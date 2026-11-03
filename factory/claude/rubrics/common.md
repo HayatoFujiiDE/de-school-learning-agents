@@ -10,3 +10,5 @@
 8. `adapt-rules.md` に「変えてよいこと」「変えてはいけないこと」の 2 つの見出しがある
 9. `selfcheck.md` に 確か / 仮説 / 未確認 の三分類の自己点検と、実行した動作確認コマンドとその結果がある
 10. 各 part の entry_point が「説明の前に触れること」（look / touch / try / make のどれか）を 1 文で示している
+11. ゲーム的な形（お題・クイズ・「なし」を当てる など）の変奏 `parts/<part_id>/game.md` が素材全体で 1 つ以上あり、material.json の variants に game: true で載っている
+12. 詳しい版（elementary-long.md / secondary-long.md）に、関心別の入口の例（マイクラ / プログラミング / ものづくり / デジもの / 画像・動画 / 絵 のうち 2 つ以上）が「〜が好きなら」の形で書かれている

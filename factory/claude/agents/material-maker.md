@@ -47,4 +47,5 @@ tools:
 - `parts/<part_id>/elementary-short.md`, `elementary-long.md`, `secondary-short.md`, `secondary-long.md`（事実を述べる段落には `[c1]` のように claim id を付ける）
 - 型 3（説明と図解）: `parts/<part_id>/figure-N.svg`
 - 型 4（動かせるもの）: `parts/<part_id>/app.html` 1 ファイル。外部読み込み無し（script src / link / fetch / import を使わない）
-- ゲーム的な形は任意で `parts/<part_id>/game.md`
+- ゲーム的な形（お題・クイズ・「なし」を当てる など）を `parts/<part_id>/game.md` に素材全体で 1 つ以上。material.json の variants に game: true で載せる
+- 詳しい版には、関心別の入口の例（マイクラ / プログラミング / ものづくり / デジもの / 画像・動画 / 絵 のうち 2 つ以上）を「〜が好きなら」の形で入れる
