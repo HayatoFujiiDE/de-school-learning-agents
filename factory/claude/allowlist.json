@@ -1,0 +1,21 @@
+{
+  "note": "一次資料のホスト。domains は職人ツール側（自身+サブドメイン）、hosts は作業場側（bare は完全一致、*. はサブドメインのみ）。両方を同じ元から保つ。SNS は入れない",
+  "domains": [
+    "minecraft.wiki",
+    "docs.python.org",
+    "scratch.mit.edu",
+    "mext.go.jp",
+    "nier.go.jp",
+    "ja.wikipedia.org",
+    "developer.mozilla.org"
+  ],
+  "hosts": [
+    "minecraft.wiki", "*.minecraft.wiki",
+    "docs.python.org",
+    "scratch.mit.edu", "*.scratch.mit.edu",
+    "mext.go.jp", "*.mext.go.jp",
+    "nier.go.jp", "*.nier.go.jp",
+    "ja.wikipedia.org",
+    "developer.mozilla.org"
+  ]
+}

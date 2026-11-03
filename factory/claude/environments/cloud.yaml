@@ -1,0 +1,20 @@
+name: de-school-factory-cloud
+description: コンテンツファクトリーの職人用作業場。一次資料ホストだけに出られる
+config:
+  type: cloud
+  networking:
+    type: limited
+    allow_package_managers: false
+    allow_mcp_servers: false
+    allowed_hosts:
+      - minecraft.wiki
+      - "*.minecraft.wiki"
+      - docs.python.org
+      - scratch.mit.edu
+      - "*.scratch.mit.edu"
+      - mext.go.jp
+      - "*.mext.go.jp"
+      - nier.go.jp
+      - "*.nier.go.jp"
+      - ja.wikipedia.org
+      - developer.mozilla.org
