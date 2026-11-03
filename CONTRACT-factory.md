@@ -1,4 +1,4 @@
-# 実装契約 — コンテンツファクトリー v1（凍結 v2。実装担当はここを正本にする）
+# 実装契約 — コンテンツファクトリー v1（凍結 v3。実装担当はここを正本にする）
 
 設計の根拠は `docs/content-factory-design.md`（人向け）と `~/.claude/plans/adaptive-gathering-hollerith.md`（承認済み計画）。本書は実装に必要な「形」だけを決める。「」内の文言は verbatim、言い換え禁止。本書と設計書が食い違ったら本書を優先し、食い違いを §R に記録する。v2 は Astra（GPT-6）と 3 視点レビューの指摘（§R）を反映した改訂。
 
@@ -83,7 +83,7 @@ Access アプリケーション（ふじさんが Zero Trust で作る。§R-5�
 
 - JSON のみ。成功は 200/201/204、失敗は `{error: "<snake_case>", message?: string}`。4xx は入力・状態の問題、5xx は外部障害。**webhook は署名 OK なら常に 2xx**
 - ID は `crypto.randomUUID()`。時刻は ISO 8601 UTC 文字列。日次集計だけ Asia/Tokyo の日付
-- **条件付き batch パターン（`src/db.ts`）**: 複数行をまとめて変える時は D1 の `batch()` を使い、**全文を同じ述語で条件付ける**。先頭の文を `UPDATE ... WHERE <述語>`、後続の INSERT を `INSERT INTO ... SELECT ... WHERE EXISTS (SELECT 1 FROM ... WHERE <同じ述語>)` の形にする。batch 後に先頭文の `meta.changes === 0` なら「競合」として 409 を返す。この形なら述語が成り立たない時に INSERT も 0 行になり、SQL 失敗以外で片方だけ commit されることがない。テスト `publish-sql.test.ts` でこの SQL 文の形を文字列検査する
+- **条件付き batch パターン（`src/db.ts`）**: 複数行をまとめて変える時は D1 の `batch()`（逐次実行の 1 トランザクション）を使い、**全文を同じ述語で条件付け、INSERT を先・UPDATE を後**に並べる。`INSERT INTO ... SELECT ... WHERE EXISTS (SELECT 1 FROM ... WHERE <述語>)` をすべて先に置き、最後に `UPDATE ... WHERE <述語>` を置く（UPDATE が述語の列を変えるので、UPDATE を先に置くと後続 INSERT の述語が消える — §R-15）。述語は**述語の列を変える UPDATE が 1 文だけ**になるように組む（複数テーブルを変える時は、各 UPDATE の述語が互いの更新列に依存しないこと）。batch 後に**最後の UPDATE** の `meta.changes === 0` なら「競合」として 409 を返す。テスト `publish-sql.test.ts` は文字列検査ではなく **`node:sqlite`（Node 24 同梱）の実 DB で batch を順に実行**し、述語成立時は全行、非成立時は 0 行になることを確かめる
 - 読み→判断→書きの間に状態が変わりうる箇所はすべて上のパターンか `UPDATE ... WHERE status = ?` の CAS で守る
 
 ### §B-3 ルート一覧
@@ -133,15 +133,16 @@ body（`POST /api/materials` は material の項目も含む）:
 - `no_personal_data !== true` → 400 `personal_data_confirmation_required`（管理画面のチェックボックス「子どもや家庭の個人情報を含んでいません」）。`brief_md` と回答本文は**ログに出さない**
 - 既存素材への job: `title/slug/catalog_item_id/kinds/concept_codes` は無視（更新しない）。`parent_version_id` は同素材の版でなければ 400
 
-**queue**（1 batch）: material（新規時 `work_status='queued'`, `publish_status='none'`）+ job（`status='queued'`, `phase='questions'`, `model` = kind による §D-1）。同素材に active な job（`queued/creating/running/needs_answer/budget_reached`）があれば部分 UNIQUE index で失敗 → 409 `material_busy`。
+**queue**（1 batch）: material（新規時 `work_status='queued'`, `publish_status='none'`。既存なら `work_status: idle → queued`）+ job（`status='queued'`, `phase='questions'`, `model` = kind による §D-1）。同素材に active な job（`queued/creating/running/needs_answer/budget_reached`）があれば部分 UNIQUE index で失敗 → 409 `material_busy`。
 
 **startJob(jobId)**（POST の続き・`POST /api/jobs/:id/start`・cron §B-5-1 が呼ぶ）:
-1. ガード（読み取り）: `settings.paused='1'` → 409 `paused` / `creating+running` ≥ `MAX_CONCURRENT_JOBS` → 409 `too_many_running` / 当日 `cost_ledger` 合計 ≥ `DAILY_CAP_CENTS` → 409 `daily_cap_reached` / `FACTORY_AGENT_ID` 空 → 503。cron から呼ばれた時は 409 相当なら何もしない
-2. CAS: `UPDATE factory_jobs SET status='creating', updated_at=? WHERE id=? AND status='queued'`。changes=0 → 409 `not_queued`。material `work_status='making'`
+1. ガード（読み取り。**上限は「起動を止める目安」であって厳密な上限ではない** — 同時に 2 本が同じ空き枠を見ることはありうる。厳密な上限は session budget と Console の支出上限が担う）: `settings.paused='1'` → 409 `paused` / `creating+running` ≥ `MAX_CONCURRENT_JOBS` → 409 `too_many_running` / 当日 `cost_ledger` 合計 + `creating/running` job の `budget_cents` 合計 ≥ `DAILY_CAP_CENTS` → 409 `daily_cap_reached` / `FACTORY_AGENT_ID` 空 → 503。cron から呼ばれた時は 409 相当なら何もしない
+2. CAS: `UPDATE factory_jobs SET status='creating', create_attempts=create_attempts+1, updated_at=? WHERE id=? AND status='queued'`。changes=0 → 409 `not_queued`。同 batch で material `work_status='making'`
 3. `sessions.create` §D-4（`metadata.job_id = jobId`）
 4. 成功: `UPDATE ... SET status='running', session_id=?, session_created_at=? WHERE id=? AND status='creating'`。201/200 `{job_id, material_id, session_id, console_url}`
-5. 失敗（例外）: `UPDATE ... SET status='queued', last_error=<エラー種別のみ> WHERE id=? AND status='creating'`、material `work_status='queued'`。502 `anthropic_error`。cron が後で再起動する
-6. 「成功したが D1 更新前に落ちた」場合: job が `creating` のまま残る。cron §B-5-1 が `creating` かつ `updated_at < now-10min` を見つけたら、`sessions.list({limit: 50})` を新しい順に見て `metadata.job_id === jobId` の session があれば採用して `running` に、無ければ `queued` に戻す
+5. 失敗: SDK が**応答を受け取った**エラー（`APIError` で `status` がある: 4xx/5xx）→ `UPDATE ... SET status='queued', last_error=<エラー種別のみ> WHERE id=? AND status='creating'`、material `work_status='queued'`。502 `anthropic_error`。**応答が不明**なエラー（`APIConnectionError` / `APIConnectionTimeoutError` / その他の例外）→ job を `creating` のまま残し `last_error='create_unconfirmed'`。502
+6. `creating` の復旧（cron §B-5-1、`updated_at < now-10min`）: `sessions.list` を新しい順に、`created_at < job.updated_at - 1h` に達するか 10 ページ読むまで辿り、`metadata.job_id === jobId` の session を探す。1 件 → 採用して `running`。複数 → 最新を採用し他は `sessions.archive`。0 件 → `queued` に戻す。`create_attempts >= 3` なら `failed`（`error='create_unconfirmed'`）、material `work_status='idle'`
+7. `cancel` が `queued` / `creating` に来た時: job `cancelled`、material `work_status='idle'`（session があれば archive）
 
 `console_url = https://platform.claude.com/workspaces/${ANTHROPIC_WORKSPACE}/sessions/${session_id}`
 
@@ -153,13 +154,14 @@ body（`POST /api/materials` は material の項目も含む）:
 
 #### c. 回答（POST /api/jobs/:id/answer）
 
-body `{answers: [{question_id, answer}]}`。3 状態 `answer_state: none | saved | sent`。
+body `{answers: [{question_id, answer}]}`。4 状態 `answer_state: none | saved | sending | sent`。
 1. job が `needs_answer` でなければ 409 `not_waiting`
-2. batch: `standards_log` に `kind='question'` で質問と回答を 1 行ずつ + job `answers_json`, `answer_state='saved'`（まだ `needs_answer`）
-3. 送信: `events.list` に `user.define_outcome` が既にあれば送らない。無ければ `user.message`（回答の列挙）+ `user.define_outcome`（§D-6）を**同じ `events.send`** で送る
-4. 成功: CAS `UPDATE ... SET status='running', phase='making', answer_state='sent', answered_at=? WHERE id=? AND status='needs_answer'`。200
-5. 失敗: `answer_state='saved'` のまま `last_error` に残し 502。**再度 answer を押すと 2 を飛ばして 3 から**（`answer_state='saved'` なら保存済みの `answers_json` を使う。body は無視）
-`paused='1'` の時は 3 を行わず 409 `paused`（2 は行う）。
+2. `answer_state='none'` の時だけ: batch で `standards_log` に `kind='question'` で質問と回答を 1 行ずつ + job `answers_json`, `answer_state='saved'`（まだ `needs_answer`）。`saved` / `sending` なら body を無視して保存済みを使う
+3. 排他: CAS `UPDATE ... SET answer_state='sending', answer_token=?, updated_at=? WHERE id=? AND status='needs_answer' AND (answer_state='saved' OR (answer_state='sending' AND updated_at < now-5min))`。changes=0 → 409 `answer_in_flight`
+4. 送信: `events.list` に `user.define_outcome` が既にあれば送らない。無ければ `user.message`（回答の列挙）+ `user.define_outcome`（§D-6）を**同じ `events.send`** で送る
+5. 成功: CAS `UPDATE ... SET status='running', phase='making', answer_state='sent', answered_at=? WHERE id=? AND status='needs_answer' AND answer_token=?`。200
+6. 失敗: CAS で `answer_state='saved'`（`answer_token` 一致）に戻し `last_error` に残して 502。運営が再度 answer を押すと 3 から
+`paused='1'` の時は 3 以降を行わず 409 `paused`（2 は行う）。reconcile は `needs_answer` の job に対して §B-4-d 手順 3 の `terminated` 判定だけを行う（`end_turn` を見ても何もしない）。
 
 #### d. 回収（/webhook と cron と `POST /api/jobs/:id/reconcile` が同じ `reconcileJob(jobId)` を呼ぶ）
 
@@ -170,12 +172,13 @@ body `{answers: [{question_id, answer}]}`。3 状態 `answer_state: none | saved
 4. `ctx.waitUntil(reconcileJob(job.id).finally(markProcessed))` → 204。**`ctx.waitUntil` の合計は 30 秒**なので reconcile は段階を D1 に残しながら進め、残り時間が無ければ途中で抜ける（cron が続きをやる）
 
 `reconcileJob(jobId)`（冪等・再入可能・段階保存）:
-0. **lease**: `UPDATE factory_jobs SET reconcile_token=?, reconcile_until=now+120s WHERE id=? AND (reconcile_until IS NULL OR reconcile_until < now)`。changes=0 → 他が処理中。何もしないで戻る。以後のこの job への書き込みはすべて `AND reconcile_token=?` を付ける。終了時に `reconcile_token=NULL, reconcile_until=NULL, last_checked_at=now`
+0. **lease**: `UPDATE factory_jobs SET reconcile_token=?, reconcile_until=now+120s WHERE id=? AND (reconcile_until IS NULL OR reconcile_until < now)`。changes=0 → 他が処理中。何もしないで戻る。以後のこの job への書き込みはすべて `AND reconcile_token=?` を付ける。**外部呼び出し（retrieve / events / files）の前に毎回 `UPDATE ... SET reconcile_until=now+120s WHERE id=? AND reconcile_token=?` で延長し、changes=0 なら所有権を失ったとして即座に抜ける**（R2 への書き込みも止める。既に書いた分は job 固有 prefix の同じ内容なので無害）。終了時に `reconcile_token=NULL, reconcile_until=NULL, last_checked_at=now`
+0-b. **順序**: まず job.status を見る。`needs_answer` なら手順 2 と 3 の `terminated` 判定だけ（他の分岐に入らない）
 1. job が終端（`done/failed/cancelled`）または `queued/creating` なら lease を返して終了（`creating` の回収は §B-4-a-6）
 2. `sessions.retrieve(session_id)`。`usage.list_cost.amount`（セント整数文字列）を `list_cost_cents` に保存し、差分（新 − 旧、正の時だけ）を `cost_ledger` に `kind='session'` で追記
 3. session `status`:
    - `running` / `rescheduling`: job が `budget_reached` なら CAS で `running` に戻す。終了
-   - `terminated`: outputs を取り込めるなら（`phase='making'` かつ §E の必須ファイルが揃う）6 へ。それ以外は job `failed`（`error='terminated_without_outputs'` / `needs_answer` 中なら `'terminated_waiting_answer'`）、material `work_status='idle'`
+   - `terminated`: outputs を取り込めるなら（`phase='making'` かつ job が `running` / `budget_reached` かつ §E の必須ファイルが揃う）6 へ。それ以外は job `failed`（`error='terminated_without_outputs'` / `needs_answer` 中なら `'terminated_waiting_answer'`）、material `work_status='idle'`
    - `idle`: 4 へ
 4. `sessions.events.list` を新しい順に読み、最新の `session.status_idle` の `stop_reason.type` で分岐:
    - `requires_action`: `stop_reason.event_ids` の各 id について、`job.denied_event_ids_json` に無いものだけ `user.tool_confirmation {tool_use_id: <sevt_ id>, result: "deny", deny_message: "無人運用のためこの操作は許可できません。別の方法で進めてください。"}` を 1 リクエストで送り、送った id を `denied_event_ids_json` に追加、`deny_count += n`。`deny_count > 8` なら `user.interrupt` + `sessions.archive` → job `failed`（`error='too_many_denies'`）、material `work_status='idle'`
@@ -185,12 +188,10 @@ body `{answers: [{question_id, answer}]}`。3 状態 `answer_state: none | saved
    - `retries_exhausted` / `refusal` / それ以外: job `failed`（`error` = その type、未知は `'unknown_stop_reason'`）、material `work_status='idle'`
    - job が `needs_answer` で `end_turn`: 何もしない（回答待ち）
 5. （段階）ここまでで `reconcile_stage='inspected'`
-6. 取り込み（`reconcile_stage` が `inspected` → `ingested` → `checked` → `versioned` と進む。各段階の終わりで D1 に stage を書く。再入時は stage から再開）:
-   - `files.list({scope_id: session_id, betas:["managed-agents-2026-04-01"]})` を**最後のページまで**辿る。§E の必須ファイル（`material.json, claims.json, sources.json, adapt-rules.md, selfcheck.md`）が揃わなければ 3 秒待って 2 回まで再取得。それでも欠けるなら job `failed`（`error='invalid_outputs'`）、material `work_status='idle'`、R2 には取れた分を残す
-   - 各ファイルを `files.download` → R2 `materials/{material_id}/{job_id}/{path}`（job 固有の prefix。上書きは起きない）
-   - §E の schema 検証。不正なら `invalid_outputs`
-   - §F-1, §F-2 を実行し `checks_json` と `sources` 行を作る。`public_paths_json`（§E-4）を算出
-   - batch（§B-2 のパターン、述語 = `job.status='running' AND job.reconcile_token=?`）: `material_versions` INSERT（`version = (SELECT COALESCE(MAX(version),0)+1 FROM material_versions WHERE material_id=?)`、`job_id UNIQUE`）+ `sources` INSERT + job `done` + material `work_status='review'`（`publish_status` は触らない）+ version `verification_status='pending'`
+6. 取り込み（`reconcile_stage` が `inspected` → `listed` → `ingested` → `versioned` と進む。各段階の終わりで D1 に stage と `reconcile_state_json` を書く。再入時は stage から再開。時間切れ（waitUntil の残りが 5 秒を切る、または lease 延長に失敗）はその時点で抜け、cron が続きをやる）:
+   - `listed`: `files.list({scope_id: session_id, betas:["managed-agents-2026-04-01"]})` を**最後のページまで**辿り、`[{file_id, filename, size}]` を `reconcile_state_json.files` に保存。§E の必須ファイル（`material.json, claims.json, sources.json, adapt-rules.md, selfcheck.md`）が揃わなければ 3 秒待って 2 回まで再取得。それでも欠けるなら job `failed`（`error='invalid_outputs'`）、material `work_status='idle'`
+   - `ingested`: `files` の各項目を `files.download` → R2 `materials/{material_id}/{job_id}/{path}` に put し、済んだ `file_id` を `reconcile_state_json.done` に追記（1 ファイルごと D1 更新。再入時は `done` に無いものだけ）。job 固有 prefix なので他 job と衝突しない。同じ job の再実行は同じ内容を同じキーに書くだけで無害
+   - `versioned`: R2 から `material.json` 等を読み §E の schema 検証（不正なら `invalid_outputs`）。`events.list` を全ページ読み §F-1、R2 の本文で §F-2 を実行し `checks_json`・`sources` 行・`public_paths_json`（§E-4）・`content_sha256` を作る。batch（§B-2 のパターン、述語 = `job.status IN ('running','budget_reached') AND job.reconcile_token=?`）: `material_versions` INSERT（`version = (SELECT COALESCE(MAX(version),0)+1 FROM material_versions WHERE material_id=?)`、`job_id UNIQUE`）+ `sources` INSERT + material `work_status='review'`（`publish_status` は触らない）+ job `done`（最後の UPDATE）。version は `verification_status='pending'`
    - job が途中で `cancelled` になっていたら（CAS 失敗）取り込みを捨てる
 7. 検証係は **cron だけ**が動かす（§B-5-2。waitUntil では走らせない）
 
@@ -211,7 +212,7 @@ body `{answers: [{question_id, answer}]}`。3 状態 `answer_state: none | saved
 
 1. **起動**: `queued` の job（`updated_at < now-1min`）を古い順に最大 1 件 `startJob`。`creating` で 10 分超のものは §B-4-a-6 の復旧
 2. **回収**: `running / needs_answer / budget_reached` の job で `last_checked_at IS NULL OR last_checked_at < now-10min` を最大 5 件 `reconcileJob`。`webhook_events` の `processed_at IS NULL AND received_at < now-2min` も対象 job を引いて `reconcileJob`
-3. **検証**: `material_versions` の `verification_status='pending'`（`verification_attempts < VERIFY_MAX_ATTEMPTS`）を最大 1 件 `runVerification`。`running` で `verification_started_at < now-30min` は `pending` に戻し `attempts += 1`。attempts が上限なら `failed`。ガード: `paused` と `DAILY_CAP_CENTS` は検証にも効く
+3. **検証**: `running` で `verification_started_at < now-30min` の版は `pending` に戻す（attempts は増やさない。取得時に数えるため）。`verification_status='pending'` の版を最大 1 件 `runVerification`（取得時に `attempts += 1`。取得前に `attempts >= VERIFY_MAX_ATTEMPTS` なら `failed`）。ガード: `paused` と `DAILY_CAP_CENTS` は検証にも効く
 4. `settings.last_cron_at` を更新
 
 ### §B-6 確認と公開切替
@@ -225,23 +226,26 @@ body `{answers: [{question_id, answer}]}`。3 状態 `answer_state: none | saved
     "explanation_and_expression": {...}, "relation_to_learning": {...},
     "conditions_of_use": {...}, "artifact_behavior": {...}, "terms_of_use": {...}
   },
-  "note": "差し戻し・却下は必須", "brief_append": "差し戻し時の追記（任意）"
+  "note": "差し戻し・却下は必須", "brief_append": "差し戻し時の追記（任意）",
+  "verification_id": "<GET /api/review/:version_id が返した verifications.id。approve では必須>"
 }
 ```
 
 前提: 版が `status='review'`。同素材に active な job があれば 409 `material_busy`（rework 中の別版承認を防ぐ）。
 
-- `approve` の追加条件（すべて 400）: 6 項目すべてに `result`（`checklist_incomplete`）/ `ng` が無い（`checklist_has_ng`）/ `verification_status='done'`（`verification_pending`）/ 検証に `contradicted` が無い（`has_contradicted_claims`）/ `confirmed` の claim の `is_primary` 出典に `url_was_fetched=0` が無い（`primary_source_unfetched`）。`license='unknown'` は承認可（画面に出す）
-- `approve` = `publishSwitch({kind:'approve', material_id, version_id, reviewer_email, checklist, note})`
-- `return`: batch（述語 = version `review`）: version `rejected` + `standards_log kind='return_reason'` + 新 job `queued`（`kind='rework'`, `parent_version_id`, brief = 元 brief + 差し戻し理由 + `brief_append`）+ material `work_status='queued'`。その後 `startJob`。起動失敗でも job は `queued` で残り cron が拾う
-- `reject`: batch: version `rejected` + `standards_log kind='return_reason'` + material `work_status='idle'`。`publish_status` は変えない
+- `approve` の追加条件（すべて 400。事前チェックであり、最終判定は下の述語で原子的に行う）: 6 項目すべてに `result`（`checklist_incomplete`）/ `ng` が無い（`checklist_has_ng`）/ `verification_status='done'`（`verification_pending`）/ **検証係の verdict** に `contradicted` が無い（`has_contradicted_claims`）/ 検証係が `confirmed` とした claim の `is_primary` 出典に `url_was_fetched=0` が無い（`primary_source_unfetched`）。`license='unknown'` と `quote_found=0` は承認可だが画面に**赤**で出す
+- `approve` = `publishSwitch({kind:'approve', material_id, version_id, verification_id, reviewer_email, checklist, note})`
+- `return`: batch（述語 = version `review`、§B-2 の順）: `review_decisions` INSERT(`return`, checklist, note) + `standards_log kind='return_reason'` + 新 job `queued`（`kind='rework'`, `parent_version_id`, brief = 元 brief + 差し戻し理由 + `brief_append`）+ material `work_status='queued'` + version `rejected`（最後の UPDATE）。その後 `startJob`。起動失敗でも job は `queued` で残り cron が拾う
+- `reject`: batch: `review_decisions` INSERT(`reject`) + `standards_log kind='return_reason'` + material `work_status='idle'` + version `rejected`。`publish_status` は変えない
 
-**`publishSwitch`（`src/publish.ts`。`publish_status` と `current_version_id` を変える唯一の関数）**: 1 batch、§B-2 のパターン。
+**`publishSwitch`（`src/publish.ts`。`publish_status` と `current_version_id` を変える唯一の関数）**: 1 batch、§B-2 のパターン（INSERT 先・UPDATE 後）。
 | kind | 述語 | 変更 |
 |---|---|---|
-| `approve` | version `status='review'` | version `approved` + `review_decisions` INSERT(`approve`, `content_sha256_at_decision`) + material `current_version_id=version`, `publish_status='available'`, `work_status='idle'` |
-| `rollback` | version `status='approved'` AND material_id 一致 | `review_decisions` INSERT(`rollback`) + material `current_version_id=version`, `publish_status='available'` |
-| `stop` | material `publish_status='available'` | `review_decisions` INSERT(`stop`, material_version_id = current) + material `publish_status='stopped'` |
+| `approve` | version `status='review' AND verification_status='done' AND material_id=?` AND `EXISTS verifications(id=:verification_id AND material_version_id=version AND contradicted=0)` AND `NOT EXISTS active job for material` | `review_decisions` INSERT(`approve`, `content_sha256_at_decision`) + material `current_version_id=version`, `publish_status='available'`, `work_status='idle'` + version `approved`（最後の UPDATE。この 1 文だけが述語の列を変える） |
+| `rollback` | version `status='approved'` AND material_id 一致 AND material `current_version_id != version` | `review_decisions` INSERT(`rollback`) + material `current_version_id=version`, `publish_status='available'`（UPDATE） |
+| `stop` | material `publish_status='available'` | `review_decisions` INSERT(`stop`, material_version_id = current) + material `publish_status='stopped'`（UPDATE） |
+
+停止の保証範囲は「停止後の新しい取得を拒否する」まで。既に子ども側に届いた内容の回収は保証しない（バディ側は配信 API を都度読む前提。§R-16）。
 grep で `publish_status` への UPDATE が `src/publish.ts` にしか無いことを確認できる形にする。`review_decisions` に UPDATE / DELETE を書かない。
 
 ### §B-7 配信（一方向）
@@ -291,10 +295,12 @@ CREATE TABLE factory_jobs (
   status TEXT NOT NULL CHECK (status IN ('queued','creating','running','needs_answer','budget_reached','done','failed','cancelled')),
   session_id TEXT UNIQUE, session_created_at TEXT, parent_version_id TEXT,
   brief_md TEXT NOT NULL, questions_json TEXT, answers_json TEXT,
-  answer_state TEXT NOT NULL CHECK (answer_state IN ('none','saved','sent')) DEFAULT 'none', answered_at TEXT,
+  answer_state TEXT NOT NULL CHECK (answer_state IN ('none','saved','sending','sent')) DEFAULT 'none', answered_at TEXT,
+  answer_token TEXT, create_attempts INTEGER NOT NULL DEFAULT 0, budget_cents INTEGER NOT NULL DEFAULT 0,
   deny_count INTEGER NOT NULL DEFAULT 0, denied_event_ids_json TEXT NOT NULL DEFAULT '[]',
   list_cost_cents INTEGER NOT NULL DEFAULT 0,
-  reconcile_stage TEXT NOT NULL DEFAULT 'none', reconcile_token TEXT, reconcile_until TEXT,
+  reconcile_stage TEXT NOT NULL DEFAULT 'none', reconcile_state_json TEXT NOT NULL DEFAULT '{}',
+  reconcile_token TEXT, reconcile_until TEXT,
   last_checked_at TEXT, last_error TEXT, error TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
@@ -311,7 +317,7 @@ CREATE TABLE material_versions (
   checks_json TEXT NOT NULL, public_paths_json TEXT NOT NULL, tech_dependencies_json TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL CHECK (status IN ('review','approved','rejected')),
   verification_status TEXT NOT NULL CHECK (verification_status IN ('pending','running','done','failed')) DEFAULT 'pending',
-  verification_attempts INTEGER NOT NULL DEFAULT 0, verification_started_at TEXT,
+  verification_attempts INTEGER NOT NULL DEFAULT 0, verification_started_at TEXT, verification_token TEXT,
   list_cost_cents INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL, UNIQUE (material_id, version)
 );
@@ -325,11 +331,13 @@ CREATE TABLE sources (
 );
 
 CREATE TABLE verifications (
-  id TEXT PRIMARY KEY, material_version_id TEXT NOT NULL UNIQUE REFERENCES material_versions(id),
+  id TEXT PRIMARY KEY, material_version_id TEXT NOT NULL REFERENCES material_versions(id),
+  attempt INTEGER NOT NULL,
   model TEXT NOT NULL, claims_total INTEGER NOT NULL, confirmed INTEGER NOT NULL, hypothesis INTEGER NOT NULL,
   unverified INTEGER NOT NULL, contradicted INTEGER NOT NULL, result_json TEXT NOT NULL,
-  cost_cents INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
-);
+  cost_cents INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+  UNIQUE (material_version_id, attempt)
+);  -- 試行ごとに 1 行。画面と承認は「最新の attempt」を使う
 
 CREATE TABLE review_decisions (
   id TEXT PRIMARY KEY, material_version_id TEXT REFERENCES material_versions(id), material_id TEXT NOT NULL,
@@ -368,11 +376,12 @@ materials.work_status（制作の進み）:
 
 | from | to | 引き金 |
 |---|---|---|
-| idle / queued | queued | job queue（draft / rework） |
-| queued | making | startJob 成功 |
-| making | queued | startJob 失敗（job を queued に戻す） |
+| idle | queued | job queue（draft / rework）。新規素材は queued で生まれる |
+| queued | making | startJob が job を `creating` にした時 |
+| making | queued | sessions.create が応答ありで失敗（job を queued に戻す） |
+| queued | idle | `queued` の job を cancel |
 | making | review | 版の取り込み完了 |
-| making | idle | job `failed` / `cancelled` |
+| making | idle | job `failed` / `cancelled`（creating / running / needs_answer / budget_reached から） |
 | review | idle | approve / reject |
 | review | queued | return（rework job queue） |
 | idle | queued | 改善 job（available の素材にも起動できる。配信は続く） |
@@ -506,7 +515,7 @@ parts/<part_id>/app.html              （型 4）
 
 ### §E-4 公開 manifest `public_paths_json`
 
-`claims.json`, `adapt-rules.md`, `material.json` の `parts[].variants[].path` と `parts[].files[].path` の集合（重複除去、昇順）。`sources.json` / `selfcheck.md` / `questions.json` / その他 outputs にあった余剰ファイルは含めない。
+`claims.json`, `adapt-rules.md`, `material.json` の `parts[].variants[].path` と `parts[].files[].path` の集合（重複除去、昇順）。**`variants[].path` と `files[].path` は `parts/<part_id>/` 配下で拡張子が `.md` / `.svg` / `.html` のものだけ許す**（それ以外・`sources.json` 等への参照は schema 検証失敗 = `invalid_outputs`）。`sources.json` / `selfcheck.md` / `questions.json` / その他 outputs にあった余剰ファイルは含めない。
 
 ## §F 機械検証と検証係
 
@@ -539,10 +548,11 @@ client.messages.create({
   messages: [{ role: 'user', content: '<claims.json + sources.json + parts/** の本文>。各 claim を出典を開き直して判定し、最後に必ず report_verdicts を 1 回呼ぶ' }]
 });
 ```
-- ループ: `stop_reason === 'tool_use'` で `report_verdicts` があれば終了。`end_turn` で来なければ `user: "report_verdicts を呼んでください"` を足して再送。最大 3 ターン
+- ループ（server tool の公式手順に従う）: 応答の `content` を assistant turn として messages に積む。`stop_reason === 'pause_turn'` → そのまま続きを要求（最大 5 回）。`stop_reason === 'tool_use'` で `report_verdicts` の block があれば終了。`end_turn` で `report_verdicts` が無ければ `user: "report_verdicts を呼んでください"` を足して再送。`max_tokens` / `refusal` / その他は失敗。合計 8 ターンで打ち切り
 - `VERDICT_SCHEMA`: `{verdicts: [{claim_id, verdict: 'confirmed'|'hypothesis'|'unverified'|'contradicted', reason, opened_urls: []}], overall_note}`。**`verdicts` の claim_id 集合が `claims.json` と完全一致**しなければその試行は失敗
-- lease: 開始時 CAS `pending → running`（`verification_started_at`, `attempts += 1`）。終了時 CAS `running → done`（`verifications` INSERT 同 batch）。失敗は `running → pending`（attempts < 上限）または `failed`
+- lease: 取得時 CAS `UPDATE ... SET verification_status='running', verification_started_at=now, verification_attempts=verification_attempts+1, verification_token=? WHERE id=? AND verification_status='pending'`。終了時 batch（述語 = `verification_status='running' AND verification_token=?`）: `verifications` INSERT（`attempt = verification_attempts`）+ `cost_ledger` INSERT + version `done`（UPDATE）。失敗は同じ述語で `pending`（attempts < 上限）または `failed`。述語が成立しなければ（reverify で世代が変わった）結果を捨てる
 - 費用: 各試行の usage から定価計算（Opus 5.5 入力 $4 / 出力 $20 per 1M。web_fetch 無料）を `cost_ledger kind='verify'` に追記（失敗試行も）
+- `POST /api/review/:version_id/reverify`: CAS `UPDATE ... SET verification_status='pending', verification_token=NULL WHERE id=? AND status='review' AND verification_status IN ('done','failed')`（`running` 中は 409 `verification_running`）。`verification_attempts` は 0 に戻す
 - 検証係には制作 session の会話を渡さない
 
 ## §G 管理画面（`public/admin/`。ビルド無し、ES2017、`fetch` は自サイトの `/api/*` のみ）
@@ -562,7 +572,7 @@ client.messages.create({
 - 型 4 の `app.html` は `<iframe sandbox="allow-scripts" src="/api/review/<version_id>/files/parts/p1/app.html">`（`allow-same-origin` を付けない）。SVG は `<img src="/api/review/<version_id>/files/…">`
 - claims の表: id / 本文 / 職人の status / 検証係の verdict（confirmed 緑、hypothesis 黄、unverified 灰、contradicted 赤）/ reason
 - sources の表: url / title / `url_was_fetched` `quote_found` の緑・赤 / license / is_primary
-- `checks_json`、grader の result / explanation、selfcheck.md、adapt-rules.md、費用、Console リンク、検証の状態（pending / running / done / failed + 「再検証」）
+- `checks_json`、grader の result / explanation、selfcheck.md、adapt-rules.md、費用、Console リンク、検証の状態（pending / running / done / failed + 「再検証」）。応答には最新 attempt の `verification_id` を含め、承認時にそのまま送る
 - **6 項目チェックリスト**（verbatim）: 「内容と根拠」「説明と表現」「学習との関係」「使う条件」「生成物の動作」「利用条件」。各 OK / NG / 該当なし + note
 - 操作: 「承認する」（6 項目回答 + NG なし + 検証 done + contradicted なし で有効化）/ 「差し戻す」（理由必須、追記任意）/ 「却下する」（理由必須）。確認ダイアログ → 実行中無効化 → トースト → 再取得
 - 素材詳細: 「配信を止める」「前の版へ戻す」（approved 版の選択）
@@ -582,7 +592,8 @@ client.messages.create({
 - (g) scenario `questions-nonempty`: job `needs_answer` → answer → `standards_log` 行が増え、fake の呼び出し記録に `user.message` + `user.define_outcome` の 1 リクエストが残る
 - (h) scenario `requires-action`: `user.tool_confirmation deny` が `sevt_` id に送られ `deny_count` 増加。同じ fixture を再度 reconcile しても二重送信しない
 - (i) 検証 `done` 前の approve は 400 `verification_pending`。`contradicted` を含む scenario は 400 `has_contradicted_claims`
-- (j) `vitest run` 全 pass（state の遷移表 + 不正遷移 / citations / schema（参照先不在を含む）/ forbidden / publish-sql の形）
+- (j) `vitest run` 全 pass（state の遷移表 + 不正遷移 / citations / schema（参照先不在・parts 外参照を含む）/ forbidden / publish-sql（`node:sqlite` で approve・rollback・stop・return の batch を実行し、述語成立で全行・非成立で 0 行））
+- (n) `reverify` 後に 2 回目の検証が `done` になり `verifications` が 2 行（attempt 1, 2）。approve に古い `verification_id` を渡すと 409
 - (k) `/api/library/files/<version_id>/sources.json` と `../` を含むパスが 404。`app.html` の応答に CSP `sandbox allow-scripts` と `nosniff`
 - (l) Access 無し（ヘッダなし・非 localhost host）で `/admin` と `/api/materials` が 401、`/api/library/available` と `/webhook`（署名 NG → 400）は Access を要求しない
 - (m) 同素材に 2 本目の job → 409 `material_busy`
@@ -634,3 +645,17 @@ fake（`src/fake/anthropic.ts`）: §B-0 の条件下でのみ。`sessions.creat
 12. **stop の意味** → 配信停止のみ。制作中の job は続き、版は `review` で待つ。承認で再び `available`（ふじさん確認待ち。別案: stop で active job も cancel）
 13. **設計書との差分**: 設計書 §12 の「`initial_events` で brief + define_outcome を渡す」は本書 §B-4-b の「質問フェーズ後に define_outcome を送る」に変更（段階 1 の制作前質問を実現するため）
 14. 棄却: 「brief の自動 PII 検出」（氏名検出は機械化できないため運用で担保。`no-secrets-to-agents` の方針と同じ）
+
+v3（Astra 再レビュー後）:
+15. **同じ述語の batch で先頭 UPDATE が後続 INSERT の述語を消す**（SQLite 実測で指摘）→ INSERT 先・UPDATE 後に固定し、述語列を変える UPDATE は 1 文だけ。テストは `node:sqlite` の実行に変更
+16. **approve の述語が弱い** → `verification_id`（世代）・`done`・`contradicted=0`・active job 不在・素材一致を述語に含める
+17. **段階保存の中身が無い** → `reconcile_state_json` に files / done を持ち、ファイル単位で再開。lease は外部呼び出し前に毎回延長し、失敗したら即抜ける
+18. **検証の UNIQUE 衝突・世代混線・attempts 二重加算** → `verifications` は試行ごと 1 行、`verification_token` で世代を固定、attempts は取得時のみ
+19. **`pause_turn`** → server tool の継続手順をループに追加
+20. **answer の二重送信** → `sending` 状態 + `answer_token`
+21. **create の応答不明** → `creating` に残し、`sessions.list` で採用、3 回で `failed`
+22. **manifest に非公開ファイルが紛れる** → `parts/` 配下・拡張子限定を schema 条件に
+23. **return / reject の監査記録** → `review_decisions` に INSERT
+24. **上限は厳密か目安か** → 目安（起動停止）。厳密な上限は session budget と Console の支出上限
+25. 未凍結（ふじさん確認待ち。既定で進める）: §R-3 日付境界 = Asia/Tokyo、§R-4 承認可能条件、§R-12 stop = 配信停止のみ
+26. 停止の保証範囲は「新しい取得の拒否」まで（§B-6 末尾）
