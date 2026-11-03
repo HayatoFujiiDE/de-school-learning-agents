@@ -1,0 +1,54 @@
+# gitleaks config for this public repository.
+# Extends the default ruleset and adds patterns specific to this project.
+title = "de-school-learning-agents"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "chatgpt-private-link"
+description = "ChatGPT private library / project / space links"
+regex = '''chatgpt\.com/(library|g/|space|c/)[A-Za-z0-9_\-/]+'''
+
+[[rules]]
+id = "google-ads-measurement-id"
+description = "Google Ads conversion ID"
+regex = '''AW-[0-9]{7,}'''
+
+[[rules]]
+id = "ga4-measurement-id"
+description = "GA4 measurement ID"
+regex = '''G-[A-Z0-9]{8,12}'''
+
+[[rules]]
+id = "jp-phone-050"
+description = "Japanese IP phone number"
+regex = '''050-[0-9]{4}-[0-9]{4}'''
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key"
+regex = '''sk-ant-[A-Za-z0-9_\-]{20,}'''
+
+[[rules]]
+id = "anthropic-webhook-signing-key"
+description = "Anthropic webhook signing secret"
+regex = '''whsec_[A-Za-z0-9_\-]{10,}'''
+
+[[rules]]
+id = "cloudflare-account-id-personal"
+description = "Cloudflare account_id written as a literal"
+regex = '''account_id\s*[:=]\s*["']?[a-f0-9]{32}'''
+
+[allowlist]
+description = "Paths that are excluded from the repository anyway, plus documentation placeholders"
+paths = [
+  '''^reference/''',
+  '''^\.claude/''',
+  '''^node_modules/''',
+]
+regexes = [
+  '''<SECRET_NAME>''',
+  '''sk-ant-xxxx''',
+  '''whsec_xxxx''',
+]

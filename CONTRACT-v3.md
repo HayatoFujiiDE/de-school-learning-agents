@@ -1,0 +1,401 @@
+# 実装契約 v3（凍結 — 実装担当はここを正本にする。「」内の文言は verbatim、言い換え禁止）
+
+v3 第 1 スコープ = 「話す」+ 右パネル「今日の予定」。元: `BRIEF-v3.md`。見た目の正本は `reference/codex-mock/style.css`、引き継ぐ中身は `reference/v2-carryover/CONTRACT-v2.md` の §C/§G/§J/§L/§N（本書で必要分を再掲・改訂。食い違いは本書が優先）。
+
+## A. ファイル構成と所有
+
+```
+app-v3/                             （実体ディレクトリ。旧 `app` symlink は公開時に廃止、tools/check.sh / render.sh は app-v3/ を直接見る）
+app-v3/index.html                   全ルート 1 枚（hash ルーティング）
+app-v3/css/tokens.css               :root トークン（codex style.css の :root を verbatim + 本書 §E-4 の追加トークン）
+app-v3/css/shell.css                codex style.css の .preview-bar / .shell / .sidebar / .brand / .nav / .ico / .sidebar-bottom / .resume-mini / .profile / .main-wrap / .topbar / .breadcrumb / .top-actions / .save-indicator / .top-link / .mobile-menu / .content / .btn 系 / .pill / .card / .toast / dialog 系 / .large-text / .reduced-motion / .sr-only / media query の該当部分を**そのまま移植**（値の改変禁止。不要セレクタの削除は可）
+app-v3/css/talk.css                 codex の .chat-page / .chat-welcome / .suggestions / .message-list / .message / .bubble / .composer / .composer-bottom / .privacy-line / .chat-bridge / .attachment / .paused を移植 + 本書 §B の .talk-layout と DES.buddy 用の調整
+app-v3/css/plan.css                 右パネル・予定表・グリッド・シート（本書 §E）
+app-v3/js/buddy.js                  v2 から verbatim コピー済み（触らない）
+app-v3/js/data.js                   正準データ（書き込み済み・verbatim。触らない）
+app-v3/js/i18n.js                   DES.t(key)（§C の表）
+app-v3/js/store.js                  DES.store（localStorage `des3.*`、try/catch）
+app-v3/js/plan.js                   予定の状態機械・空き時間計算・描画（§D）
+app-v3/js/talk.js                   会話の描画・composer・会話→表の連動（§G）
+app-v3/js/app.js                    ルーティング・シェル・パネル開閉・表示モード・トースト・ダイアログ
+```
+
+- 外部依存は **`@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600;700;800&display=swap')` の 1 行だけ**（tokens.css 先頭）。他の CDN・フォント・script 読み込み禁止
+- ビルド無し。`file://` で開いて動くこと（`fetch` 禁止、ES5〜ES2017 の範囲、module 不使用）
+- 素材固有の図版（種・石・紙の模型等）は作らない。アイコンは `reference/codex-mock/nav-icons.md` の線画 + 本書 §F の追加アイコンのみ
+
+## B. ルートとレイアウト
+
+hash ルート: `#talk`（既定・空 hash も talk）/ `#plan`（予定を広く見る）/ `#make` `#works` `#today` `#self` `#map` `#trail`（第 1 スコープ外 — 空状態 1 文のみ。§I）/ `#paused`（「今日はここまで」の後）
+
+**シェル**（codex `shell.html` の DOM 構造どおり）: `.preview-bar`（「体験モック · 架空のデータ」+ role-tabs は **子ども だけ active・他 3 つは disabled**）→ `.shell` = `.sidebar` + `.main-wrap`（`header.topbar` + `main.content`）。サイドバー: brand（DE-SCHOOL / 「バディと、学ぶ。」）、nav 7 入口（nav-icons.md の順・svg verbatim）、`.sidebar-bottom` = `.resume-mini`（「続きをする」/ `DES.data.resume.title` / `.resume-next` = `DES.data.resume.next`）+ `.profile`（avatar「は」/ はると / `DES.t('mode_js'|'mode_es')` に応じ「中学生向けの表示」「小学生向けの表示」/ 表示設定ボタン）+ 小リンク「はじめの状態に戻す」（全 `des3.*` を消して reload）。
+topbar: `.breadcrumb` = `<span class="crumb-base">バディエージェント</span> / <strong>話す</strong>`（`#plan` では `<strong>今日の予定</strong>`）、`.top-actions` = `.save-indicator`「このブラウザに保存」/ `.top-link` 続きをする / **`.top-link.plan-toggle`「今日の予定」**（§F の calendar アイコン + ラベル、`aria-pressed` = パネル開閉状態）/ `.top-link` 表示設定。
+
+**話す（`#talk`）の 3 列**:
+
+| 幅 | 構成 |
+| - | - |
+| ≥ 1121 | `.content` 内 `.talk-layout` = grid `minmax(0,1fr) 360px`、gap 28px。左 `.chat-page`（max-width 820・中央）、右 `aside.plan-panel`（sticky top 96px、`max-height: calc(100vh - 116px)`、内部スクロール）。パネルを閉じると `.talk-layout.panel-closed` = `1fr` で会話が中央 820 に戻る |
+| 951〜1120 | パネル幅 300px、gap 20px。開閉は同じ |
+| 701〜950 | サイドバーは codex の 76px アイコン列。パネルは **既定で閉じ**、「今日の予定」ボタンで右から被さる drawer（幅 340、`position:fixed`、背景 `#0003` の scrim、scrim クリック / Esc / 閉じるボタンで閉じる） |
+| ≤ 700（390） | codex の mobile 形（サイドバーは左 drawer・hamburger）+ **下タブ帯** `.tabbar`（固定・高さ 56px・オリーブ `#524e44` 地に白文字・5 つ: 話す / 作る / 作品 / お題 / もっと。「もっと」= 左 drawer を開く）。「今日の予定」は topbar のボタンから **上から引き出すシート** `.plan-sheet`（`position:fixed; inset:0 0 auto 0; max-height:88vh`、translateY 220ms、閉じるボタン + scrim）。会話は全幅、composer は `position:sticky; bottom:56px`。横スクロール禁止 |
+
+パネル開閉状態は `des3.panel`（`'open'|'closed'`、既定 open）。≤ 950 では drawer / sheet の一時状態で、保存値は書き換えない。
+
+**`#plan`**: `.content` 内 `.plan-page`（max-width 1180）= 左「今日の予定」表（§D と同じコンポーネント・広い形）+ 右「今まで取り組んできたこと」グリッド（§E-3）を 2 列（`minmax(0,1.1fr) minmax(0,1fr)`）。≤ 950 で 1 列。
+
+## C. 表示モード（v2 §C を継承）
+
+`<html data-mode="js|es">` 既定 js、`des3.mode` に保存。切替は `.profile` の表示設定ボタン → `<dialog class="mode-dialog">` 見出し「表示を選ぶ」・2 つの `.radio-card`（中学生向け / 小学生向け）・`.dialog-footer` に「これでいい」「やめる」。`DES.t(key)` の表（追加分を含む。無い key はそのまま key を返さず console.warn + js 値）:
+
+| key | js | es |
+| - | - | - |
+| talk | 話す | はなす |
+| make | 作る | つくる |
+| works | 作品 | 作品 |
+| today | 今日のお題 | きょうのお題 |
+| self | 自己理解 | 自分を知る |
+| map | 学びマップ | 学びマップ |
+| trail | あしあと | あしあと |
+| more | もっと | もっと |
+| plan | 今日の予定 | きょうの予定 |
+| resume | 続きをする | つづきをする |
+| later | あとで | あとにする |
+| add_to_plan | 予定に入れる | 予定に入れる |
+| add_activity | 取り組みを追加 | やることを足す |
+| ask_buddy | バディに相談する | バディにそうだんする |
+| done_today | 今日はここまで | きょうはここまで |
+| finished | 終わった | おわった |
+| remove | 外す | はずす |
+| hide | 非表示にする | かくす |
+| show | 表示する | もう一度出す |
+| move_up | 上へ | 上へ |
+| move_down | 下へ | 下へ |
+| fix_time | 時刻を直す | 時間をかえる |
+| join | 参加する | 参加する |
+| skip_ex | 今日は見送る | きょうはやらない |
+| decide_later | あとで決める | あとで決める |
+| keep_tomorrow | 明日にとっておく | あしたにとっておく |
+| am | 午前 | 午前 |
+| pm | 午後 | 午後 |
+| lunch | 昼 | お昼 |
+| free | あいている | あいている |
+| history | 今まで取り組んできたこと | 今までやってきたこと |
+| goals_head | 今後やってみたいこと・できるようになりたいこと・目標 | やってみたいこと・できるようになりたいこと・目標 |
+| goal_empty | 話しながら決まる | 話しながら決まる |
+| kind_fixed | 固定 | きまっている予定 |
+| kind_event | 当日の行事 | きょうの行事 |
+| kind_optional | 参加自由 | 参加自由 |
+| kind_mine | 自分で選んだ | 自分でえらんだ |
+| kind_proposed | 提案中 | ていあん中 |
+| kind_held | 保留 | あとで決める予定 |
+| overlap | 重なり | 時間が重なる |
+| ai_proposal | バディの提案 | バディのていあん |
+| own_label | 本人の言葉 | 本人のことば |
+| record_label | 記録 | きろく |
+| mode_js | 中学生向け | 中学生向け |
+| mode_es | 小学生向け | 小学生向け |
+| share_note | この会話は田中さんも見られるよ。おうちの人には、学んだことをまとめて伝えるね | この会話は田中さんも見られるよ。おうちの人には、まなんだことをまとめてつたえるね |
+| welcome_h | 今日は、何を話そう。 | きょうは、何を話そう。 |
+| welcome_p | 相談でも、ひとことでも。予定を見ながら話せるよ | そうだんでも、ひとことでも。予定を見ながら話せるよ |
+| bridge | この話の続きを、作る で試してみる？ | この話のつづきを、つくる でためしてみる？ |
+| composer_ph | 話したいことを書く | 話したいことを書いてね |
+| send | 送る | 送る |
+| photo | 写真 | 写真 |
+| voice | 音声の体験例 | 音声のれい |
+| sample_note | 応答はサンプル | 返事はサンプル |
+| paused_h | 今日はここまで | きょうはここまで |
+| paused_p | 会話と予定はこのブラウザに残るよ。次は「続きをする」から戻れる | 会話と予定はこのブラウザにのこるよ。次は「つづきをする」からもどれる |
+| not_yet | ここはまだ作っていないよ。話す か 今日の予定 を使ってね | ここはまだ作っていないよ。はなす か きょうの予定 を使ってね |
+| no_free | 今日はもう空きがないよ。明日にとっておく？ | きょうはもう空きがないよ。あしたにとっておく？ |
+
+| tab_plan | 予定 | 予定 |
+| shorten | 短くする | みじかくする |
+| move_other | 別の時間へ | べつの時間へ |
+| fix_in_plan | 今日の予定で直す → | きょうの予定で直す → |
+| decide | 決める | 決める |
+| cancel | やめる | やめる |
+| keep_text | 残す | のこす |
+| undo | 戻す | もどす |
+| removed_toast | 外したよ | はずしたよ |
+| returned_toast | 「{title}」を 今まで取り組んできたこと に戻した | 「{title}」を 今までやってきたこと にもどした |
+| confirm_mode | この表示にする | この表示にする |
+| choose_mode | 表示を選ぶ | 表示をえらぶ |
+| widen | 広く見る → | 広く見る → |
+| back_talk | 話すに戻る | はなすにもどる |
+| reselect | 選び直す | えらびなおす |
+| start_at | 開始 | はじめる時間 |
+| length | 長さ | 長さ |
+| add_here | ここに入れる | ここに入れる |
+| in_plan | 予定に入っている | 予定に入っている |
+| kept_tomorrow | 明日にとっておいた | あしたにとっておいた |
+| today_done | 今日 {range} | きょう {range} |
+| overlap_with | {title}と重なる | {title}と時間が重なる |
+| no_slot_band | 空いている時間がないよ。短くするか、あとで決めてね | あいている時間がないよ。みじかくするか、あとで決めてね |
+| compact_overlap | 重なりがある | 時間が重なっている |
+| demo_media | このモックでは体験例だけ。本番では写真・音声入力が使える | このモックではれいだけ。本番では写真と音声が使える |
+| prefilled | 入力欄に入れたよ。送るで相談できる | 入力らんに入れたよ。送るでそうだんできる |
+| save_fail | このブラウザに保存できない | このブラウザに保存できない |
+| saved | このブラウザに保存 | このブラウザに保存 |
+| hidden_stub | 非表示: {title} | かくしている: {title} |
+| exercise_skipped | 運動（見送り） | 運動（やらない） |
+| circle_tbd | 確認中 | かくにん中 |
+| back_to_history | 終わった取り組みは、予定表の「終わった」でここへ戻る | おわったことは、予定表の「おわった」でここにもどる |
+| grid_note_more | ほか {n} 回 | ほか {n} 回 |
+
+es: 本文 14px → 15px、`.btn` と行の操作ボタンの最小高 44px → 48px。ruby は nav の「作品」「自己理解→自分を知る（ruby 不要）」「学びマップ」「今日のお題」のみ。**会話本文・記録・本人の言葉は書き換えない**（`DES.data.talk` / `goals` はモードで変えない）。
+
+## D. 予定の状態機械（v2 §L を継承・改訂）
+
+`kind`: `fixed`（お昼）/ `event`（サークル対話）/ `optional`（運動）/ `mine` / `proposed` / `held`。状態列に出す語はこの 6 つのラベル（§C `kind_*`）+ optional の選択 + 「確認中」（circle.today が `'tbd'` のとき）+ 重なり時の「重なり」だけ。**完了・遅れ・経過の語は出さない**（「終わった」は本人の操作名であって表の状態語ではない）。
+
+**表の形**（カレンダー型・上から下へ）: 3 ブロック `午前 10:00〜12:30` / `昼 12:30〜13:30`（fixed 1 行のみ）/ `午後 13:30〜15:30`。各ブロック内は行を開始時刻順に並べ、行間に空きがあれば `.row.free` 「あいている 11:10〜11:30」+ 「取り組みを追加」ボタンを自動挿入する（空き = 15 分以上。optional が `join` のときその枠は埋まり、`skip` のとき 11:30〜12:30 が空き行になる。`undecided` / `later` は optional 行をそのまま出し空き行は出さない）。現在時刻線（`DES.data.now`、橙 1.5px + 左に時刻）を該当ブロック内の位置に 1 本。
+
+**行の構成（PC）**: `.row` = 時間列（`10:00`〜`10:50` 縦 2 行・幅 64px）| 本文（タイトル + kind チップ。proposed は `.src-ai` ラベル「バディの提案」も）| 操作（右端）。≤ 700 は 2 段（上段: 時間 + チップ / 下段: タイトル + 操作）。
+
+| 操作 | 前 | 後 | 見え方・会話への記録 |
+| - | - | - | - |
+| 予定に入れる | proposed | mine | 点線枠 → 実線、チップ「自分で選んだ」。会話に記録行「13:30 に「アクセサリー作り（続き）」を入れた」 |
+| あとで | proposed | held | 行が薄くなりチップ「保留」。同じ行に「予定に入れる」が残る（held → mine 可）。記録行「「ゲーム作り: Python」をあとで決めることにした」 |
+| 上へ / 下へ | mine | mine | 同じブロック内の隣の mine 行と時間帯ごと入れ替え（長さは各自維持し、2 行を詰め直す）。fixed / event / optional は動かない。記録行なし |
+| 時刻を直す | mine | mine | 行内に開始（10:00〜15:15、15 分刻み）+ 長さ（15/30/45/60 分 + 現在値が別ならそれも）+ 「決める」「やめる」。終了は 15:30 で頭打ち。保存で `edited:true`。記録行「「建築（大きく）」を 10:00〜10:45 にした」 |
+| 外す | mine / held | （削除） | 行が消えトースト「外したよ」+ トースト内「戻す」（5 秒）。記録行「「建築（大きく）」を予定から外した」 |
+| 非表示にする | mine | mine（`hidden:true`） | 行が 1 行の薄い stub「非表示: 建築（大きく）」+ 「表示する」に畳まれる。空き時間計算では**埋まったまま**。記録行なし |
+| 終わった | mine | （行を削除し catalog へ戻す） | 行が消え、グリッドの該当取り組みに緑チップ「今日 10:00〜10:50」（`.src-record`）。トースト「「建築（大きく）」を 今まで取り組んできたこと に戻した」+「戻す」。記録行「「建築（大きく）」が終わった（10:00〜10:50）」 |
+| 運動: 参加する / 今日は見送る / あとで決める | optional.choice | join / skip / later | join: 行に「参加する」チップ。skip: 行が「運動（見送り）」の薄い 1 行 stub になり、同枠に空き行「あいている 11:30〜12:30」+「取り組みを追加」。later: チップ「あとで決める」。記録行（skip のみ）「運動は今日は見送ることにした」 |
+| 取り組みを追加（空き行） | — | mine 追加 | 空き行のボタン → `.pick-sheet`（§E-3 のグリッドを選択モードで表示）→ 選ぶと空き行の位置に mine 行（長さ = 空きの長さ、最大 60 分）。記録行「14:15 に「ポスター作り」を入れた」 |
+| 今日の予定に入れる（グリッド） | — | mine 追加 | 最初の空き（15 分以上）に入る（長さ = min(空き, 60)）。**空きが無ければ追加せず**トースト `no_free` + ボタン「明日にとっておく」→ 押すとグリッドの取り組みにチップ「明日にとっておいた」（サンド地・墨文字）。記録行は入った時だけ |
+| バディに相談する（グリッド） | — | — | 話す画面の composer に「「ポスター作り」をやってみたい」を**入力した状態**にしてフォーカス（送信はしない。≤ 950 では drawer / sheet を閉じて composer へ） |
+| ドラッグ | mine | mine | 同ブロック内の mine 行同士の並べ替え（上へ / 下へ と同じ結果）。グリッドの取り組みを空き行へドロップ = 取り組みを追加と同じ。HTML5 DnD（`draggable`）。ドロップ先は `.row.free` と mine 行だけがハイライト（薄橙 `--orange-soft`）。キーボードではボタンで同じ操作ができること |
+
+**重なり**（時刻を直した後に fixed / event / join した optional と重なる）: 行の下にサンド帯 `.overlap-band` 「お昼と重なる」（相手が event なら「サークル対話と重なる」/ optional なら「運動と重なる」）+ 3 候補ボタン「短くする」（相手の開始に合わせ終了を切る）/「別の時間へ」（同じ長さが入る最初の空きへ移す。無ければ帯に「空いている時間がないよ。短くするか、あとで決めてね」と出し移動しない）/「あとで決める」（重なったまま状態チップ「重なり」を残し、チップを押すと 3 候補が再び開く）。コンパクト表示（≤ 950 の drawer / sheet）では帯に「重なりがある」+ リンク「今日の予定で直す →」（`#plan` へ）だけ。
+
+**提案の生成**（会話 → 表）: §G。**本人の編集が常に勝つ**: `edited:true` の行はバディの提案・自動詰めで動かさない。
+
+状態の保存: `des3.plan`（plan 配列全体）/ `des3.catalogMarks`（取り組み id → `{today:'10:00〜10:50'}` or `{tomorrow:true}`）/ `des3.goals` / `des3.talk`（追加分のみ）/ `des3.panel` / `des3.mode` / `des3.hidden`（nav 以外の折りたたみ）。無ければ `DES.data` の初期値。
+
+## E. 右パネル・グリッド・目標
+
+### E-1 パネルの骨格
+`aside.plan-panel` = `.panel-head`（h2 `DES.t('plan')` + 日付「11/2（月）· 月水金A」+ 閉じるボタン ×）→ `.panel-tabs`（`.segmented` 2 つ: 「予定」/ `DES.t('history')`。選択は `des3.panelTab`）→ 予定タブ = §E-2 目標 3 枠（コンパクト）+ §D の表 / 今までタブ = §E-3 グリッド。パネル内の文字は 12〜13px、行の最小高 44px（es 48px）。
+
+### E-2 目標 3 枠（`DES.data.goals`）
+見出し `DES.t('goals_head')`（10px eyebrow）。3 枠を横並び（パネル内では 1 列）。text あり = 白地 + 左 3px 青 `#2f557d` + 「本人の言葉 11/2」のチップ（`.src-own`、22px）。text 無し = 破線枠 `1px dashed #cfcabd` + 灰文字 `goal_empty`。枠をクリック → 行内 textarea（1 行）+「残す」「やめる」。空で残す = null に戻る。これも本人の言葉（青）。保存 `des3.goals`。会話への記録行「「できるようになりたいこと」に「〜」と書いた」。
+
+### E-3 今まで取り組んできたこと（グリッド）
+`DES.data.catalog` をカテゴリ × 取り組みで描く。PC（`#plan`）= カテゴリを列見出しにした 7 列グリッド（セル = 取り組みの小カード）。パネル内・≤ 950 = カテゴリごとの縦リスト（カテゴリ見出し + 取り組みカード 1 列）。各カードに操作 2 つ: `add_to_plan` / `ask_buddy`（アイコンボタン + title、PC ではホバー / フォーカスで表示、≤ 950 は常時）。チップ: 今日の予定に入っている取り組み = 「予定に入っている」（`.pill`）/ 終わった = 「今日 10:00〜10:50」（`.src-record` 緑）/ 明日にとっておいた = 「明日にとっておいた」（サンド）。注記（グリッドの下・10px muted）: 「終わった取り組みは、予定表の「終わった」でここへ戻る」。
+
+### E-4 カラー（tokens.css の追加）
+```
+--sand:#f1ece3; --sand-ink:#66625a;           /* fixed / event 行の地と文字 */
+--own:#2f557d;                                  /* 本人の言葉 */
+--record:#476f63; --record-soft:#e9f0ec;        /* 記録 */
+--ai:#e3a94a; --ai-ink:#8a5a00; --ai-soft:#fff4de; /* バディの提案（枠は 1px dashed） */
+--gap:#6f6b62; --olive:#524e44; --cream:#fff8e8;
+--tabbar:#524e44;
+```
+fixed / event 行 = `--sand` 地・`--sand-ink` 文字。optional 行 = 白地・`1px dashed var(--line)`。mine 行 = 白地・実線 `var(--line)`・左 3px `--record`。proposed 行 = `--ai-soft` 地・`1px dashed var(--ai)`。held 行 = mine の形で `opacity:.6`。現在時刻線・主ボタン・パネル開閉の active = 橙のみ。チップは高さ 22px・11px・radius 999。
+
+## F. アイコン（`DES.icon(name)` — 24 viewBox・stroke 1.65・線画。nav 7 種は nav-icons.md verbatim）
+追加: `calendar`（`M4 5h16v15H4z M4 9h16 M8 3v4 M16 3v4`）/ `close`（`M6 6l12 12 M18 6L6 18`）/ `plus`（`M12 5v14 M5 12h14`）/ `chat`（= talk と同じ path）/ `up`（`M12 19V5 M5 12l7-7 7 7`）/ `down`（`M12 5v14 M5 12l7 7 7-7`）/ `more`（`M5 12h.01 M12 12h.01 M19 12h.01`、stroke-width 3）/ `check`（`M5 12l5 5L20 7`）/ `drag`（`M9 6h.01 M15 6h.01 M9 12h.01 M15 12h.01 M9 18h.01 M15 18h.01`、stroke-width 3）/ `quote`（`M7 7h4v4H7z M13 7h4v4h-4z M7 11c0 3-2 4-2 4 M13 11c0 3-2 4-2 4`）/ `record`（`M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18 M9 12l2 2 4-4`）/ `spark`（`M12 3v4 M12 17v4 M3 12h4 M17 12h4 M6 6l2.5 2.5 M15.5 15.5 18 18 M6 18l2.5-2.5 M15.5 8.5 18 6`）/ `lock`（`M6 11h12v9H6z M9 11V7a3 3 0 0 1 6 0v4`）/ `pause`（`M8 5v14 M16 5v14`）/ `camera`（`M4 8h4l2-2h4l2 2h4v11H4z M12 17a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7`）/ `mic`（`M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3 M5 11a7 7 0 0 0 14 0 M12 18v3`）/ `send`（`M4 12l16-8-6 16-2-6-8-2z`）。
+
+**バディのキャラ**: `DES.buddy(size, mood)` の戻り値だけ。codex の `.buddy-mark`（角丸四角 + ··）は**使わない**（CSS も入れない）。話す画面の welcome = `DES.buddy(56,'happy')`、各 buddy メッセージの左 = `DES.buddy(30,'neutral')`、提案カードのラベル横 = `DES.buddy(18,'think')`。リング・枠は付けない。
+
+## G. 話す画面（codex .chat-page の構成どおり）
+
+順序: welcome（buddy 56 + h1 `welcome_h` + p `welcome_p`）→ `.message-list`（`DES.data.talk` + `des3.talk`）→ `.chat-bridge`（p `bridge` + `.btn` `DES.t('make')`→ `#make`）→ `.composer`（textarea placeholder `composer_ph` / `.composer-bottom` = 左 `.btn.ghost.small` 写真（camera）・音声の体験例（mic）| 右 `.hint` `sample_note` + `.btn.orange` 送る（send））→ `.privacy-line`（lock + `share_note`）→ `.btn.ghost` `done_today`（pause）→ `#paused`。
+
+メッセージ: `.message.user .bubble`（右・`#eeece3`。codex のクラス名をそのまま使う）/ `.message.buddy`（左に `DES.buddy(30)` + 白 bubble）/ **`.message.record`**（表の操作の記録: 中央寄せでなく左、左 3px `--record`、11px、`.src-record` チップ「記録」+ 時刻 + 文）。時刻は bubble の下に 10px muted。
+提案を含む buddy メッセージ（`proposal` あり）: bubble の下に `.proposal-card`（`--ai-soft` 地・dashed `--ai`・`DES.buddy(18,'think')` + ラベル `ai_proposal` + 「13:30〜14:15 アクセサリー作り（続き）」）。カード内に `add_to_plan` / `later` の 2 ボタン — **右パネルの行と同じ状態を参照**し、入れた後はカードが「予定に入っている」（mine）/「保留」（held）の表示に変わりボタンが消える。
+
+**composer 送信（応答はサンプル・決定論）**: 空は送れない（disabled）。送信で child メッセージ追加・textarea クリア・`sending` 中は送るボタン disabled（150ms）。応答規則（上から最初に当たるもの）:
+1. 本文に `DES.data.catalog` の取り組み title（または title の「:」以降 / 「 ex)」以前の短縮形）を含む → 最初の空き（15 分以上）に proposed 行を追加し、buddy「○○:○○ から「<title>」を入れておく？ <長さ> 分くらい」+ 提案カード。空きが無ければ buddy `no_free` + カード内ボタン「明日にとっておく」
+2. 「運動」と「見送」を含む → optional を skip にし buddy「わかった。11:30〜12:30 はあいたよ。何か入れる？」
+3. 「午後」と「やりたい」「したい」を含み取り組み名が無い → buddy「午後は 13:30〜15:30 があいている。今まで取り組んできたことから選ぶ？ 右の表から入れられるよ」（≤ 700 では「右の表」→「予定の表」）
+4. それ以外 → buddy「聞いたよ。予定に入れたいことがあれば、名前を教えて。表から選んでもいいよ」
+
+写真 / 音声ボタンは押すとトースト「このモックでは体験例だけ。本番では写真・音声入力が使える」。`.attachment` 行や dialog は出さない。
+
+## H. 操作ループの受け入れ基準（ui-interaction-completeness）
+- [ ] CRUD 対称: 予定行は 入れる（proposed→mine / グリッド / 空き行）・見える・直せる（時刻・順番）・外せる（戻す付き）・隠せる（表示する付き）・終わった（戻す付き）。目標 3 枠は 書く・直す・空にする。省略: 行タイトルの文字編集（理由: 取り組み名は catalog が正本）
+- [ ] フィードバック: 全操作にトースト or 行の差し替え（200ms ease-out）。送るは処理中 disabled。ドロップ先ハイライト
+- [ ] フォーム: composer 送信で入力クリア + メッセージ即時反映。目標の編集はやめるで元に戻る
+- [ ] 状態: 空き行（0 件なら出さない）/ 午後が空（空き行 1 本）/ 提案 0 件 / goals null の破線 / 第 1 スコープ外ルートの空状態 1 文
+- [ ] 実機: 1440 / 1024 / 390 のレンダで目視（司令塔）
+
+## I. 空状態・禁止・品質（v2 §I/§J/§N を継承）
+- 空状態は左揃え・アイコンなし・バディ口調 1 文（§C `not_yet` など）。スピナー・ロード演出なし
+- 絵文字をアイコンにしない。`alert/confirm/prompt` 禁止。評価語（点数・ランキング・順位・評価・成績・レベル・集中力・得意・苦手・上手・成長）禁止。「データがありません」禁止。「学びのバディ」禁止（呼び名は「バディエージェント」、短縮は「バディ」）
+- a11y: focus-visible は codex の `outline:3px solid #a9590b; outline-offset:4px` をそのまま使う。チップに `aria-label`（出所名）。`DES.buddy` は `role="img"`。drawer / sheet / dialog は Esc で閉じ、閉じたらトグルへフォーカスを戻す。操作領域 js 44px / es 48px。`prefers-reduced-motion` で transition 0
+- 動き: 行の差し替え 200ms（max-height + opacity）、チップ 150ms、シート 220ms。他は動かさない
+- 橙の用途: 主ボタン・現在時刻線・ドロップ先・nav の現在地・パネル開閉の active のみ。構造色に使わない
+- 同時に見える操作 ≤ 5 は会話列の折り目上で数える（写真・音声・送る・作る・今日はここまで = 5。suggestions チップは出さない）
+- 横スクロール禁止（全幅）。`document.documentElement.scrollWidth <= innerWidth`
+
+## J. 検証（実装担当が実行し verdict だけ報告）
+```
+sh tools/check.sh talk plan make paused          # CHECK_RESULT=PASS が必須（禁止語 0・JS エラー 0）
+sh tools/render.sh <scratch>/render talk plan    # 1440 / 1024 / 390 の png 6 枚
+```
+加えて headless Chrome の `--dump-dom` で `#talk` 1440 に `.plan-panel .row` が 7 本以上（p1〜p7 + 空き行）、`.message.buddy > .des-buddy` が 3 つ（提案カード内の 2 つを含めると `.des-buddy` は welcome と合わせて 6 つ）、`buddy-mark` が 0 件であることを grep -c で確認する。
+
+## K. 第 1 スコープ外（作らない・報告に残す）
+作る / 作品 / 今日のお題 / 自己理解 / 学びマップ / あしあと の中身、文字サイズ・ふりがな・動きの個別設定 UI、サポーター・保護者画面、サークル対話の切替 UI（データは `circle.today` を読むだけ・`'tbd'` の「確認中」表示はコードとして対応）、写真・音声の実入力、本番 AI 応答。
+
+## R. 裁定（2026-11-03 Astra 契約レビューへの回答。§B〜§J と食い違う場合は本節が優先）
+
+### R-1 占有と空き時間（§D）
+- 占有する行: `fixed` / `event`（`tbd` も占有）/ `optional` の `undecided` `join` `later` / `mine`（hidden も占有）/ **`proposed`（提案は枠を押さえる）**。占有しない: `held` / `optional.skip`
+- `held → mine`（予定に入れる）は再検査: 元の時間帯が空いていればそのまま。空いていなければ同じ長さが入る最初の空き（R-4 の探索）へ移し記録行を「{start} に「{title}」を入れた（時間を変えた）」とする。それも無ければ元の時間帯に戻し重なり帯（R-3）
+- 空き行は差分で出す: 占有の合間で 15 分以上の区間すべて（optional.skip の 11:30〜12:30 に 30 分の mine を入れたら残り 30 分が空き行になる）
+- 新規行は長さ = min(空き, 60)。提案の生成（§G 規則 1）も同じ `freeSlots()` を使う
+
+### R-2 上へ / 下へ・ドラッグ（§D）
+- 対象: **同じブロック内で、間に占有行（fixed / event / optional-非skip / proposed）を挟まない隣接 mine 行の組**だけ。該当が無ければボタン disabled（title「間に動かせない予定がある」）。初期データでは p1 と p3 の間に p2 があるため、両者とも disabled
+- 入れ替え: 早い方の開始を A とし、下へ動く行が A から始まり、もう 1 行がその終了から続く（長さは各自維持）。結果が次の占有行と重なれば、動かした行に重なり帯（R-3）
+- 入れ替え・ドラッグ・時刻を直す・重なり候補の実行は、いずれも関わった行に `edited:true` を付ける。自動の詰め直しは R-2 の入れ替え時に限る（相手行が `edited:true` でも入れ替えは本人操作なので動かす）
+- 記録行「「{a}」と「{b}」の順番を入れ替えた」
+
+### R-3 重なり（§D）— 発火条件と候補
+- 時刻を確定するあらゆる操作（時刻を直す / 入れ替え / ドラッグ / held→mine / 追加 / skip→join）のあとに全行を共通の `overlaps(rows)` に通す。mine 同士も対象（帯は「{title}と重なる」= `overlap_with`）
+- ブロック所属: 開始 < 12:30 = 午前、開始 ≥ 13:30 = 午後。**開始の選択肢に 12:30〜13:15 は出さない**（お昼の中からは始められない）。終了が 12:30 を越える行は「お昼と重なる」帯
+- 候補: **短くする** = 自分の開始 < 相手の開始 のときだけ出す（相手の開始まで切る）。包含・同時開始なら出さない / **別の時間へ** = 自分を除いた占有集合で、午前→午後の時刻順に同じ長さが入る最初の空きへ（無ければ `no_slot_band`）/ **あとで決める** = チップ「重なり」で保持
+- 記録行: 短くする「「{title}」を短くした（{start}〜{end}）」/ 別の時間へ「「{title}」を {start}〜 に移した」/ あとで決める「「{title}」の重なりはあとで決める」
+
+### R-4 時刻を直す（§D）
+開始の選択肢 = 10:00〜12:15 と 13:30〜15:15 の 15 分刻み + 現在値が刻みに無ければ現在値も（p3 の 11:10 など）。既定 = 現在値。長さも同じ規則。開いてそのまま「決める」= 変更なし（記録行なし）
+
+### R-5 optional（運動）の 4 値
+| choice | 行の見え方 | 占有 | 操作 |
+| - | - | - | - |
+| undecided（初期） | 「運動」+ チップ「参加自由」 | する | 参加する / 今日は見送る / あとで決める |
+| join | チップ「参加する」 | する | 選び直す（→ undecided）。枠に mine 行があれば運動行に帯「{title}と重なる」 |
+| skip | stub `exercise_skipped` | しない | 選び直す（→ undecided。枠内の mine 行は残す） |
+| later | チップ「あとで決める」 | する | 選び直す |
+記録行: join「運動に参加することにした」/ skip「運動は今日は見送ることにした」/ later「運動はあとで決めることにした」/ 選び直す は記録なし
+
+### R-6 非表示・外す・終わった・戻す
+- hidden stub の操作は「表示する」だけ。外す / 終わった は表示してから
+- 戻す（undo）は 外す・終わった とも **5 秒**。復元内容 = 行（hidden 含む全フィールド）+ catalogMarks の差分。記録行は消さず「「{title}」を戻した」を追記。復元先が埋まっていれば行は戻し重なり帯（R-3）
+- catalogMarks の形: `{ [activityId]: { today: ['10:00〜10:50', ...], tomorrow: true|false } }`。グリッドのチップ: 予定行が参照していれば `in_plan` / today の各要素に `today_done`（2 つまで表示、超過は `grid_note_more`）/ tomorrow なら `kept_tomorrow`。同じ取り組みを複数の行で予定してよい（p3 と p6）
+
+### R-7 会話 ↔ 表（§G）
+- 記録行の文は**テンプレート**（`{title}` `{start}` `{end}` `{label}` を埋める）。§D の表の文は例
+- 提案カードの状態表: proposed = 2 ボタン / mine = 「予定に入っている {start}〜{end}」ボタンなし / held = 「保留」+ ボタン「予定に入れる」 / 行が外された・終わった = 「予定から外した」「終わった」ボタンなし / 時刻変更 = カードの時刻は行に追従
+- 規則の順序: まず「運動」+「見送」（規則 2）を処理し、次に取り組み名（規則 1）。両方あれば返事は 2 文を改行で連結。「午前」「午後」が本文にあれば探索をそのブロックに限る。規則 3 の返事は `freeSlots()` から作る: 「午後は {range, …} があいている。今まで取り組んできたことから選ぶ？ 表から入れられるよ」/ 空きなし「午後はもう空きがないよ。明日にとっておく？」
+- 名前照合: 各 catalog item に `aliases`（i18n.js 内の表で定義。例: prog-python = ['ゲーム作り: Python','Python','パイソン'] / mc-build = ['建築'] / craft-accessory = ['アクセサリー'] / basic-eboard = ['eboard'] …全 27 件を実装担当が title から機械的に作る: title 全体・「: 」以降・「 ex)」以前）。最長一致、同点なら catalog 順で先
+- 新規 id: 行 `'p' + Date.now().toString(36) + '-' + 連番`、会話 `'t' + 同じ`。proposed 行は `from` に会話 id、会話は `proposal` に行 id を相互に持つ
+
+### R-8 レイアウト・入口（§B/§E）
+- `#plan` への入口: パネル見出し右の小リンク `widen`（→ `#plan`）。`#plan` では topbar の plan-toggle を `back_talk`（→ `#talk`）に差し替える
+- ルート × 幅 × パネル: `#talk` ≥ 951 = `des3.panel` に従う / `#talk` ≤ 950 = 閉（drawer / sheet は一時・幅変更と遷移で閉じる）/ `#plan` = パネルなし（本文に表）/ スコープ外ルート・`#paused` = パネルなし・plan-toggle は `#talk` へ戻して開く
+- 目標 3 枠は `#plan` でも表の上に横並び 3 列（≤ 700 は 1 列）。各枠は label を 11px eyebrow として常時表示。長い `goals_head` は `#plan` のみ（パネルでは省く）
+- `#plan` のグリッド: 7 列にしない。**カテゴリごとのカード**（カテゴリ名 + 取り組みの縦リスト）を ≥ 1121 で 2 列、以下 1 列。パネル内も同じ 1 列
+- 行の操作の収納: mine 行は右端「…」ボタン（`more` アイコン・aria-haspopup）→ 行直下に `.row-menu`（6 操作を縦、44px / es 48px、Esc と外クリックで閉じる）。proposed は 2 ボタン常時、optional は 3 ボタン常時（≤ 700 と 300px パネルでは optional も「…」へ）。コンパクト（≤ 950 の drawer / sheet）も同じ
+- 時間軸: 等高リスト（分あたり高さは持たない）。現在時刻線は「開始 ≤ now の最後の行」の直下（その行が now を含むときはその行の上辺に重ねる）。now が 12:30〜13:30 のときはお昼行の上辺
+- `.pick-sheet` / drawer / mode-dialog / `.row-sheet`（≤ 700 の行メニュー）は **すべて `<dialog>` + `showModal()`**（フォーカス封じ込めは native）。閉じたら開いたボタンへフォーカスを戻す。pick-sheet の各取り組みは `add_here` 1 ボタンだけ（相談は出さない）
+- グリッドの操作は**文字つき `.btn.small`** を常時表示: `add_to_plan` / `ask_buddy`。`ask_buddy` は composer の下書き末尾に改行して「「{title}」をやってみたい」を足し（上書きしない）トースト `prefilled`
+- `#paused` = codex `.paused`: `DES.buddy(56,'neutral')` + h1 `paused_h` + p `paused_p` + `.btn.primary` `resume`（→ `#talk`、composer の下書きと scroll 位置は `des3.draft` から復元）
+
+### R-9 CSS 例外（§A の「値を変えない」からの明示的な逸脱）
+- `.toast.actionable { pointer-events:auto }`（戻す・明日にとっておく を押せるように）
+- 行内・グリッド内・メニュー内の `.btn.small` は `min-height:44px`（es 48px）。topbar / composer の `.btn` は codex の値のまま
+- held 行は背景 `#faf9f5`・枠 dashed のみ弱め、文字と操作は AA（`--ink` / `--muted`）のまま。`opacity` は使わない
+- es の部位別サイズ: 本文 15 / パネル本文 13→14 / チップ・記録 11→12 / eyebrow 10→11。文字サイズ・ふりがな・動きの個別設定 UI は第 1 スコープ外（§K に追記）
+
+### R-10 出所部品の適用（§E）
+目標 = `.src-own`（青・quote）/ 終わったチップ・記録行 = `.src-record`（緑・record）/ 提案 = `.src-ai`（琥珀・spark）。チップは色 + ラベル + アイコンの 3 重、`aria-label` に出所名
+
+### R-11 保存・入力
+- `localStorage` が throw したら状態はメモリに保持し、`.save-indicator` を `save_fail`（muted・緑点なし）に変える
+- 自由入力（composer / 目標）は `textContent` で描く（innerHTML に入れない）。送信は「送る」ボタンと Ctrl/Cmd+Enter のみ。IME 変換中（`isComposing`）は送らない。下書きは input ごとに `des3.draft` へ
+- `share_note` は本番想定の文（§J 継承）。モックで実際に共有されないことは `.preview-bar` の「体験モック · 架空のデータ」で示す（追加文は置かない）
+
+### R-12 サークル対話
+p2 の開始・終了は `classroom.circle` から派生（`today` + `minutes`。data.js の p2 は 10:50 と一致）。`'none'` = 行を出さず占有もしない / `'tbd'` = 10:50〜11:10 の位置に「サークル対話」+ チップ `circle_tbd`、占有する。切替 UI は作らない
+
+### R-13 検証（§J の補強）
+- `check.sh` は維持。加えて実装担当は (a) `grep -rnE '点数|ランキング|順位|評価|成績|レベル|集中力|得意|苦手|上手|成長|データがありません|学びのバディ' app-v3/` が 0 件 (b) `--dump-dom` の出力が 5KB 以上（空 DOM を PASS にしない）(c) node で plan.js の純関数（freeSlots / overlaps / swap / setTime / finish / undo / optional 遷移）を呼ぶテストを scratchpad に書いて全 pass、を verdict として報告する
+- 操作後の状態（パネル閉・es・optional 4 値・非表示・戻す・重なり 3 候補・保存復元）は司令塔が実ブラウザで操作して確認する（実装担当は node テストまで）
+- 390 の check.sh は window 500 clamp の既知制限。横スクロールは render.sh の iframe 390 の画像で目視する
+
+## S. 設計案 v1.0（2026-11-03）の反映（§R と同じく §B〜§J に優先）
+
+正本: `reference/統合構想設計案-v1.0-2026-11-03.md`「話す」「今日の予定」「本人の関与と達成へ返すフィードバック」「代表例7」。追加された方針: 迷っているときは一日分の希望を先に決めさせず、**仮の枠（まず 10〜15 分触ってみて、続けるか考える）**から始められる / **選ぶ・並べ替える・任せる**という本人の判断が表に反映され、**どこを変えたかも分かる** / 何から始めるか分からない場合は「何をしたい？」を繰り返さず、体験・関心を手がかりに**短い試行案を 1 つ**示す。
+
+### S-1 「まかせる」（任せる）— 空き行の 2 つ目の操作
+- 空き行 `.row.free` のボタンを 2 つにする: `add_activity` / **`leave_it`（js「バディにまかせる」/ es「バディにまかせる」）**。コンパクト表示でも 2 つとも出す（文字つき `.btn.small`）
+- 押すと `DES.plan.suggestTrial(slot)`: 取り組みを決定論で 1 つ選び、その空き行の先頭に **15 分の proposed 行（`trial:true`）** を置く。選び方の優先順: (1) `goals` の text に title / alias が含まれ、かつ今日の予定に無い取り組み（理由 `reason_goal`）→ (2) 今日の予定に既にある取り組み（理由 `reason_continue`。行タイトルは「{title}（続き）」）→ (3) catalogMarks.today がある取り組み（理由 `reason_done`）→ (4) catalog 順で予定に無い最初の取り組み（理由 `reason_catalog`）
+- 会話に buddy メッセージ（`proposal` = 行 id）: 「まず 15 分、「{title}」を触ってみる？ {reason} 続けるか、そのあと決めてもいいよ」。提案カードは通常どおり（`add_to_plan` / `later`）。カードと行に小チップ **`trial`（js「おためし 15 分」/ es「おためし 15分」）**
+- 予定に入れると mine 行になりチップ `trial` は残る。「続ける」は別操作を作らず **時刻を直す**（長さ）で伸ばす。記録行「「{title}」をおためしで {start} に入れた」
+- 空きが 15 分未満の行には `leave_it` を出さない
+
+### S-2 「わからない」への応答（§G 規則 0 — 規則 1〜4 より先）
+本文に「わからない」「分からない」「決められない」「何したら」「なにしたら」「何をしたら」のいずれかを含む → S-1 と同じ選び方で**今日の最初の空き**（15 分以上。無ければ 午後の提案は出さず「今日はもう空きがないよ。明日、まず 15 分だけ触るのはどう？」）に trial 行を置き、buddy は S-1 の文で返す。「何をしたい？」と聞き返さない
+
+### S-3 提案を断る
+proposed 行の操作に **`decline`（js「違う」/ es「ちがう」）** を足す（カードにも同じボタン。計 3 つ: 予定に入れる / あとで / 違う）。押すと行を消し（占有解除）、カードは「見送った」表示（ボタンなし）。記録行「「{title}」の提案は見送った」。トースト `undo` 5 秒で戻せる
+
+### S-4 どこを変えたかが分かる
+- `edited:true` の mine 行には時間列の下に 10px の印 **`edited_mark`（js「直した」/ es「なおした」）**（`--record` 緑・アイコンなし）
+- バディが置いた行（proposed / trial 由来の mine）はタイトル横に `.src-ai` の小ラベル `ai_proposal` を **mine になった後も 1 行目だけ**残さない（= 消す）。代わりに記録行が出所を保つ（会話に「{start} に「{title}」を入れた」が残る）
+
+### S-5 i18n 追加（§C の表に加える）
+| key | js | es |
+| - | - | - |
+| leave_it | バディにまかせる | バディにまかせる |
+| trial | おためし 15 分 | おためし 15分 |
+| decline | 違う | ちがう |
+| declined | 見送った | 見送った |
+| edited_mark | 直した | なおした |
+| reason_goal | 「やってみたい」と書いてあったから。 | 「やってみたい」って書いてあったから。 |
+| reason_continue | 今日の続きだから。 | きょうのつづきだから。 |
+| reason_done | 前にやったことがあるから。 | 前にやったことがあるから。 |
+| reason_catalog | 今まで取り組んできたことから選んだよ。 | 今までやってきたことからえらんだよ。 |
+| trial_ask | まず 15 分、「{title}」を触ってみる？ {reason} 続けるか、そのあと決めてもいいよ | まず 15分、「{title}」をさわってみる？ {reason} つづけるか、そのあと決めてもいいよ |
+| no_free_trial | 今日はもう空きがないよ。明日、まず 15 分だけ触るのはどう？ | きょうはもう空きがないよ。あした、まず 15分だけさわるのはどう？ |
+
+### S-6 スコープ外のまま（§K に追加）
+五つの観点（関心・体験・習熟・心理・志向性）の表示・編集 UI、サポーター側の観察入力、実演・見本の再生。本人の「任せる」と「違う」は S-1 / S-3 の範囲で反映する
+
+## T. 修正裁定（2026-11-03 Astra 実装レビュー + 司令塔目視。§R/§S と同じく優先）
+
+### T-1 状態機械（plan.js）
+- 入れ替え（R-2）: 結果の 2 行がブロックの終端（午前 12:30 / 午後 15:30）を越えるなら入れ替え不可（ボタン disabled・title「この時間には入らない」）。次の占有行との重なりは従来どおり帯
+- 重なりの帰属: `overlaps(rows, c, actorId)` に操作した行の id を渡し、関わる組では**操作した行**に帯を出す。操作行が無い（再読込など）ときは従来の順位
+- 運動 join と mine の重なり: 帯は **mine 行**に出し、3 候補も mine 行で解消する（運動の時刻は固定）。運動行には帯を出さない
+- hidden 行と表示行の重なり: 帯は**表示されている行**に出す
+- 「短くする」の条件は「自分の開始 < 相手の開始」だけ（自分が相手を包含していても可。現状の実装を正とし R-3 の「包含」の語を削る）
+- 「あとで決める」も `edited:true` を付ける
+- 会話経由の運動 skip（§G 規則 2）は記録行を足さない（バディの返事が記録の代わり。現状を正とする）
+
+### T-2 入力・a11y
+- 左 drawer（サイドバー・≤ 700）も `<dialog>` + `showModal()`。scrim クリックで閉じる
+- トーストは、plan-dialog が開いているときはその dialog の内側（末尾）に描く。閉じたら body 直下へ戻す
+- `.composer textarea` の `outline:none` は通常時だけ。`textarea:focus-visible` は codex のリング（3px #a9590b / offset 4px）を出す
+- 行・提案カード・編集中目標の focus-visible offset は 4px
+- 行メニューは外クリック・写真等の他操作で必ず DOM も閉じる（再描画）
+- トーストの期限後は `hidden` を付け、ボタンを DOM から外す
+- パネルタブ・閉じるボタンは js 44px / es 48px
+- 出所チップの `aria-label` = 出所名 + 表示文（例「記録 今日 10:00〜10:50」）。提案カードのラベルは `.src-ai` チップ（spark + `ai_proposal`）に統一し、`DES.buddy(18,'think')` はチップの左に置く
+- `des3.catalogMarks` は各値が `{today: string[], tomorrow: boolean}` のときだけ採用。違う形は**そのキーだけ**初期値へ
+- 幅変更時: breakpoint が同じでも一時 dialog（drawer / sheet）は閉じる
+- `DES.t` の未知キーは warn + **key 文字列**を返す（空文字にしない）
+
+### T-3 CSS（codex 値の扱い）
+- `html[data-mode="es"] .btn{min-height:48px}` をやめ、行・グリッド・メニュー・パネル操作の `.btn.small` と行ボタンに限定する（R-9 どおり）。composer / topbar の `.btn` は 43px のまま
+- es の本文: `.bubble` / `.composer textarea` / `.chat-welcome p` / `.proposal-card` 本文を 15px に明示
+- `button:disabled{opacity:.5}`（codex 値）に戻す。`.toast.actionable` の padding は codex の `13px 23px` のまま（`pointer-events:auto` と `display:flex` だけ例外）
+- 橙の例外を明記: ブランドの「-」と `.chat-bridge` の地 `#fbf1e0` / 枠 `#e8d6b9` は codex verbatim として §I の用途制限の対象外
+- §C 本文の「これでいい」は誤記。表の `confirm_mode`「この表示にする」が正
+- 701〜950 の drawer（340px）でも optional は「…」収納（現状を正とする。R-8 を更新）
+
+### T-4 見た目（司令塔目視）
+- **パネル内の目標 3 枠をコンパクトに**: `.goal.compact` = 1 行（`.g-label` 11px muted → 同じ行に `.g-text` 13px、折り返し可）。padding 7px 12px、枠は text あり = 左 3px 青のみ（枠線なし・影なし）、空 = 破線枠 + `goal_empty`（muted）。3 枠の合計高さを 130px 以下に。`#plan` と 390 シートの横並びカード形は従来どおり（390 シートもコンパクト形）
+- **グリッドの操作を軽く**: 各取り組みは 1 行 = タイトル（左）+ `.btn.ghost.small` 2 つ（右・枠なし・muted・ホバーで ink）。ラベルは短縮 key **`add_short`（js「入れる」/ es「入れる」）/ `ask_short`（js「相談する」/ es「そうだんする」）**。最小高は 44/48 を保ちつつ、見た目は文字だけ。`#plan` のカテゴリカードは 3 列（≥ 1121）/ 2 列（951〜1120）/ 1 列
+- **提案行のチップ**: proposed 行は kind チップ「提案中」を出さず、`.src-ai` ラベル `ai_proposal`（+ trial なら `trial`）だけ。held 行は「保留」チップのみ
+- アイコン追加（§F）: `menu`（`M4 7h16 M4 12h16 M4 17h16`）を mobile メニューに、`sliders`（`M4 6h10 M18 6h2 M14 4v4 M4 12h2 M10 12h10 M6 10v4 M4 18h12 M20 18h2 M16 16v4`）を表示設定に使う。「続きをする」は `chat` のまま
+
+### T-5 追補（2026-11-03 再レビュー）
+- 非表示（hidden）の mine 行が重なりに関わる場合（相手が運動 join / fixed / event / 他の mine のいずれでも）: 帯は **hidden stub に出す**。stub の文は「非表示: {title}」+ 小文字 `compact_overlap`（「重なりがある」）、操作は「表示する」だけ（表示すると通常の帯と候補が出る）。相手側には帯を出さない。fixed / event が相手のときも帯を捨てない
+- グリッドの各取り組みは「タイトル + 操作 2 つ」を基本 1 行とし、幅が足りないときは操作 2 つが次の行の右へ折り返してよい（実装を正とする）

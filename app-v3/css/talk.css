@@ -1,0 +1,90 @@
+/* codex-mock/style.css の会話部分を移植（値は変えない。codex のバディ印の規則は入れない）+ v3 の .talk-layout と DES.buddy 用の調整
+   橙の例外（T-3）: ブランドの「-」と .chat-bridge の地 #fbf1e0 / 枠 #e8d6b9 は codex verbatim として §I の用途制限の対象外 */
+.chat-page{max-width:820px;margin:auto}
+.chat-welcome{padding:30px 0 20px}
+.chat-welcome h1{font-size:29px;margin-top:23px}
+.chat-welcome p{margin-top:10px;font-size:13px;color:var(--muted)}
+.suggestions{display:flex;gap:10px;flex-wrap:wrap;margin:23px 0 26px}
+.suggestions button{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 16px;font-size:12px;text-align:left}
+.message-list{display:grid;gap:21px;margin:25px 0}
+.message{display:flex;gap:12px;align-items:flex-start}
+.message.user{justify-content:flex-end}
+.message .bubble{padding:15px 19px;border-radius:0 14px 14px 14px;max-width:85%;line-height:1.95;font-size:13px;white-space:pre-wrap}
+.message.buddy .bubble{background:#fff;border:1px solid var(--line)}
+.message.user .bubble{background:#eeece3;border-radius:14px 0 14px 14px}
+.composer{background:#fff;border:1px solid #d8dcd1;border-radius:16px;padding:17px;box-shadow:0 7px 24px #20251b05}
+.composer textarea{width:100%;border:0;outline:none;background:transparent;min-height:72px;line-height:1.9;font-size:13px;resize:none}
+.composer-bottom{display:flex;justify-content:space-between;align-items:center}
+.composer-bottom .hint{font-size:10px}
+.privacy-line{margin:15px 0;text-align:center}
+.privacy-line button{font-size:10px;color:var(--muted);display:inline-flex;align-items:center;gap:5px}
+.privacy-line .ico{width:12px;height:12px}
+.chat-bridge{border:1px solid #e8d6b9;background:#fbf1e0;border-radius:12px;padding:18px;display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+.chat-bridge p{font-size:12px}
+.attachment{border:1px solid #e2e1d8;padding:10px;border-radius:8px;margin-bottom:10px;font-size:11px;display:flex;gap:10px;align-items:center}
+.attachment img{max-height:65px;max-width:90px;border-radius:5px}
+.paused{display:grid;justify-items:center;max-width:600px;margin:70px auto;text-align:center;gap:20px}
+.paused h1{font-size:27px}
+.paused .card{width:100%;text-align:left}
+.paused .ico{width:40px;height:40px}
+
+@media(max-width:700px){.chat-welcome{padding-top:15px}
+.chat-welcome h1{font-size:25px}
+.chat-bridge{gap:13px;align-items:flex-start;flex-direction:column}
+.composer-bottom .hint{display:none}
+.message .bubble{max-width:95%}
+}
+
+/* ---------- v3 追加 ---------- */
+/* 話す の 2 列（会話 | 右パネル）。CONTRACT-v3 §B */
+.talk-layout{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:28px;align-items:start}
+.talk-layout>.chat-page{width:100%;min-width:0}
+.talk-layout.panel-closed{grid-template-columns:minmax(0,1fr)}
+.talk-layout.panel-closed>.plan-panel{display:none}
+@media(max-width:1120px){.talk-layout{grid-template-columns:minmax(0,1fr) 300px;gap:20px}}
+@media(max-width:950px){.talk-layout,.talk-layout.panel-closed{grid-template-columns:minmax(0,1fr)}
+.talk-layout>.plan-panel{display:none}
+}
+
+/* DES.buddy（リング・枠なし） */
+.des-buddy{flex-shrink:0}
+.chat-welcome .des-buddy{width:56px;height:56px}
+.message>.des-buddy{width:30px;height:30px;margin-top:2px}
+.msg-body{display:grid;gap:6px;justify-items:start;flex:1;min-width:0}
+.message.user .msg-body{justify-items:end}
+.msg-time{font-size:10px;color:var(--muted);line-height:1.4}
+.message .bubble{overflow-wrap:anywhere}
+
+/* 表の操作の記録（左寄せ・左 3px 緑） */
+.message.record{gap:8px;align-items:center;flex-wrap:wrap;border-left:3px solid var(--record);padding:4px 0 4px 12px;margin-left:42px;font-size:11px;line-height:1.7;color:var(--ink)}
+.message.record .msg-time{font-size:11px}
+.message.record .rec-text{min-width:0;overflow-wrap:anywhere}
+
+/* 提案カード（会話の中。右パネルの行と同じ状態を参照） */
+.proposal-card{background:var(--ai-soft);border:1px dashed var(--ai);border-radius:12px;padding:12px 14px;display:grid;gap:8px;max-width:85%;min-width:0}
+.proposal-card .pc-head{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:600;color:var(--ai-ink)}
+.proposal-card .pc-body{font-size:13px;font-weight:600;line-height:1.7;overflow-wrap:anywhere}
+.proposal-card .pc-status{font-size:12px;color:var(--ink);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.proposal-card .actions{gap:8px}
+.proposal-card .btn.small{min-height:44px}
+
+/* composer まわり（outline:none は通常時だけ。キーボード操作では codex のリングを出す） */
+.composer textarea:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
+.composer-tools,.composer-send{display:flex;align-items:center;gap:6px;min-width:0}
+.composer-send{gap:12px}
+.composer-bottom{gap:8px}
+.privacy-line .privacy-note{font-size:10px;color:var(--muted);display:inline-flex;align-items:center;gap:5px;line-height:1.7}
+.privacy-line .privacy-note .ico{width:12px;height:12px}
+.chat-done{display:flex;justify-content:center;margin:4px 0 10px}
+.paused .des-buddy{width:56px;height:56px}
+
+html[data-mode="es"] .message .bubble,html[data-mode="es"] .composer textarea,html[data-mode="es"] .chat-welcome p,html[data-mode="es"] .proposal-card .pc-body{font-size:15px}
+html[data-mode="es"] .message.record{font-size:12px}
+html[data-mode="es"] .proposal-card .btn.small{min-height:48px}
+
+@media(max-width:700px){
+.message.record{margin-left:0}
+.proposal-card{max-width:95%}
+.composer{position:sticky;bottom:56px;z-index:5}
+.chat-page{padding-bottom:8px}
+}

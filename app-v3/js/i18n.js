@@ -1,0 +1,229 @@
+/* 表示の言葉。DES.t(key) は CONTRACT-v3 §C の表（verbatim）+ 契約の本文にある UI 文言。
+   会話本文・記録・本人の言葉はモードで書き換えないため、記録と返事のテンプレートは DES.text（1 種）に置く。 */
+window.DES = window.DES || {};
+(function () {
+  'use strict';
+  var DES = window.DES;
+  // [js, es]
+  var T = {
+    talk: ['話す', 'はなす'],
+    make: ['作る', 'つくる'],
+    works: ['作品', '作品'],
+    today: ['今日のお題', 'きょうのお題'],
+    self: ['自己理解', '自分を知る'],
+    map: ['学びマップ', '学びマップ'],
+    trail: ['あしあと', 'あしあと'],
+    more: ['もっと', 'もっと'],
+    plan: ['今日の予定', 'きょうの予定'],
+    resume: ['続きをする', 'つづきをする'],
+    later: ['あとで', 'あとにする'],
+    add_to_plan: ['予定に入れる', '予定に入れる'],
+    add_activity: ['取り組みを追加', 'やることを足す'],
+    ask_buddy: ['バディに相談する', 'バディにそうだんする'],
+    done_today: ['今日はここまで', 'きょうはここまで'],
+    finished: ['終わった', 'おわった'],
+    remove: ['外す', 'はずす'],
+    hide: ['非表示にする', 'かくす'],
+    show: ['表示する', 'もう一度出す'],
+    move_up: ['上へ', '上へ'],
+    move_down: ['下へ', '下へ'],
+    fix_time: ['時刻を直す', '時間をかえる'],
+    join: ['参加する', '参加する'],
+    skip_ex: ['今日は見送る', 'きょうはやらない'],
+    decide_later: ['あとで決める', 'あとで決める'],
+    keep_tomorrow: ['明日にとっておく', 'あしたにとっておく'],
+    am: ['午前', '午前'],
+    pm: ['午後', '午後'],
+    lunch: ['昼', 'お昼'],
+    free: ['あいている', 'あいている'],
+    history: ['今まで取り組んできたこと', '今までやってきたこと'],
+    goals_head: ['今後やってみたいこと・できるようになりたいこと・目標', 'やってみたいこと・できるようになりたいこと・目標'],
+    goal_empty: ['話しながら決まる', '話しながら決まる'],
+    kind_fixed: ['固定', 'きまっている予定'],
+    kind_event: ['当日の行事', 'きょうの行事'],
+    kind_optional: ['参加自由', '参加自由'],
+    kind_mine: ['自分で選んだ', '自分でえらんだ'],
+    kind_proposed: ['提案中', 'ていあん中'],
+    kind_held: ['保留', 'あとで決める予定'],
+    overlap: ['重なり', '時間が重なる'],
+    ai_proposal: ['バディの提案', 'バディのていあん'],
+    own_label: ['本人の言葉', '本人のことば'],
+    record_label: ['記録', 'きろく'],
+    mode_js: ['中学生向け', '中学生向け'],
+    mode_es: ['小学生向け', '小学生向け'],
+    share_note: ['この会話は田中さんも見られるよ。おうちの人には、学んだことをまとめて伝えるね', 'この会話は田中さんも見られるよ。おうちの人には、まなんだことをまとめてつたえるね'],
+    welcome_h: ['今日は、何を話そう。', 'きょうは、何を話そう。'],
+    welcome_p: ['相談でも、ひとことでも。予定を見ながら話せるよ', 'そうだんでも、ひとことでも。予定を見ながら話せるよ'],
+    bridge: ['この話の続きを、作る で試してみる？', 'この話のつづきを、つくる でためしてみる？'],
+    composer_ph: ['話したいことを書く', '話したいことを書いてね'],
+    send: ['送る', '送る'],
+    photo: ['写真', '写真'],
+    voice: ['音声の体験例', '音声のれい'],
+    sample_note: ['応答はサンプル', '返事はサンプル'],
+    paused_h: ['今日はここまで', 'きょうはここまで'],
+    paused_p: ['会話と予定はこのブラウザに残るよ。次は「続きをする」から戻れる', '会話と予定はこのブラウザにのこるよ。次は「つづきをする」からもどれる'],
+    not_yet: ['ここはまだ作っていないよ。話す か 今日の予定 を使ってね', 'ここはまだ作っていないよ。はなす か きょうの予定 を使ってね'],
+    no_free: ['今日はもう空きがないよ。明日にとっておく？', 'きょうはもう空きがないよ。あしたにとっておく？'],
+    tab_plan: ['予定', '予定'],
+    shorten: ['短くする', 'みじかくする'],
+    move_other: ['別の時間へ', 'べつの時間へ'],
+    fix_in_plan: ['今日の予定で直す →', 'きょうの予定で直す →'],
+    decide: ['決める', '決める'],
+    cancel: ['やめる', 'やめる'],
+    keep_text: ['残す', 'のこす'],
+    undo: ['戻す', 'もどす'],
+    removed_toast: ['外したよ', 'はずしたよ'],
+    returned_toast: ['「{title}」を 今まで取り組んできたこと に戻した', '「{title}」を 今までやってきたこと にもどした'],
+    confirm_mode: ['この表示にする', 'この表示にする'],
+    choose_mode: ['表示を選ぶ', '表示をえらぶ'],
+    widen: ['広く見る →', '広く見る →'],
+    back_talk: ['話すに戻る', 'はなすにもどる'],
+    reselect: ['選び直す', 'えらびなおす'],
+    start_at: ['開始', 'はじめる時間'],
+    length: ['長さ', '長さ'],
+    add_here: ['ここに入れる', 'ここに入れる'],
+    in_plan: ['予定に入っている', '予定に入っている'],
+    kept_tomorrow: ['明日にとっておいた', 'あしたにとっておいた'],
+    today_done: ['今日 {range}', 'きょう {range}'],
+    overlap_with: ['{title}と重なる', '{title}と時間が重なる'],
+    no_slot_band: ['空いている時間がないよ。短くするか、あとで決めてね', 'あいている時間がないよ。みじかくするか、あとで決めてね'],
+    compact_overlap: ['重なりがある', '時間が重なっている'],
+    demo_media: ['このモックでは体験例だけ。本番では写真・音声入力が使える', 'このモックではれいだけ。本番では写真と音声が使える'],
+    prefilled: ['入力欄に入れたよ。送るで相談できる', '入力らんに入れたよ。送るでそうだんできる'],
+    save_fail: ['このブラウザに保存できない', 'このブラウザに保存できない'],
+    saved: ['このブラウザに保存', 'このブラウザに保存'],
+    hidden_stub: ['非表示: {title}', 'かくしている: {title}'],
+    exercise_skipped: ['運動（見送り）', '運動（やらない）'],
+    circle_tbd: ['確認中', 'かくにん中'],
+    back_to_history: ['終わった取り組みは、予定表の「終わった」でここへ戻る', 'おわったことは、予定表の「おわった」でここにもどる'],
+    grid_note_more: ['ほか {n} 回', 'ほか {n} 回'],
+    // §S-5
+    leave_it: ['バディにまかせる', 'バディにまかせる'],
+    trial: ['おためし 15 分', 'おためし 15分'],
+    decline: ['違う', 'ちがう'],
+    declined: ['見送った', '見送った'],
+    edited_mark: ['直した', 'なおした'],
+    reason_goal: ['「やってみたい」と書いてあったから。', '「やってみたい」って書いてあったから。'],
+    reason_continue: ['今日の続きだから。', 'きょうのつづきだから。'],
+    reason_done: ['前にやったことがあるから。', '前にやったことがあるから。'],
+    reason_catalog: ['今まで取り組んできたことから選んだよ。', '今までやってきたことからえらんだよ。'],
+    trial_ask: ['まず 15 分、「{title}」を触ってみる？ {reason} 続けるか、そのあと決めてもいいよ', 'まず 15分、「{title}」をさわってみる？ {reason} つづけるか、そのあと決めてもいいよ'],
+    no_free_trial: ['今日はもう空きがないよ。明日、まず 15 分だけ触るのはどう？', 'きょうはもう空きがないよ。あした、まず 15分だけさわるのはどう？'],
+    // §T-4
+    add_short: ['入れる', '入れる'],
+    ask_short: ['相談する', 'そうだんする'],
+
+    // ---- 契約の本文（§B / §C / §R）にある UI 文言で、上の表に key が無いもの ----
+    preview: ['体験モック · 架空のデータ', '体験モック · 架空のデータ'],
+    role_child: ['子ども', '子ども'],
+    role_supporter: ['サポーター', 'サポーター'],
+    role_factory: ['素材運用', '素材運用'],
+    role_design: ['設計を見る', '設計を見る'],
+    role_tabs: ['画面レビュー', '画面レビュー'],
+    brand_sub: ['バディと、学ぶ。', 'バディと、学ぶ。'],
+    crumb_base: ['バディエージェント', 'バディエージェント'],
+    nav_label: ['メインメニュー', 'メインメニュー'],
+    mode_view_js: ['中学生向けの表示', '中学生向けの表示'],
+    mode_view_es: ['小学生向けの表示', '小学生向けの表示'],
+    settings: ['表示設定', '表示設定'],
+    reset: ['はじめの状態に戻す', 'はじめの状態に戻す'],
+    menu_open: ['メニューを開く', 'メニューを開く'],
+    menu_close: ['メニューを閉じる', 'メニューを閉じる'],
+    close: ['閉じる', 'とじる'],
+    today_tab: ['お題', 'お題'],
+    tabbar: ['入口', '入口'],
+    move_blocked: ['間に動かせない予定がある', '間に動かせない予定がある'],
+    swap_no_fit: ['この時間には入らない', 'この時間には入らない'],
+    row_ops: ['「{title}」の操作', '「{title}」の操作'],
+    minutes: ['{n} 分', '{n} 分'],
+    plan_date: ['{m}/{d}（{w}）· {g}', '{m}/{d}（{w}）· {g}'],
+    card_removed: ['予定から外した', '予定からはずした'],
+    composer_label: ['話したいこと', '話したいこと']
+  };
+  // ふりがな（es のみ。§C: nav の「作品」「学びマップ」「今日のお題」）
+  var RUBY = {
+    works: '<ruby>作品<rt>さくひん</rt></ruby>',
+    map: '<ruby>学<rt>まな</rt></ruby>びマップ',
+    today: 'きょうのお<ruby>題<rt>だい</rt></ruby>'
+  };
+
+  DES.mode = function () {
+    var m = DES.state && DES.state.mode;
+    if (m !== 'es' && m !== 'js') m = document.documentElement.getAttribute('data-mode');
+    return m === 'es' ? 'es' : 'js';
+  };
+  DES.fmt = function (s, vars) {
+    return String(s).replace(/\{(\w+)\}/g, function (all, k) { return vars && vars[k] != null ? String(vars[k]) : all; });
+  };
+  DES.t = function (key, vars) {
+    var row = T[key];
+    if (!row) { if (window.console) console.warn('DES.t: key が無い', key); return String(key); }
+    var v = DES.mode() === 'es' ? row[1] : row[0];
+    if (v == null || v === '') { if (window.console) console.warn('DES.t: es が無い', key); v = row[0]; }
+    return vars ? DES.fmt(v, vars) : v;
+  };
+  // nav 用。es のときだけ ruby 付きの HTML（固定の文字列のみ）
+  DES.tNavHTML = function (key) {
+    if (DES.mode() === 'es' && RUBY[key]) return RUBY[key];
+    return null;
+  };
+
+  // 記録行と返事のテンプレート（CONTRACT-v3 §D / §G / §R-2〜R-7。モードで変えない）
+  DES.text = {
+    rec_add: '{start} に「{title}」を入れた',
+    rec_add_moved: '{start} に「{title}」を入れた（時間を変えた）',
+    rec_hold: '「{title}」をあとで決めることにした',
+    rec_swap: '「{a}」と「{b}」の順番を入れ替えた',
+    rec_time: '「{title}」を {start}〜{end} にした',
+    rec_remove: '「{title}」を予定から外した',
+    rec_finish: '「{title}」が終わった（{start}〜{end}）',
+    rec_undo: '「{title}」を戻した',
+    rec_join: '運動に参加することにした',
+    rec_skip: '運動は今日は見送ることにした',
+    rec_later: '運動はあとで決めることにした',
+    rec_goal: '「{label}」に「{text}」と書いた',
+    rec_shorten: '「{title}」を短くした（{start}〜{end}）',
+    rec_moved: '「{title}」を {start}〜 に移した',
+    rec_defer: '「{title}」の重なりはあとで決める',
+    rec_trial: '「{title}」をおためしで {start} に入れた',
+    rec_decline: '「{title}」の提案は見送った',
+    rec_moved_suffix: '（時間を変えた）',
+    rep_propose: '{start} から「{title}」を入れておく？ {len} 分くらい',
+    rep_skip: 'わかった。{range} はあいたよ。何か入れる？',
+    rep_pm: '午後は {ranges} があいている。今まで取り組んできたことから選ぶ？ 表から入れられるよ',
+    rep_pm_none: '午後はもう空きがないよ。明日にとっておく？',
+    rep_default: '聞いたよ。予定に入れたいことがあれば、名前を教えて。表から選んでもいいよ',
+    prefill_line: '「{title}」をやってみたい'
+  };
+
+  // 名前照合の別名（R-7）: title 全体・「: 」以降・「 ex)」以前 + 契約の例（パイソン / アクセサリー / eboard）。全 27 件
+  DES.aliases = {
+    'mc-build': ['建築'],
+    'mc-game': ['ゲーム作り ex) コマンド使って等', 'ゲーム作り'],
+    'mc-redstone': ['レッドストーン回路'],
+    'mc-mod': ['Mod 系 create etc...'],
+    'mc-model': ['マイクラモデリング ex) ブロックベンチ', 'マイクラモデリング'],
+    'prog-scratch': ['スクラッチ'],
+    'prog-js': ['ゲーム作り: Javascript', 'Javascript'],
+    'prog-python': ['ゲーム作り: Python', 'Python', 'パイソン'],
+    'prog-unity': ['Unity'],
+    'prog-roblox': ['Roblox ゲームづくり'],
+    'craft-cardboard': ['ダンボール工作'],
+    'craft-accessory': ['アクセサリー作り', 'アクセサリー'],
+    'craft-3dpen': ['3D ペン'],
+    'craft-lego': ['レゴ'],
+    'dig-3dprint': ['3D プリンター/モデリング'],
+    'dig-stormworks': ['ストームワークス'],
+    'media-poster': ['ポスター作り'],
+    'media-movie': ['映画作り'],
+    'media-tokusatsu': ['特撮づくり'],
+    'media-stopmotion': ['コマドリ'],
+    'draw-ipad': ['iPad 絵'],
+    'draw-stamp': ['LINE スタンプ作り'],
+    'draw-manga': ['漫画づくり大会'],
+    'basic-text': ['基礎学習: テキストベース', 'テキストベース'],
+    'basic-eboard': ['基礎学習: eboard 動画', 'eboard 動画', 'eboard'],
+    'basic-boardgame': ['ボードゲーム系 学び'],
+    'basic-digital': ['デジタル学習 ex) Duolingo etc...', 'デジタル学習']
+  };
+})();

@@ -1,0 +1,30 @@
+# Private design material, owner notes and session state are never published
+reference/
+.claude/
+docs/private/
+
+# Local secrets and runtime state (Cloudflare / Anthropic)
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+!.env.example
+.wrangler/
+.factory/
+*.pem
+*.key
+
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Local render output (screens/ keeps the committed samples only)
+screens/_local/
