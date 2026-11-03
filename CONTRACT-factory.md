@@ -241,8 +241,8 @@ body `{answers: [{question_id, answer}]}`。4 状態 `answer_state: none | saved
 **`publishSwitch`（`src/publish.ts`。`publish_status` と `current_version_id` を変える唯一の関数）**: 1 batch、§B-2 のパターン（INSERT 先・UPDATE 後）。
 | kind | 述語 | 変更 |
 |---|---|---|
-| `approve` | version `status='review' AND verification_status='done' AND material_id=?` AND `EXISTS verifications(id=:verification_id AND material_version_id=version AND contradicted=0)` AND `NOT EXISTS active job for material` | `review_decisions` INSERT(`approve`, `content_sha256_at_decision`) + material `current_version_id=version`, `publish_status='available'`, `work_status='idle'` + version `approved`（最後の UPDATE。この 1 文だけが述語の列を変える） |
-| `rollback` | version `status='approved'` AND material_id 一致 AND material `current_version_id != version` | `review_decisions` INSERT(`rollback`) + material `current_version_id=version`, `publish_status='available'`（UPDATE） |
+| `approve` | version `status='review' AND verification_status='done' AND material_id=?` AND `EXISTS verifications(id=:verification_id AND material_version_id=version AND contradicted=0 AND attempt = (SELECT MAX(attempt) FROM verifications WHERE material_version_id=version))` AND `NOT EXISTS active job for material`（古い attempt の id は事前チェックで 409 `stale_verification`） | `review_decisions` INSERT(`approve`, `content_sha256_at_decision`) + material `current_version_id=version`, `publish_status='available'`, `work_status='idle'` + version `approved`（最後の UPDATE。この 1 文だけが述語の列を変える） |
+| `rollback` | version `status='approved'` AND material_id 一致 AND (material `current_version_id != version` OR material `publish_status='stopped'`) | `review_decisions` INSERT(`rollback`) + material `current_version_id=version`, `publish_status='available'`（UPDATE） |
 | `stop` | material `publish_status='available'` | `review_decisions` INSERT(`stop`, material_version_id = current) + material `publish_status='stopped'`（UPDATE） |
 
 停止の保証範囲は「停止後の新しい取得を拒否する」まで。既に子ども側に届いた内容の回収は保証しない（バディ側は配信 API を都度読む前提。§R-16）。
@@ -395,7 +395,7 @@ materials.publish_status（配信。`publishSwitch` だけが変える）:
 | available | available | rollback（別の approved 版へ付け替え） |
 | available | stopped | stop |
 
-factory_jobs: `queued → creating → running → (needs_answer → running) → done | failed | cancelled`。`running ↔ budget_reached`。`creating → queued`（作成失敗）。`cancelled` は `queued/creating/running/needs_answer/budget_reached` から。
+factory_jobs: `queued → creating → running → (needs_answer → running) → done | failed | cancelled`。`running ↔ budget_reached`。`creating → queued`（応答ありの作成失敗）。`creating → failed`（`create_attempts >= 3`、`error='create_unconfirmed'`）。`cancelled` は `queued/creating/running/needs_answer/budget_reached` から。
 
 material_versions: `review → approved | rejected`。`approved` と `rejected` は終端（`approved` は何度でも rollback の対象になれる）。
 
@@ -550,7 +550,7 @@ client.messages.create({
 ```
 - ループ（server tool の公式手順に従う）: 応答の `content` を assistant turn として messages に積む。`stop_reason === 'pause_turn'` → そのまま続きを要求（最大 5 回）。`stop_reason === 'tool_use'` で `report_verdicts` の block があれば終了。`end_turn` で `report_verdicts` が無ければ `user: "report_verdicts を呼んでください"` を足して再送。`max_tokens` / `refusal` / その他は失敗。合計 8 ターンで打ち切り
 - `VERDICT_SCHEMA`: `{verdicts: [{claim_id, verdict: 'confirmed'|'hypothesis'|'unverified'|'contradicted', reason, opened_urls: []}], overall_note}`。**`verdicts` の claim_id 集合が `claims.json` と完全一致**しなければその試行は失敗
-- lease: 取得時 CAS `UPDATE ... SET verification_status='running', verification_started_at=now, verification_attempts=verification_attempts+1, verification_token=? WHERE id=? AND verification_status='pending'`。終了時 batch（述語 = `verification_status='running' AND verification_token=?`）: `verifications` INSERT（`attempt = verification_attempts`）+ `cost_ledger` INSERT + version `done`（UPDATE）。失敗は同じ述語で `pending`（attempts < 上限）または `failed`。述語が成立しなければ（reverify で世代が変わった）結果を捨てる
+- lease: 取得時 CAS `UPDATE ... SET verification_status='running', verification_started_at=now, verification_attempts=verification_attempts+1, verification_token=? WHERE id=? AND verification_status='pending'`。終了時 batch（述語 = `verification_status='running' AND verification_token=?`）: `verifications` INSERT（`attempt = (SELECT COALESCE(MAX(attempt),0)+1 FROM verifications WHERE material_version_id=?)`。版ごとに単調増加。`verification_attempts` は再試行上限のカウンタとしてだけ使う）+ `cost_ledger` INSERT + version `done`（UPDATE）。失敗は同じ述語で `pending`（attempts < 上限）または `failed`。述語が成立しなければ（reverify で世代が変わった）結果を捨てる
 - 費用: 各試行の usage から定価計算（Opus 5.5 入力 $4 / 出力 $20 per 1M。web_fetch 無料）を `cost_ledger kind='verify'` に追記（失敗試行も）
 - `POST /api/review/:version_id/reverify`: CAS `UPDATE ... SET verification_status='pending', verification_token=NULL WHERE id=? AND status='review' AND verification_status IN ('done','failed')`（`running` 中は 409 `verification_running`）。`verification_attempts` は 0 に戻す
 - 検証係には制作 session の会話を渡さない
@@ -659,3 +659,9 @@ v3（Astra 再レビュー後）:
 24. **上限は厳密か目安か** → 目安（起動停止）。厳密な上限は session budget と Console の支出上限
 25. 未凍結（ふじさん確認待ち。既定で進める）: §R-3 日付境界 = Asia/Tokyo、§R-4 承認可能条件、§R-12 stop = 配信停止のみ
 26. 停止の保証範囲は「新しい取得の拒否」まで（§B-6 末尾）
+
+v3.1（Opus 実装担当の指摘）:
+27. reverify 後の `attempt` が UNIQUE で衝突 → `attempt = MAX+1`（版ごと単調増加）。`verification_attempts` は上限カウンタ専用
+28. approve の述語が古い `verification_id` を弾けない → `attempt = MAX(attempt)` を述語に追加、事前チェックは 409 `stale_verification`
+29. 承認版が 1 つの素材は stop 後に配信へ戻せない → rollback の述語に `OR publish_status='stopped'` を追加（同じ版を再び配信できる）
+30. `creating → failed` を job 遷移表に追加
