@@ -1,0 +1,107 @@
+// fetch / scheduled の入口とルーティング（契約 §B-1, §B-3）。フレームワークは使わない。
+// run_worker_first: true なので静的ファイルを含む全リクエストがここを通る。
+import { handleFakeControl } from './anthropic';
+import { jsonError, requireAccess } from './access';
+import { runCron } from './cron';
+import type { Env } from './env';
+import { json, makeCtx, type RouteCtx } from './http';
+import { answerJobRoute, cancelJobRoute, createJob, getJobDetail, reconcileJobRoute, startJobRoute } from './routes/jobs';
+import { libraryAvailable, libraryFile } from './routes/library';
+import { createMaterial, getMaterialDetail, listMaterials, rollbackMaterial, stopMaterial } from './routes/materials';
+import { decide, listReview, reverify, reviewDetail, reviewFile } from './routes/review';
+import { addStandard, getStandards } from './routes/standards';
+import { getStatus, setPause } from './routes/status';
+import { handleWebhook } from './routes/webhook';
+
+type Handler = (c: RouteCtx, ...params: string[]) => Promise<Response>;
+const ID = '([A-Za-z0-9-]{1,64})';
+
+const ROUTES: Array<[string, RegExp, Handler]> = [
+  ['POST', /^\/api\/materials$/, createMaterial],
+  ['GET', /^\/api\/materials$/, listMaterials],
+  ['GET', new RegExp(`^/api/materials/${ID}$`), getMaterialDetail],
+  ['POST', new RegExp(`^/api/materials/${ID}/stop$`), stopMaterial],
+  ['POST', new RegExp(`^/api/materials/${ID}/rollback$`), rollbackMaterial],
+  ['POST', /^\/api\/jobs$/, createJob],
+  ['GET', new RegExp(`^/api/jobs/${ID}$`), getJobDetail],
+  ['POST', new RegExp(`^/api/jobs/${ID}/start$`), startJobRoute],
+  ['POST', new RegExp(`^/api/jobs/${ID}/answer$`), answerJobRoute],
+  ['POST', new RegExp(`^/api/jobs/${ID}/cancel$`), cancelJobRoute],
+  ['POST', new RegExp(`^/api/jobs/${ID}/reconcile$`), reconcileJobRoute],
+  ['GET', /^\/api\/review$/, listReview],
+  ['GET', new RegExp(`^/api/review/${ID}$`), reviewDetail],
+  ['GET', new RegExp(`^/api/review/${ID}/files/(.*)$`), reviewFile],
+  ['POST', new RegExp(`^/api/review/${ID}/decision$`), decide],
+  ['POST', new RegExp(`^/api/review/${ID}/reverify$`), reverify],
+  ['GET', /^\/api\/status$/, getStatus],
+  ['POST', /^\/api\/status\/pause$/, setPause],
+  ['GET', /^\/api\/standards$/, getStandards],
+  ['POST', /^\/api\/standards$/, addStandard],
+];
+
+// 管理画面に付ける CSP（同一 origin の /api/* だけを読む。確認用 iframe は sandbox 付きで同一 origin から読む）
+const ADMIN_CSP =
+  "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+
+async function serveAdmin(request: Request, env: Env): Promise<Response> {
+  const res = await env.ASSETS.fetch(request);
+  const headers = new Headers(res.headers);
+  headers.set('content-security-policy', ADMIN_CSP);
+  headers.set('x-content-type-options', 'nosniff');
+  headers.set('cache-control', 'no-store');
+  headers.set('referrer-policy', 'no-referrer');
+  return new Response(res.body, { status: res.status, headers });
+}
+
+export default {
+  async fetch(request: Request, env: Env, exec: ExecutionContext): Promise<Response> {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    try {
+      // 署名のみ（Access の外）
+      if (path === '/webhook') {
+        if (request.method !== 'POST') return jsonError(405, 'method_not_allowed');
+        return await handleWebhook(request, env, exec);
+      }
+      // 認証なし（公開・読み取り専用）
+      if (path.startsWith('/api/library/')) {
+        if (request.method !== 'GET') return jsonError(405, 'method_not_allowed');
+        if (path === '/api/library/available') return await libraryAvailable(env);
+        const m = new RegExp(`^/api/library/files/${ID}/(.*)$`).exec(path);
+        if (m) return await libraryFile(env, m[1], m[2]);
+        return jsonError(404, 'not_found');
+      }
+
+      const isAdmin = path === '/admin' || path.startsWith('/admin/');
+      const isApi = path.startsWith('/api/');
+      const isFake = path.startsWith('/__fake/');
+      if (!isAdmin && !isApi && !isFake) return jsonError(404, 'not_found');
+
+      // それ以外はすべて Access
+      const access = await requireAccess(request, env);
+      if (!access.ok) return access.response;
+
+      if (isFake) {
+        const r = await handleFakeControl(request, env);
+        return r ?? jsonError(404, 'not_found');
+      }
+      if (isAdmin) {
+        if (request.method !== 'GET' && request.method !== 'HEAD') return jsonError(405, 'method_not_allowed');
+        return await serveAdmin(request, env);
+      }
+      const ctx = makeCtx(env, request, exec, access.email);
+      for (const [method, re, handler] of ROUTES) {
+        const m = re.exec(path);
+        if (m && request.method === method) return await handler(ctx, ...m.slice(1));
+      }
+      return jsonError(404, 'not_found');
+    } catch (e) {
+      console.log(JSON.stringify({ at: 'fetch_error', path: path.slice(0, 80), kind: e instanceof Error ? e.name : 'error' }));
+      return json(500, { error: 'internal_error' });
+    }
+  },
+
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    await runCron(env);
+  },
+} satisfies ExportedHandler<Env>;

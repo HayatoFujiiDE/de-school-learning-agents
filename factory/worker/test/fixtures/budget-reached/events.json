@@ -1,0 +1,15 @@
+{
+  "initial": [
+    {
+      "type": "session.status_running",
+      "id": "sevt_run_1"
+    },
+    {
+      "type": "session.status_idle",
+      "stop_reason": {
+        "type": "budget_reached"
+      },
+      "stop_details": null
+    }
+  ]
+}

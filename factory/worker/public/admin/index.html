@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>コンテンツファクトリー 管理</title>
+  <link rel="stylesheet" href="/admin/admin.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="#/">コンテンツファクトリー</a>
+    <nav class="nav">
+      <a href="#/">素材</a>
+      <a href="#/new">新しい素材</a>
+      <a href="#/review">確認待ち</a>
+      <a href="#/standards">編集基準</a>
+    </nav>
+  </header>
+  <section id="status" class="status" aria-live="polite"><span class="muted">状況を読み込み中…</span></section>
+  <main id="view" class="view"><p class="muted">読み込み中…</p></main>
+
+  <dialog id="dlg" class="dlg">
+    <form method="dialog" id="dlg-form">
+      <h2 id="dlg-title"></h2>
+      <p id="dlg-body" class="pre"></p>
+      <label id="dlg-note-wrap" class="field hidden">
+        <span id="dlg-note-label">理由</span>
+        <textarea id="dlg-note" rows="4"></textarea>
+        <span id="dlg-note-err" class="err hidden">入力してください</span>
+      </label>
+      <div class="row end">
+        <button type="button" id="dlg-cancel" class="btn">やめる</button>
+        <button type="button" id="dlg-ok" class="btn primary">実行する</button>
+      </div>
+    </form>
+  </dialog>
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script src="/admin/admin.js"></script>
+</body>
+</html>

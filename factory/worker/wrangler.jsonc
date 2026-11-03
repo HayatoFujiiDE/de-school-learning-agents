@@ -1,0 +1,36 @@
+{
+  // コンテンツファクトリー Worker（契約: ../../CONTRACT-factory.md §B-0）
+  // fake とローカル認証省略の変数はここに書かない（.dev.vars のみ。scripts/check-no-fake.sh が確認する）
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "de-school-factory",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "triggers": { "crons": ["*/10 * * * *"] },
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "none",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "factory", "database_id": "<set-after-create>", "migrations_dir": "migrations" }
+  ],
+  "r2_buckets": [
+    { "binding": "R2", "bucket_name": "factory-materials" }
+  ],
+  "vars": {
+    "FACTORY_AGENT_ID": "",
+    "FACTORY_ENV_ID": "",
+    "ANTHROPIC_WORKSPACE": "default",
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": "",
+    "MAX_CONCURRENT_JOBS": "2",
+    "DAILY_CAP_CENTS": "1500",
+    "SESSION_BUDGET_DRAFT_CENTS": "300",
+    "SESSION_BUDGET_REWORK_CENTS": "500",
+    "VERIFY_MAX_FETCHES": "25",
+    "VERIFY_MAX_ATTEMPTS": "3"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "initial": [
+    {
+      "type": "session.status_running",
+      "id": "sevt_run_1"
+    },
+    {
+      "type": "agent.tool_use",
+      "id": "sevt_ra_tool_1",
+      "name": "bash",
+      "input": {
+        "command": "curl https://example.com"
+      },
+      "evaluated_permission": "ask"
+    },
+    {
+      "type": "session.status_idle",
+      "stop_reason": {
+        "type": "requires_action",
+        "event_ids": [
+          "sevt_ra_tool_1"
+        ]
+      },
+      "stop_details": null
+    }
+  ]
+}

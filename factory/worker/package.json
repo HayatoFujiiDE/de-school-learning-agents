@@ -1,15 +1,17 @@
 {
-  "name": "worker",
+  "name": "de-school-factory-worker",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build:assets": "bash scripts/sync-claude-assets.sh",
+    "typecheck": "bash scripts/sync-claude-assets.sh && tsc --noEmit",
+    "test": "vitest run",
+    "dev": "bash scripts/sync-claude-assets.sh && wrangler dev --local --port 8787",
+    "migrate:local": "wrangler d1 migrations apply factory --local",
+    "smoke": "bash scripts/smoke.sh",
+    "deploy": "bash scripts/sync-claude-assets.sh && bash scripts/check-no-fake.sh && wrangler deploy"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "devDependencies": {
     "@anthropic-ai/sdk": "^1.3.0",
     "@cloudflare/workers-types": "^5.20261102.1",

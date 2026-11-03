@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "slug": "mc-redstone-basics",
+  "title": "レッドストーン回路のしくみ",
+  "kinds": [3, 4],
+  "catalog_item_id": "mc-redstone",
+  "concept_codes": [],
+  "summary_elementary": "レッドストーンの粉で信号が伝わるようすを見て、さわって確かめる",
+  "summary_secondary": "レッドストーン信号の強さと距離の関係を図と小さな模型で確かめる",
+  "conditions": { "tools": ["Minecraft Java 1.21"], "place": "教室", "age_band": ["elementary", "secondary"], "supporter_check": false },
+  "license_summary": "出典は Minecraft Wiki（CC BY-NC-SA 3.0）",
+  "parts": [
+    {
+      "id": "p1",
+      "kind": 3,
+      "title": "信号の道",
+      "entry_point": { "type": "look", "text": "図の赤い線を指でたどって、どこで止まるか数えてみよう" },
+      "variants": [
+        { "audience": "elementary", "length": "short", "interest": null, "game": false, "path": "parts/p1/elementary-short.md" },
+        { "audience": "elementary", "length": "long", "interest": null, "game": false, "path": "parts/p1/elementary-long.md" },
+        { "audience": "secondary", "length": "short", "interest": null, "game": false, "path": "parts/p1/secondary-short.md" },
+        { "audience": "secondary", "length": "long", "interest": null, "game": false, "path": "parts/p1/secondary-long.md" },
+        { "audience": "elementary", "length": "short", "interest": null, "game": true, "path": "parts/p1/game.md" }
+      ],
+      "files": [{ "path": "parts/p1/figure-1.svg", "role": "figure" }],
+      "adjustable": ["例に出すブロックの種類", "説明の長さ"],
+      "tech_dependencies": ["svg"],
+      "runtime_check": { "how": "SVG を開く", "expected": "赤い線と 15 個の目盛りが見える" },
+      "needs_supporter_check": false
+    },
+    {
+      "id": "p2",
+      "kind": 4,
+      "title": "信号を動かしてみる",
+      "entry_point": { "type": "try", "text": "スライダーを動かして、明かりがつく距離を探そう" },
+      "variants": [
+        { "audience": "elementary", "length": "short", "interest": null, "game": false, "path": "parts/p2/elementary-short.md" },
+        { "audience": "elementary", "length": "long", "interest": null, "game": false, "path": "parts/p2/elementary-long.md" },
+        { "audience": "secondary", "length": "short", "interest": null, "game": false, "path": "parts/p2/secondary-short.md" },
+        { "audience": "secondary", "length": "long", "interest": null, "game": false, "path": "parts/p2/secondary-long.md" }
+      ],
+      "files": [{ "path": "parts/p2/app.html", "role": "app" }],
+      "adjustable": ["スライダーの最大値"],
+      "tech_dependencies": ["html", "js"],
+      "runtime_check": { "how": "スライダーを 16 にする", "expected": "ランプが消える" },
+      "needs_supporter_check": false
+    }
+  ]
+}

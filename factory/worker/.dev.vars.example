@@ -1,0 +1,10 @@
+# ローカル開発用（.dev.vars にコピーして使う。.dev.vars は commit しない）
+# 本物の値はここに書かない。本番は `wrangler secret put` をふじさんの通常ターミナルで実行する
+ANTHROPIC_API_KEY=sk-ant-xxxx
+ANTHROPIC_WEBHOOK_SIGNING_KEY=whsec_xxxx
+# 以下 2 つはローカル専用。hostname が localhost / 127.0.0.1 の時だけ効く
+ACCESS_DEV_BYPASS_EMAIL=dev@example.invalid
+ANTHROPIC_FAKE=1
+# fake で job を起動するには agent / environment ID が空でないこと
+FACTORY_AGENT_ID=agent_fake
+FACTORY_ENV_ID=env_fake

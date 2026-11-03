@@ -1,0 +1,76 @@
+{
+  "initial": [
+    {
+      "filename": "questions.json",
+      "fixture": "done-contradicted/outputs/questions.json"
+    }
+  ],
+  "after": {
+    "user.define_outcome": [
+      {
+        "filename": "adapt-rules.md",
+        "fixture": "_shared/outputs/adapt-rules.md"
+      },
+      {
+        "filename": "claims.json",
+        "fixture": "done-contradicted/outputs/claims.json"
+      },
+      {
+        "filename": "material.json",
+        "fixture": "_shared/outputs/material.json"
+      },
+      {
+        "filename": "parts/p1/elementary-long.md",
+        "fixture": "_shared/outputs/parts/p1/elementary-long.md"
+      },
+      {
+        "filename": "parts/p1/elementary-short.md",
+        "fixture": "_shared/outputs/parts/p1/elementary-short.md"
+      },
+      {
+        "filename": "parts/p1/figure-1.svg",
+        "fixture": "_shared/outputs/parts/p1/figure-1.svg"
+      },
+      {
+        "filename": "parts/p1/game.md",
+        "fixture": "_shared/outputs/parts/p1/game.md"
+      },
+      {
+        "filename": "parts/p1/secondary-long.md",
+        "fixture": "_shared/outputs/parts/p1/secondary-long.md"
+      },
+      {
+        "filename": "parts/p1/secondary-short.md",
+        "fixture": "_shared/outputs/parts/p1/secondary-short.md"
+      },
+      {
+        "filename": "parts/p2/app.html",
+        "fixture": "_shared/outputs/parts/p2/app.html"
+      },
+      {
+        "filename": "parts/p2/elementary-long.md",
+        "fixture": "_shared/outputs/parts/p2/elementary-long.md"
+      },
+      {
+        "filename": "parts/p2/elementary-short.md",
+        "fixture": "_shared/outputs/parts/p2/elementary-short.md"
+      },
+      {
+        "filename": "parts/p2/secondary-long.md",
+        "fixture": "_shared/outputs/parts/p2/secondary-long.md"
+      },
+      {
+        "filename": "parts/p2/secondary-short.md",
+        "fixture": "_shared/outputs/parts/p2/secondary-short.md"
+      },
+      {
+        "filename": "selfcheck.md",
+        "fixture": "_shared/outputs/selfcheck.md"
+      },
+      {
+        "filename": "sources.json",
+        "fixture": "_shared/outputs/sources.json"
+      }
+    ]
+  }
+}
