@@ -1,0 +1,12 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600;700;800&display=swap');
+/* codex-mock/style.css の :root（verbatim）+ CONTRACT-v3 §E-4 の追加トークン */
+:root{--paper:#f7f5f0;--white:#fff;--ink:#292c29;--muted:#6c7068;--line:#e3e3db;--orange:#ed922c;--orange-soft:#fbecd7;--green:#467060;--green-soft:#edf3ec;--radius:18px;--shadow:0 12px 38px #292c290a;font-family:'Noto Sans JP',-apple-system,BlinkMacSystemFont,sans-serif;font-size:14px;color:var(--ink);background:var(--paper);font-synthesis:none}
+
+:root{
+  --sand:#f1ece3; --sand-ink:#66625a;           /* fixed / event 行の地と文字 */
+  --own:#2f557d;                                  /* 本人の言葉 */
+  --record:#476f63; --record-soft:#e9f0ec;        /* 記録 */
+  --ai:#e3a94a; --ai-ink:#8a5a00; --ai-soft:#fff4de; /* バディの提案（枠は 1px dashed） */
+  --gap:#6f6b62; --olive:#524e44; --cream:#fff8e8;
+  --tabbar:#524e44;
+}

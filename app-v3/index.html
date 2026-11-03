@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ja" data-mode="js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>バディエージェント</title>
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/shell.css">
+<link rel="stylesheet" href="css/talk.css">
+<link rel="stylesheet" href="css/plan.css">
+</head>
+<body>
+<div class="preview-bar" id="preview-bar"></div>
+<div class="shell">
+  <aside class="sidebar" id="sidebar"></aside>
+  <div class="main-wrap">
+    <header class="topbar" id="topbar"></header>
+    <main class="content" id="main"></main>
+  </div>
+</div>
+<nav class="tabbar" id="tabbar"></nav>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<dialog class="mode-dialog" id="mode-dialog" aria-labelledby="mode-h"></dialog>
+<dialog class="plan-dialog plan-drawer plan-sheet" id="plan-dialog"></dialog>
+<dialog class="pick-sheet" id="pick-sheet"></dialog>
+<dialog class="row-sheet" id="row-sheet"></dialog>
+<dialog class="nav-drawer" id="nav-drawer"></dialog>
+<script src="js/buddy.js"></script>
+<script src="js/data.js"></script>
+<script src="js/i18n.js"></script>
+<script src="js/store.js"></script>
+<script src="js/plan.js"></script>
+<script src="js/talk.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
