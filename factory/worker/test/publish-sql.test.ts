@@ -123,8 +123,18 @@ describe('rollback', () => {
     expect(one('SELECT publish_status, current_version_id FROM materials WHERE id=?', 'm1')).toEqual({ publish_status: 'available', current_version_id: 'v1' });
     expect(one("SELECT decision FROM review_decisions").decision).toBe('rollback');
   });
+  it('stopped なら現在と同じ版へ rollback できる（1 行ずつ）', () => {
+    material('m1', 'idle', 'stopped', 'v1');
+    version('v1', 'm1', 1, 'approved');
+    expect(runBatch(rb('m1', 'v1'))).toEqual([1, 1]);
+    expect(one('SELECT publish_status, current_version_id FROM materials WHERE id=?', 'm1')).toEqual({ publish_status: 'available', current_version_id: 'v1' });
+    // 戻った後（available・同じ版）にもう一度流すと 0 行
+    expect(runBatch(rb('m1', 'v1'))).toEqual([0, 0]);
+    expect(count('review_decisions')).toBe(1);
+  });
   it.each([
-    ['現在の版を指定', () => (material('m1', 'idle', 'available', 'v1'), version('v1', 'm1', 1, 'approved'), ['m1', 'v1'])],
+    ['available で現在の版を指定', () => (material('m1', 'idle', 'available', 'v1'), version('v1', 'm1', 1, 'approved'), ['m1', 'v1'])],
+    ['stopped でも rejected 版は不可', () => (material('m1', 'idle', 'stopped', 'v1'), version('v1', 'm1', 1, 'rejected'), ['m1', 'v1'])],
     ['rejected 版', () => (material('m1', 'idle', 'available', 'v2'), version('v1', 'm1', 1, 'rejected'), version('v2', 'm1', 2, 'approved'), ['m1', 'v1'])],
     ['review 版', () => (material('m1', 'review', 'available', 'v2'), version('v1', 'm1', 1, 'review'), version('v2', 'm1', 2, 'approved'), ['m1', 'v1'])],
     ['他素材の版', () => (material('m1', 'idle', 'stopped', null), material('m2', 'idle', 'none'), version('v9', 'm2', 1, 'approved'), ['m1', 'v9'])],

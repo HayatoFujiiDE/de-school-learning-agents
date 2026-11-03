@@ -264,6 +264,14 @@ async function main() {
   lib = await api('GET', '/api/library/available');
   const v2File = await api('GET', `/api/library/files/${v2?.id}/claims.json`);
   check('(c) stop → 200 で配信から消える（files も 404、no-store）', r.status === 200 && !lib.json?.materials?.some((m) => m.material_id === aMid) && v2File.status === 404 && /no-store/.test(lib.headers.get('cache-control') ?? ''), `stop=${r.status} file=${v2File.status}`);
+  // stop → 同じ版（v2）へ rollback → available に戻る（§R-29）
+  r = await api('POST', `/api/materials/${aMid}/rollback`, { version_id: v2?.id, note: 'smoke 同じ版で再開' });
+  lib = await api('GET', '/api/library/available');
+  check('(c) stop 後に同じ版（v2）へ rollback → 200 で配信に戻る', r.status === 200 && lib.json?.materials?.find((m) => m.material_id === aMid)?.version_id === v2?.id, `status=${r.status} err=${r.json?.error}`);
+  r = await api('POST', `/api/materials/${aMid}/rollback`, { version_id: v2?.id, note: 'smoke 二重' });
+  check('(c) 配信中に現在と同じ版へ rollback → 409', r.status === 409, `status=${r.status}`);
+  r = await api('POST', `/api/materials/${aMid}/stop`, { note: 'smoke 停止 2' });
+  check('(c) 再度 stop → 200', r.status === 200, `status=${r.status}`);
   r = await api('POST', `/api/materials/${aMid}/rollback`, { version_id: aVid, note: 'smoke 戻す' });
   lib = await api('GET', '/api/library/available');
   check('(c) rollback（v1）→ 200 で配信に戻る', r.status === 200 && lib.json?.materials?.find((m) => m.material_id === aMid)?.version_id === aVid, `status=${r.status} err=${r.json?.error}`);

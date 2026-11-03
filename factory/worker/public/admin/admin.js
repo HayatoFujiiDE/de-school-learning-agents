@@ -284,7 +284,8 @@
     view.innerHTML = '<p class="loading">読み込み中…</p>';
     api('GET', '/api/materials/' + encodeURIComponent(id)).then(function (d) {
       var m = d.material;
-      var approved = d.versions.filter(function (v) { return v.status === 'approved' && v.id !== m.current_version_id; });
+      // stop 中は現在の版も選べる（同じ版で配信を再開できる）
+      var approved = d.versions.filter(function (v) { return v.status === 'approved' && (v.id !== m.current_version_id || m.publish_status === 'stopped'); });
       view.innerHTML = '<h1>' + esc(m.title) + '</h1>' +
         '<div class="card"><div class="row">' + pill('配信: ' + (PUBLISH_LABEL[m.publish_status] || m.publish_status), m.publish_status === 'available' ? 'green' : 'gray') +
         pill('制作: ' + (WORK_LABEL[m.work_status] || m.work_status)) + '<span class="muted">slug ' + esc(m.slug) + ' / 型 ' + esc((m.kinds || []).join(', ')) + '</span></div>' +

@@ -30,10 +30,10 @@ const P_APPROVE = `SELECT 1 FROM material_versions pv
         AND pw.attempt = (SELECT MAX(pw2.attempt) FROM verifications pw2 WHERE pw2.material_version_id = pv.id))
     AND NOT EXISTS (SELECT 1 FROM factory_jobs pj WHERE pj.material_id = pv.material_id AND pj.status IN ${ACTIVE_JOB_SQL})`;
 
-// 述語 P（rollback）: 同素材の approved 版で、現在の版ではない
+// 述語 P（rollback）: 同素材の approved 版で、現在の版ではない、または配信停止中（stop 後に同じ版を再び配信できる。§R-29）
 const P_ROLLBACK = `SELECT 1 FROM material_versions pv JOIN materials pm ON pm.id = pv.material_id
   WHERE pv.id = ? AND pv.material_id = ? AND pv.status = 'approved'
-    AND (pm.current_version_id IS NULL OR pm.current_version_id <> pv.id)`;
+    AND (pm.current_version_id IS NULL OR pm.current_version_id <> pv.id OR pm.publish_status = 'stopped')`;
 
 // 述語 P（stop）: 配信中
 const P_STOP = `SELECT 1 FROM materials pm WHERE pm.id = ? AND pm.publish_status = 'available'`;
