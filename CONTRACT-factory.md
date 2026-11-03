@@ -665,3 +665,9 @@ v3.1（Opus 実装担当の指摘）:
 28. approve の述語が古い `verification_id` を弾けない → `attempt = MAX(attempt)` を述語に追加、事前チェックは 409 `stale_verification`
 29. 承認版が 1 つの素材は stop 後に配信へ戻せない → rollback の述語に `OR publish_status='stopped'` を追加（同じ版を再び配信できる）
 30. `creating → failed` を job 遷移表に追加
+
+v3.2（Astra high 実装レビュー後）:
+31. 検証係の入力は `parts/**` の .md / .html / .svg すべて。合計 400,000 文字超は切り詰めず試行を `failed` にし、理由は `improvement_notes(source='verification')` に残す（`material_versions` に `last_error` 列を足さない）
+32. events / files は全ページ取得。途中で抜ける時は `reconcile_state_json` に続き位置を保存。外部呼び出しの timeout は残時間に連動（waitUntil 25 秒 / cron 10 分）、reconcile 内の SDK 再試行は 0
+33. cancel は CAS 後に再読して session を interrupt + archive。失敗へ落とす UPDATE は読んだ時点の status / phase を述語に含める
+34. `pause_turn` の継続は応答の `container` id を引き継ぐ。HEAD も Origin 検証の対象

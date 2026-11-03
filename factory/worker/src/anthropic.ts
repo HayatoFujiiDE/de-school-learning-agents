@@ -26,19 +26,30 @@ export interface FileMeta {
   created_at: string;
 }
 
+/** 外部呼び出しのオプション。deadline があれば timeout = min(残り時間, 60 秒)、再試行 0（reconcile 用） */
+export interface CallOpts {
+  deadline?: number;
+}
+
+export interface Page<T> {
+  data: T[];
+  /** 次のページの cursor。null なら最後のページ */
+  next: string | null;
+}
+
 export interface FactoryPort {
   readonly isFake: boolean;
-  createSession(params: SessionCreateParams): Promise<{ id: string }>;
-  retrieveSession(sessionId: string): Promise<SessionView>;
-  listSessionsPage(page: string | null): Promise<{ data: SessionView[]; next: string | null }>;
-  /** events を最大 max 件。order='desc' は新しい順 */
-  listEvents(sessionId: string, opts: { order: 'asc' | 'desc'; max: number }): Promise<unknown[]>;
-  sendEvents(sessionId: string, events: BetaManagedAgentsEventParams[]): Promise<void>;
-  archiveSession(sessionId: string): Promise<void>;
-  /** files.list を最後のページまで（最大 max 件） */
-  listFiles(sessionId: string, max: number): Promise<FileMeta[]>;
-  downloadFile(fileId: string): Promise<Uint8Array>;
-  createMessage(params: MessageCreateParamsNonStreaming): Promise<Message>;
+  createSession(params: SessionCreateParams, o?: CallOpts): Promise<{ id: string }>;
+  retrieveSession(sessionId: string, o?: CallOpts): Promise<SessionView>;
+  listSessionsPage(page: string | null, o?: CallOpts): Promise<Page<SessionView>>;
+  /** events.list の 1 ページ。order='desc' は新しい順。page は前のページの next */
+  listEventsPage(sessionId: string, q: { order: 'asc' | 'desc'; page: string | null }, o?: CallOpts): Promise<Page<unknown>>;
+  sendEvents(sessionId: string, events: BetaManagedAgentsEventParams[], o?: CallOpts): Promise<void>;
+  archiveSession(sessionId: string, o?: CallOpts): Promise<void>;
+  /** files.list（scope_id = session）の 1 ページ */
+  listFilesPage(sessionId: string, page: string | null, o?: CallOpts): Promise<Page<FileMeta>>;
+  downloadFile(fileId: string, o?: CallOpts): Promise<Uint8Array>;
+  createMessage(params: MessageCreateParamsNonStreaming, o?: CallOpts): Promise<Message>;
 }
 
 /** 外部呼び出しの失敗。responded=true は API が応答した（status あり）。false は応答不明（接続断・タイムアウト等） */
@@ -94,50 +105,54 @@ export function makeClient(env: Env, opts: { timeoutMs?: number } = {}): Anthrop
   });
 }
 
+const CALL_TIMEOUT_MAX_MS = 60_000;
+
+/** deadline から SDK の RequestOptions を作る（reconcile では再試行しない） */
+export function requestOptions(o?: CallOpts): { timeout?: number; maxRetries?: number } {
+  if (!o?.deadline) return {};
+  const remaining = o.deadline - Date.now();
+  return { timeout: Math.max(1_000, Math.min(remaining, CALL_TIMEOUT_MAX_MS)), maxRetries: 0 };
+}
+
 function realPort(env: Env): FactoryPort {
   const client = makeClient(env);
   const longClient = makeClient(env, { timeoutMs: 300_000 });
   return {
     isFake: false,
-    createSession: (params) => call(async () => ({ id: (await client.beta.sessions.create(params)).id })),
-    retrieveSession: (id) => call(async () => toView(await client.beta.sessions.retrieve(id))),
-    listSessionsPage: (page) =>
+    createSession: (params, o) => call(async () => ({ id: (await client.beta.sessions.create(params, requestOptions(o))).id })),
+    retrieveSession: (id, o) => call(async () => toView(await client.beta.sessions.retrieve(id, {}, requestOptions(o)))),
+    listSessionsPage: (page, o) =>
       call(async () => {
-        const p = await client.beta.sessions.list({ order: 'desc', ...(page ? { page } : {}) });
+        const p = await client.beta.sessions.list({ order: 'desc', ...(page ? { page } : {}) }, requestOptions(o));
         return { data: p.data.map(toView), next: p.next_page ?? null };
       }),
-    listEvents: (id, { order, max }) =>
+    listEventsPage: (id, { order, page }, o) =>
       call(async () => {
-        const out: unknown[] = [];
-        for await (const ev of client.beta.sessions.events.list(id, { order })) {
-          out.push(ev);
-          if (out.length >= max) break;
-        }
-        return out;
+        const p = await client.beta.sessions.events.list(id, { order, ...(page ? { page } : {}) }, requestOptions(o));
+        return { data: p.data as unknown[], next: p.next_page ?? null };
       }),
-    sendEvents: (id, events) =>
+    sendEvents: (id, events, o) =>
       call(async () => {
-        await client.beta.sessions.events.send(id, { events });
+        await client.beta.sessions.events.send(id, { events }, requestOptions(o));
       }),
-    archiveSession: (id) =>
+    archiveSession: (id, o) =>
       call(async () => {
-        await client.beta.sessions.archive(id);
+        await client.beta.sessions.archive(id, {}, requestOptions(o));
       }),
-    listFiles: (sessionId, max) =>
+    listFilesPage: (sessionId, page, o) =>
       call(async () => {
-        const out: FileMeta[] = [];
-        for await (const f of client.beta.files.list({ scope_id: sessionId, betas: [MANAGED_AGENTS_BETA] })) {
-          out.push({ id: f.id, filename: f.filename, size_bytes: f.size_bytes, created_at: f.created_at });
-          if (out.length >= max) break;
-        }
-        return out;
+        const p = await client.beta.files.list({ scope_id: sessionId, betas: [MANAGED_AGENTS_BETA], ...(page ? { page } : {}) }, requestOptions(o));
+        return {
+          data: p.data.map((f) => ({ id: f.id, filename: f.filename, size_bytes: f.size_bytes, created_at: f.created_at })),
+          next: p.next_page ?? null,
+        };
       }),
-    downloadFile: (fileId) =>
+    downloadFile: (fileId, o) =>
       call(async () => {
-        const res = await client.beta.files.download(fileId);
+        const res = await client.beta.files.download(fileId, {}, requestOptions(o));
         return new Uint8Array(await res.arrayBuffer());
       }),
-    createMessage: (params) => call(() => longClient.messages.create(params)),
+    createMessage: (params, o) => call(() => longClient.messages.create(params, requestOptions(o))),
   };
 }
 

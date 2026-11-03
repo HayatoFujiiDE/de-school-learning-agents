@@ -1,5 +1,5 @@
 // Cloudflare Access JWT 検証 + Origin 検証（契約 §B-1）。
-// 失敗は 401 access_denied、GET/HEAD 以外で Origin 不一致は 403 bad_origin。
+// 失敗は 401 access_denied、GET 以外（HEAD を含む）で Origin 不一致は 403 bad_origin。
 
 import { isLocalHostname, type Env } from './env';
 
@@ -77,7 +77,7 @@ export async function verifyAccessJwt(token: string, env: Env, nowSec = Math.flo
   return payload.email;
 }
 
-/** Access の検証。GET/HEAD 以外は Origin も検証する */
+/** Access の検証。GET 以外は Origin も検証する */
 export async function requireAccess(request: Request, env: Env): Promise<AccessResult> {
   const url = new URL(request.url);
   let email: string | null = null;
@@ -93,7 +93,8 @@ export async function requireAccess(request: Request, env: Env): Promise<AccessR
     }
     if (!email) return denied();
   }
-  if (request.method !== 'GET' && request.method !== 'HEAD') {
+  // §B-1「GET 以外」: HEAD も検証する
+  if (request.method !== 'GET') {
     const origin = request.headers.get('Origin');
     if (!origin || origin !== url.origin) return { ok: false, response: jsonError(403, 'bad_origin') };
   }

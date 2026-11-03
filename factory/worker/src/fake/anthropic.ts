@@ -125,6 +125,18 @@ const unb64url = (s: string) => {
   return new TextDecoder().decode(Uint8Array.from(bin, (ch) => ch.charCodeAt(0)));
 };
 
+/** 本物と同じく cursor で区切って返す（小さいページで、続き位置からの再開を smoke で通す） */
+const FAKE_PAGE_SIZE = 4;
+function paginate<T>(items: T[], page: string | null, prefix: string): { data: T[]; next: string | null } {
+  let start = 0;
+  if (page) {
+    if (!page.startsWith(prefix)) throw new PortError(true, 400, 'bad_cursor');
+    start = Number.parseInt(page.slice(prefix.length), 10) || 0;
+  }
+  const end = start + FAKE_PAGE_SIZE;
+  return { data: items.slice(start, end), next: end < items.length ? `${prefix}${end}` : null };
+}
+
 function extractTagged(text: string, tag: string): string | null {
   const m = new RegExp(`<${tag}>\\n?([\\s\\S]*?)\\n?</${tag}>`).exec(text);
   return m ? m[1] : null;
@@ -156,10 +168,10 @@ export function createFakePort(env: Env): FactoryPort {
         });
       return { data, next: null };
     },
-    async listEvents(id, { order, max }) {
+    async listEventsPage(id, { order, page }) {
       const v = buildView(await readCalls(db), id);
       const evs = order === 'desc' ? [...v.events].reverse() : v.events;
-      return evs.slice(0, max);
+      return paginate(evs, page, `${order}:`);
     },
     async sendEvents(id, events) {
       buildView(await readCalls(db), id); // 存在確認
@@ -168,7 +180,7 @@ export function createFakePort(env: Env): FactoryPort {
     async archiveSession(id) {
       await appendCall(db, { op: 'sessions.archive', at: nowIso(), session_id: id });
     },
-    async listFiles(sessionId, max) {
+    async listFilesPage(sessionId, page) {
       const v = buildView(await readCalls(db), sessionId);
       const out: FileMeta[] = [];
       let i = 0;
@@ -177,7 +189,7 @@ export function createFakePort(env: Env): FactoryPort {
         if (text === undefined) continue;
         out.push({ id: `file_fake_${b64url(fixture)}`, filename, size_bytes: enc.encode(text).byteLength, created_at: new Date(Date.parse(v.created_at) + i++).toISOString() });
       }
-      return out.slice(0, max);
+      return paginate(out, page, 'files:');
     },
     async downloadFile(fileId) {
       if (!fileId.startsWith('file_fake_')) throw notFound();
@@ -202,15 +214,35 @@ export function createFakePort(env: Env): FactoryPort {
             max_uses: (t as { max_uses?: number }).max_uses,
           })),
           messages: params.messages.length,
+          container: typeof params.container === 'string' ? params.container : null,
         },
       });
-      // claims.json の各 claim に fixture 専用キー fake_verdict があればそれを、無ければ confirmed を返す
+      // claims.json の各 claim に fixture 専用キー fake_verdict があればそれを、無ければ confirmed を返す。
+      // 最上位の fake_pause_turns: n があれば、assistant の turn が n 未満の間は container 付きの pause_turn を返す
       const claimsText = extractTagged(content, 'claims_json') ?? '{"claims":[]}';
       let claims: Array<{ id: string; fake_verdict?: string }> = [];
+      let pauseTurns = 0;
       try {
-        claims = (JSON.parse(claimsText) as { claims?: Array<{ id: string; fake_verdict?: string }> }).claims ?? [];
+        const parsed = JSON.parse(claimsText) as { claims?: Array<{ id: string; fake_verdict?: string }>; fake_pause_turns?: number };
+        claims = parsed.claims ?? [];
+        pauseTurns = Number(parsed.fake_pause_turns ?? 0);
       } catch {
         claims = [];
+      }
+      const assistantTurns = params.messages.filter((m) => m.role === 'assistant').length;
+      const fakeContainer = { id: 'container_fake_pause_1', expires_at: new Date(Date.now() + 3600_000).toISOString(), skills: null };
+      if (assistantTurns < pauseTurns) {
+        return {
+          id: `msg_fake_${crypto.randomUUID().slice(0, 8)}`,
+          type: 'message',
+          role: 'assistant',
+          model: params.model,
+          container: fakeContainer,
+          content: [{ type: 'text', text: '出典を開いています', citations: null }],
+          stop_reason: 'pause_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 6000, output_tokens: 300, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        } as unknown as Message;
       }
       const verdicts = claims.map((c) => ({
         claim_id: c.id,
@@ -223,6 +255,7 @@ export function createFakePort(env: Env): FactoryPort {
         type: 'message',
         role: 'assistant',
         model: params.model,
+        container: pauseTurns > 0 ? fakeContainer : null,
         content: [{ type: 'tool_use', id: 'toolu_fake_1', name: 'report_verdicts', input: { verdicts, overall_note: 'fake' }, caller: { type: 'direct' } }],
         stop_reason: 'tool_use',
         stop_sequence: null,

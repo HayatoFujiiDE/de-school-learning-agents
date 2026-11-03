@@ -12,7 +12,8 @@ export const VERIFIER_MODEL = 'claude-opus-5-5';
 export const VERDICTS = ['confirmed', 'hypothesis', 'unverified', 'contradicted'] as const;
 const MAX_PAUSES = 5;
 const MAX_TURNS = 8;
-const PARTS_CHAR_CAP = 150_000;
+/** 検証係への入力（claims + sources + parts/** 全本文）の上限。超えたら切り詰めずにその試行を failed にする */
+export const VERIFY_INPUT_CHAR_LIMIT = 400_000;
 // Opus 5.5 の定価（USD / 1M tokens）。web_fetch は無料
 const PRICE_IN = 4;
 const PRICE_OUT = 20;
@@ -87,7 +88,7 @@ export function usageMicroDollars(u: Message['usage'] | undefined): number {
 }
 export const microDollarsToCents = (m: number) => Math.ceil(m / 10_000);
 
-interface VersionForVerify {
+export interface VersionForVerify {
   id: string;
   material_id: string;
   r2_prefix: string;
@@ -95,18 +96,19 @@ interface VersionForVerify {
   public_paths_json: string;
 }
 
-async function buildUserContent(env: Env, v: VersionForVerify): Promise<string> {
+/** parts/** の本文（.md / .html / .svg）を全部入れる。上限を超えたら null（切り詰めない） */
+export async function buildUserContent(env: Pick<Env, 'R2'>, v: VersionForVerify): Promise<string | null> {
   const sourcesObj = await env.R2.get(v.r2_prefix + 'sources.json');
   const sourcesText = sourcesObj ? await sourcesObj.text() : '{"sources":[]}';
-  const paths = (JSON.parse(v.public_paths_json) as string[]).filter((p) => p.startsWith('parts/') && p.endsWith('.md'));
-  let budget = PARTS_CHAR_CAP;
+  const paths = (JSON.parse(v.public_paths_json) as string[]).filter((p) => p.startsWith('parts/') && /\.(md|html|svg)$/.test(p));
+  let total = v.claims_json.length + sourcesText.length;
   const bodies: string[] = [];
   for (const p of paths) {
-    if (budget <= 0) break;
     const o = await env.R2.get(v.r2_prefix + p);
     if (!o) continue;
-    const t = (await o.text()).slice(0, budget);
-    budget -= t.length;
+    const t = await o.text();
+    total += t.length + p.length;
+    if (total > VERIFY_INPUT_CHAR_LIMIT) return null;
     bodies.push(`## ${p}\n${t}`);
   }
   return [
@@ -124,15 +126,21 @@ async function buildUserContent(env: Env, v: VersionForVerify): Promise<string> 
   ].join('\n');
 }
 
-type AttemptResult = { ok: true; report: VerdictReport; microDollars: number } | { ok: false; reason: string; microDollars: number };
+type AttemptResult =
+  | { ok: true; report: VerdictReport; microDollars: number }
+  /** terminal=true は再試行しても同じ結果になる失敗（attempts に関係なく failed） */
+  | { ok: false; reason: string; microDollars: number; terminal?: boolean };
 
 async function runAttempt(env: Env, port: FactoryPort, v: VersionForVerify): Promise<AttemptResult> {
   const claimIds = ((JSON.parse(v.claims_json) as { claims?: Array<{ id?: unknown }> }).claims ?? [])
     .map((c) => c.id)
     .filter((id): id is string => typeof id === 'string');
-  const messages: MessageParam[] = [{ role: 'user', content: await buildUserContent(env, v) }];
+  const content = await buildUserContent(env, v);
+  if (content === null) return { ok: false, reason: 'input_too_large', microDollars: 0, terminal: true };
+  const messages: MessageParam[] = [{ role: 'user', content }];
   let micro = 0;
   let pauses = 0;
+  let containerId: string | null = null;
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const params: MessageCreateParamsNonStreaming = {
       model: VERIFIER_MODEL,
@@ -150,6 +158,8 @@ async function runAttempt(env: Env, port: FactoryPort, v: VersionForVerify): Pro
       ],
       tool_choice: { type: 'auto' },
       messages,
+      // pause_turn の継続: 前の応答の container を引き継ぐ（server tool の公式手順）
+      ...(containerId ? { container: containerId } : {}),
     };
     let resp: Message;
     try {
@@ -158,6 +168,7 @@ async function runAttempt(env: Env, port: FactoryPort, v: VersionForVerify): Pro
       return { ok: false, reason: `api:${errorKind(e)}`, microDollars: micro };
     }
     micro += usageMicroDollars(resp.usage);
+    if (resp.container?.id) containerId = resp.container.id;
     messages.push({ role: 'assistant', content: resp.content as MessageParam['content'] });
     const tu = resp.content.find((b) => b.type === 'tool_use' && b.name === 'report_verdicts') as { input?: unknown } | undefined;
     if (resp.stop_reason === 'tool_use' && tu) {
@@ -267,10 +278,26 @@ export async function runVerificationStep(env: Env, port: FactoryPort): Promise<
       ),
     );
   } else {
+    const PV = `SELECT 1 FROM material_versions pv WHERE pv.id = ? AND pv.verification_status = 'running' AND pv.verification_token = ?`;
+    if (result.terminal) {
+      // 版には last_error 列が無いので、理由は素材の improvement_notes（source='verification'）に残す
+      stmts.push(
+        stmt(
+          `INSERT INTO improvement_notes (id, material_id, source, note, created_at) SELECT ?, ?, 'verification', ?, ? WHERE EXISTS (${PV})`,
+          crypto.randomUUID(),
+          v.material_id,
+          `検証できませんでした（${result.reason}）。本文の合計が ${VERIFY_INPUT_CHAR_LIMIT} 文字を超えています。版 ${v.id}`,
+          now,
+          v.id,
+          token,
+        ),
+      );
+    }
     stmts.push(
       stmt(
-        `UPDATE material_versions SET verification_status = CASE WHEN verification_attempts >= ? THEN 'failed' ELSE 'pending' END, verification_token = NULL
+        `UPDATE material_versions SET verification_status = CASE WHEN ? = 1 OR verification_attempts >= ? THEN 'failed' ELSE 'pending' END, verification_token = NULL
          WHERE id = ? AND verification_status = 'running' AND verification_token = ?`,
+        result.terminal ? 1 : 0,
         max,
         v.id,
         token,
@@ -278,7 +305,7 @@ export async function runVerificationStep(env: Env, port: FactoryPort): Promise<
     );
   }
   const r = await conditionalBatch(db, stmts);
-  const state = !r.ok ? 'discarded' : result.ok ? 'done' : `retry:${result.reason}`;
+  const state = !r.ok ? 'discarded' : result.ok ? 'done' : result.terminal ? `failed:${result.reason}` : `retry:${result.reason}`;
   console.log(JSON.stringify({ at: 'verify', version_id: v.id, result: state }));
   return state;
 }

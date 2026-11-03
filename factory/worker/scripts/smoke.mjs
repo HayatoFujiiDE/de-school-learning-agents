@@ -252,7 +252,20 @@ async function main() {
   r = await api('POST', `/api/review/${v2?.id}/reverify`);
   check('(n) reverify → 200 pending', r.status === 200 && r.json?.verification_status === 'pending', `status=${r.status} err=${r.json?.error}`);
   v2D = await cronUntil(v2?.id, (d) => d.version?.verification_status === 'done');
-  check('(n) 2 回目の検証 done（attempt 2、verification_id が新しい）', v2D?.verification?.attempt === 2 && !!v2D?.verification_id && v2D.verification_id !== oldVid, `att=${v2D?.verification?.attempt}`);
+  {
+    const hist = v2D?.verification_history ?? [];
+    check(
+      '(n) 2 回目の検証 done・履歴 2 行（attempt 1, 2）・verification_id が新しい',
+      v2D?.version?.verification_status === 'done' &&
+        hist.length === 2 &&
+        hist[0].attempt === 1 &&
+        hist[1].attempt === 2 &&
+        hist[0].id === oldVid &&
+        hist[1].id === v2D?.verification_id &&
+        v2D.verification_id !== oldVid,
+      `vs=${v2D?.version?.verification_status} hist=${JSON.stringify(hist.map((h) => h.attempt))}`,
+    );
+  }
   r = await api('POST', `/api/review/${v2?.id}/decision`, { decision: 'approve', checklist: ALL_OK, note: '', verification_id: oldVid });
   check('(n) 古い verification_id の approve → 409', r.status === 409, `status=${r.status} err=${r.json?.error}`);
   r = await api('POST', `/api/review/${v2?.id}/decision`, { decision: 'approve', checklist: ALL_OK, note: '', verification_id: v2D?.verification_id });
@@ -285,6 +298,19 @@ async function main() {
   r = await api('POST', `/api/review/${ic.versionId}/decision`, { decision: 'return', checklist: ALL_OK, note: 'c2 の根拠を見直してください', brief_append: '' });
   const icMat = (await api('GET', `/api/materials/${ic.materialId}`)).json;
   check('(i) 差し戻し → 版 rejected + rework job + review_decisions(return)', r.status === 200 && icMat?.versions?.[0]?.status === 'rejected' && icMat?.jobs?.some((x) => x.kind === 'rework') && icMat?.review_decisions?.some((d) => d.decision === 'return'), `status=${r.status} err=${r.json?.error}`);
+
+  // ---- 検証係の pause_turn 継続（container を引き継ぐ）----
+  {
+    const pt = await makeVersion('done-pause-turn', 'pt');
+    const ptD = await cronUntil(pt.versionId, (d) => d.version?.verification_status === 'done');
+    const msgs = ((await api('GET', '/__fake/calls')).json?.calls ?? []).filter((c) => c.op === 'messages.create');
+    const cont = msgs.filter((c) => c.params?.container === 'container_fake_pause_1');
+    check(
+      '(F-3) pause_turn の後の継続リクエストに container が付き、検証 done',
+      ptD?.version?.verification_status === 'done' && cont.length === 1 && cont[0].params?.messages === 2,
+      `vs=${ptD?.version?.verification_status} cont=${cont.length} msgs=${cont[0]?.params?.messages}`,
+    );
+  }
 
   // ---- (g) questions-nonempty ----
   const g = await create('questions-nonempty', 'g');
@@ -369,6 +395,8 @@ async function main() {
     check('(l) 非 localhost では fake の制御口に届かない（401）', fakeCtl === 401, `fake=${fakeCtl}`);
     const badOrigin = await api('POST', '/api/standards', { text: 'x' }, { origin: 'https://evil.example' });
     const noOrigin = await api('POST', '/api/standards', { text: 'x' }, { origin: false });
+    const head = await fetch(`${BASE}/api/materials`, { method: 'HEAD' });
+    check('(l) HEAD も Origin 無しは 403', head.status === 403, `status=${head.status}`);
     check('(l) GET 以外で Origin 不一致・無しは 403 bad_origin', badOrigin.status === 403 && noOrigin.status === 403 && badOrigin.json?.error === 'bad_origin', `${badOrigin.status}/${noOrigin.status}`);
     const adminLocal = await fetch(`${BASE}/admin/`);
     const adminHtml = await adminLocal.text();

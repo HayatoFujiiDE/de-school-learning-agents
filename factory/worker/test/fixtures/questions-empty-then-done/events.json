@@ -57,12 +57,25 @@
         ]
       },
       {
+        "type": "span.outcome_evaluation_start",
+        "id": "sevt_eval_start_1",
+        "outcome_id": "outc_fake",
+        "iteration": 0
+      },
+      {
         "type": "span.outcome_evaluation_end",
         "id": "sevt_eval_1",
+        "outcome_evaluation_start_id": "sevt_eval_start_1",
+        "outcome_id": "outc_fake",
+        "iteration": 0,
         "result": "satisfied",
         "explanation": "rubric の各項目を満たしている",
-        "iteration": 0,
-        "outcome_id": "outc_fake"
+        "usage": {
+          "input_tokens": 5200,
+          "output_tokens": 640,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        }
       },
       {
         "type": "session.status_idle",

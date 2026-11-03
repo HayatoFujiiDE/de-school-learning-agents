@@ -83,3 +83,26 @@ describe('checkCitations', () => {
 
   it('normalizeSpace', () => expect(normalizeSpace(' a \n\t b ')).toBe('a b'));
 });
+
+describe('accumulateCitations（ページ分割で流し込んでも同じ結果）', () => {
+  it('2 ページに分けても、result が use より先に来ても checkCitations と一致する', async () => {
+    const { accumulateCitations, finishCitations, newCitationAcc } = await import('../src/checks/citations');
+    const sources = [
+      { id: 's1', url: 'https://minecraft.wiki/w/R', quoted_excerpt: '最大 15 ブロック', is_primary: true },
+      { id: 's2', url: 'https://minecraft.wiki/w/T', quoted_excerpt: '無い文', is_primary: true },
+    ];
+    const events = [
+      fetchUse('a', 'https://minecraft.wiki/w/R'),
+      result('a', 'ページ本文: 最大 15 ブロック。'),
+      fetchUse('b', 'https://minecraft.wiki/w/T'),
+      result('b', '別の本文'),
+    ];
+    const whole = checkCitations(sources, events);
+    const acc = newCitationAcc();
+    accumulateCitations(acc, sources, [events[3], events[1]]);
+    const restored = JSON.parse(JSON.stringify(acc));
+    accumulateCitations(restored, sources, [events[0], events[2]]);
+    expect(finishCitations(restored, sources)).toEqual(whole);
+    expect(whole.sources.map((s) => s.check_detail)).toEqual(['ok', 'quote_not_found']);
+  });
+});

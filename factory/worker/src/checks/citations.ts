@@ -56,25 +56,48 @@ function looksOffloaded(text: string): boolean {
   return /\/(mnt|tmp|workspace)\/[^\s]+/.test(text) && text.length < 4000;
 }
 
-export function checkCitations(sources: CitationSourceInput[], events: unknown[]): CitationResult {
-  const fetches: Array<{ id: string; url: string }> = [];
-  const results = new Map<string, AnyEvent>();
+/**
+ * events をページ単位で流し込める集計状態（JSON にして reconcile_state_json に保存できる）。
+ * 本文そのものは持たず、tool_result ごとに「本文があったか / offload らしいか / 引用が見つかった出典 id」だけを持つ。順序に依存しない。
+ */
+export interface CitationAcc {
+  fetches: Record<string, string>; // web_fetch の tool_use id → 正規化 URL
+  results: Record<string, { t: 0 | 1; o: 0 | 1; q: string[] }>; // tool_use_id → 要約
+}
+
+export const newCitationAcc = (): CitationAcc => ({ fetches: {}, results: {} });
+
+export function accumulateCitations(acc: CitationAcc, sources: CitationSourceInput[], events: unknown[]): CitationAcc {
+  const excerpts = sources.map((s) => ({ id: s.id, ex: normalizeSpace(s.quoted_excerpt ?? '') })).filter((x) => x.ex.length > 0);
   for (const raw of events) {
     const ev = raw as AnyEvent;
     if (!ev || typeof ev !== 'object') continue;
     if (ev.type === 'agent.tool_use' && ev.name === 'web_fetch' && typeof ev.id === 'string') {
       const url = (ev.input as Record<string, unknown> | undefined)?.url;
-      if (typeof url === 'string') fetches.push({ id: ev.id, url: normalizeUrl(url) });
+      if (typeof url === 'string') acc.fetches[ev.id] = normalizeUrl(url);
     } else if (ev.type === 'agent.tool_result' && typeof ev.tool_use_id === 'string') {
-      results.set(ev.tool_use_id, ev);
+      const t = resultText(ev);
+      const prev = acc.results[ev.tool_use_id];
+      const norm = t === null ? '' : normalizeSpace(t);
+      const q = t === null ? [] : excerpts.filter((x) => norm.includes(x.ex)).map((x) => x.id);
+      acc.results[ev.tool_use_id] = {
+        t: prev?.t === 1 || t !== null ? 1 : 0,
+        o: prev?.o === 1 || (t !== null && looksOffloaded(t)) ? 1 : 0,
+        q: [...new Set([...(prev?.q ?? []), ...q])],
+      };
     }
   }
+  return acc;
+}
 
+export function finishCitations(acc: CitationAcc, sources: CitationSourceInput[]): CitationResult {
   const out: CitationResult['sources'] = [];
   for (const s of sources) {
     const target = normalizeUrl(s.url);
-    const matches = fetches.filter((f) => f.url === target);
-    const fetched: 0 | 1 = matches.length > 0 ? 1 : 0;
+    const matchIds = Object.entries(acc.fetches)
+      .filter(([, u]) => u === target)
+      .map(([id]) => id);
+    const fetched: 0 | 1 = matchIds.length > 0 ? 1 : 0;
     let quote: 0 | 1 = 0;
     let detail: CheckDetail;
     const excerpt = normalizeSpace(s.quoted_excerpt ?? '');
@@ -85,16 +108,15 @@ export function checkCitations(sources: CitationSourceInput[], events: unknown[]
     } else {
       let anyText = false;
       let offloaded = false;
-      for (const mt of matches) {
-        const r = results.get(mt.id);
-        const t = r ? resultText(r) : null;
-        if (t === null) continue;
+      for (const id of matchIds) {
+        const r = acc.results[id];
+        if (!r || r.t === 0) continue;
         anyText = true;
-        if (normalizeSpace(t).includes(excerpt)) {
+        if (r.q.includes(s.id)) {
           quote = 1;
           break;
         }
-        if (looksOffloaded(t)) offloaded = true;
+        if (r.o === 1) offloaded = true;
       }
       if (quote) detail = 'ok';
       else if (!anyText || offloaded) detail = 'result_unavailable';
@@ -111,4 +133,8 @@ export function checkCitations(sources: CitationSourceInput[], events: unknown[]
       quoted: out.filter((x) => x.quote_found === 1).length,
     },
   };
+}
+
+export function checkCitations(sources: CitationSourceInput[], events: unknown[]): CitationResult {
+  return finishCitations(accumulateCitations(newCitationAcc(), sources, events), sources);
 }

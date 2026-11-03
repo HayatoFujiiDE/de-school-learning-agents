@@ -90,6 +90,10 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
   const ver = await latestVerification(db, vid);
   const report = ver ? parseJsonField<{ verdicts?: Array<{ claim_id: string; verdict: string; reason: string; opened_urls: string[] }>; overall_note?: string }>(ver.result_json, {}) : null;
   const claims = parseJsonField<{ claims?: Array<Record<string, unknown>> }>(v.claims_json, {}).claims ?? [];
+  const history = await all<{ id: string; attempt: number; contradicted: number; created_at: string }>(
+    db,
+    stmt('SELECT id, attempt, contradicted, created_at FROM verifications WHERE material_version_id = ? ORDER BY attempt ASC', vid),
+  );
   const verifyCost = await first<{ c: number | null }>(db, stmt("SELECT SUM(cents) AS c FROM cost_ledger WHERE kind = 'verify' AND ref_id = ?", vid));
   return json(200, {
     version: {
@@ -136,6 +140,7 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
         }
       : null,
     verification_id: ver?.id ?? null,
+    verification_history: history,
     verify_cost_cents: Number(verifyCost?.c ?? 0),
   });
 }
