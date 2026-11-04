@@ -1,4 +1,4 @@
-# 実装契約 — コンテンツファクトリー v1（凍結 v3。実装担当はここを正本にする）
+# 実装契約 — コンテンツファクトリー v1（凍結 v3.6。実装担当はここを正本にする）
 
 設計の根拠は `docs/content-factory-design.md`（人向け）と `~/.claude/plans/adaptive-gathering-hollerith.md`（承認済み計画）。本書は実装に必要な「形」だけを決める。「」内の文言は verbatim、言い換え禁止。本書と設計書が食い違ったら本書を優先し、食い違いを §R に記録する。v2 は Astra（GPT-6）と 3 視点レビューの指摘（§R）を反映した改訂。
 
@@ -773,6 +773,112 @@ CREATE INDEX idx_cost_day ON cost_ledger(day);
 
 fake（§I）に `xai.responses` / `messages.batches.{create,retrieve,results}` / RSS の `fetch`（`FactoryPort` でなく `fetch` を差し替える引数）を足す。本番コードに fake の分岐を増やさない。
 
+## §L 確認の負担を減らす（v3.6。2026-11-04 夜凍結。§B-5 / §B-6 / §F-3 / §G-2 に優先する）
+
+オーナー決定（2026-11-04、verbatim の趣旨）: 「全部チェックするのは認知的負荷が高すぎる。怪しいところだけ表示」/ 自動差し戻しは注文 1 回あたり 1 回まで / 戻す基準は confirmed が半分未満 / 6 項目のうち「内容と根拠」「利用条件」「生成物の動作」は機械が全部緑なら自動 OK、人は「説明と表現」「学習との関係」「使う条件」/ 確認画面はサクサク見られる形に / 検証係は Opus 5.5 のまま Batch API。
+
+### §L-1 migration `migrations/0003_review_triage.sql`（verbatim。画像生成の計画で 0003 としていたものは 0004 に繰り下げる）
+
+```sql
+ALTER TABLE material_versions ADD COLUMN verify_batch_id TEXT;
+ALTER TABLE material_versions ADD COLUMN verify_turn INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE material_versions ADD COLUMN verify_pauses INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE material_versions ADD COLUMN verify_micro INTEGER NOT NULL DEFAULT 0;      -- この試行で積み上がった費用（micro-dollars）
+ALTER TABLE material_versions ADD COLUMN verify_submitted_at TEXT;
+ALTER TABLE material_versions ADD COLUMN auto_reverified INTEGER NOT NULL DEFAULT 0;   -- 自動の再検証を使ったら 1（版ごとに 1 回）
+```
+
+### §L-2 検証係の Batch 化（`src/verify.ts`。§F-3 の判定ロジック・schema・lease・費用の記帳は維持し、呼び方だけ変える）
+
+- `VERIFY_MODE`（var、既定 `batch`。`sync` で従来の同期ループ = 戻し用）。`VERIFY_MAX_CONTENT_TOKENS`（var、既定 `20000`）
+- tool は `{type:'web_fetch_20250910', name:'web_fetch', max_uses, allowed_domains, max_content_tokens}`（Batch では turn の間に数十分〜数時間あくので、dynamic filtering の container に依存しない基本版にする。container の寿命は未確認 §R-49 (b)）。同期モードも同じ tool にそろえる
+- 会話の状態は R2 `verify/{version_id}/{verification_token}/messages.json`（MessageParam[]）。D1 は §L-1 の列だけ
+- 1 ターン = 1 batch（requests 1 件、`custom_id = v{turn}`。版 id は含めない＝64 文字制限）。params は §F-3 と同じ（model / max_tokens / thinking / system / tools / tool_choice auto）。**最後の message の最後の content block に `cache_control: {type:'ephemeral'}`** を付ける（Batch と併用可）
+- cron の verify 段（`runVerificationStep` を置き換え。1 回の cron で: 期限切れ処理 → 提出済みの版を最大 3 件回収 → 新規提出を最大 1 件）:
+  1. 期限切れ: `verification_status='running' AND verify_submitted_at < now-26h` → `pending`（attempts は増やさない）。R2 の状態は残してよい（token が変われば読まれない）
+  2. 回収: `running AND verify_batch_id IS NOT NULL` を `verify_submitted_at` 昇順に最大 3 件。`retrieveBatch` → `processing_status !== 'ended'` なら次へ。ended なら `batchResults` の 1 件目: `succeeded` → 応答を §F-3 のループ本体と同じ規則で処理（`pause_turn` → `verify_pauses+1`、上限 5 / `end_turn` で report 無し → user 文を足す / `tool_use` + `report_verdicts` → 完了 / それ以外 → 試行失敗）。続きがあれば `verify_turn+1`（上限 8）で R2 を書き直して次の batch を提出（**提出前に `paused` と `DAILY_CAP_CENTS` を確認**。超えていたら batch_id を NULL にして running のまま待つ＝次の cron で再提出）。`errored` / `expired` / `canceled` → 試行失敗
+  3. 新規提出: §F-3 の lease（CAS で running・attempts+1・token）→ turn 0 の messages を R2 に書く → `createBatch` → `verify_batch_id, verify_submitted_at, verify_turn=0, verify_pauses=0, verify_micro=0` を token 付き CAS で書く
+- 状態の書き込みはすべて述語 `verification_status='running' AND verification_token=?`。不成立なら（reverify で世代が変わった）結果を捨てる
+- 費用: 各ターンの usage を `verify_micro` に足し、**ターンごとに** `cost_ledger kind='verify'` へ記帳（失敗・破棄でも実費は記帳。§F-3 と同じ）。単価 = Batch 50% × Opus 5.5（入力 $4、cache write 1.25 倍、cache read 0.1 倍、出力 $20 / 1M）。cache read の公式倍率はこれより低い可能性があり、多めに数える（安全側。§R-49 (c)）。`verifications.cost_cents` は試行の合計
+- `createBatch` の応答が不明（timeout・接続断）: その試行を失敗（attempts < 上限なら pending）にし、**見積り 1 ターン分（`VERIFY_UNCONFIRMED_CENTS`、既定 `150`）を記帳**。迷子の batch は回収しない（費用は 1 ターン分で有界。§R-49 (d)）
+- `result_json` に `meta` を足す: `{mode:'batch'|'sync', turns, fetch_errors: {<error_code>: n}, fetched_ok: [url...]}`（全ターンの `web_fetch_tool_result` から数える。`VERDICT_SCHEMA` の検証対象外の付帯情報）
+- reverify（§F-3）は `running` 中 409 のまま。CAS で `verify_batch_id=NULL, verify_turn=0, verify_pauses=0, verify_micro=0` も戻す
+
+### §L-3 仕分け（純関数 `src/checks/triage.ts` の `triageVersion(input)`）
+
+input: `claims`（claims_json）, `report`（最新 verification の result_json。無ければ null）, `verificationCount`, `sources`（sources 行）, `checks`（checks_json）, `material`（material_json）, `autoReverified`, `autoDerived`（この版の job が自動差し戻しで作られた = job.parent_version_id の版に `review_decisions.decision='return' AND reviewer_email='system:auto-triage'` がある）
+
+output:
+```ts
+{
+  auto: { content_and_evidence: 'ok'|'review', terms_of_use: 'ok'|'review', artifact_behavior: 'ok'|'review' },
+  groups: Array<{ cause: Cause, source_id: string|null, url: string|null, verifier_opened_urls: string[], claim_ids: string[], note: string }>,
+  ok_counts: { claims: number, sources: number },   // 要確認に出なかったもの
+  needs_review: number,                              // groups.length + auto が review の数
+  bad: boolean, action: 'none'|'auto_return'|'reverify', return_note: string|null
+}
+type Cause = 'contradicted' | 'maker_url_not_fetched' | 'quote_mismatch' | 'verifier_limit' | 'not_confirmed' | 'no_source' | 'license_unknown'
+```
+- claim の扱い: verdict が `confirmed` なら問題なし。それ以外は、その claim の `source_ids` ごとに原因を 1 つ決めて group に入れる（同じ出典の claim は 1 group にまとめる）。原因の優先順: `contradicted`（verdict）→ `maker_url_not_fetched`（`url_was_fetched=0`）→ `quote_mismatch`（`quote_found=0`）→ `verifier_limit`（`report.meta.fetch_errors` に `max_uses_exceeded` / `too_many_requests` / `unavailable` が 1 件以上）→ `not_confirmed`。`source_ids` が空なら `no_source`（source_id null の 1 group）
+- 出典だけの問題: claim に関係なく `quote_found=0` の出典は `quote_mismatch` の group（claim_ids は空でも出す）。`license='unknown'` の出典は `license_unknown` の group
+- `auto.content_and_evidence = 'ok'` ⇔ report あり かつ全 claim confirmed かつ claims が参照する全出典が `url_was_fetched=1 AND quote_found=1`
+- `auto.terms_of_use = 'ok'` ⇔ 出典が 1 件以上 かつ全出典 `license !== 'unknown'`
+- `auto.artifact_behavior = 'ok'` ⇔ `checks.forbidden / app_html / kakunin_zumi / missing_source_refs / missing_claim_refs` がすべて空 かつ parts の variants / files に `.html` が無い（動くものは人が触って確かめる。§R-49 (e)）
+- `bad` ⇔ report あり かつ claims ≥ 5 かつ（contradicted ≥ 1 または confirmed × 2 < claims 数 または `quote_found=0` の出典数 × 2 > 出典数）
+- `action`: `bad` かつ `verifier_limit` の group がある かつ `autoReverified=0` → `reverify` / それ以外で `bad` かつ `!autoDerived` → `auto_return` / ほかは `none`
+- `return_note`（auto_return の時だけ）: 下の固定文 + group ごとに 1 行（`- 出典 <id>（<url>）: <原因の文>。主張 <ids>。検証係が開いた URL: <urls>`）。原因の文は §L-6 の表と同じ
+```
+自動の差し戻し（検証の結果、確かめられた主張が半分に届きませんでした）。
+出典の URL は web_fetch で本文が返った URL を一字も変えずに書く。引用は本文の一続きをそのまま写す。開けなかったページは出典に使わない。
+```
+
+### §L-4 自動の処置（cron。verify 段の直後に `triageStep`）
+
+- 対象: `status='review' AND verification_status='done'` で `review_decisions` がまだ無い版を古い順に最大 3 件。最新 verification で `triageVersion` を計算
+- `reverify`: CAS `UPDATE material_versions SET verification_status='pending', verification_attempts=0, verification_token=NULL, verify_batch_id=NULL, verify_turn=0, verify_pauses=0, verify_micro=0, auto_reverified=1 WHERE id=? AND status='review' AND verification_status='done' AND auto_reverified=0`。`max_uses` は変えない（同じ上限で 2 回目。§R-49 (f)）
+- `auto_return`: `buildReturn`（§B-6 と同じ batch）を `reviewer_email='system:auto-triage'`、`note=return_note`、`checklist_json=NULL` で。**`standards_log` には書かない**（編集基準は人の言葉だけ。`buildReturn` に `skipStandardsLog` を足す）。rework の model / budget は人の差し戻しと同じ（`claude-opus-5-5` / `SESSION_BUDGET_REWORK_CENTS`）。job は `queued` で残し、cron の起動段が拾う（同じ cron で startJob しない）
+- `SESSION_BUDGET_REWORK_CENTS` の既定を `1000` に（オーナーが自動作り直し 1 回 +$10 程度を承認）
+- 承認の追加条件: approve の事前チェックで `triageVersion().action !== 'none'` なら 409 `auto_triage_pending`（cron がまだ処置していない窓で人が承認しない）
+
+### §L-5 API
+
+- `GET /api/review/:version_id` の応答に `triage`（§L-3 の output）を足す
+- `GET /api/review`（一覧）の各行に `needs_review`（数）, `auto_ok`（auto が ok の数）を足し、**`needs_review` の多い順 → 作成の古い順**で返す
+- `GET /api/materials/:id`（素材詳細）の decisions に `reviewer_email='system:auto-triage'` の行も含める（画面で「自動の差し戻し」と表示し、note を見られる）
+- decision の approve: `checklist` のうち `triage.auto[k]==='ok'` の 3 項目は省略可（省略時はサーバーが `{"result":"ok","note":"auto"}` を入れて記録）。`'review'` の項目と人の 3 項目は必須。`checklist_has_ng` 等の既存条件は維持
+
+### §L-6 確認画面（§G-2 を置き換え。素の HTML/JS のまま）
+
+上から順に:
+1. **判定帯**（画面上部に固定）: 素材名・版・「要確認 N 件」（0 なら「要確認なし」）・「自動で OK: <項目名…>」・検証の状態（「検証待ち」「検証中」「検証済み」「検証できませんでした」+ 「再検証」）
+2. **要確認**（既定で開く）: group ごとに 1 枚。見出し = 原因の文、本文 = 出典 id・職人が書いた URL・検証係が開いた URL（違えば並べて表示）・関係する主張（id と本文、検証係の reason）。原因の文（verbatim）:
+
+| cause | 文 |
+|---|---|
+| contradicted | 出典と食い違う |
+| maker_url_not_fetched | 職人がこの URL を開けていない |
+| quote_mismatch | 引用が出典の本文と一致しない |
+| verifier_limit | 検証係が開ききれなかった（取得の上限） |
+| not_confirmed | 出典で確かめられなかった |
+| no_source | 出典が付いていない |
+| license_unknown | 利用条件が分からない |
+
+3. **本文**: 既定は「小学生・短い」。変奏は既存のタブ。要確認の主張を含む段落は黄色の印（claims の id 参照 `[c3]` 等で特定。特定できなければ印なし）
+4. **あなたが見る 3 項目**: 「説明と表現」「学習との関係」「使う条件」+ auto が review の項目。各 OK / NG の 2 択トグル（「該当なし」は「使う条件」だけ）。NG を選んだ時だけメモ欄
+5. **畳む**: 「問題なし（主張 N 件・出典 M 件）」の `<details>` に従来の claims 表・sources 表、「詳細（機械検査・自己点検・変えてよい範囲・費用）」の `<details>` に checks_json・selfcheck・adapt-rules・grader・費用・Console リンク
+6. **固定フッター**: 「承認する」「差し戻す」「却下する」。差し戻し・却下を押すと理由欄（と差し戻しの追記欄）が開き、もう一度押すと確認ダイアログ。承認不可の理由はボタンの横に 1 行で出し、該当箇所へスクロール
+- キー（入力欄にフォーカスがある時は無効）: `1` `2` `3` = 人の 3 項目を順に OK、`Shift+1..3` = NG、`A` 承認、`R` 差し戻し、`X` 却下、`J` / `K` = 次 / 前の確認待ち、`?` = キーの一覧。ダイアログは既存の確認ダイアログ（Enter で実行・Esc で取消）
+- 一覧: 列に「要確認」（数）と「自動 OK」（数）を足し、§L-5 の順に並べる。自動差し戻しで rework 中の素材は「自動で作り直し中」と表示
+- §G-3 の操作ループは維持
+
+### §L-7 受け入れ基準（fake・vitest）
+
+- (l1) `triageVersion` の単体: 版 1 相当（25 中 confirmed 1、出典 8 中 quote 2）→ bad・auto_return・group が出典ごと / claims 4 件 → bad にならない / verifier_limit あり・autoReverified=0 → reverify / autoDerived → none / 全緑 → auto 3 項目 ok・needs_review 0
+- (l2) Batch 検証の状態遷移を fake で: 提出 → processing → ended(pause_turn) → 次ターン提出 → ended(report) → done。途中で reverify → 古い結果は捨てる。expired → pending。日次上限で提出待ち
+- (l3) cron の triageStep: auto_return で rework job が queued・版 rejected・standards_log は増えない・review_decisions の reviewer_email が `system:auto-triage`。rework の版は再び bad でも none（人に出る）
+- (l4) approve: auto ok の 3 項目を省略して承認できる / auto が review の項目を省略すると 400 / action が none 以外なら 409 `auto_triage_pending`
+- (l5) 画面: 要確認 0 件・N 件の両方で描画、キー操作で 3 項目が切り替わる、固定フッターの承認が条件どおり有効化（smoke で DOM の要素数を数える）
+
 ## §R 裁定記録（2026-11-04。Astra medium + 3 視点レビューの指摘への裁定）
 
 1. **`tool_choice: any` は Opus 5.5 で 400** → `auto` + `strict: true` + 再送ループ（§F-3）。採用
@@ -835,4 +941,4 @@ v3.5（2026-11-04 段階 0 の実測。最初の本物の session sesn_01Jfui3ap
 46. §R-45 の実装の裁定: 必須 9 以外の省略可キーのうち `needs_supporter_check` だけは、置くなら真偽値でなければ `invalid_outputs`（安全の印を黙って false に落とさない）。`adjustable` / `tech_dependencies` / `runtime_check` は型違いなら既定値（`[]` / `null`）に落とす（配信の表示が減るだけで安全側）。files.list の同名判定は basename で比べ、必須ファイルの再取得より先に行う。reingest の「より新しい job」は終端の job も数える
 47. Astra high（v3.5 実装）の裁定: (a) `versioned` で論理キーを置く前に、`{prefix}parts/` 配下で論理 Map に無いキーを消す（旧形式・前回の取り込みの残りが検証係 §F-3 の列挙に混ざらない。`raw/` は消さない） (b) 2 パーツの fixture を §E-0 (b) の命名（パーツ配下の全ファイルに part id）に合わせた (c) `runtime_check` はオブジェクト以外なら null（§R-46 の字面どおり）
 48. 段階 0 の出典照合の実測（session sesn_01Jfui3apjV7eE2o8TiQN8YC、web_fetch 34 回のうち本文が返ったのは 9 回、19 回は `url_not_accessible`、6 回は `url_not_in_prior_context`）: (a) 旧 `url_was_fetched` は「試みた」で 1 になり、開けなかったページを緑にしていた（8 件中 7 件が緑、実際に開けたのは 3 件）。エラーの結果だけなら 0 にする（§F-1 を改訂。集計の形は v3 にして旧集計は数え直し） (b) 職人は開けたページ（`Redstone_circuit`, `Signal_strength` 等）の本文を、別の綴りの URL（`Redstone_circuits`, `Redstone_mechanics` 等、開けなかった URL）で sources.json に記録していた。2 件は別 URL の本文に逐語で存在、3 件は部分一致（2〜5 割）。職人の定義に「url は本文を取得できた URL をそのまま書く」「引用は一続きの逐語コピー」を追加 (c) 既に作られた版 1 の `sources` 行は旧規則のまま（再計算しない。確認画面では引用の赤で気づける。検証係が出典を開き直す）
-
+49. §L（確認の負担軽減・v3.6）の裁定: (a) オーナー決定は §L 冒頭のとおり。自動差し戻しは「人の差し戻し・人の注文から作られた job の版」1 本につき 1 回（自動で作られた版は自動で戻さない）。人が差し戻した後の版はまた 1 回まで戻る＝人の操作 1 回あたり自動 1 回で有界 (b) Batch では turn の間隔が長いので web_fetch を container 不要の基本版 `web_fetch_20250910` にした（dynamic filtering の container が turn 間で生き残るかは未確認）。`max_content_tokens` で 1 ページの入力を抑える (c) cache read の倍率は公式値を未確認のまま 0.1 倍で多めに数える (d) `createBatch` の応答不明は回収しない（会議 §R-40 の回収は list に custom_id が無く複雑。損は 1 ターン分の見積りで記帳）(e)「生成物の動作」は .html（動くもの）があれば人が見る。職人の `runtime_check` は自己申告なので自動 OK の根拠にしない (f) 検証係の取得上限が原因らしい時は作り直さず 1 回だけ再検証（版 1 の推定原因。作り直しの費用 $5〜10 を検証側の都合で使わない）。上限値の見直しは実測後 (g) 助言（Fable）の指摘を採用: 機械の差し戻し理由を standards_log に入れない（職人に渡す「これまでの差し戻し理由 40 件」を人の言葉で保つ）/ claims 5 件未満は割合で判定しない / 自動差し戻しの記録を素材詳細に残す (h) Jev（TypeSafe AI の判定専用モデル）を一次判定に置く案は、API の公開仕様が無い（docs 404・early access）ため本節に入れない。入れる場所は §L-3 の report の前段（claim × 職人の web_fetch 本文）
