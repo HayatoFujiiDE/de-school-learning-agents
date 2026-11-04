@@ -42,6 +42,7 @@ regex = '''account_id\s*[:=]\s*["']?[a-f0-9]{32}'''
 
 [allowlist]
 description = "Paths that are excluded from the repository anyway, plus documentation placeholders"
+regexTarget = "line"
 paths = [
   '''^reference/''',
   '''^\.claude/''',
@@ -51,4 +52,6 @@ regexes = [
   '''<SECRET_NAME>''',
   '''sk-ant-xxxx''',
   '''whsec_xxxx''',
+  # Cloudflare Access の AUD は公開してよい識別子（JWT の aud 照合に使う。秘密ではない）
+  '''"ACCESS_AUD": "[0-9a-f]{64}"''',
 ]
