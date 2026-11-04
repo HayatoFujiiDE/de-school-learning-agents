@@ -26,7 +26,7 @@
 
 **範囲外**: 描き直しに元画像を入れる編集（v1/images/edits）、1024x1536・xhigh、JPEG、画像の Batch API、バディ側の生成、動画、検証係が画像を見ること、Workflows・Durable Objects、配信 API の形の変更、管理画面からの試し生成（probe）。
 
-**既存の欠陥として切り離すもの**: `tooManyDenies` が interrupt と archive の両方の失敗を握りつぶして job を failed にし、後始末を再試行しない（`jobs.ts:1105-1110`。旧下書きへのレビュー M5）。今回の変更による回帰ではないので GitHub Issue で扱い、本節は既存の処理をそのまま使う。
+**既存の欠陥として切り離すもの**: `tooManyDenies` が interrupt と archive の両方の失敗を握りつぶして job を failed にし、後始末を再試行しない（`jobs.ts:1105-1110`。旧下書きへのレビュー M5）。今回の変更による回帰ではないので GitHub Issue #2 で扱い、本節は既存の処理をそのまま使う。
 
 **前提（本番で確かめたこと。probe-results.md）**: custom tool を持つ agent を API で作れる（p2）。`agent.custom_tool_use` の 252 秒後の result を受理して session が再開する（p3）。同じ id への 2 回目の result は 200 で、記録も turn も起きない（p4a。end_turn の後で確認）。archive 後は 400（p4b）。1 枚の所要は最長 83 秒、usage は `output_tokens_details.{image_tokens,text_tokens}`（p1）。
 
@@ -85,6 +85,8 @@ CREATE INDEX idx_image_requests_state ON image_requests(state, updated_at);
 
 旧下書き `contract-M2-draft.md` の §M-2-2 a（frontmatter の tools、verbatim）・b（`validateImageInput`、表、model の決め方、`MAKER_CUSTOM_TOOLS`）・c（system prompt の節、verbatim）を**そのまま使う**。違いは 1 点だけ: c の 3 項目め「結果の文に残りの枚数が書いてある」はそのまま、b の `not_configured` も同じ。
 
+**c の差し替え 1 か所**: 「画像ファイルを outputs に置く必要はない（置いても使われない）」を「画像ファイルを outputs に置かない（image_id の画像と同じ名前のファイルが outputs にあると、取り込みで素材全体が弾かれる）」に変える。取り込みの規則（§O-7 = 旧 §M-2-7 の 3、同じ basename は `duplicate_basename`）はそのまま。§O-6 の成功の文の「画像ファイルを outputs に置く必要はありません。」も「画像ファイルを outputs に置かないでください。」に変える
+
 `ant apply` の frontmatter での custom tool の書き方は未確認（p2 は API で確かめた）。`ant apply --dry-run` が通り、作られた agent の tools に `generate_image` が出ることを §O-8 の本番確認に入れる。
 
 ## §O-3 状態と遷移
@@ -110,7 +112,7 @@ CREATE INDEX idx_image_requests_state ON image_requests(state, updated_at);
 ### b. 入口: reconcile の requires_action（§B-4-d 手順 4 の差分）
 
 1. 走査（`onIdle` の fold）: `stop_reason.event_ids` の `agent.custom_tool_use` のうち name が `generate_image` のものは、name と `input` を `blocked[id]` に保持する（`JSON.stringify(input)` が 16,384 文字超なら `{oversized:true}`）。他の custom tool は従来どおり name だけ。保存済みの集計に generate_image なのに `input` を持たない項目があれば捨てる
-2. **generate_image の id は、`recovered`（Issue #1 の answered の回収）にも pending の deny にも入れない**。現行の `jobs.ts:1197` の `recovered = event_ids − denied ∩ answered` と `pending` の計算から、`blocked[id]` が generate_image の id を先に除く。画像の deny は下の `imageDenies` だけで数える（成功して返した画像も、answered に出た後で deny に数えない）
+2. **generate_image の id は、`recovered`（Issue #1 の answered の回収）にも pending の deny にも入れない**。画像の id の集合 = `blocked[id]` が generate_image のもの ∪ `SELECT custom_tool_use_id FROM image_requests WHERE job_id = ? AND custom_tool_use_id IN (<event_ids>)`（D1 で引く）。走査は answered にあれば元の tool_use を読まずに終わることがある（`jobs.ts:1176`）ので、走査だけでは返し済みの画像を識別できない。返し済みの画像は必ず D1 に行がある（返すのは登録済みの行だけ）ので、D1 で引けば読み順に依らない。現行の `jobs.ts:1197` の `recovered` と `pending` の計算から、この集合を先に除く。画像の deny は下の `imageDenies` だけで数える（成功して返した画像も、answered に出た後で deny に数えない）
 3. event_ids のうち `answered` にも `denied` にも無い generate_image の id ごとに、`image_requests` を `custom_tool_use_id` で引く:
    - 行が無い → 登録（§O-3 c の I）。登録の後、行が queued なら `IMAGE_GEN.send({request_id})`（失敗は無視。cron が拾う）
    - 行が終端 → 職人へ返す（§O-6 の event。1 件ずつ `sendEvents`）。送った id は今回の pending から外す。送信の例外は従来の送信失敗と同じ扱い（次の reconcile でもう一度。二重は p4a で無害）
@@ -261,11 +263,11 @@ H2 は人が OpenAI の利用画面で実額を確かめてから押す前提（
 | 止まった所 | D1 の状態 | 次に起きること | 収束 |
 |---|---|---|---|
 | I1 の後、I2 の前（同じ batch） | どちらも無い（batch は 1 トランザクション） | 次の reconcile が登録し直す | 次の reconcile |
-| I2 の後、send の前 | queued、message 無し | cron C1 が次の cron で send | cron 3〜4 回以内に終端 |
+| I2 の後、send の前 | queued、message 無し | cron C1 が次の cron で send | C1・C2 がその依頼を 3〜4 回処理した時点で終端（各 20 件の上限で後回しになった回は数えない） |
 | consumer が D の前に落ちた | queued | Queue の再試行 or C1 | 同上 |
-| D の後、OpenAI を呼ぶ前に落ちた | dispatched | 再試行の consumer は D が 0 行で呼ばない。C3 が 10 分で failed + 停止 | 10 分。費用は U（取り置きの内） |
-| OpenAI の応答待ちで落ちた | dispatched | 同上（課金されたか分からない → 停止） | 10 分 |
-| 応答を受けた後、R2 put の前 / 後、R1 の前に落ちた | dispatched | 同上。R2 の物体は孤立（掃除が prefix で消す） | 10 分 |
+| D の後、OpenAI を呼ぶ前に落ちた | dispatched | 再試行の consumer は D が 0 行で呼ばない。`dispatched_at` から 10 分を過ぎた後の最初の cron（その依頼を選べた回）で C3 が failed + 停止 | C3 が処理した時点。費用は U（取り置きの内） |
+| OpenAI の応答待ちで落ちた | dispatched | 同上（課金されたか分からない → 停止） | 同上 |
+| 応答を受けた後、R2 put の前 / 後、R1 の前に落ちた | dispatched | 同上。R2 の物体は孤立（掃除が prefix で消す） | 同上 |
 | R1 の後 | 終端 | reconcile が返す | 次の reconcile |
 | C3 の後に遅れた consumer の R1 | failed | R1 は 0 行（state 条件）。R2 の物体は孤立 | — |
 | reconcile が sendEvents の後、保存の前に落ちた | 終端（D1 は送信を記録しない） | 次の reconcile が events の `answered` で見る。見えなければもう一度送る（p4a で無害） | 次の reconcile |
@@ -405,7 +407,7 @@ UI acceptance criteria（ui-interaction-completeness）:
 
 ### a. `user.custom_tool_result`
 
-**形は probe p5 の結果で 1 つに決める（凍結の条件）**。p5 は「file 参照」「base64 直」の両方で青い三角を返し、職人が内容を言い当てられるかを見る。
+**形 A（base64 直）に決めた（p5、2026-11-05。probe-results.md）**。file 参照・base64 直の両方で職人が青い三角を言い当て、規則「両方通れば A」による。以下の B は、2 MB 級の base64 が通らなかった時の切り替え先として残す。元の決め方: p5 は「file 参照」「base64 直」の両方で青い三角を返し、職人が内容を言い当てられるかを見る。
 
 - 形 A（base64 直）: `{"type":"image","source":{"type":"base64","media_type":"image/png"|"image/webp","data":"<R2 の物体の base64>"}}`。reconcile が返す時に R2 から読む。Files を使わない
 - 形 B（file 参照）: reconcile が返す時に、`file_id` が NULL なら R2 から読んで `uploadFile` → `UPDATE image_requests SET file_id = ? WHERE id = ? AND file_id IS NULL`（0 行なら今 upload した file を `deleteFile`）→ `{"type":"image","source":{"type":"file","file_id":"<file_…>"}}`
@@ -444,7 +446,7 @@ UI acceptance criteria（ui-interaction-completeness）:
 | t6 | R の表の全行（fake のシナリオ）: 状態・error・actual_cents・停止の理由が表どおり。**不正な画像 + usage 超過で停止する**（旧 B1）。**usage 欠落で停止する**（旧 M4） | 実額 ≤ U の正常は停止しない |
 | t7 | C3 の後に遅れた R1 は 0 行、停止は 1 回だけ（理由は result_unknown） | — |
 | t8 | queued × 停止 / job cancel / 3 回 → C2 は failed、理由が順位どおり。D は 0 行 | — |
-| t15 | deny の数え方（v2 レビュー B1 の順序）: 通常 deny 7 + 画像 A done・B failed → `too_many_denies` にならない。A・B が answered に出ても recovered に入らない | 現行の recovered の式のままなら 9 で止まる |
+| t15 | deny の数え方（v2 レビュー B1 の順序）: 通常 deny 7 + 画像 A done・B failed → `too_many_denies` にならない。A・B が answered に出ても recovered に入らない。**events の降順が `result(A) → idle[A,B] → tool_use(B) → tool_use(A)`（走査が A の tool_use を読まずに終わる）と、その逆の両方で** deny 合計 8 | D1 で引かず blocked だけで除くと、前者の順で 9 |
 | t16 | `OpenAiError` に usage がある失敗（400 + out_image 20,000）→ failed `bad_request` + 停止 `over_reserve` | usage を持たない旧 port なら停止しない |
 | t9 | F: job 終端・queued / dispatched 無し → 1 回だけ if:、額 = 呼んだ分の U の合計。dispatched が残る間は 0 行。2 回目は 0 行 | — |
 | t10 | reconcile: generate_image → I と send 1 回。終端の依頼 → result 1 回。events に result がある（answered）→ 送らない。queued → 送らず `awaiting_image:1`。tool_confirmation との混在では deny は tool_confirmation だけ | answered の無い fixture では送る |
