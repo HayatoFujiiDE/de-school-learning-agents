@@ -86,6 +86,14 @@ const ok = (status: number, body: Record<string, unknown>): ApiResult => ({ stat
 const err = (status: number, error: string, message?: string): ApiResult => ({ status, body: message ? { error, message } : { error } });
 
 export const DENY_MESSAGE = '無人運用のためこの操作は許可できません。別の方法で進めてください。';
+/** §M-5: generate_image（または職人定義に無い custom tool）への custom_tool_result の本文 */
+export const CUSTOM_TOOL_UNAVAILABLE_MESSAGE = '画像生成はまだ使えません。図は SVG で描いてください。';
+/** 職人（factory/claude/agents/material-maker.md）が定義する custom tool の名前。現在は agent_toolset だけで custom tool は無い */
+const MAKER_CUSTOM_TOOLS: readonly string[] = [];
+/** §M-5: この custom tool 呼び出しは is_error の結果で返すか */
+export const rejectsCustomTool = (name: string): boolean => name === 'generate_image' || !MAKER_CUSTOM_TOOLS.includes(name);
+/** requires_action の event_ids を探して、idle より古い側を何件まで読むか（ブロック中の tool use は idle の直前にある） */
+const BLOCKED_LOOKBACK = 200;
 export const OUTCOME_DESCRIPTION = '注文票の素材を /mnt/session/outputs/ に §E の構成で作る。調査→構成→制作→自分で動作確認→selfcheck の順';
 const KIND_LABEL: Record<number, string> = { 3: '説明と図解', 4: '動かせるもの' };
 export const SUPPORTED_KINDS = [3, 4];
@@ -1039,28 +1047,50 @@ class Reconciler {
     // 新しい順に辿り、最新の status_idle・最新の outcome_evaluation_end・define_outcome の有無を集める。
     // end_turn の時は define_outcome が見つかるまで（無ければ最後のページまで）辿ってから「既送なし」を確定する。
     // 途中集計（id と種別だけ。本文は持たない）は scan.idle に保存し、時間切れの後は続きから（先頭 event が変わっていたら先頭から）
-    type IdleAgg = { idle: { type: string; event_ids: string[] } | null; evalEnd: { result: string } | null; hasOutcome: boolean };
+    // requires_action の時は、まだ返していない event_ids の event 種別（custom_tool_use なら name も。input は持たない）を
+    // idle より古い側から BLOCKED_LOOKBACK 件まで探す（§M-5。見つからない id は従来どおり tool_confirmation の deny）
+    type Blocked = { type: string; name?: string };
+    type IdleAgg = {
+      idle: { type: string; event_ids: string[] } | null;
+      evalEnd: { result: string } | null;
+      hasOutcome: boolean;
+      blocked?: Record<string, Blocked>;
+      afterIdle?: number;
+    };
+    const alreadyDenied = new Set(parseJson<string[]>(job.denied_event_ids_json, []));
     const { agg: seen, head } = await this.scan<unknown, IdleAgg>(job, 'idle', {
       base: { purpose: 'idle', job_status: job.status, job_phase: job.phase, session_status: sessionStatus },
-      init: () => ({ idle: null, evalEnd: null, hasOutcome: false }),
+      init: () => ({ idle: null, evalEnd: null, hasOutcome: false, blocked: {}, afterIdle: 0 }),
       fetch: (cursor) => this.port.listEventsPage(job.session_id!, { order: 'desc', page: cursor }, this.call),
       idOf: eventId,
       fold: (agg, items) => {
         for (const raw of items) {
-          const e = (raw ?? {}) as { type?: unknown; result?: unknown; stop_reason?: { type?: unknown; event_ids?: unknown } };
+          const e = (raw ?? {}) as { id?: unknown; type?: unknown; name?: unknown; result?: unknown; stop_reason?: { type?: unknown; event_ids?: unknown } };
           if (!agg.idle && e.type === 'session.status_idle') {
             const ids = e.stop_reason?.event_ids;
             agg.idle = {
               type: String(e.stop_reason?.type ?? ''),
               event_ids: Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : [],
             };
+            if (agg.idle.type === 'requires_action') continue;
           }
           if (!agg.evalEnd && e.type === 'span.outcome_evaluation_end') agg.evalEnd = { result: String(e.result ?? '') };
           if (e.type === 'user.define_outcome') agg.hasOutcome = true;
           if (!agg.idle) continue;
+          if (agg.idle.type === 'requires_action') {
+            const blocked = (agg.blocked ??= {});
+            if (typeof e.id === 'string' && agg.idle.event_ids.includes(e.id) && !blocked[e.id]) {
+              blocked[e.id] = e.type === 'agent.custom_tool_use' ? { type: String(e.type), name: String(e.name ?? '') } : { type: String(e.type ?? '') };
+            }
+            agg.afterIdle = (agg.afterIdle ?? 0) + 1;
+            const pending = agg.idle.event_ids.filter((id) => !alreadyDenied.has(id) && !blocked[id]);
+            if (pending.length === 0 || agg.afterIdle >= BLOCKED_LOOKBACK) return true;
+            continue;
+          }
           if (agg.idle.type !== 'end_turn') return true;
           if (agg.hasOutcome) return true;
         }
+        if (agg.idle?.type === 'requires_action' && agg.idle.event_ids.every((id) => alreadyDenied.has(id) || agg.blocked?.[id])) return true;
         return false;
       },
     });
@@ -1070,13 +1100,24 @@ class Reconciler {
     const stop = idleEv.type;
 
     if (stop === 'requires_action') {
-      const denied = new Set(parseJson<string[]>(job.denied_event_ids_json, []));
+      const denied = new Set(alreadyDenied);
       const ids = idleEv.event_ids.filter((id) => !denied.has(id));
       if (ids.length === 0) return 'already_denied';
       await this.extend();
+      // custom tool（generate_image 等。§M-5）は tool_confirmation ではなく is_error の custom_tool_result で返す。どちらも deny 数に数える
       await this.port.sendEvents(
         job.session_id!,
-        ids.map((id) => ({ type: 'user.tool_confirmation', tool_use_id: id, result: 'deny', deny_message: DENY_MESSAGE }) as BetaManagedAgentsEventParams),
+        ids.map((id) => {
+          const b = seen.blocked?.[id];
+          if (b && b.type === 'agent.custom_tool_use' && rejectsCustomTool(b.name ?? ''))
+            return {
+              type: 'user.custom_tool_result',
+              custom_tool_use_id: id,
+              content: [{ type: 'text', text: CUSTOM_TOOL_UNAVAILABLE_MESSAGE }],
+              is_error: true,
+            } as BetaManagedAgentsEventParams;
+          return { type: 'user.tool_confirmation', tool_use_id: id, result: 'deny', deny_message: DENY_MESSAGE } as BetaManagedAgentsEventParams;
+        }),
         this.call,
       );
       ids.forEach((id) => denied.add(id));
@@ -1340,7 +1381,8 @@ class Reconciler {
     const grader = ev.grader;
 
     const texts = new Map<string, string>();
-    for (const [p, b] of files) if (p.startsWith('parts/')) texts.set(p, dec.decode(b));
+    // 画像（png / webp）はバイナリなので禁止語・参照の検査に入れない（§M）。検査するのは本文として読む md / svg / html だけ
+    for (const [p, b] of files) if (p.startsWith('parts/') && /\.(md|svg|html)$/.test(p)) texts.set(p, dec.decode(b));
     const forb = checkForbidden({
       texts,
       summary_elementary: schema.material.summary_elementary,

@@ -6,6 +6,8 @@ import { json, parseJsonField } from '../http';
 
 const HTML_CSP = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:";
 const SVG_CSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'";
+/** §M-3: png / webp（中身は取り込み時に先頭バイトで検査済み §M-2） */
+const IMAGE_CSP = "default-src 'none'; sandbox";
 
 /** URL の生 pathname から取り出した相対パスを検査する（`..`・`%`・先頭 `/`・空セグメントは不可） */
 export function safeRequestPath(raw: string): string | null {
@@ -21,6 +23,8 @@ function contentHeaders(path: string): Record<string, string> | null {
   if (path.endsWith('.json')) return { ...base, 'content-type': 'application/json' };
   if (path.endsWith('.html')) return { ...base, 'content-type': 'text/html; charset=utf-8', 'content-security-policy': HTML_CSP };
   if (path.endsWith('.svg')) return { ...base, 'content-type': 'image/svg+xml', 'content-security-policy': SVG_CSP };
+  if (path.endsWith('.png')) return { ...base, 'content-type': 'image/png', 'content-security-policy': IMAGE_CSP };
+  if (path.endsWith('.webp')) return { ...base, 'content-type': 'image/webp', 'content-security-policy': IMAGE_CSP };
   return null;
 }
 

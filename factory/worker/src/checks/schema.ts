@@ -1,5 +1,5 @@
 // 純関数: material.json / claims.json / sources.json の検証と公開 manifest の算出（契約 §E）。I/O を持たない。
-// ここで失敗したものだけが invalid_outputs（必須キー欠落・参照先不在・parts 外参照・JSON 不正・サイズ超過）。
+// ここで失敗したものだけが invalid_outputs（必須キー欠落・参照先不在・parts 外参照・JSON 不正・サイズ超過・画像の先頭バイト不一致 §M-2）。
 
 export const REQUIRED_FILES = ['material.json', 'claims.json', 'sources.json', 'adapt-rules.md', 'selfcheck.md'] as const;
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -21,6 +21,8 @@ export const LENGTHS = ['short', 'long'] as const;
 export const ENTRY_TYPES = ['look', 'touch', 'try', 'make'] as const;
 export const CLAIM_STATUSES = ['confirmed', 'hypothesis', 'unverified'] as const;
 const PART_FILE_EXTENSIONS = ['.md', '.svg', '.html'];
+/** §M-1: parts[].files[].path だけに許す画像（variants には許さない） */
+const PART_IMAGE_EXTENSIONS = ['.png', '.webp'];
 
 export interface Variant {
   audience: (typeof AUDIENCES)[number];
@@ -124,13 +126,34 @@ function parseJson(text: string): { ok: true; value: unknown } | { ok: false } {
   }
 }
 
-/** パーツ配下の参照パスか（parts/<part_id>/ 配下で .md/.svg/.html） */
+/** パーツ配下の参照パスか（parts/<part_id>/ 配下で .md/.svg/.html）。variants はこれだけ（§M-1） */
 export function isPartPath(p: string, partId: string): boolean {
   if (!isSafeRelativePath(p)) return false;
   if (!p.startsWith(`parts/${partId}/`)) return false;
   const rest = p.slice(`parts/${partId}/`.length);
   if (rest.length === 0) return false;
   return PART_FILE_EXTENSIONS.some((ext) => p.endsWith(ext));
+}
+
+/** §M-1: parts[].files[].path 用。isPartPath に加えて .png / .webp を許す（variants は isPartPath のまま） */
+export function isPartFilePath(p: string, partId: string): boolean {
+  if (isPartPath(p, partId)) return true;
+  if (!isSafeRelativePath(p) || !p.startsWith(`parts/${partId}/`)) return false;
+  if (p.length === `parts/${partId}/`.length) return false;
+  return PART_IMAGE_EXTENSIONS.some((ext) => p.endsWith(ext));
+}
+
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const startsWithBytes = (b: Uint8Array, sig: number[], at = 0) => b.byteLength >= at + sig.length && sig.every((x, i) => b[at + i] === x);
+
+/**
+ * §M-2: 拡張子が .png / .webp のファイルは、実際の先頭バイトが形式と一致するか（拡張子だけを信用しない）。
+ * .png = 89 50 4E 47 0D 0A 1A 0A、.webp = 先頭 4 バイト "RIFF" かつ 8〜11 バイト目 "WEBP"。それ以外の拡張子は対象外（true）
+ */
+export function imageBytesMatch(path: string, bytes: Uint8Array): boolean {
+  if (path.endsWith('.png')) return startsWithBytes(bytes, PNG_MAGIC);
+  if (path.endsWith('.webp')) return startsWithBytes(bytes, [0x52, 0x49, 0x46, 0x46]) && startsWithBytes(bytes, [0x57, 0x45, 0x42, 0x50], 8);
+  return true;
 }
 
 export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
@@ -204,8 +227,9 @@ export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
       for (const [j, fr] of (p.files as unknown[]).entries()) {
         const f = fr as Record<string, unknown>;
         if (!f || !isStr(f.path)) return fail(`bad_type:parts[${i}].files[${j}]`);
-        if (!isPartPath(f.path, p.id)) return fail(`path_outside_part:${f.path}`);
+        if (!isPartFilePath(f.path, p.id)) return fail(`path_outside_part:${f.path}`);
         if (!files.has(f.path)) return fail(`missing_ref:${f.path}`);
+        if (!imageBytesMatch(f.path, files.get(f.path)!)) return fail(`bad_image:${f.path}`);
         pfiles.push({ path: f.path, role: isStr(f.role) ? f.role : 'file' });
       }
     }
