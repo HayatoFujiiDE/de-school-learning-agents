@@ -26,16 +26,17 @@
     "ANTHROPIC_WORKSPACE": "default",
     "ACCESS_TEAM_DOMAIN": "https://de-school.cloudflareaccess.com",
     "ACCESS_AUD": "9ada8dbb88287b598ba54ea6c89c4b3e452975cf55ff4112a7653c70b313ee02",
-    "MAX_CONCURRENT_JOBS": "2",
-    "DAILY_CAP_CENTS": "1500",
-    "SESSION_BUDGET_DRAFT_CENTS": "300",
+    // 2026-11-04〜11-11 の開発週だけ引き上げ中（ふじさん指示）。11-11 に戻す: MAX_CONCURRENT_JOBS 2 / DAILY_CAP_CENTS 1500 / VERIFY_INFLIGHT 2。下書き 800 は実測 $6.17 に合わせた値で残す
+    "MAX_CONCURRENT_JOBS": "3",
+    "DAILY_CAP_CENTS": "6000",
+    "SESSION_BUDGET_DRAFT_CENTS": "800",
     "SESSION_BUDGET_REWORK_CENTS": "1000",
     "VERIFY_MAX_FETCHES": "25",
     "VERIFY_MAX_ATTEMPTS": "3",
     // 検証係の Batch 化（契約 §L-2）
     "VERIFY_MODE": "batch",
     "VERIFY_MAX_CONTENT_TOKENS": "20000",
-    "VERIFY_INFLIGHT": "2",
+    "VERIFY_INFLIGHT": "4",
     "VERIFY_TURN_RESERVE_CENTS": "150",
     "VERIFY_ATTEMPT_CAP_CENTS": "400",
     // 入口（契約 §K-0）。XAI_API_KEY は secret（wrangler secret put。ここには書かない）
