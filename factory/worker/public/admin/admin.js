@@ -882,8 +882,9 @@
   /** 下書き（{ [question_id]: { mode: 'default'|'own', text } }）。読み書きの失敗は無視して画面は動かす */
   function loadAnswerDraft(jobId, qs) {
     var raw = null;
-    try { raw = JSON.parse(window.localStorage.getItem(DRAFT_PREFIX + jobId) || 'null'); } catch (e) { raw = null; }
-    if (!raw || typeof raw !== 'object') raw = answerDraftMem[jobId] || null;
+    // このページで入力した最新の下書き（メモリ）を優先する。storage の値は保存に失敗していると古いことがある
+    raw = answerDraftMem[jobId] || null;
+    if (!raw) { try { raw = JSON.parse(window.localStorage.getItem(DRAFT_PREFIX + jobId) || 'null'); } catch (e) { raw = null; } }
     var out = {};
     if (!raw || typeof raw !== 'object') return out;
     qs.forEach(function (q) {
@@ -1043,6 +1044,7 @@
     var btn = $('#ans-btn');
     var sending = false;
     function setSending(on) {
+      if (!view.contains(btn) || !document.body.contains(btn)) return; // 送信中に別の画面へ移った
       sending = on;
       Array.prototype.forEach.call(view.querySelectorAll('.aq-card input, .aq-card textarea'), function (el) { el.disabled = on; });
       if (!on) refresh();
