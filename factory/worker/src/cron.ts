@@ -7,6 +7,7 @@ import { meetingTick } from './meeting';
 import { runScout, scoutDueOn } from './scout';
 import { getJob, markWebhookProcessed, reconcileJob, recoverCreating, startJob, type JobRow } from './jobs';
 import { runVerificationStep } from './verify';
+import { triageStep } from './triage-step';
 
 // cron 経由の reconcile は開始から 10 分を締め切りにする（scheduled handler は最長 15 分。検証の時間を残す）
 const CRON_RECONCILE_BUDGET_MS = 10 * 60_000;
@@ -67,6 +68,13 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
     out.verify = await runVerificationStep(env, port);
   } catch (e) {
     out.verify_error = e instanceof Error ? e.name : 'error';
+  }
+
+  // 3-b. 仕分けと自動の処置（§L-4。verify 段の直後。rework job は queued で残し、次の cron の起動段が拾う）
+  try {
+    out.triage = await triageStep(env, { deadline: cronStart + CRON_LIMIT_MS - INTAKE_END_MARGIN_MS });
+  } catch (e) {
+    out.triage_error = e instanceof Error ? e.name : 'error';
   }
 
   // 入口（§K-4, §K-5）。pause 中は新しい外部呼び出しをしない（収集は runScout が、会議の起動は startMeeting が見る。会議の回収は行う）

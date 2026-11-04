@@ -3,7 +3,9 @@ import { all, cas, conditionalBatch, first, isUniqueViolation, nowIso, stmt } fr
 import { JOB_MODEL, cfg, consoleUrl } from '../env';
 import { isNonEmptyString, json, parseJsonField, readBody, type RouteCtx } from '../http';
 import { getJob, startJob } from '../jobs';
-import { buildReject, buildReturn, publishSwitch } from '../publish';
+import { buildReject, buildReturn, buildReworkBrief, publishSwitch } from '../publish';
+import { AUTO_ITEMS, type AutoItem } from '../checks/triage';
+import { computeTriage, latestVerificationOf } from '../triage-step';
 import { serveVersionFile } from './library';
 
 export const CHECKLIST_KEYS = [
@@ -37,6 +39,7 @@ interface VersionRow {
   verification_attempts: number;
   verification_started_at: string | null;
   list_cost_cents: number;
+  auto_reverified: number;
   created_at: string;
 }
 interface VerificationRow {
@@ -60,15 +63,25 @@ const hasActiveJob = async (db: D1Database, mid: string) =>
   !!(await first(db, stmt("SELECT 1 AS x FROM factory_jobs WHERE material_id = ? AND status IN ('queued','creating','running','needs_answer','budget_reached')", mid)));
 
 export async function listReview(c: RouteCtx): Promise<Response> {
-  const rows = await all(
-    c.env.DB,
+  const db = c.env.DB;
+  const rows = await all<Record<string, unknown> & { version_id: string; created_at: string }>(
+    db,
     stmt(
       `SELECT v.id AS version_id, v.material_id, v.version, v.verification_status, v.created_at, m.title, m.slug, m.publish_status
        FROM material_versions v JOIN materials m ON m.id = v.material_id
        WHERE v.status = 'review' ORDER BY v.created_at ASC`,
     ),
   );
-  return json(200, { versions: rows });
+  // §L-5: 各行に needs_review / auto_ok を足し、needs_review の多い順 → 作成の古い順
+  const out: Array<Record<string, unknown> & { needs_review: number; auto_ok: number; created_at: string; version_id: string }> = [];
+  for (const r of rows) {
+    const v = await getVersion(db, r.version_id);
+    if (!v) continue;
+    const t = await computeTriage(db, v, await latestVerificationOf(db, v.id));
+    out.push({ ...r, needs_review: t.needs_review, auto_ok: AUTO_ITEMS.filter((k) => t.auto[k] === 'ok').length });
+  }
+  out.sort((a, b) => b.needs_review - a.needs_review || (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0) || (a.version_id < b.version_id ? -1 : a.version_id > b.version_id ? 1 : 0));
+  return json(200, { versions: out });
 }
 
 export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> {
@@ -94,7 +107,12 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
     db,
     stmt('SELECT id, attempt, contradicted, created_at FROM verifications WHERE material_version_id = ? ORDER BY attempt ASC', vid),
   );
-  const verifyCost = await first<{ c: number | null }>(db, stmt("SELECT SUM(cents) AS c FROM cost_ledger WHERE kind = 'verify' AND ref_id = ?", vid));
+  // 同期の記帳（ref_id = 版の id）と Batch のターンごとの記帳・見積り（ref_id = vb:{版の id}:…）の両方（§L-5）
+  const verifyCost = await first<{ c: number | null }>(
+    db,
+    stmt("SELECT SUM(cents) AS c FROM cost_ledger WHERE kind = 'verify' AND (ref_id = ? OR ref_id GLOB 'vb:' || ? || ':*')", vid, vid),
+  );
+  const triage = await computeTriage(db, v, ver ? { id: ver.id, result_json: ver.result_json } : null);
   return json(200, {
     version: {
       id: v.id,
@@ -142,6 +160,7 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
     verification_id: ver?.id ?? null,
     verification_history: history,
     verify_cost_cents: Number(verifyCost?.c ?? 0),
+    triage,
   });
 }
 
@@ -153,13 +172,18 @@ export async function reviewFile(c: RouteCtx, vid: string, rawPath: string): Pro
   return serveVersionFile(c.env, row, rawPath);
 }
 
-function checkChecklist(raw: unknown): { ok: true; json: string; hasNg: boolean } | { ok: false } {
+/** autoOk の項目は省略可（省略時は {"result":"ok","note":"auto"} を記録する §L-5）。それ以外は必須 */
+function checkChecklist(raw: unknown, autoOk: ReadonlySet<string> = new Set()): { ok: true; json: string; hasNg: boolean } | { ok: false } {
   const o = raw as Record<string, unknown> | null;
   if (!o || typeof o !== 'object') return { ok: false };
   const out: Record<string, { result: string; note: string }> = {};
   let hasNg = false;
   for (const k of CHECKLIST_KEYS) {
-    const item = o[k] as Record<string, unknown> | undefined;
+    const item = Object.prototype.hasOwnProperty.call(o, k) ? (o[k] as Record<string, unknown> | undefined) : undefined;
+    if (item === undefined && autoOk.has(k)) {
+      out[k] = { result: 'ok', note: 'auto' };
+      continue;
+    }
     if (!item || !['ok', 'ng', 'na'].includes(item.result as string)) return { ok: false };
     if (item.result === 'ng') hasNg = true;
     out[k] = { result: item.result as string, note: typeof item.note === 'string' ? item.note.slice(0, 2000) : '' };
@@ -181,13 +205,18 @@ export async function decide(c: RouteCtx, vid: string): Promise<Response> {
   const now = nowIso();
 
   if (decision === 'approve') {
-    const cl = checkChecklist(b.checklist);
+    const triage = await computeTriage(db, v, await latestVerificationOf(db, vid));
+    const autoOk = new Set<string>(AUTO_ITEMS.filter((k: AutoItem) => triage.auto[k] === 'ok'));
+    const cl = checkChecklist(b.checklist, autoOk);
     if (!cl.ok) return json(400, { error: 'checklist_incomplete' });
     if (cl.hasNg) return json(400, { error: 'checklist_has_ng' });
     if (v.verification_status !== 'done') return json(400, { error: 'verification_pending' });
     if (typeof b.verification_id !== 'string' || !b.verification_id) return json(400, { error: 'verification_id_required' });
     const latest = await latestVerification(db, vid);
     if (!latest || latest.id !== b.verification_id) return json(409, { error: 'stale_verification' });
+    // 自動の処置（差し戻し・再検証）が決まっている版は人が承認しない（§L-4）
+    if (triage.verification_id !== latest.id) return json(409, { error: 'stale_verification' });
+    if (triage.action !== 'none') return json(409, { error: 'auto_triage_pending', action: triage.action });
     if (latest.contradicted > 0) return json(400, { error: 'has_contradicted_claims' });
     // 検証係が confirmed とした claim の一次出典に url_was_fetched=0 が無い
     const report = parseJsonField<{ verdicts?: Array<{ claim_id: string; verdict: string }> }>(latest.result_json, {});
@@ -231,13 +260,7 @@ export async function decide(c: RouteCtx, vid: string): Promise<Response> {
   // return
   const origJob = await getJob(db, v.job_id);
   const append = typeof b.brief_append === 'string' ? b.brief_append.slice(0, 8000) : '';
-  const brief = [
-    origJob?.brief_md ?? '',
-    '',
-    `## 差し戻し理由（v${v.version}）`,
-    note,
-    ...(append.trim() ? ['', '## 追記', append] : []),
-  ].join('\n');
+  const brief = buildReworkBrief(origJob?.brief_md, v.version, note, append);
   const newJobId = crypto.randomUUID();
   try {
     const r = await conditionalBatch(
@@ -276,7 +299,9 @@ export async function reverify(c: RouteCtx, vid: string): Promise<Response> {
   const okReset = await cas(
     db,
     stmt(
-      `UPDATE material_versions SET verification_status = 'pending', verification_token = NULL, verification_attempts = 0
+      `UPDATE material_versions SET verification_status = 'pending', verification_token = NULL, verification_attempts = 0,
+         verify_phase = NULL, verify_phase_at = NULL, verify_batch_id = NULL, verify_turn = 0, verify_pauses = 0, verify_micro = 0,
+         triaged_verification_id = NULL
        WHERE id = ? AND status = 'review' AND verification_status IN ('done','failed')`,
       vid,
     ),
