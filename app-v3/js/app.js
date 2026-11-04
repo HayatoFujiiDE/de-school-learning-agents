@@ -348,6 +348,7 @@ window.DES = window.DES || {};
     u.built = key;
     if (r === 'talk') DES.talk.renderPage(main, rebuild);
     else if (r === 'plan') DES.plan.renderPage(main);
+    else if (r === 'self') DES.self.render(main);
     else if (rebuild) {
       if (r === 'paused') DES.talk.renderPaused(main);
       else { main.textContent = ''; main.appendChild(H('p', { class: 'empty-line' }, T('not_yet'))); }
