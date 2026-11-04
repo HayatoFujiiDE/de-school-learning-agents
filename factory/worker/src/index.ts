@@ -7,7 +7,7 @@ import type { Env } from './env';
 import { json, makeCtx, type RouteCtx } from './http';
 import { getFloor } from './routes/floor';
 import { probeImageTool } from './routes/probe';
-import { answerJobRoute, cancelJobRoute, createJob, getJobDetail, reconcileJobRoute, reingestJobRoute, startJobRoute } from './routes/jobs';
+import { answerJobRoute, cancelJobRoute, createJob, getJobDetail, raiseBudgetRoute, reconcileJobRoute, reingestJobRoute, startJobRoute } from './routes/jobs';
 import { libraryAvailable, libraryFile } from './routes/library';
 import { createMaterial, getMaterialDetail, listMaterials, rollbackMaterial, stopMaterial } from './routes/materials';
 import {
@@ -42,6 +42,7 @@ const ROUTES: Array<[string, RegExp, Handler]> = [
   ['POST', new RegExp(`^/api/jobs/${ID}/cancel$`), cancelJobRoute],
   ['POST', new RegExp(`^/api/jobs/${ID}/reconcile$`), reconcileJobRoute],
   ['POST', new RegExp(`^/api/jobs/${ID}/reingest$`), reingestJobRoute],
+  ['POST', new RegExp(`^/api/jobs/${ID}/raise-budget$`), raiseBudgetRoute], // §B-4-f（運営の増額操作だけ）
   ['GET', /^\/api\/review$/, listReview],
   ['GET', new RegExp(`^/api/review/${ID}$`), reviewDetail],
   ['GET', new RegExp(`^/api/review/${ID}/files/(.*)$`), reviewFile],

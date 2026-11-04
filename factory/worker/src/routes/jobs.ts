@@ -3,6 +3,7 @@ import { first, stmt } from '../db';
 import { consoleUrl } from '../env';
 import { fromResult, isNonEmptyString, json, parseJsonField, readBody, type RouteCtx } from '../http';
 import { answerJob, cancelJob, claimReingest, getJob, getMaterial, queueJobForMaterial, reconcileJob, startJob } from '../jobs';
+import { raiseBudget } from '../raise-budget';
 
 export async function createJob(c: RouteCtx): Promise<Response> {
   const b = await readBody(c.request);
@@ -73,4 +74,10 @@ export async function reingestJobRoute(c: RouteCtx, id: string): Promise<Respons
   const refused = await claimReingest(c.env, id);
   if (refused) return fromResult(refused);
   return reconcileAndReport(c, id);
+}
+
+/** §B-4-f: 予算に当たった job を運営の許可で増額する（受理されると session は自動で再開する。job を running に戻すのは reconcile） */
+export async function raiseBudgetRoute(c: RouteCtx, id: string): Promise<Response> {
+  const b = await readBody(c.request);
+  return fromResult(await raiseBudget(c.env, await c.port(), id, b));
 }

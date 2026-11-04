@@ -1,0 +1,11 @@
+{
+  "initial": {
+    "status": "idle",
+    "list_cost": "300"
+  },
+  "after": {
+    "sessions.update": {
+      "status": "idle"
+    }
+  }
+}

@@ -6,6 +6,10 @@
 //   events.json:  {"initial": [event...], "after": {"<type>": [event...]}}   … 送った event の echo の後ろに足す（同じ type は最初の 1 回だけ）
 //   files.json:   {"initial": [{"filename","fixture"}], "after": {"<type>": [...]}}  … filename ごとに上書き
 // 送った events と messages.create の引数は settings.fake_calls_json に追記する（smoke が (g)(h) を確認する）。
+// 増額（sessions.update の budget。§B-4-f）: 使った額（list_cost）以下なら本物と同じく budget_not_raised で拒否する。
+//   受け付けたら session.updated を足し、公式（managed-agents/budgets: 予算を上げる update が受理されると止まった作業は自動で再開する）
+//   どおり session を running にする（session.status_running も足す）。session.json / events.json の after["sessions.update"] があれば
+//   そちらを使う（例: fixture budget-raise-stays-idle は update の後も idle のまま）。
 
 import type { Message, MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { MessageBatchIndividualResponse } from '@anthropic-ai/sdk/resources/messages/batches';
@@ -107,6 +111,23 @@ function buildView(calls: Call[], sessionId: string): View {
   for (const c of calls) {
     if (c.session_id !== sessionId) continue;
     if (c.op === 'sessions.archive') status = 'terminated';
+    if (c.op === 'sessions.update') {
+      const cents = Number(c.params?.budget_cents ?? 0);
+      events.push({ type: 'session.updated', budget: { type: 'limit', max_list_cost: { amount: String(cents), currency: 'USD' } } });
+      if (status === 'terminated') continue;
+      const s = sess.after?.['sessions.update'];
+      if (s) {
+        // fixture の指定どおり（status が無ければ今のまま）
+        if (s.status) status = s.status;
+        if (s.list_cost) listCost = s.list_cost;
+        for (const ae of evs.after?.['sessions.update'] ?? []) events.push({ ...ae });
+      } else {
+        // 既定: 予算を上げる update が受理されると止まった作業は自動で再開する（公式 managed-agents/budgets）
+        status = 'running';
+        events.push({ type: 'session.status_running' });
+      }
+      continue;
+    }
     if (c.op !== 'events.send') continue;
     for (const e of c.events ?? []) {
       n++;
@@ -167,6 +188,13 @@ export function createFakePort(env: Env): FactoryPort {
     async retrieveSession(id) {
       const v = buildView(await readCalls(db), id);
       return { id, status: v.status, listCostCents: Number.parseInt(v.listCost, 10), metadata: v.metadata, created_at: v.created_at };
+    },
+    async updateSessionBudget(id, cents) {
+      const v = buildView(await readCalls(db), id); // 存在確認
+      // 本物と同じ拒否: 終わった session は変えられない / 使った額以下へは下げられない（budget_not_raised）
+      if (v.status === 'terminated') throw new PortError(true, 400, 'session_terminated');
+      if (!Number.isInteger(cents) || cents <= Number.parseInt(v.listCost, 10)) throw new PortError(true, 400, 'budget_not_raised');
+      await appendCall(db, { op: 'sessions.update', at: nowIso(), session_id: id, params: { budget_cents: cents } });
     },
     async listSessionsPage() {
       const calls = await readCalls(db);

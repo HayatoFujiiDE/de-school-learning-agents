@@ -72,6 +72,12 @@ export interface FactoryPort {
   readonly isFake: boolean;
   createSession(params: SessionCreateParams, o?: CallOpts): Promise<{ id: string }>;
   retrieveSession(sessionId: string, o?: CallOpts): Promise<SessionView>;
+  /**
+   * sessions.update で session の予算（max_list_cost）を cents に置き換える（§B-4-f。運営の増額操作だけが呼ぶ）。
+   * 金額の書式は createSession と同じ（{ type: 'limit', max_list_cost: { amount: String(cents), currency: 'USD' } }）。
+   * 使った額以下への変更は API が拒否する（reason budget_not_raised）
+   */
+  updateSessionBudget(sessionId: string, cents: number, o?: CallOpts): Promise<void>;
   listSessionsPage(page: string | null, o?: CallOpts): Promise<Page<SessionView>>;
   /** events.list の 1 ページ。order='desc' は新しい順。page は前のページの next */
   listEventsPage(sessionId: string, q: { order: 'asc' | 'desc'; page: string | null }, o?: CallOpts): Promise<Page<unknown>>;
@@ -258,6 +264,11 @@ export function realPort(env: Env, opts: { fetchImpl?: typeof fetch } = {}): Fac
     isFake: false,
     createSession: (params, o) => call(async () => ({ id: (await client.beta.sessions.create(params, requestOptions(o))).id })),
     retrieveSession: (id, o) => call(async () => toView(await client.beta.sessions.retrieve(id, {}, requestOptions(o)))),
+    // 予算は絶対値の置き換えなので、応答不明の再送でも上げ幅は増えない
+    updateSessionBudget: (id, cents, o) =>
+      call(async () => {
+        await client.beta.sessions.update(id, { budget: { type: 'limit', max_list_cost: { amount: String(cents), currency: 'USD' } } }, requestOptions(o));
+      }),
     listSessionsPage: (page, o) =>
       call(async () => {
         const p = await client.beta.sessions.list({ order: 'desc', ...(page ? { page } : {}) }, requestOptions(o));

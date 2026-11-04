@@ -210,11 +210,11 @@ body `{answers: [{question_id, answer}]}`。4 状態 `answer_state: none | saved
 #### f. 予算に当たった job の増額（`POST /api/jobs/:id/raise-budget`。2026-11-05 オーナー指示で追加。「Worker からは増額しない」を置き換え）
 body `{add_cents: 500 | 1000 | 2000, note?}`。運営の明示操作だけが増額する（cron・webhook・職人からは増やさない）。
 1. `status='budget_reached'` かつ session あり（違えば 409 `not_budget_reached`）。`paused` なら 409 `paused`
-2. 新予算 = `max(budget_cents, list_cost_cents) + add_cents`。1 job は 5000（$50）まで（超えたら 409 `job_budget_cap`）。`todayCostCents + add_cents > DAILY_CAP_CENTS` なら 409 `daily_cap`
+2. 新予算 = `max(budget_cents, list_cost_cents) + add_cents`。1 job は 5000（$50）まで（超えたら 409 `job_budget_cap`）。`todayCostCents + (新予算 − D1 の list_cost_cents) > DAILY_CAP_CENTS` なら 409 `daily_cap`（台帳にまだ載っていない使った額も余地に含める）
 3. `sessions.update(budget = 新予算)`。API が拒否したら 502 `raise_failed`。D1 は変えない
 4. D1 CAS `budget_cents = 新予算 WHERE status='budget_reached' AND budget_cents = 旧値`（0 行は 409 `conflict`。Anthropic 側は上げたまま）
-5. session が `idle` なら `user.message`（続きを頼む定型文）を 1 通。`running` なら送らない。job を `running` に戻すのは従来どおり reconcile（running を見たら budget_reached → running）
-6. 応答 `{job_id, budget_cents, resumed: 'message_sent' | 'already_running'}`。監査は `console.log` の `raise_budget`（メールは書かない）
+5. 再開は送らない: 公式仕様で、受理された budget の update が止まった作業を自動で再開する（予算で止まっている間の `user.message` は 400）。job を `running` に戻すのは従来どおり reconcile（running を見たら budget_reached → running）。新予算の基準は update 直前の `sessions.retrieve` の `usage.list_cost` + 1¢ も含めた max。update の結果不明（timeout・接続）は 502 `raise_unknown`、明示の拒否は 502 `raise_failed`
+6. 応答 `{job_id, budget_cents, resumed: 'auto'}`。監査は `console.log` の `raise_budget`（メールは書かない）
 
 ### §B-5 cron（`*/10 * * * *`。scheduled handler は最長 15 分）
 
@@ -1257,4 +1257,4 @@ v3.5（2026-11-04 段階 0 の実測。最初の本物の session sesn_01Jfui3ap
 51. §L v3.6.1 への Astra high（REVISE）への裁定（v3.6.2）: (a) **BLOCKING**: 停止・飛行中の数・日次の予約を、処理権を取る UPDATE の同じ 1 文の WHERE で判定する（§L-2 3-2 の SQL）。別の文で数えてから取る形は 2 つの cron が別の行を取って上限を超えた (b) migration 前の running と同期モードの running（`verify_phase IS NULL`）は従来の 30 分 → pending を残す (c) 48 時間の失敗は「retrieve が失敗した時」だけ。時刻だけで捨てない (d) confirmed の claim でも出典 id 無し・一覧に無い id は group に出す（自動 OK の条件と表示をそろえた）(e) 版の費用表示に `vb:` の記帳を含める (f) `source_not_listed` の文を表に足した / 途中 reverify の行は防御の想定と明記 / Console の上限は Batch で多少超えうると明記
 52. §L v3.6.2 は Astra high で GO。MINOR（ターン数が §F-3 の 8 回と食い違い）は `verify_turn+1 < 8` に揃えた
 53. 実装レビュー（Astra）の反映: (a) §L-2 の結果取得の一時エラーに永続の回数上限（`verify_collect_errors`、6 回で試行失敗）。migration 0003 は本番未適用なので同じファイルに列を足す (b) 同期モードの締め切りは本文の受信まで効く signal で切る (c) §M-5b 種別が分からない待ちは同じ idle event に 5 分以上の間隔で 3 回数えてから失敗
-54. 予算に当たった job の増額（2026-11-05 オーナー指示「許可したら増額して進むようにして」）: §B-4-d の「Worker からは増額しない」を「運営の明示操作だけが増額する」（§B-4-f `raise-budget`）に置き換え。1 job $50 まで・日次上限・paused を通し、増額後に session が idle なら続きを頼む 1 通を送る。cron・webhook・職人からは増額しない。同日、deny 上限の入口判定（Issue #1、ebf9d9d）を §B-4 0-b の例外として追記済み
+54. 予算に当たった job の増額（2026-11-05 オーナー指示「許可したら増額して進むようにして」）: §B-4-d の「Worker からは増額しない」を「運営の明示操作だけが増額する」（§B-4-f `raise-budget`）に置き換え。1 job $50 まで・日次上限・paused を通し、増額の update 自体が作業を再開させる（公式 managed-agents/budgets）。cron・webhook・職人からは増額しない。同日、deny 上限の入口判定（Issue #1、ebf9d9d）を §B-4 0-b の例外として追記済み

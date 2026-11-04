@@ -56,7 +56,14 @@
     already_submitted: '会議の結果を待っています（回収は 10 分ごと）',
     not_found: '見つかりません',
     access_denied: 'ログインが必要です',
-    bad_origin: '送信元が正しくありません'
+    bad_origin: '送信元が正しくありません',
+    not_budget_reached: '予算の上限で止まっている状態ではありません。読み込み直してください',
+    job_budget_cap: '1 つの作業の予算は $50.00 までです',
+    daily_cap: '今日の費用の上限を超えるため、予算を増やせません',
+    raise_failed: '予算を増やせませんでした。予算は変わっていません',
+    raise_unknown: 'Anthropic から返事がなく、予算が増えたか分かりません（増えている可能性があります）。「状態を取り込む」で確かめてから押し直してください',
+    invalid_add_cents: '増やす額は $5 / $10 / $20 のどれかです',
+    invalid_note: 'メモは 200 字までです'
   };
 
   var $ = function (sel, root) { return (root || document).querySelector(sel); };
@@ -1335,12 +1342,28 @@
     return html + '</div></section>';
   }
 
+  // 予算の増額（契約 §B-4-f）。額と上限はサーバーと同じ（サーバーが正。ここは押せるかの目安）
+  var RAISE_STEPS = [500, 1000, 2000];
+  var JOB_BUDGET_CAP_CENTS = 5000;
+  /**
+   * 増やした後の予算の見込み = max(今の予算, 使った額 + 1¢) + 増やす額。
+   * サーバーは押した時に session の使った額を読み直して決める（丸め分の 1¢ を足す）ので、応答の budget_cents が正
+   */
+  function raisedBudget(j, add) { return Math.max(Number(j.budget_cents || 0), Number(j.list_cost_cents || 0) + 1) + add; }
+  function raiseButtonsHtml(j) {
+    if (j.status !== 'budget_reached' || !j.session_id) return '';
+    return '<div class="row">' + RAISE_STEPS.map(function (add) {
+      var over = raisedBudget(j, add) > JOB_BUDGET_CAP_CENTS;
+      return '<button type="button" class="btn" data-raise="' + add + '"' + (over ? ' disabled title="1 つの作業の予算は $50.00 までです"' : '') + '>' + esc(fmtCents(add).replace(/\.00$/, '')) + ' 増やして続ける</button>';
+    }).join('') + '</div>';
+  }
+
   function jobAlertHtml(j) {
     var lines = [];
-    if (j.status === 'budget_reached') lines.push('上限に達しました（Worker からは増額しません）');
+    if (j.status === 'budget_reached') lines.push('予算 ' + fmtCents(j.budget_cents) + ' に達して止まっています（使った額 ' + fmtCents(j.list_cost_cents) + '）');
     if (j.error) lines.push('エラー: ' + j.error);
     if (j.last_error) lines.push('最後のエラー: ' + j.last_error);
-    return lines.length ? '<div class="aq-alert" role="alert">' + lines.map(function (l) { return '<p>' + esc(l) + '</p>'; }).join('') + '</div>' : '';
+    return lines.length ? '<div class="aq-alert" role="alert">' + lines.map(function (l) { return '<p>' + esc(l) + '</p>'; }).join('') + raiseButtonsHtml(j) + '</div>' : '';
   }
 
   function jobDetailHtml(j, open) {
@@ -1383,8 +1406,46 @@
       jobDetailHtml(j, mode === 'none') + foot;
   }
 
-  function bindJobActions(id) {
+  /** 増額のメモの下書き（job id ごと）。失敗しても書いたメモを消さない（§G-3） */
+  var raiseNoteMem = {};
+  /** 増額ボタン（§B-4-f）: 予告（新しい予算とメモ欄）→ 実行（3 つとも止める）→ トースト → 読み直し */
+  function bindRaiseButtons(id, j) {
+    var btns = document.querySelectorAll('[data-raise]');
+    Array.prototype.forEach.call(btns, function (btn) {
+      btn.addEventListener('click', function () {
+        var add = Number(btn.getAttribute('data-raise'));
+        var next = raisedBudget(j, add);
+        action(btn, {
+          title: '予算を ' + fmtCents(add) + ' 増やして、職人に続きを頼みます。新しい予算 ' + fmtCents(next),
+          body: '今の予算 ' + fmtCents(j.budget_cents) + ' / 使った額 ' + fmtCents(j.list_cost_cents) + '。新しい予算は押した時の使った額から決まるので、少し変わることがあります。1 つの作業の予算は ' + fmtCents(JOB_BUDGET_CAP_CENTS) + ' まで、今日の費用の上限も超えない範囲で増やします。増やすと職人は自動で続きを始めます。',
+          note: true, noteRequired: false, noteLabel: 'メモ（任意・200 字まで）', noteValue: raiseNoteMem[id] || '',
+          okText: '増やして続ける', busyText: '増やしています…',
+          run: function (note) {
+            raiseNoteMem[id] = note || '';
+            Array.prototype.forEach.call(btns, function (b) { b.disabled = true; }); // 送信中は他の額も押せない
+            var body = { add_cents: add };
+            if (note && note.trim()) body.note = note.trim();
+            return api('POST', '/api/jobs/' + encodeURIComponent(id) + '/raise-budget', body);
+          },
+          success: '予算を ' + fmtCents(next) + ' にして続きを頼みました',
+          after: function (res) {
+            delete raiseNoteMem[id];
+            toast('予算を ' + fmtCents(res && res.budget_cents !== undefined ? res.budget_cents : next) + ' にして続きを頼みました');
+            route();
+          },
+          fail: function (e) {
+            // 状態が変わった（409）・増えたか分からない（raise_unknown）時は読み直して今の状態を出す。それ以外はボタンを戻してもう一度押せるようにする
+            if (e && (e.status === 409 || (e.body && e.body.error === 'raise_unknown'))) { route(); return; }
+            Array.prototype.forEach.call(btns, function (b) { b.disabled = raisedBudget(j, Number(b.getAttribute('data-raise'))) > JOB_BUDGET_CAP_CENTS; });
+          }
+        });
+      });
+    });
+  }
+
+  function bindJobActions(id, j) {
     $('#reload-btn').addEventListener('click', function () { route(); });
+    if (j) bindRaiseButtons(id, j);
     var start = $('#start-btn');
     if (start) start.addEventListener('click', function () {
       action(start, { title: '職人の作業場を起動します', run: function () { return api('POST', '/api/jobs/' + encodeURIComponent(id) + '/start'); }, success: '起動しました' });
@@ -1493,7 +1554,7 @@
       if (qs.length && mode !== 'input') clearAnswerDraft(id); // 回答は保存済み（answer_state は none に戻らない）
       view.innerHTML = jobHtml(j, mode, draft);
       document.body.classList.toggle('has-foot', mode === 'input' || mode === 'resend');
-      bindJobActions(id);
+      bindJobActions(id, j);
       if (mode === 'input') bindAnswerInputs(view, id, qs, draft);
       else if (mode === 'resend') {
         var rb = $('#ans-btn');
