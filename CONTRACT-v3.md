@@ -399,3 +399,18 @@ proposed 行の操作に **`decline`（js「違う」/ es「ちがう」）** �
 ### T-5 追補（2026-11-03 再レビュー）
 - 非表示（hidden）の mine 行が重なりに関わる場合（相手が運動 join / fixed / event / 他の mine のいずれでも）: 帯は **hidden stub に出す**。stub の文は「非表示: {title}」+ 小文字 `compact_overlap`（「重なりがある」）、操作は「表示する」だけ（表示すると通常の帯と候補が出る）。相手側には帯を出さない。fixed / event が相手のときも帯を捨てない
 - グリッドの各取り組みは「タイトル + 操作 2 つ」を基本 1 行とし、幅が足りないときは操作 2 つが次の行の右へ折り返してよい（実装を正とする）
+
+## U. 「作る」と作品の最小部分（2026-11-05 凍結。`#make` / `#make/<id>` / `#works` について §B〜§T に優先）
+
+正本は `docs/plans/make-page/design-v3.md`（Fable 設計 → 司令塔壁打ち → ふじさん確定 6 問 + 追加指示 2 件。§11 が確定事項、原文 verbatim）。実装範囲は同 §13「第 1 スコープ案」。§7 のマイクロコピー表と バディの返事の型は **verbatim**（言い換え禁止）。以下は司令塔の裁定で、design-v3 と食い違う時は本節が優先。
+
+- **U-1 題材**: モックの見本・仮の案・棚のカードは確定 Q2 の 3 題材（マイクラのコマンド例 / Python の小さなゲーム / 回路の電気）だけで作る。design-v3 §13 の「ドアストッパーの 3 形状の線画」は使わない（§A「素材固有の図版は作らない」と Q2 の両方に反する）。シナリオ B/D のドアストッパーは設計の検証用の話であってモックのデータではない。図は 3 題材の構造が分かる線画 SVG（ブロック配置・画面のキャラ・回路と電球）を 2 色（墨 + 橙/オリーブ）で、インライン。
+- **U-2 bridge の題材決定**: 話すから来た時の仮の案 3 枚は、直近の本人発言に「マイクラ/建築/コマンド」→マイクラ、「Python/ゲーム/プログラム」→Python、「回路/電気/電池/LED」→回路、どれも無ければマイクラ、の決定論で選ぶ（各題材に 3 案固定）。
+- **U-3 ファイル**: 新規 `app-v3/js/make.js`（状態・純関数・描画）、`app-v3/js/make-data.js`（見本 3・仮の案・決定論の返事）、`app-v3/js/works.js`（作品の最小部分）、`app-v3/css/make.css`、`tools/make-test.js`（node で純関数）。既存の変更は `index.html`（script/link 追加）・`app.js`（`make/` 前方一致ルート・`#works` 描画・`#make` の今日の予定 drawer）・`talk.js`（bridge が活動を作る）・`plan.js`（mine 行メニューに「作るで開く」）・`i18n.js`（§7 の key）だけ。`data.js` / `buddy.js` / `tokens.css` は触らない。talk / plan の既存の挙動・裁定（§R/§S/§T）は上記の差分以外変えない。
+- **U-4 純関数**: `DES.make` に commitChange / revert / adopt / remake / decline / leave / pause（背中押し 3 ケースの選択を返す）/ saveWork / addCapture を純関数で置き、DOM に依存しない。`tools/make-test.js` は `node tools/make-test.js` で各関数の正常・境界を検査し最後に `MAKE_TEST=PASS|FAIL` を出す。
+- **U-5 背中押し**: design-v3 §6-8 の 3 ケースを決定論で。押した・断った回数は `des3.activities` 内の内部値で、画面に出さない。評価語（§I の禁止語 + 「成長」「頑張」）は UI に出さない（原文引用は docs のみ）。
+- **U-6 作品のキャプチャー**: 画像はダミー線画（実ファイル入力は `demo_media` トースト）。バディの見立ては決定論 1 行・琥珀の出所チップ・「直す」「違う」付き。顔・名前の注意 1 行は design-v3 §6-10 の文。共有の項目は置かない。
+- **U-7 動き**: 「作っている」の破線カードは 150ms で差し替え。`prefers-reduced-motion` / `.reduced-motion` で即時。
+- **U-8 保存**: `des3.activities` / `des3.works` / `des3.makeSide`。読み書きは既存 `DES.store` 経由（try/catch・失敗は `save_fail`）。「はじめの状態に戻す」で消える。
+- **U-9 受け入れ（操作ループ）**: 入口→見本「動かしてみる」→作業台、スライダー→試す→変化 +1（本人）、前に戻す（5 秒 undo）、任せる→作っている→カード→これにする（変化 +1 バディ）/ 作り直す / 違う（undo）/ 比べる、作品に残す→ダイアログ→トースト「作品で見る」、今日はここまで→背中押し→`#paused`→「一歩だけやってみる」で作業台へ、続きをする→止まった作業台、話す bridge→仮の案 3 枚、予定表「作るで開く」、作品「写真・スクショを入れる」→残す→活動生成→「続きを作る」、表示切替 es/js で状態保持、リロードで状態保持。各操作にフィードバック（トースト or 差し替え）。
+- **U-10 検証（実装担当が実行し verdict だけ報告）**: `sh tools/check.sh talk plan make make/<見本から作った活動id> works paused`（CHECK_RESULT=PASS）、`node tools/make-test.js`（MAKE_TEST=PASS）、`sh tools/render.sh <scratch>/render make works` の 1440/1024/390、横スクロール無し。既存の `talk plan` の check も PASS 維持。
