@@ -243,6 +243,9 @@ DES.selfData = {
     // 話すへ入れる下書き（{scene} = 本人が書いた場面、{kind} = kinds の js 文言）
     prefill: '「{scene}」のとき、{kind}できる工夫を考えたい',
     t_scene: { js: '困ることを残した', es: 'こまることをのこした' },
+    t_away: { js: '「今はいい」にした', es: '「いまはいい」にした' },
+    t_back: { js: '工夫をもどした', es: 'くふうをもどした' },
+    away_head: { js: '今はいい（{n}）', es: 'いまはいい（{n}）' },
     t_idea: { js: '工夫を足した', es: 'くふうを足した' },
     scenes: [
       { id: 'k1', src: 'own', date: '10-28', text: 'サークル対話で、聞いてるだけだとぼーっとしてくる',
