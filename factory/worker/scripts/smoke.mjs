@@ -1,4 +1,4 @@
-// smoke（契約 §H (a)〜(e),(g)〜(i),(k)〜(n)、§K-8 (o)〜(s)、§L-7 (l5)、§N-5 (n2)(n3)）。scripts/smoke.sh が wrangler dev（fake）を起動してから呼ぶ。
+// smoke（契約 §H (a)〜(e),(g)〜(i),(k)〜(n)、§K-8 (o)〜(s)、§L-7 (l5)、§N-5 (n2)(n3)、§N-6-7 (n6c)）。scripts/smoke.sh が wrangler dev（fake）を起動してから呼ぶ。
 // 出力: 1 行ずつ `PASS <名前>` / `FAIL <名前> <理由>`。最後に SMOKE_RESULT=PASS|FAIL。応答本文は必要な field だけを見る。
 import crypto from 'node:crypto';
 import http from 'node:http';
@@ -171,7 +171,7 @@ async function main() {
     const keys = ['intake', 'maker', 'clerk', 'verifier', 'reviewer', 'library'];
     check(
       '(n2) GET /api/floor 200・stations 6 キー・queue が配列',
-      fl.status === 200 && !!fl.json?.stations && keys.every((k) => typeof fl.json.stations[k] === 'object') && Object.keys(fl.json.stations).length === 6 && Array.isArray(fl.json?.queue),
+      fl.status === 200 && !!fl.json?.stations && keys.every((k) => typeof fl.json.stations[k] === 'object') && Object.keys(fl.json.stations).every((k) => keys.includes(k) || k === 'rework') && Array.isArray(fl.json?.queue), // §N-6-6 で rework が増えた（それ以外のキーは増やさない）
       `status=${fl.status} stations=${Object.keys(fl.json?.stations ?? {}).join(',')}`,
     );
     const row = (fl.json?.queue ?? []).find((q) => q.material?.id === aMid);
@@ -473,6 +473,48 @@ async function main() {
       const chips = (out.match(/class="floor-chip /g) || []).length;
       check('(n3) 実 API の queue を描画: 行数が一致・チップは 7 × 行数', rows === q.length && chips === 7 * q.length, `rows=${rows}/${q.length} chips=${chips}`);
     }
+  }
+
+  // ---- (n6c) 工場の場面（§N-6-6・§N-6-7）: stations.rework の 2 キー、背景画像 200、キャラ 11 体が 200 ----
+  {
+    const fl = await api('GET', '/api/floor');
+    const rw = fl.json?.stations?.rework;
+    check(
+      '(n6c) /api/floor の stations.rework に auto_active・manual_active（数値）',
+      fl.status === 200 && !!rw && Number.isInteger(rw.auto_active) && Number.isInteger(rw.manual_active),
+      `status=${fl.status} rework=${JSON.stringify(rw ?? null)}`,
+    );
+    const bg = await fetch(`${BASE}/admin/img/scene-bg.webp`);
+    await bg.arrayBuffer();
+    check('(n6c) /admin/img/scene-bg.webp が 200', bg.status === 200, `status=${bg.status}`);
+    // キャラの拡張子は floor-scene.js の CHAR_EXT（配信中のファイルを node:vm で読む。取得・評価に失敗したら FAIL）
+    let ext = null;
+    let why = '';
+    try {
+      const res = await fetch(`${BASE}/admin/floor-scene.js`);
+      const code = await res.text();
+      if (res.status !== 200) throw new Error(`status=${res.status}`);
+      const sandbox = { module: { exports: {} } };
+      vm.runInNewContext(code, sandbox, { timeout: 2000 });
+      const e = sandbox.module.exports?.CHAR_EXT;
+      if (e !== 'svg' && e !== 'png') throw new Error(`CHAR_EXT=${String(e)}`);
+      ext = e;
+    } catch (e) {
+      why = String(e && e.message).slice(0, 120);
+    }
+    check('(n6c) /admin/floor-scene.js を node:vm で読める（CHAR_EXT が svg / png）', ext !== null, why);
+    const ids = ['scout', 'sprout', 'star', 'beret', 'robot', 'glasses', 'chick', 'sun', 'cat', 'sprout-b', 'ghost'];
+    const codes = [];
+    for (const id of ids) {
+      const r = await fetch(`${BASE}/admin/img/chars/char-${id}.${ext ?? 'svg'}`);
+      await r.arrayBuffer();
+      codes.push(r.status);
+    }
+    check(
+      `(n6c) キャラ 11 体（char-<id>.${ext ?? 'svg'}）が 200`,
+      codes.every((c) => c === 200),
+      ids.map((id, i) => `${id}=${codes[i]}`).filter((x) => !x.endsWith('=200')).join(' '),
+    );
   }
 
   // ---- personal data 確認 ----

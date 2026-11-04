@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" fill="none" stroke-linejoin="round" stroke-linecap="round">
+<g class="ch-body">
+<g class="ch-prop"><path d="M104 100 L106 92" stroke="#1c1c22" stroke-width="5"/>
+<path d="M104 96 C88 95 78 82 80 64 C97 67 107 80 104 96 Z" fill="#62b84c" stroke="#1c1c22" stroke-width="5"/><path d="M98 87 C91 82 86 76 85 70 C93 73 98 79 100 86 Z" fill="#86cf6a"/>
+<path d="M107 95 C111 78 126 66 144 64 C144 82 130 94 107 95 Z" fill="#62b84c" stroke="#1c1c22" stroke-width="5"/><path d="M114 89 C119 80 127 73 137 70 C135 79 127 86 116 89 Z" fill="#86cf6a"/></g>
+<path d="M44 150 C38 132 46 116 58 112 C62 102 74 96 86 100 C94 94 110 94 118 102 C132 104 142 118 140 134 C142 150 134 162 122 164 C118 174 108 178 100 176 C94 172 86 172 80 176 C70 180 60 176 56 168 C48 164 45 158 44 150 Z" fill="#ffffff" stroke="#1c1c22" stroke-width="6"/>
+<path d="M50 152 C52 162 58 168 66 168 C60 160 56 152 55 142 Z" fill="#eeedf4"/>
+<g class="ch-eyes"><ellipse cx="82" cy="138" rx="4.6" ry="8" fill="#1c1c22"/><ellipse cx="80.7" cy="134.4" rx="1.4" ry="1.9" fill="#fff"/><ellipse cx="107" cy="139" rx="4.6" ry="8" fill="#1c1c22"/><ellipse cx="105.7" cy="135.4" rx="1.4" ry="1.9" fill="#fff"/></g>
+<g class="ch-hands"><ellipse cx="130" cy="166" rx="6" ry="4.6" fill="#ffffff" stroke="#1c1c22" stroke-width="4.2"/></g>
+</g>
+<g class="ch-laptop"><g transform="translate(0 0)">
+<path d="M102 175 L134 189 L186 173 L182 165 Z" fill="#5b5f6b" stroke="#1c1c22" stroke-width="4.5"/>
+<path d="M138 139 L186 116 L182 166 L132 180 Z" fill="#4d515c" stroke="#1c1c22" stroke-width="5"/>
+<path d="M143 145 L180 127 L177 160 L140 170 Z" fill="#5a5e6a"/>
+</g></g>
+</svg>

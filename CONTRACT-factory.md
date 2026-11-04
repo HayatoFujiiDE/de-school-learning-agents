@@ -175,6 +175,7 @@ body `{answers: [{question_id, answer}]}`。4 状態 `answer_state: none | saved
 `reconcileJob(jobId)`（冪等・再入可能・段階保存）:
 0. **lease**: `UPDATE factory_jobs SET reconcile_token=?, reconcile_until=now+120s WHERE id=? AND (reconcile_until IS NULL OR reconcile_until < now)`。changes=0 → 他が処理中。何もしないで戻る。以後のこの job への書き込みはすべて `AND reconcile_token=?` を付ける。**外部呼び出し（retrieve / events / files）の前に毎回 `UPDATE ... SET reconcile_until=now+120s WHERE id=? AND reconcile_token=?` で延長し、changes=0 なら所有権を失ったとして即座に抜ける**（R2 への書き込みも止める。既に書いた分は job 固有 prefix の同じ内容なので無害）。終了時に `reconcile_token=NULL, reconcile_until=NULL, last_checked_at=now`
 0-b. **順序**: まず job.status を見る。`needs_answer` なら手順 2 と 3 の `terminated` 判定だけ（他の分岐に入らない）
+例外: deny_count が 8 を超えた job は、reconcile の入口で状態・段階に関わらず interrupt / archive / failed('too_many_denies') にする（Issue #1、ebf9d9d）
 1. job が終端（`done/failed/cancelled`）または `queued/creating` なら lease を返して終了（`creating` の回収は §B-4-a-6）
 2. `sessions.retrieve(session_id)`。`usage.list_cost.amount`（セント整数文字列）を `list_cost_cents` に保存し、差分（新 − 旧、正の時だけ）を `cost_ledger` に `kind='session'` で追記
 3. session `status`:
@@ -1048,6 +1049,136 @@ state は `done` / `active` / `waiting` (人の番) / `failed` / `pending` / `sk
 - (n2) smoke: `/api/floor` が 200・`stations` 6 キー・`queue` が配列。smoke の素材が ingest 後に `verify` 工程 active（または review の版が出た後に `review` 工程 waiting）になっている行が 1 つある
 - (n3) smoke: `/admin/` の HTML に `#/materials` のリンクがあり、`admin.js` を `__FACTORY_ADMIN_NO_BOOT__` で読んでも例外が出ない（既存の純関数読みと同じ）
 - (n4) 既存の vitest / smoke が green のまま
+
+### §N-6 工場の場面 v2（v3.9。2026-11-04 夜凍結。ふじさん指示「共有した画像のキャラを忠実に、斜め上から工場をのぞく感じに、分岐も」。§N-3 の 2〜4 を置き換える。§N-1 / §N-2 / §N-3 の 1・5〜8 の動作は維持し、5 の見た目は §N-6-5 で置き換える）
+
+配色はこの画面に限り参考画像に合わせる（明示指示がトンマナ既定に優先）: 床 `#eceaf3`〜`#f6f5fa`、流れの青 `#3d8bf2`、濃紺のバッジ `#1f2937`、完了の緑 `#22a55b`、要確認の黄 `#f6c343`、失敗の赤 `#e5484d`。上部の状況帯・ナビは既存のまま。
+
+#### §N-6-1 場面の構成
+- 斜め上から見た床の背景画像 `/admin/img/scene-bg.png` 1 枚の上に、キャラ（`/admin/img/chars/char-<id>.(svg|png)`）・持ち場の名札・状態バッジ・流れの矢印（inline SVG）を重ねる。重ねる位置はすべて背景画像に対する % 座標（定数 `SCENE` に集約。司令塔が背景を見て値を決める）
+- 場面の幅は表示幅に合わせて拡縮（縦横比固定）。880px 未満では場面を min-width 880px で横スクロール
+- 机（持ち場）は 10 個。本線 5 + 分岐 2 + 寄り道 3:
+
+| id | 名前（名札） | 名札アイコン | キャラ | 位置（参考画像） |
+|---|---|---|---|---|
+| intake | 入口 | 本 | scout + sprout | 上段 1 |
+| maker | 職人 | 鉛筆 | beret | 上段 2 |
+| clerk | 受付 | リスト | star | 上段 3 |
+| verifier | 検証係 | 虫眼鏡 | robot | 上段 4 |
+| reviewer | 確認する人 | チェック | glasses | 上段 5 |
+| rework | 作り直しへ | 吹き出し | chick | 右上 |
+| library | 倉庫 | 箱 | sun | 右下 |
+| meeting | 会議 | なし（寄り道の札） | cat | 下段左（入口からの分岐） |
+| questions | 質問 | なし | sprout-b | 下段中（職人と往復） |
+| autofix | 自動の作り直し | なし | ghost | 下段右（検証係からの点線） |
+
+- 流れ（矢印）: intake→maker→clerk→verifier→reviewer（実線・青）、reviewer→rework と reviewer→library（実線・二股）、rework→maker（戻り。場面上部を回る点線）、intake→meeting（実線の分岐）、maker↔questions（下りの実線 + 上りの点線）、verifier→autofix（点線）、autofix→maker（戻りの点線）
+
+#### §N-6-2 持ち場の状態（`/api/floor` の値から。上から最初に当たったもの）
+バッジは濃紺の丸い札（白文字）。動いている時は左に青い回転リング、下に細い進捗バー（任意）。人の番は濃紺の札に黄色の「!」丸と黄色の文字（参考画像の「確認待ち」）、失敗は赤の札。札はすべて 1 行（2 行目の情報は「・」でつなぐ）、終わったものは濃紺の札に緑の ✓、何も無ければ白い札に灰の文字「待機」。
+
+| 持ち場 | 状態の判定 | 札 |
+|---|---|---|
+| intake | scout_running | 動・「収集中」 |
+| | proposed > 0 | 完・「提案 N 件」 |
+| | それ以外 | 待機 |
+| meeting | meeting_pending | 動・「会議中（結果待ち）」 |
+| | last_meeting_at が 24 時間以内 | 完・「会議 完了」 |
+| | それ以外 | 待機 |
+| maker | 行の making 工程 active の数 N > 0 | 動・「制作中 N」+ バー N / max_concurrent |
+| | budget_reached > 0 | 人・「予算の上限 N」 |
+| | creating > 0 | 動・「準備中 N」 |
+| | 行の making 工程 failed の数 > 0 | 赤・「失敗 N」 |
+| | それ以外 | 待機 |
+| questions | needs_answer > 0 | 人・「回答待ち N」 |
+| | 行の questions 工程 active の数 > 0 | 動・「質問を考え中」 |
+| | それ以外 | 待機 |
+| clerk | ingesting > 0 | 動・「取り込み中 N」 |
+| | failed_invalid_outputs > 0 | 赤・「取り込み失敗 N」 |
+| | それ以外 | 待機 |
+| verifier | running > 0 | 動・「検証中 N」+ バー（verify active 行の progress の平均を 70〜84 → 0〜100% に換算） |
+| | pending > 0 | 動・「順番待ち N」（リングは回さない） |
+| | failed > 0 | 赤・「検証失敗 N」 |
+| | それ以外 | 待機 |
+| autofix | stations.rework.auto_active > 0 | 動・「作り直し中 N」 |
+| | それ以外 | 待機 |
+| reviewer | waiting > 0 | 人・「確認待ち N」（needs_review_total > 0 なら 2 行目に「要確認 M」） |
+| | それ以外 | 待機 |
+| rework | stations.rework.manual_active > 0 | 動・「作り直し N」 |
+| | それ以外 | 待機 |
+| library | available > 0 | 完・「利用できる N」 |
+| | それ以外 | 待機 |
+
+#### §N-6-3 動き（CSS だけ。JS の rAF ループを作らない。reduced-motion で全停止）
+- 動いている持ち場: キャラ `.ch-body` が上下に揺れる（1.6s）、`.ch-hands` が小刻みに動く（タイピング 0.35s）、机の上に小さな光の粒が浮かぶ（任意）
+- 人の番の持ち場: 札が脈打つ、キャラの頭上に黄色の「!」の吹き出しが跳ねる
+- 待機の持ち場: 瞬き（`.ch-eyes` の scaleY、5〜7 秒に 1 回、キャラごとに遅延をずらす）だけ
+- 矢印: 流れ先の持ち場が動いている・人の番なら破線が流れ（`stroke-dashoffset`）、矢印の上を小さな青い点（素材）が移動する（SVG `<animateMotion>` か CSS `offset-path`）。流れていなければ薄い色で静止
+- 状態が変わった持ち場は 1 回だけ跳ねる（`.flash` 相当）
+
+#### §N-6-4 操作
+- 持ち場（机・キャラ・札）をクリック → 制作キューをその持ち場にいる行だけに絞る（もう一度で解除。絞り込み中は場面の上に「職人にいる素材だけ表示中 ✕」）。行の所属: 行の steps で state が active / waiting / failed の最初の工程 → questions→questions、making→maker、ingest→clerk、verify→verifier、review→reviewer、publish→library。自動の作り直し中の行（job.auto_rework かつ active）は autofix にも、人の作り直し中は rework にも属する
+- キーボード: 持ち場は `button`（`aria-pressed`）。名札の文言を accessible name にする
+- 書き込み操作は置かない（§N-3 5 と同じ）
+
+#### §N-6-5 制作キューの見た目（参考画像の下の表に合わせる。中身・リンクは §N-3 5 のまま）
+- 見出し「≡ 制作キュー（N件）」
+- 列: コンテンツ名 / 進行状況（制作ステップ）/ 進捗 / ステータス / 操作
+- 行頭に ▶（押すと行の下に詳細: 各工程の detail、job の last_error、版の要確認数、リンク。もう一度で閉じる）と型のアイコン（型 3 = 文書、型 4 = 操作できるもの）
+- 工程チップ: done = 白地 + 緑の塗り丸 ✓ / active = 青枠 + 青い回転リング / waiting = 黄地 + 「!」丸 / failed = 赤地 + × / pending = 灰の枠と文字 / skipped = 灰 + 取り消し線。チップ間の矢印は done→done が灰の実線、active・waiting の手前が青の実線、それ以降は灰の点線
+- **分岐の表示**: job.kind = rework の行は先頭の「注文」チップを二段の分岐にする — 上段「前の版 vN」(done)、下段「差し戻し」または「自動の差し戻し」(done)、括弧の線で次のチップへ合流（参考画像 SNS 投稿の行の形）
+- 進捗: 青い角丸バー + 太字の %。ステータス: 確認待ち = 黄の札に「!」、稼働中 = 緑の札に ▶、失敗 = 赤、予算の上限 = 黄、終了 = 灰
+- attention のある行は薄い黄の背景
+
+#### §N-6-6 API の追加（§N-1 に追記。後方互換）
+- `stations.rework = { auto_active, manual_active }`: active な job（ACTIVE_JOB_STATUSES）のうち kind = rework の数を auto_rework（isAutoDerived）で分ける
+- queue の `job` に `parent_version`（親の版の version 番号。無ければ null）
+- 既存のキーは変えない
+
+#### §N-6-7 受け入れ
+- (n6a) vitest: 持ち場の状態の判定（§N-6-2 の全行）を純関数 `stationStates(floor)` にして、`public/admin/floor-scene.js`（ブラウザと node の両方で読める UMD 形式、ES2017）に置き、test/floor-scene.test.ts で全行を検査
+- (n6b) vitest: 行の所属（§N-6-4）の純関数 `rowStations(row)` を同じファイルに置き検査
+- (n6c) smoke: `/api/floor` に `stations.rework` の 2 キーがある。`/admin/img/scene-bg.png` と 11 体のキャラ画像が 200
+- (n6d) 既存の vitest / smoke が green
+- (n6e) 実機: 1440 / 1024 / 390 の幅で場面と表が崩れない（司令塔が headless Chrome で確認）。参考画像と並べて、キャラ・机の配置・札・矢印の見た目が対応していること
+
+#### §N-6-8 座標（司令塔が背景を測った値。場面の座標系は背景画像と同じ 1706 × 600。重ねる SVG は `viewBox="0 0 1706 600"`、HTML 要素は x/1706・y/600 の % で置く）
+
+キャラ: 足元（机に接する点）= anchor。キャラ画像の表示枠は 1 辺 `size`（場面の単位）の正方形で、枠の下辺中央を anchor から `size × 0.08` 下にずらして置く（画像内の余白ぶん）。左右反転が要るものは `flip`。
+
+| 持ち場 | キャラ | anchor (x, y) | size | 名札（上の札）の中心 | 状態札の中心 |
+|---|---|---|---|---|---|
+| intake | scout | (150, 290) | 150 | (195, 117) | (210, 360) |
+| intake | sprout | (300, 318) | 120 | — | — |
+| maker | beret | (470, 292) | 150 | (470, 113) | (530, 330) |
+| clerk | star | (745, 282) | 150 | (765, 110) | (785, 310) |
+| verifier | robot | (990, 288) | 150 | (1045, 110) | (1055, 310) |
+| reviewer | glasses | (1290, 342) | 150 | (1320, 115) | (1345, 367) |
+| rework | chick | (1530, 192) | 130 | — | (1597, 212) |
+| library | sun | (1532, 428) | 130 | — | (1580, 468) |
+| meeting | cat | (472, 478) | 130 | — | (562, 512) |
+| questions | sprout-b | (882, 482) | 130 | — | (948, 502) |
+| autofix | ghost | (1172, 488) | 130 | — | (1245, 504) |
+
+- 分岐・寄り道（rework / library / meeting / questions / autofix）は上の名札を持たず、状態札そのものが名札を兼ねる（待機中は白い札に名前、例「会議」「質問」「自動の作り直し」「作り直しへ」「倉庫」。動いている時は濃紺の札に状態「会議中（結果待ち）」等）。rework は動いている時だけ (1605, 105) に吹き出しアイコンを出す（参考画像の右上の吹き出し）
+- 机のクリック範囲: anchor を中心に幅 240 × 高さ 170（下段・右列は 200 × 150）の楕円
+- 矢印（すべて 3 次ベジェ。端に矢じり。太さ 6、角丸）:
+
+| id | 種類 | 始点 → 終点（制御点はおおむね参考画像の曲がり方に合わせて実装側で調整してよい） |
+|---|---|---|
+| intake-maker | 実線 | (355, 300) → (410, 288)（上に少し膨らむ） |
+| intake-meeting | 実線 | (330, 352) → (412, 410)（右下へ S 字） |
+| maker-clerk | 実線 | (622, 268) → (672, 268) |
+| maker-questions | 実線 | (600, 345) → (835, 448)（下へ） |
+| questions-maker | 点線 | (860, 430) → (640, 352)（戻り。maker-questions と重ならないよう上側を通す） |
+| clerk-verifier | 実線 | (880, 266) → (928, 266) |
+| verifier-autofix | 点線 | (1088, 342) → (1120, 445) |
+| verifier-reviewer | 実線 | (1172, 300) → (1215, 306) |
+| reviewer-rework | 実線 | (1410, 296) → (1490, 230)（右上へ曲がる） |
+| reviewer-library | 実線 | (1410, 302) → (1482, 386)（右下へ曲がる） |
+
+- 戻りの長い矢印（作り直し・自動の作り直し → 職人）は描かない。代わりにその札の 2 行目に小さく「↩ 職人へ」を出す（動いている時だけ）
+- 背景の小物と重複しないように: 背景にはすでに段ボール箱（右下の机）と青いキューブ（下段右の机）がある。キャラ画像側に同じ小物が描かれていても消さなくてよいが、重なって不自然なら anchor を左へずらす（実装側の判断で ±30 まで）
 
 ## §R 裁定記録（2026-11-04。Astra medium + 3 視点レビューの指摘への裁定）
 

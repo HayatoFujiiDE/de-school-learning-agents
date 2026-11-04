@@ -1,6 +1,7 @@
 // GET /api/floor（契約 §N-1）。工場ビューの集約。読み取り専用・副作用なし。
-// SQL: 制作キュー 1 文（素材 LEFT JOIN active / 最後の job、review / current の版）+ 持ち場の集計 1 文 + 収集の lock（scoutRunning）+ 今日の費用。
-// review の版だけ computeTriage（listReview と同じ: 版ごとに最新 verification・sources を読む）、rework job だけ isAutoDerived を呼ぶ。
+// SQL: 制作キュー 1 文（素材 LEFT JOIN active / 最後の job、review / current の版）+ 持ち場の集計 1 文（stations.rework を含む）
+// + 収集の lock（scoutRunning）+ 今日の費用。
+// review の版だけ computeTriage（listReview と同じ: 版ごとに最新 verification・sources を読む）、queue の rework job だけ isAutoDerived を呼ぶ。
 // 応答に brief_md・questions 本文・answers・token 類は含めない。
 import { all, first, isoPlus, nowIso, stmt } from '../db';
 import { cfg } from '../env';
@@ -9,7 +10,7 @@ import { json, parseJsonField, type RouteCtx } from '../http';
 import { todayCostCents } from '../jobs';
 import { AUTO_ITEMS } from '../checks/triage';
 import { scoutRunning } from '../scout';
-import { computeTriage, isAutoDerived, latestVerificationOf } from '../triage-step';
+import { AUTO_TRIAGE_EMAIL, computeTriage, isAutoDerived, latestVerificationOf } from '../triage-step';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const QUEUE_LIMIT = 100;
@@ -32,6 +33,7 @@ interface QueueRow {
   j_reconcile_stage: string | null;
   j_has_questions: number | null;
   j_parent_version_id: string | null;
+  j_parent_version: number | null;
   v_id: string | null;
   v_version: number | null;
   v_status: string | null;
@@ -66,6 +68,8 @@ interface StationRow {
   v_done: number;
   lib_available: number;
   lib_stopped: number;
+  rw_auto_active: number;
+  rw_manual_active: number;
 }
 
 export async function getFloor(c: RouteCtx): Promise<Response> {
@@ -81,6 +85,7 @@ export async function getFloor(c: RouteCtx): Promise<Response> {
               m.publish_status AS m_publish_status, m.updated_at AS m_updated_at,
               j.id AS j_id, j.status AS j_status, j.phase AS j_phase, j.kind AS j_kind, j.error AS j_error, j.last_error AS j_last_error,
               j.reconcile_stage AS j_reconcile_stage, (j.questions_json IS NOT NULL) AS j_has_questions, j.parent_version_id AS j_parent_version_id,
+              (SELECT pv.version FROM material_versions pv WHERE pv.id = j.parent_version_id) AS j_parent_version,
               v.id AS v_id, v.version AS v_version, v.status AS v_status, v.verification_status AS v_verification_status,
               v.verify_phase AS v_verify_phase, v.verify_turn AS v_verify_turn, v.job_id AS v_job_id,
               CASE WHEN v.status = 'review' THEN v.claims_json END AS v_claims_json,
@@ -174,7 +179,16 @@ export async function getFloor(c: RouteCtx): Promise<Response> {
           updated_at: q.m_updated_at,
         },
         job: q.j_id
-          ? { id: q.j_id, status: q.j_status, phase: q.j_phase, kind: q.j_kind, error: q.j_error, last_error: q.j_last_error, auto_rework: autoRework }
+          ? {
+              id: q.j_id,
+              status: q.j_status,
+              phase: q.j_phase,
+              kind: q.j_kind,
+              error: q.j_error,
+              last_error: q.j_last_error,
+              auto_rework: autoRework,
+              parent_version: q.j_parent_version === null || q.j_parent_version === undefined ? null : Number(q.j_parent_version),
+            }
           : null,
         version: q.v_id
           ? {
@@ -225,7 +239,16 @@ export async function getFloor(c: RouteCtx): Promise<Response> {
               (SELECT COUNT(*) FROM material_versions WHERE status = 'review' AND verification_status = 'failed') AS v_failed,
               (SELECT COUNT(*) FROM material_versions WHERE status = 'review' AND verification_status = 'done') AS v_done,
               (SELECT COUNT(*) FROM materials WHERE publish_status = 'available') AS lib_available,
-              (SELECT COUNT(*) FROM materials WHERE publish_status = 'stopped') AS lib_stopped`,
+              (SELECT COUNT(*) FROM materials WHERE publish_status = 'stopped') AS lib_stopped,
+              -- §N-6-6 stations.rework: active な rework job を、isAutoDerived と同じ条件（親の版に自動仕分けの return がある）で分ける
+              (SELECT COUNT(*) FROM factory_jobs r WHERE r.kind = 'rework' AND r.status IN ${ACTIVE}
+                 AND EXISTS (SELECT 1 FROM review_decisions d WHERE d.material_version_id = r.parent_version_id
+                               AND d.decision = 'return' AND d.reviewer_email = ?)) AS rw_auto_active,
+              (SELECT COUNT(*) FROM factory_jobs r WHERE r.kind = 'rework' AND r.status IN ${ACTIVE}
+                 AND NOT EXISTS (SELECT 1 FROM review_decisions d WHERE d.material_version_id = r.parent_version_id
+                                   AND d.decision = 'return' AND d.reviewer_email = ?)) AS rw_manual_active`,
+      AUTO_TRIAGE_EMAIL,
+      AUTO_TRIAGE_EMAIL,
     ),
   );
   const k = cfg(c.env);
@@ -256,6 +279,7 @@ export async function getFloor(c: RouteCtx): Promise<Response> {
       verifier: { pending: n(s?.v_pending), running: n(s?.v_running), failed: n(s?.v_failed) },
       reviewer: { waiting: n(s?.v_done), needs_review_total: needsReviewTotal },
       library: { available: n(s?.lib_available), stopped: n(s?.lib_stopped) },
+      rework: { auto_active: n(s?.rw_auto_active), manual_active: n(s?.rw_manual_active) },
     },
     queue: built.map((b) => b.row),
   });

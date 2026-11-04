@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" fill="none" stroke-linejoin="round" stroke-linecap="round">
+<g class="ch-prop">
+<path d="M138 146 L167 134 L197 146 L197 166 L167 179 L138 166 Z" fill="#f2f3f8" stroke="#c4c8d4" stroke-width="2"/>
+<path d="M167 158 L197 146 L197 166 L167 179 Z" fill="#dde0ea" stroke="#c4c8d4" stroke-width="2"/>
+<path d="M138 146 L167 158 L167 179" stroke="#c4c8d4" stroke-width="2"/>
+<path d="M142 118 L167 107 L193 118 L193 140 L167 152 L142 140 Z" fill="#6b92dd" stroke="#3a5c9c" stroke-width="3"/>
+<path d="M142 118 L167 107 L193 118 L167 129 Z" fill="#94b5f0" stroke="#3a5c9c" stroke-width="3"/>
+<path d="M167 129 L193 118 L193 140 L167 152 Z" fill="#5279c6" stroke="#3a5c9c" stroke-width="3"/>
+</g>
+<g class="ch-body"><g transform="rotate(7 92 176)">
+<path d="M46 174 C42 150 44 128 50 114 C58 96 74 86 94 86 C116 86 132 102 136 124 C140 142 142 160 140 172 C134 176 128 171 122 173 C116 179 108 181 102 175 C96 171 90 173 86 177 C78 183 70 179 66 173 C60 177 51 179 46 174 Z" fill="#ffffff" stroke="#1c1c22" stroke-width="6"/>
+<path d="M52 168 C54 174 60 176 66 172 C60 164 56 154 55 142 Z" fill="#eeedf4"/>
+<g class="ch-eyes">
+<circle cx="98" cy="131" r="11" fill="#fff" stroke="#1c1c22" stroke-width="5"/>
+<circle cx="121" cy="128" r="9.5" fill="#fff" stroke="#1c1c22" stroke-width="5"/>
+<circle cx="100" cy="132" r="4" fill="#1c1c22"/><circle cx="123" cy="128.5" r="3.6" fill="#1c1c22"/>
+</g>
+<path d="M108 153 C112 156 117 155 119 151" stroke="#1c1c22" stroke-width="4"/>
+</g></g>
+</svg>

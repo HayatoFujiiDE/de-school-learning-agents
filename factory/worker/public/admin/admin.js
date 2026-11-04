@@ -437,30 +437,47 @@
     }, function () { /* 会議の表示は補助。失敗しても一覧は使える */ });
   }
 
-  // ---- 画面: 工場（§N-3）。読み取り専用。書き込み操作は置かず、既存の画面へ送る ----
+  // ---- 画面: 工場（§N-3 / §N-6）。読み取り専用。書き込み操作は置かず、既存の画面へ送る ----
+  // 場面（背景・キャラ・名札・状態札・矢印）の座標と持ち場の判定は floor-scene.js（window.FactoryFloorScene）。ここは DOM と表だけ
   var FLOOR_POLL_MS = 15000;
   var FLOOR_ATT = [['answer', '回答待ち', 'yellow'], ['review', '確認待ち', 'yellow'], ['failed', '失敗', 'red'], ['budget', '予算の上限', 'yellow']];
   var FLOOR_ATT_LABEL = { answer: '回答待ち', review: '確認待ち', failed: '失敗', budget: '予算の上限' };
   var FLOOR_STATE_LABEL = { done: '済み', active: '進行中', waiting: 'あなたの番', failed: '失敗', pending: 'これから', skipped: 'なし' };
-  var FLOOR_STATE_ICON = { done: '✓', waiting: '!', failed: '×' };
-  // 持ち場（左から右）。steps は「右隣に動いている物があるか」の判定に使う工程の key
-  var FLOOR_STATIONS = [
-    { key: 'intake', img: 'scout', name: '入口', sub: '収集部隊・会議', steps: ['order'] },
-    { key: 'maker', img: 'maker', name: '職人', sub: '', steps: ['questions', 'making'] },
-    { key: 'clerk', img: 'clerk', name: '受付', sub: '取り込み・機械照合', steps: ['ingest'] },
-    { key: 'verifier', img: 'verifier', name: '検証係', sub: '', steps: ['verify'] },
-    { key: 'reviewer', img: 'reviewer', name: '確認する人', sub: '', steps: ['review'] },
-    { key: 'library', img: 'library', name: '倉庫', sub: '利用できる', steps: ['publish'] }
-  ];
-  // 画像が無い時の丸いキャラ（薄い灰色の楕円 + 目 2 つ）。画像と同じ 96×96
-  var FLOOR_CHAR_SVG = '<svg class="floor-char" viewBox="0 0 96 96" width="96" height="96" aria-hidden="true" focusable="false">' +
-    '<ellipse class="floor-char-body" cx="48" cy="54" rx="34" ry="30"/><circle class="floor-char-eye" cx="37" cy="50" r="4.5"/><circle class="floor-char-eye" cx="59" cy="50" r="4.5"/></svg>';
-  var floorCharFailed = {};
+  var SVGNS = 'http://www.w3.org/2000/svg';
   // timer は 1 つだけ。gen は画面を開き直すたびに増え、古い応答を捨てる。inflight は取得中の gen（同じ gen で二重に取りに行かない）
-  var floor = { active: false, gen: 0, timer: null, inflight: null, data: null, prev: null, errAt: null, bandHtml: null };
+  // filter = 絞り込み中の持ち場 id、open = ▶ で詳細を開いている素材 id、prevSt = 前回の持ち場の札（変わったら 1 回跳ねる）
+  // menuOpen = 表の「…」の説明を開いている、userScrolled = 人が場面を横にスクロールした（以後は自動で送らない）、resizeObs = 札の寄せ直し用
+  var floor = { active: false, gen: 0, timer: null, inflight: null, data: null, prev: null, errAt: null, bandHtml: null, filter: null, open: {}, prevSt: null,
+    menuOpen: false, userScrolled: false, autoScrollAt: 0, resizeObs: null };
 
+  function floorScene() { return window.FactoryFloorScene || null; }
   function hhmm(d) { var p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(d.getHours()) + ':' + p(d.getMinutes()); }
-  function ringHtml() { return '<span class="floor-ring" aria-hidden="true"></span>'; }
+
+  // 線のアイコン（24 × 24。色は CSS の currentColor）
+  var ICON_PATH = {
+    book: 'M2.5 5.5C5 4.3 8.7 4.2 12 6.2c3.3-2 7-1.9 9.5-.7v13.3c-2.5-1.2-6.2-1.3-9.5.7-3.3-2-7-1.9-9.5-.7Z M12 6.2v13.3',
+    pencil: 'M15.6 4.4l4 4L8.2 19.8 3.5 20.5l.7-4.7Z M13.4 6.6l4 4',
+    list: 'M5 3.5h14a1.5 1.5 0 0 1 1.5 1.5v14a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19V5A1.5 1.5 0 0 1 5 3.5Z M7.8 8.5h.01 M11 8.5h5.5 M7.8 12h.01 M11 12h5.5 M7.8 15.5h.01 M11 15.5h5.5',
+    search: 'M10.5 3.8a6.7 6.7 0 1 0 0 13.4a6.7 6.7 0 1 0 0-13.4Z M15.5 15.5l5 5',
+    check: 'M5 3.5h14a1.5 1.5 0 0 1 1.5 1.5v14a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19V5A1.5 1.5 0 0 1 5 3.5Z M7.5 12.3l3.1 3.1 6-6.6',
+    bubble: 'M5 4h14a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2h-7.5L7 20.5v-4H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z M7.5 8.5h9 M7.5 12h6',
+    box: 'M3.5 8.5h17v10a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5Z M2.5 4.5h19v4h-19Z M10 12.5h4',
+    order: 'M9 3.5h6v3H9Z M7 5H5.5v15.5h13V5H17 M8.5 11h7 M8.5 14.5h7 M8.5 18h4',
+    doc: 'M6 3h8.5L19 7.5V21H6Z M14 3v5h5 M9 12h7 M9 15.5h7 M9 8.5h2.5',
+    app: 'M3.5 4.5h17v13h-17Z M3.5 8h17 M6 6.2h.01 M8.2 6.2h.01 M11.5 10.5l6 2.3-2.6 1-1 2.6Z',
+    menu: 'M4 6.5h16 M4 12h16 M4 17.5h16',
+    tri: 'M8 5.5l10 6.5-10 6.5Z'
+  };
+  var STEP_ICON = { order: 'order', questions: 'bubble', making: 'pencil', ingest: 'list', verify: 'search', review: 'check', publish: 'box' };
+  function iconSvg(name, cls) {
+    return '<svg class="scene-ic ' + (cls || '') + '" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="' + ICON_PATH[name] + '"/></svg>';
+  }
+  /** 状態の印（緑の塗り丸 ✓ / 「!」丸 / × 丸）。active は回転リング */
+  function symHtml(kind) {
+    if (kind === 'active' || kind === 'moving') return '<span class="scene-ring" aria-hidden="true"></span>';
+    var fg = kind === 'done' ? 'M5.6 10.4l3 3 5.8-6.4' : kind === 'failed' ? 'M7 7l6 6 M13 7l-6 6' : 'M10 5.2v6.2 M10 14.7v.1';
+    return '<svg class="scene-sym scene-sym-' + kind + '" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="9.5"/><path d="' + fg + '"/></svg>';
+  }
 
   /** 人の番の帯（§N-3 1.）。att = floor.attention、errAt = 更新に失敗した時刻（HH:MM）か null */
   function floorBandHtml(att, errAt) {
@@ -472,102 +489,449 @@
       (errAt ? '<span class="floor-band-err">更新できませんでした（' + esc(errAt) + '）</span>' : '');
   }
 
-  /** 持ち場ごとのバッジ・補足・動き（§N-3 2.〜4.）。d = /api/floor の応答 */
-  function floorStationModel(d) {
-    var s = (d && d.stations) || {};
-    var it = s.intake || {}, mk = s.maker || {}, ck = s.clerk || {}, vf = s.verifier || {}, rv = s.reviewer || {}, lb = s.library || {};
-    var queue = (d && d.queue) || [];
-    var makingFailed = queue.filter(function (r) { return (r.steps || []).some(function (x) { return x.key === 'making' && x.state === 'failed'; }); }).length;
-    var making = Math.max(0, Number(mk.creating || 0) + Number(mk.running || 0) - Number(ck.ingesting || 0));
-    function b(text, cls, kind) { return { text: text, cls: cls, kind: kind }; }
-    var out = {};
-    out.intake = { badges: [], sub: '提案箱 ' + Number(it.proposed || 0) + ' 件' };
-    if (it.scout_running) out.intake.badges.push(b('収集中', 'orange', 'moving'));
-    if (it.meeting_pending) out.intake.badges.push(b('会議の結果待ち', 'orange', 'moving'));
-    out.maker = { badges: [], sub: Number(mk.queued || 0) > 0 ? '順番待ち ' + mk.queued : '' };
-    if (making > 0) out.maker.badges.push(b('制作中 ' + making + ' / ' + Number(mk.max_concurrent || 0), 'orange', 'moving'));
-    if (Number(mk.needs_answer || 0) > 0) out.maker.badges.push(b('回答待ち ' + mk.needs_answer, 'yellow', 'waiting'));
-    if (Number(mk.budget_reached || 0) > 0) out.maker.badges.push(b('予算の上限 ' + mk.budget_reached, 'yellow', 'waiting'));
-    if (makingFailed > 0) out.maker.badges.push(b('失敗 ' + makingFailed, 'red', 'failed'));
-    out.clerk = { badges: [], sub: '' };
-    if (Number(ck.ingesting || 0) > 0) out.clerk.badges.push(b('取り込み中', 'orange', 'moving'));
-    if (Number(ck.failed_invalid_outputs || 0) > 0) out.clerk.badges.push(b('失敗 ' + ck.failed_invalid_outputs, 'red', 'failed'));
-    out.verifier = { badges: [], sub: Number(vf.pending || 0) > 0 ? '順番待ち ' + vf.pending : '' };
-    if (Number(vf.running || 0) > 0) out.verifier.badges.push(b('検証中 ' + vf.running, 'orange', 'moving'));
-    if (Number(vf.failed || 0) > 0) out.verifier.badges.push(b('失敗 ' + vf.failed, 'red', 'failed'));
-    out.reviewer = { badges: [], sub: Number(rv.needs_review_total || 0) > 0 ? '要確認 合計 ' + rv.needs_review_total : '' };
-    if (Number(rv.waiting || 0) > 0) out.reviewer.badges.push(b('確認待ち ' + rv.waiting, 'yellow', 'waiting'));
-    out.library = { badges: [], sub: Number(lb.stopped || 0) > 0 ? '止めている ' + lb.stopped : '' };
-    if (Number(lb.available || 0) > 0) out.library.badges.push(b('利用できる ' + lb.available, 'green', 'stock'));
-    FLOOR_STATIONS.forEach(function (st) {
-      var m = out[st.key];
-      m.moving = m.badges.some(function (x) { return x.kind === 'moving'; });
-      m.waiting = m.badges.some(function (x) { return x.kind === 'waiting'; });
-      // 右隣に流れてくる物: この持ち場の工程が active / waiting の行がある
-      m.inflow = m.moving || m.waiting || queue.some(function (r) {
-        return (r.steps || []).some(function (x) { return st.steps.indexOf(x.key) >= 0 && (x.state === 'active' || x.state === 'waiting'); });
-      });
-    });
-    return out;
+  // ---- 場面（§N-6-1〜§N-6-4）----
+  var SCENE_W = 1706, SCENE_H = 600;
+  function pctX(x) { return (x / SCENE_W * 100) + '%'; }
+  function pctY(y) { return (y / SCENE_H * 100) + '%'; }
+  function placeCenter(el, xy) { el.style.left = pctX(xy[0]); el.style.top = pctY(xy[1]); }
+  function placeBox(el, x, y, w, h) { el.style.left = pctX(x); el.style.top = pctY(y); el.style.width = pctX(w); el.style.height = pctY(h); }
+  function cubicD(a) { return 'M' + a.from.join(' ') + ' C' + a.c1.join(' ') + ' ' + a.c2.join(' ') + ' ' + a.end.join(' '); }
+  function cubicLen(a) {
+    var len = 0, px = a.from[0], py = a.from[1];
+    for (var i = 1; i <= 24; i++) {
+      var t = i / 24, u = 1 - t;
+      var x = u * u * u * a.from[0] + 3 * u * u * t * a.c1[0] + 3 * u * t * t * a.c2[0] + t * t * t * a.end[0];
+      var y = u * u * u * a.from[1] + 3 * u * u * t * a.c1[1] + 3 * u * t * t * a.c2[1] + t * t * t * a.end[1];
+      len += Math.sqrt((x - px) * (x - px) + (y - py) * (y - py));
+      px = x; py = y;
+    }
+    return len;
   }
-  function floorBadgesHtml(m) {
-    if (!m.badges.length) return pill('待機', 'gray');
-    return m.badges.map(function (x) {
-      return '<span class="pill ' + x.cls + (x.kind === 'waiting' ? ' floor-pulse' : '') + '">' + (x.kind === 'moving' ? ringHtml() : '') + esc(x.text) + '</span>';
-    }).join(' ');
+  /** 矢じり（終点の向き = c2 → end）。開いた山形、角丸 */
+  function arrowHeadD(a) {
+    var dx = a.end[0] - a.c2[0], dy = a.end[1] - a.c2[1];
+    var l = Math.sqrt(dx * dx + dy * dy) || 1;
+    dx /= l; dy /= l;
+    var back = 15, wing = 11;
+    var bx = a.end[0] - dx * back, by = a.end[1] - dy * back;
+    var r = function (n) { return Math.round(n * 10) / 10; };
+    return 'M' + r(bx - dy * wing) + ' ' + r(by + dx * wing) + ' L' + a.end.join(' ') + ' L' + r(bx + dy * wing) + ' ' + r(by - dx * wing);
   }
-  function floorArrowSvg(key) {
-    return '<svg class="floor-arrow" data-arrow="' + esc(key) + '" viewBox="0 0 36 24" width="36" height="24" aria-hidden="true" focusable="false">' +
-      '<line class="floor-dash" x1="2" y1="12" x2="27" y2="12"/><path class="floor-head" d="M25 6 L33 12 L25 18"/></svg>';
+  function sceneArrowsSvg(S) {
+    return '<svg class="scene-arrows" viewBox="0 0 ' + SCENE_W + ' ' + SCENE_H + '" aria-hidden="true" focusable="false">' + S.arrows.map(function (a) {
+      var d = cubicD(a), id = 'scene-arrow-p-' + a.id, len = cubicLen(a);
+      var dur = Math.max(1.2, len / 95);
+      var dots = len < 100 ? [] : len > 220 ? [0, dur / 2] : [0]; // 短い矢印には点を出さない
+      return '<g class="scene-arrow' + (a.dashed ? ' dashed' : '') + '" data-arrow="' + esc(a.id) + '">' +
+        '<path class="scene-arrow-glow" d="' + d + '"/><path class="scene-arrow-glow" d="' + arrowHeadD(a) + '"/>' +
+        '<path class="scene-arrow-line" id="' + id + '" d="' + d + '"/><path class="scene-arrow-sheen" d="' + d + '"/>' +
+        '<path class="scene-arrow-head" d="' + arrowHeadD(a) + '"/>' +
+        '<g class="scene-arrow-dots">' + dots.map(function (b) {
+          return '<circle class="scene-arrow-dot" r="4" cx="0" cy="0"><animateMotion dur="' + dur.toFixed(2) + 's" begin="' + (-b).toFixed(2) + 's" repeatCount="indefinite" keyPoints="0;1" keyTimes="0;1" calcMode="linear"><mpath href="#' + id + '"/></animateMotion></circle>';
+        }).join('') + '</g></g>';
+    }).join('') + '</svg>';
   }
 
-  /** 工程チップ 7 個（§N-3 5.）。チップ間の矢印は active の直前だけ流れる */
-  function floorChipsHtml(steps) {
-    return '<div class="floor-chips">' + (steps || []).map(function (s, i) {
-      var arrow = i === 0 ? '' : '<svg class="floor-carrow' + (s.state === 'active' ? ' flowing' : '') + '" viewBox="0 0 14 10" width="14" height="10" aria-hidden="true" focusable="false"><line class="floor-dash" x1="1" y1="5" x2="9" y2="5"/><path d="M8 2 L12 5 L8 8"/></svg>';
-      var icon = s.state === 'active' ? ringHtml() : FLOOR_STATE_ICON[s.state] ? '<span class="floor-icon" aria-hidden="true">' + FLOOR_STATE_ICON[s.state] + '</span>' : '';
-      var showDetail = s.detail && (s.state === 'active' || s.state === 'waiting' || s.state === 'failed' || s.key === 'publish');
-      var title = s.label + '：' + (FLOOR_STATE_LABEL[s.state] || s.state) + (s.detail ? '（' + s.detail + '）' : '');
-      return arrow + '<span class="floor-chip ' + esc(s.state) + '" data-step="' + esc(s.key) + '" title="' + esc(title) + '" aria-label="' + esc(title) + '">' + icon +
-        esc(s.label) + (showDetail ? '<small>' + esc(s.detail) + '</small>' : '') + '</span>';
+  // キャラ（§N-6-1）: svg は fetch → DOMParser で解析・無害化して inline（部位の class に CSS が効く）、png は <img>。読めなければ丸いキャラの inline SVG
+  var FALLBACK_CHAR_SVG = '<svg class="ch-svg" viewBox="0 0 200 200" aria-hidden="true" focusable="false" fill="none" stroke-linejoin="round" stroke-linecap="round">' +
+    '<g class="ch-body"><path d="M44 146 C34 116 52 86 88 84 C122 82 141 104 138 134 C137 152 128 164 114 168 C110 176 102 182 94 180 C88 178 84 174 80 172 C72 176 62 175 58 168 C48 164 44 156 44 146 Z" fill="#ffffff" stroke="#1c1c22" stroke-width="6"/>' +
+    '<path d="M50 148 C52 160 60 166 70 166 C64 158 58 150 56 138 Z" fill="#eeedf4"/>' +
+    '<g class="ch-eyes"><ellipse cx="100" cy="134" rx="4.6" ry="8" fill="#1c1c22"/><ellipse cx="98.7" cy="130.4" rx="1.4" ry="1.9" fill="#fff"/><ellipse cx="121" cy="131" rx="4.6" ry="8" fill="#1c1c22"/><ellipse cx="119.7" cy="127.4" rx="1.4" ry="1.9" fill="#fff"/></g>' +
+    '<g class="ch-hands"><ellipse cx="131" cy="168" rx="6" ry="4.6" fill="#ffffff" stroke="#1c1c22" stroke-width="4.2"/></g></g>' +
+    '<g class="ch-laptop"><path d="M102 175 L134 189 L186 173 L182 165 Z" fill="#5b5f6b" stroke="#1c1c22" stroke-width="4.5"/><path d="M138 139 L186 116 L182 166 L132 180 Z" fill="#4d515c" stroke="#1c1c22" stroke-width="5"/><path d="M143 145 L180 127 L177 160 L140 170 Z" fill="#5a5e6a"/></g></svg>';
+  var charCache = {}; // キャラ id → { mode: 'svg'|'img'|'fallback', url, root?, promise }
+  /**
+   * 自サイトのキャラ SVG を解析して無害化する（許可リスト。規則は floor-scene.js の charSvgElementAllowed / charSvgAttrAllowed）。
+   * 許可した要素・属性だけを残し、それ以外は中身ごと削除する。style 属性・<style> は残さない。読めなければ null
+   */
+  function sanitizeCharSvg(text) {
+    var S = floorScene();
+    if (!S || typeof DOMParser === 'undefined' || !text || text.length > 300000) return null;
+    // 解析の前に on* / style 属性と <style> を落としておく（CSP の違反報告が出ないようにするだけ。安全の担保は下の許可リスト）
+    text = String(text).replace(/<style[\s\S]*?<\/style\s*>/gi, '').replace(/\s(?:on[a-z]+|style)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+    var doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+    var svg = doc.documentElement;
+    if (!svg || svg.namespaceURI !== SVGNS || svg.localName !== 'svg' || doc.getElementsByTagName('parsererror').length) return null;
+    function clean(el) {
+      Array.prototype.slice.call(el.childNodes).forEach(function (n) {
+        if (n.nodeType === 3) return; // 文字（空白）はそのまま
+        if (n.nodeType !== 1 || n.namespaceURI !== SVGNS || !S.charSvgElementAllowed(n.localName)) { el.removeChild(n); return; }
+        clean(n);
+      });
+      Array.prototype.slice.call(el.attributes).forEach(function (a) {
+        if (a.namespaceURI || !S.charSvgAttrAllowed(a.name, a.value)) el.removeAttributeNode(a);
+      });
+    }
+    clean(svg);
+    return svg;
+  }
+  function loadChar(id) {
+    var c = charCache[id];
+    if (c) return c.promise;
+    var S = floorScene();
+    var ext = S && S.CHAR_EXT === 'png' ? 'png' : 'svg';
+    c = charCache[id] = { mode: null, url: '/admin/img/chars/char-' + id + '.' + ext };
+    if (ext === 'png' || typeof fetch !== 'function') { c.mode = 'img'; c.promise = Promise.resolve(c); return c.promise; }
+    c.promise = fetch(c.url, { credentials: 'same-origin' }).then(function (r) {
+      if (!r.ok) throw new Error('http_' + r.status);
+      return r.text();
+    }).then(function (text) {
+      var root = sanitizeCharSvg(text);
+      if (root) { c.mode = 'svg'; c.root = root; } else c.mode = 'fallback';
+      return c;
+    }).catch(function () { c.mode = 'fallback'; return c; });
+    return c.promise;
+  }
+  function mountFallbackChar(holder) { holder.innerHTML = FALLBACK_CHAR_SVG; holder.setAttribute('data-ch-mode', 'fallback'); }
+  function mountChar(holder, id) {
+    loadChar(id).then(function (c) {
+      if (!holder.isConnected) return;
+      if (c.mode === 'svg' && c.root) {
+        var node = document.importNode(c.root, true);
+        node.removeAttribute('width');
+        node.removeAttribute('height');
+        node.setAttribute('class', 'ch-svg');
+        node.setAttribute('aria-hidden', 'true');
+        node.setAttribute('focusable', 'false');
+        holder.textContent = '';
+        holder.appendChild(node);
+        holder.setAttribute('data-ch-mode', 'svg');
+      } else if (c.mode === 'img') {
+        var img = document.createElement('img');
+        img.className = 'ch-img';
+        img.alt = '';
+        img.onerror = function () { c.mode = 'fallback'; if (holder.isConnected) mountFallbackChar(holder); };
+        img.src = c.url;
+        holder.textContent = '';
+        holder.appendChild(img);
+        holder.setAttribute('data-ch-mode', 'img');
+      } else mountFallbackChar(holder);
+    });
+  }
+
+  /** 場面の骨組み（1 回だけ作る。状態は renderScene が class と札の中身で反映する） */
+  function buildScene(el) {
+    var S = floorScene();
+    if (!S) { el.innerHTML = ''; return; }
+    var SC = S.SCENE;
+    el.innerHTML = sceneArrowsSvg(SC);
+    var drop = SC.charDrop;
+    SC.stations.forEach(function (st, si) {
+      var main = st.chars[0];
+      // クリック範囲（anchor 中心の楕円。キャラが 2 体なら 2 体の足元の中点）
+      var cx = 0, cy = 0;
+      st.chars.forEach(function (c) { cx += c.anchor[0]; cy += c.anchor[1]; });
+      cx /= st.chars.length; cy /= st.chars.length;
+      var hit = document.createElement('button');
+      hit.type = 'button';
+      hit.className = 'scene-hit';
+      hit.setAttribute('data-st', st.id);
+      hit.setAttribute('aria-pressed', 'false');
+      hit.setAttribute('aria-describedby', 'scene-pill-' + st.id);
+      hit.innerHTML = '<span class="sr-only">' + esc(st.name) + '</span>';
+      placeBox(hit, cx - st.hit[0] / 2, cy - st.hit[1] / 2, st.hit[0], st.hit[1]);
+      el.appendChild(hit);
+      var glow = document.createElement('div');
+      glow.className = 'scene-glow';
+      glow.setAttribute('data-st', st.id);
+      glow.setAttribute('aria-hidden', 'true');
+      placeBox(glow, cx - st.hit[0] / 2, cy + 8 - st.hit[0] / 4, st.hit[0], st.hit[0] / 2);
+      el.appendChild(glow);
+      // キャラ
+      st.chars.forEach(function (c, ci) {
+        var h = document.createElement('div');
+        h.className = 'scene-char' + (c.flip ? ' flip' : '');
+        h.setAttribute('data-st', st.id);
+        h.setAttribute('data-char', c.id);
+        var fx = typeof c.footX === 'number' ? c.footX : 0.5;
+        placeBox(h, c.anchor[0] - c.size * fx, c.anchor[1] + c.size * drop - c.size, c.size, c.size);
+        // 瞬きはキャラごとに周期と遅延をずらす（5〜7 秒に 1 回）
+        var k = si * 2 + ci;
+        h.style.setProperty('--blink-dur', (5 + (k % 5) * 0.5) + 's');
+        h.style.setProperty('--blink-delay', (-(k * 1.7) % 6).toFixed(1) + 's');
+        el.appendChild(h);
+        mountChar(h, c.id);
+      });
+      // 机の上の光の粒（動いている時だけ見える）と、人の番の「!」の吹き出し
+      var spark = document.createElement('div');
+      spark.className = 'scene-spark';
+      spark.setAttribute('data-st', st.id);
+      spark.setAttribute('aria-hidden', 'true');
+      spark.innerHTML = '<i></i><i></i><i></i>';
+      placeCenter(spark, [main.anchor[0] + main.size * 0.3, main.anchor[1] - main.size * 0.3]);
+      el.appendChild(spark);
+      var alert = document.createElement('div');
+      alert.className = 'scene-alert';
+      alert.setAttribute('data-st', st.id);
+      alert.setAttribute('aria-hidden', 'true');
+      alert.textContent = '!';
+      placeCenter(alert, [main.anchor[0] - main.size * 0.08, main.anchor[1] - main.size * 0.66]);
+      el.appendChild(alert);
+      if (st.bubble) {
+        var bub = document.createElement('div');
+        bub.className = 'scene-bubble';
+        bub.setAttribute('data-st', st.id);
+        bub.setAttribute('aria-hidden', 'true');
+        bub.innerHTML = iconSvg('menu');
+        placeCenter(bub, st.bubble);
+        el.appendChild(bub);
+      }
+      // 名札（本線 5 つ）
+      if (st.tag) {
+        var tag = document.createElement('div');
+        tag.className = 'scene-pos scene-tag-pos';
+        tag.setAttribute('data-st', st.id);
+        tag.innerHTML = '<div class="scene-tag">' + (st.icon ? iconSvg(st.icon) : '') + '<span>' + esc(st.name) + '</span></div>';
+        placeCenter(tag, st.tag);
+        el.appendChild(tag);
+      }
+      // 状態札
+      var pillPos = document.createElement('div');
+      pillPos.className = 'scene-pos scene-pill-pos';
+      pillPos.setAttribute('data-st', st.id);
+      pillPos.innerHTML = '<div class="scene-pill idle' + (st.branch ? ' branch' : '') + '" id="scene-pill-' + esc(st.id) + '"><span class="scene-pill-text"><span class="scene-pill-main">' + esc(st.branch ? st.name : '…') + '</span></span></div>';
+      placeCenter(pillPos, st.pill);
+      el.appendChild(pillPos);
+    });
+  }
+
+  function scenePillInner(st, x) {
+    var branchIdle = st.branch && x.kind === 'idle';
+    var sym = x.kind === 'moving' ? '<span class="scene-ring' + (x.spin === false ? ' still' : '') + '" aria-hidden="true"></span>'
+      : x.kind === 'done' ? symHtml('done') : x.kind === 'human' ? symHtml('waiting') : x.kind === 'failed' ? symHtml('failed') : '';
+    var subs = '';
+    if (x.text2) subs += '<span class="scene-pill-sub">・' + esc(x.text2) + '</span>';
+    if (st.back && x.kind === 'moving') subs += '<span class="scene-pill-sub">・↩ 職人へ</span>';
+    var bar = typeof x.bar === 'number' ? '<progress class="scene-pill-bar" max="100" value="' + Math.max(0, Math.min(100, x.bar)) + '" aria-label="進み具合 ' + Math.round(x.bar) + '%"></progress>' : '';
+    return sym + '<span class="scene-pill-text"><span class="scene-pill-line"><span class="scene-pill-main">' + esc(branchIdle ? st.name : x.text) + '</span>' + subs + '</span>' + bar + '</span>';
+  }
+  function bump(el) {
+    if (!el) return;
+    el.classList.remove('jump');
+    void el.offsetWidth;
+    el.classList.add('jump');
+    setTimeout(function () { el.classList.remove('jump'); }, 700);
+  }
+  /** 状態を場面に反映する（札・キャラの動き・矢印・絞り込みの押下） */
+  function renderScene(d) {
+    var S = floorScene();
+    var root = $('#scene');
+    if (!S || !root) return;
+    var states = S.stationStates(d);
+    var prev = floor.prevSt;
+    var next = {};
+    S.SCENE.stations.forEach(function (st) {
+      var x = states[st.id] || { kind: 'idle', text: '待機' };
+      var key = x.kind + '|' + x.text + '|' + (x.text2 || ''); // 変わったら 1 回跳ねる
+      var htmlKey = key + '|' + (typeof x.bar === 'number' ? x.bar : '') + '|' + (x.spin === false ? 0 : 1);
+      next[st.id] = key;
+      var pillEl = root.querySelector('#scene-pill-' + st.id);
+      if (pillEl) {
+        if (pillEl.getAttribute('data-html') !== htmlKey) {
+          pillEl.innerHTML = scenePillInner(st, x);
+          pillEl.setAttribute('data-html', htmlKey);
+        }
+        pillEl.className = 'scene-pill ' + x.kind + (st.branch ? ' branch' : '') + (floor.filter === st.id ? ' on' : '');
+      }
+      Array.prototype.forEach.call(root.querySelectorAll('[data-st="' + st.id + '"]'), function (n) {
+        if (n.classList.contains('scene-char')) {
+          n.classList.toggle('is-moving', x.kind === 'moving');
+          n.classList.toggle('is-human', x.kind === 'human');
+        } else if (n.classList.contains('scene-hit')) {
+          n.setAttribute('aria-pressed', floor.filter === st.id ? 'true' : 'false');
+        } else if (n.classList.contains('scene-spark')) n.classList.toggle('on', x.kind === 'moving' && x.spin !== false);
+        else if (n.classList.contains('scene-alert')) n.classList.toggle('on', x.kind === 'human');
+        else if (n.classList.contains('scene-bubble')) n.classList.toggle('on', x.kind === 'moving');
+        else if (n.classList.contains('scene-glow')) n.classList.toggle('on', floor.filter === st.id);
+        else if (n.classList.contains('scene-tag-pos')) n.firstChild.classList.toggle('on', floor.filter === st.id);
+      });
+      if (prev && prev[st.id] !== undefined && prev[st.id] !== key) {
+        bump(pillEl);
+        Array.prototype.forEach.call(root.querySelectorAll('.scene-char[data-st="' + st.id + '"]'), bump);
+      }
+    });
+    floor.prevSt = next;
+    S.SCENE.arrows.forEach(function (a) {
+      var g = root.querySelector('[data-arrow="' + a.id + '"]');
+      if (g) g.classList.toggle('flowing', S.arrowFlowing(a, states));
+    });
+    clampScenePills();
+    autoScrollScene(states);
+  }
+  /** 札が場面の端からはみ出す時は内側へ寄せる（札の文が長い持ち場・狭い幅のため。座標は SCENE のまま） */
+  function clampScenePills() {
+    var root = $('#scene');
+    if (!root) return;
+    var box = root.getBoundingClientRect();
+    if (!box.width) return;
+    var pad = box.width * 0.006;
+    Array.prototype.forEach.call(root.querySelectorAll('.scene-pill-pos, .scene-tag-pos'), function (el) {
+      el.style.marginLeft = '0px';
+      var r = el.getBoundingClientRect();
+      var shift = 0;
+      if (r.right > box.right - pad) shift = box.right - pad - r.right;
+      else if (r.left < box.left + pad) shift = box.left + pad - r.left;
+      if (shift) el.style.marginLeft = Math.round(shift) + 'px';
+    });
+  }
+  /**
+   * 880px 未満で場面が横スクロールになる時、最初の「人の番」か「失敗」の持ち場が見える位置まで横に送る（§N-6 差し戻し B12）。
+   * 人が一度でもスクロールしたら以後は動かさない（floor.userScrolled）
+   */
+  function autoScrollScene(states) {
+    var S = floorScene();
+    var sc = $('#scene-scroll');
+    var root = $('#scene');
+    if (!S || !sc || !root || floor.userScrolled || sc.scrollWidth <= sc.clientWidth + 1) return;
+    var st = S.SCENE.stations.filter(function (x) { var k = states[x.id] && states[x.id].kind; return k === 'human' || k === 'failed'; })[0];
+    if (!st) return;
+    var x = st.pill[0] / SCENE_W * root.offsetWidth;
+    var left = Math.max(0, Math.min(sc.scrollWidth - sc.clientWidth, Math.round(x - sc.clientWidth / 2)));
+    if (Math.abs(sc.scrollLeft - left) < 2) return;
+    floor.autoScrollAt = Date.now();
+    sc.scrollLeft = left;
+  }
+  function onSceneScroll() {
+    if (Date.now() - (floor.autoScrollAt || 0) > 400) floor.userScrolled = true; // 自動で送った直後のスクロール通知は人の操作に数えない
+  }
+  function stationName(id) {
+    var S = floorScene();
+    var st = S ? S.SCENE.stations.filter(function (x) { return x.id === id; })[0] : null;
+    return st ? st.filterName || st.name : id;
+  }
+  function renderFilterChip() {
+    var b = $('#scene-filter');
+    if (!b) return;
+    if (!floor.filter) { b.classList.add('hidden'); b.textContent = ''; return; }
+    b.classList.remove('hidden');
+    b.innerHTML = esc(stationName(floor.filter) + 'にいる素材だけ表示中') + ' <span class="scene-filter-x" aria-hidden="true">✕</span>';
+    b.setAttribute('aria-label', stationName(floor.filter) + 'にいる素材だけ表示中。押すと絞り込みを解除します');
+  }
+  function setFloorFilter(id) {
+    floor.filter = id && floor.filter !== id ? id : null;
+    renderFilterChip();
+    if (floor.data) { renderScene(floor.data); renderQueue(floor.data, false); }
+  }
+
+  // ---- 制作キュー（§N-3 5. の中身・リンク、§N-6-5 の見た目）----
+  function stepTitle(s) { return s.label + '：' + (FLOOR_STATE_LABEL[s.state] || s.state) + (s.detail ? '（' + s.detail + '）' : ''); }
+  function chipArrowHtml(kind, flowing) {
+    return '<svg class="fq-arr ' + kind + (flowing ? ' flow' : '') + '" viewBox="0 0 20 12" aria-hidden="true" focusable="false"><path class="fq-arr-l" d="M2 6H15"/>' +
+      (flowing ? '<path class="fq-arr-f" d="M2 6H15"/>' : '') + '<path class="fq-arr-h" d="M12 2.6L16 6L12 9.4"/></svg>';
+  }
+  function chipInner(s) {
+    var icon = s.state === 'done' || s.state === 'active' || s.state === 'waiting' || s.state === 'failed' ? symHtml(s.state) : iconSvg(STEP_ICON[s.key] || 'order', 'fq-step-ic');
+    return icon + '<span class="fq-chip-t">' + esc(s.label) + '</span>';
+  }
+  /** 工程チップ 7 個（§N-6-5）。row を渡すと rework の行の「注文」を二段の分岐にする */
+  function floorChipsHtml(steps, row) {
+    var S = floorScene();
+    var job = row && row.job;
+    steps = steps || [];
+    return '<div class="fq-chips">' + steps.map(function (s, i) {
+      var arrow = '';
+      if (i > 0) {
+        var kind = S ? S.chipArrowKind(steps[i - 1].state, s.state) : 'todo';
+        arrow = chipArrowHtml(kind, s.state === 'active');
+      }
+      var title = stepTitle(s);
+      if (i === 0 && job && job.kind === 'rework') {
+        var top = '前の版' + (job.parent_version !== null && job.parent_version !== undefined ? ' v' + job.parent_version : '');
+        var bottom = job.auto_rework ? '自動の差し戻し' : '差し戻し';
+        return '<span class="fq-step fq-step-fork"><span class="floor-chip fq-chip fq-fork ' + esc(s.state) + '" data-step="' + esc(s.key) + '" title="' + esc(title + '・' + top + '・' + bottom) + '" aria-label="' + esc(title + '・' + top + '・' + bottom) + '">' +
+          '<span class="fq-fork-col"><span class="fq-sub">' + symHtml('done') + '<span class="fq-chip-t">' + esc(top) + '</span></span>' +
+          '<span class="fq-sub">' + symHtml('done') + '<span class="fq-chip-t">' + esc(bottom) + '</span></span></span>' +
+          '<svg class="fq-brace" viewBox="0 0 20 60" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path d="M0 15 C11 15 7 30 20 30 M0 45 C11 45 7 30 20 30"/></svg></span></span>';
+      }
+      return '<span class="fq-step">' + arrow + '<span class="floor-chip fq-chip ' + esc(s.state) + '" data-step="' + esc(s.key) + '" title="' + esc(title) + '" aria-label="' + esc(title) + '">' + chipInner(s) + '</span></span>';
     }).join('') + '</div>';
   }
   function floorRowStatusHtml(r) {
-    if (r.attention) return pill(FLOOR_ATT_LABEL[r.attention] || r.attention, r.attention === 'failed' ? 'red' : 'yellow');
     var steps = r.steps || [];
-    if (steps.some(function (x) { return x.state === 'active'; })) return pill('稼働中', 'green');
-    if (r.job && r.job.status === 'queued') return pill('順番待ち', 'gray');
-    return pill('終了', 'gray');
+    var a = r.attention;
+    if (a === 'failed') return '<span class="fq-st failed">' + symHtml('failed') + '失敗</span>';
+    if (a) return '<span class="fq-st waiting">' + symHtml('waiting') + esc(FLOOR_ATT_LABEL[a] || a) + '</span>';
+    if (steps.some(function (x) { return x.state === 'active'; })) return '<span class="fq-st running">' + iconSvg('tri', 'fq-st-ic') + '稼働中</span>';
+    if (r.job && r.job.status === 'queued') return '<span class="fq-st ended">順番待ち</span>';
+    return '<span class="fq-st ended">終了</span>';
   }
   function floorOpHtml(r) {
     var m = r.material || {}, j = r.job, v = r.version;
-    if (r.attention === 'answer' && j) return '<a class="btn small primary" href="#/job/' + esc(j.id) + '">回答する</a>';
-    if (r.attention === 'review' && v) return '<a class="btn small primary" href="#/review/' + esc(v.id) + '">確認する</a>';
-    if (r.attention === 'failed' && j && j.status === 'failed' && j.error === 'invalid_outputs') return '<a class="btn small" href="#/job/' + esc(j.id) + '">取り込みをやり直す</a>';
-    return '<a class="btn small" href="#/material/' + esc(m.id) + '">詳細</a>';
+    if (r.attention === 'answer' && j) return '<a class="fq-op primary" href="#/job/' + esc(j.id) + '">回答する</a>';
+    if (r.attention === 'review' && v) return '<a class="fq-op primary" href="#/review/' + esc(v.id) + '">確認する</a>';
+    if (r.attention === 'failed' && j && j.status === 'failed' && j.error === 'invalid_outputs') return '<a class="fq-op" href="#/job/' + esc(j.id) + '">取り込みをやり直す</a>';
+    return '<a class="fq-op" href="#/material/' + esc(m.id) + '">詳細</a>';
   }
-  /** 制作キューの表（0 件なら案内） */
-  function floorQueueHtml(queue) {
-    queue = queue || [];
-    if (!queue.length) {
-      return '<p class="floor-empty">動いている素材はありません。新しい素材を注文するか、提案箱から採択してください</p>' +
-        '<div class="row"><a class="btn primary" href="#/new">新しい素材を注文する</a><a class="btn" href="#/proposals">提案箱を見る</a></div>';
+  function kindIconHtml(kinds) {
+    kinds = Array.isArray(kinds) ? kinds.map(Number) : [];
+    var has3 = kinds.indexOf(3) >= 0, has4 = kinds.indexOf(4) >= 0;
+    var label = kinds.length ? kinds.map(function (k) { return k === 3 ? '型 3（文書）' : k === 4 ? '型 4（操作できるもの）' : '型 ' + k; }).join('・') : '型なし';
+    return '<span class="fq-kind" title="' + esc(label) + '"><span class="sr-only">' + esc(label) + '</span>' + iconSvg(has4 && !has3 ? 'app' : 'doc') + (has3 && has4 ? iconSvg('app', 'scene-ic-sub') : '') + '</span>';
+  }
+  function floorDetailHtml(r) {
+    var m = r.material || {}, j = r.job, v = r.version;
+    var steps = (r.steps || []).map(function (s) {
+      return '<li class="' + esc(s.state) + '"><b>' + esc(s.label) + '</b> ' + esc(FLOOR_STATE_LABEL[s.state] || s.state) + (s.detail ? '・' + esc(s.detail) : '') + '</li>';
+    }).join('');
+    var facts = [];
+    facts.push('<div><dt>slug</dt><dd>' + esc(m.slug || '—') + '</dd></div>');
+    if (j) {
+      facts.push('<div><dt>職人の作業</dt><dd>' + esc((j.kind === 'rework' ? (j.auto_rework ? '自動の作り直し' : '作り直し') : '注文') + '・' + (JOB_LABEL[j.status] || j.status)) +
+        (j.kind === 'rework' && j.parent_version !== null && j.parent_version !== undefined ? '（前の版 v' + esc(j.parent_version) + '）' : '') + '</dd></div>');
+      if (j.last_error || j.error) facts.push('<div><dt>最後のエラー</dt><dd class="err">' + esc(j.last_error || j.error) + '</dd></div>');
     }
-    return '<div class="table-wrap"><table class="floor-table"><thead><tr><th>題名</th><th>工程</th><th>進捗</th><th>状態</th><th>操作</th></tr></thead><tbody>' +
-      queue.map(function (r) {
+    if (v) {
+      facts.push('<div><dt>版</dt><dd>v' + esc(v.version) + '・' + esc(v.status) + '</dd></div>');
+      if (v.needs_review !== null && v.needs_review !== undefined) facts.push('<div><dt>要確認</dt><dd>' + esc(v.needs_review) + ' 件' + (v.auto_ok !== null && v.auto_ok !== undefined ? '（自動で OK ' + esc(v.auto_ok) + ' 項目）' : '') + '</dd></div>');
+    }
+    var links = ['<a href="#/material/' + esc(m.id) + '">素材の詳細</a>'];
+    if (j) links.push('<a href="#/job/' + esc(j.id) + '">職人の作業</a>');
+    if (v && v.status === 'review') links.push('<a href="#/review/' + esc(v.id) + '">確認画面</a>');
+    return '<div class="fq-detail-in"><ul class="fq-detail-steps">' + steps + '</ul><dl class="fq-facts">' + facts.join('') + '</dl><p class="fq-links">' + links.join('') + '</p></div>';
+  }
+  var FQ_ORDER_NOTE = '並び順: あなたの番（回答待ち・確認待ち・失敗・予算の上限）→ 動いている → 24 時間以内に終わった。同じまとまりの中は更新の新しい順（最大 100 件）。' +
+    '▶ で工程ごとの詳細を開きます。場面の持ち場を押すと、その持ち場にいる素材だけを表示します。';
+  /** 見出し「≡ 制作キュー（N件）」と右端の「…」（並び順の説明を出す小さなポップオーバー） */
+  function fqHeadHtml(count, menuOpen) {
+    return '<div class="fq-head">' + iconSvg('menu', 'fq-menu') + '<h2 id="fq-h">制作キュー' + (count === null ? '' : '<span class="fq-count">（' + count + '件）</span>') + '</h2>' +
+      '<div class="fq-more"><button type="button" class="fq-more-btn" data-fq-menu="1" aria-expanded="' + (menuOpen ? 'true' : 'false') + '" aria-controls="fq-more-pop" aria-label="表の並び順の説明">' +
+      '<span aria-hidden="true">…</span></button><div id="fq-more-pop" class="fq-pop" role="note"' + (menuOpen ? '' : ' hidden') + '>' + esc(FQ_ORDER_NOTE) + '</div></div></div>';
+  }
+  /** 制作キュー（見出し + 表）。opts = { filter: 持ち場 id | null, open: { 素材 id: true }, menuOpen }。0 件なら案内 */
+  function floorQueueHtml(queue, opts) {
+    opts = opts || {};
+    queue = queue || [];
+    var S = floorScene();
+    var rows = opts.filter && S ? queue.filter(function (r) { return S.rowStations(r).indexOf(opts.filter) >= 0; }) : queue;
+    var head = fqHeadHtml(rows.length, !!opts.menuOpen);
+    if (!queue.length) {
+      return head + '<div class="fq-empty"><p>動いている素材はありません。新しい素材を注文するか、提案箱から採択してください</p>' +
+        '<div class="row"><a class="btn primary" href="#/new">新しい素材を注文する</a><a class="btn" href="#/proposals">提案箱を見る</a></div></div>';
+    }
+    if (!rows.length) {
+      return head + '<div class="fq-empty"><p>' + esc(stationName(opts.filter)) + 'にいる素材はありません</p><button type="button" class="btn" data-fq-clear="1">絞り込みを解除</button></div>';
+    }
+    var open = opts.open || {};
+    return head + '<div class="fq-wrap"><table class="fq-table"><colgroup><col class="fq-c-name"><col class="fq-c-steps"><col class="fq-c-prog"><col class="fq-c-status"><col class="fq-c-op"></colgroup><thead><tr><th scope="col">コンテンツ名</th><th scope="col">進行状況（制作ステップ）</th><th scope="col">進捗</th><th scope="col">ステータス</th><th scope="col">操作</th></tr></thead><tbody>' +
+      rows.map(function (r) {
         var m = r.material || {}, v = r.version;
         var pct = Math.max(0, Math.min(100, Number(r.progress_pct || 0)));
-        return '<tr data-floor-row="' + esc(m.id) + '"' + (r.attention ? ' data-floor-att="' + esc(r.attention) + '"' : '') + '>' +
-          '<td class="floor-title"><a href="#/material/' + esc(m.id) + '">' + esc(m.title) + '</a><div class="muted floor-meta">' + esc(m.slug) + (v ? ' ・ v' + esc(v.version) : '') + '</div></td>' +
-          '<td>' + floorChipsHtml(r.steps) + '</td>' +
-          '<td class="floor-prog"><progress class="floor-bar" max="100" value="' + pct + '" aria-label="進捗 ' + pct + '%"></progress><span>' + pct + '%</span></td>' +
-          '<td>' + floorRowStatusHtml(r) + '</td>' +
-          '<td>' + floorOpHtml(r) + '</td></tr>';
+        var isOpen = !!open[m.id];
+        var did = 'fq-d-' + esc(m.id);
+        return '<tr class="fq-row' + (r.attention ? ' att' : '') + (isOpen ? ' open' : '') + '" data-floor-row="' + esc(m.id) + '"' + (r.attention ? ' data-floor-att="' + esc(r.attention) + '"' : '') + '>' +
+          '<td class="fq-name"><div class="fq-name-in"><button type="button" class="fq-toggle" data-fq-open="' + esc(m.id) + '" aria-expanded="' + (isOpen ? 'true' : 'false') + '"' + (isOpen ? ' aria-controls="' + did + '"' : '') + '>' +
+          iconSvg('tri') + '<span class="sr-only">' + (isOpen ? '詳細を閉じる' : '詳細を開く') + '</span></button>' + kindIconHtml(m.kinds) +
+          '<a class="fq-title" href="#/material/' + esc(m.id) + '">' + esc(m.title) + '</a>' + (v ? '<span class="fq-ver">v' + esc(v.version) + '</span>' : '') + '</div></td>' +
+          '<td class="fq-steps">' + floorChipsHtml(r.steps, r) + '</td>' +
+          '<td class="fq-prog"><div class="fq-prog-in"><progress class="fq-bar" max="100" value="' + pct + '" aria-label="進捗 ' + pct + '%"></progress><b>' + pct + '%</b></div></td>' +
+          '<td class="fq-status">' + floorRowStatusHtml(r) + '</td>' +
+          '<td class="fq-opcell">' + floorOpHtml(r) + '</td></tr>' +
+          (isOpen ? '<tr class="fq-detail' + (r.attention ? ' att' : '') + '" id="' + did + '" data-fq-detail="' + esc(m.id) + '"><td colspan="5">' + floorDetailHtml(r) + '</td></tr>' : '');
       }).join('') + '</tbody></table></div>';
   }
   function floorSkeletonHtml() {
     var row = '<div class="floor-skel"><i></i><i></i><i></i></div>';
-    return row + row + row;
+    return fqHeadHtml(null, false) + row + row + row;
   }
   function floorRowKey(r) { return (r.steps || []).map(function (x) { return x.state; }).join(','); }
 
@@ -578,19 +942,8 @@
     el.classList.add('flash');
     setTimeout(function () { el.classList.remove('flash'); }, 1500);
   }
-  function bindFloorChar(img) {
-    var key = img.getAttribute('data-char');
-    function swap() {
-      floorCharFailed[key] = true;
-      var holder = document.createElement('span');
-      holder.className = 'floor-char-wrap';
-      holder.innerHTML = FLOOR_CHAR_SVG;
-      if (img.parentNode) img.parentNode.replaceChild(holder.firstChild, img);
-    }
-    img.onerror = swap;
-    if (img.complete && img.naturalWidth === 0 && img.getAttribute('src')) swap();
-  }
 
+  function findAttRow(kind) { return document.querySelector('#floor-queue [data-floor-att="' + kind + '"]'); }
   function renderFloorBand() {
     var el = $('#floor-band');
     if (!el) return;
@@ -601,34 +954,22 @@
     el.innerHTML = html;
     Array.prototype.forEach.call(el.querySelectorAll('[data-floor-goto]'), function (btn) {
       btn.addEventListener('click', function () {
-        var row = document.querySelector('[data-floor-att="' + btn.getAttribute('data-floor-goto') + '"]');
+        var kind = btn.getAttribute('data-floor-goto');
+        var row = findAttRow(kind);
+        if (!row && floor.filter) { setFloorFilter(null); row = findAttRow(kind); } // 絞り込みで隠れていたら解除してから探す
         if (!row) return;
         row.scrollIntoView({ behavior: 'smooth', block: 'center' });
         floorFlash(row);
       });
     });
   }
-  function renderFloor(d) {
-    floor.data = d;
-    renderFloorBand();
-    var model = floorStationModel(d);
-    FLOOR_STATIONS.forEach(function (st, i) {
-      var card = document.querySelector('[data-station="' + st.key + '"]');
-      if (!card) return;
-      var m = model[st.key];
-      card.classList.toggle('moving', m.moving);
-      card.classList.toggle('waiting', m.waiting);
-      card.querySelector('.floor-badges').innerHTML = floorBadgesHtml(m);
-      card.querySelector('.floor-sub').textContent = m.sub || '';
-      if (i > 0) {
-        var ar = document.querySelector('[data-arrow="' + st.key + '"]');
-        if (ar) ar.classList.toggle('flowing', m.inflow);
-      }
-    });
+  /** 制作キューを描き直す。flashChanged = 前回から工程が変わった行を光らせる（自動更新の時だけ） */
+  function renderQueue(d, flashChanged) {
     var q = $('#floor-queue');
     if (!q) return;
     q.classList.remove('loading');
-    q.innerHTML = floorQueueHtml(d.queue);
+    q.innerHTML = floorQueueHtml(d.queue, { filter: floor.filter, open: floor.open, menuOpen: floor.menuOpen });
+    if (!flashChanged) return;
     var prev = floor.prev;
     var next = {};
     (d.queue || []).forEach(function (r) {
@@ -640,14 +981,50 @@
       }
     });
     floor.prev = next;
+  }
+  function renderFloor(d) {
+    floor.data = d;
+    renderFloorBand();
+    renderScene(d);
+    renderQueue(d, true);
     var upd = $('#floor-updated');
     if (upd) upd.textContent = '更新 ' + hhmm(new Date());
+  }
+  function setFloorMenu(open, focusBtn) {
+    floor.menuOpen = !!open;
+    var btn = $('#floor-queue [data-fq-menu]'), pop = $('#fq-more-pop');
+    if (btn) btn.setAttribute('aria-expanded', floor.menuOpen ? 'true' : 'false');
+    if (pop) pop.hidden = !floor.menuOpen;
+    if (focusBtn && btn) btn.focus();
+  }
+  function onFloorKey(e) {
+    if (e.key === 'Escape' && floor.menuOpen) setFloorMenu(false, true);
+  }
+  function onFloorClick(e) {
+    var t = e.target && e.target.closest ? e.target : null;
+    if (!t) return;
+    if (t.closest('[data-fq-menu]')) { setFloorMenu(!floor.menuOpen, false); return; }
+    if (floor.menuOpen && !t.closest('.fq-more')) setFloorMenu(false, false); // 外側を押したら閉じる
+    var tog = t.closest('[data-fq-open]');
+    if (tog) {
+      var id = tog.getAttribute('data-fq-open');
+      if (floor.open[id]) delete floor.open[id]; else floor.open[id] = true;
+      if (floor.data) renderQueue(floor.data, false);
+      var again = document.querySelector('[data-fq-open="' + id.replace(/["\\]/g, '') + '"]');
+      if (again) again.focus();
+      return;
+    }
+    if (t.closest('[data-fq-clear]') || t.closest('#scene-filter')) { setFloorFilter(null); return; }
+    var st = t.closest('#scene [data-st]');
+    if (st) setFloorFilter(st.getAttribute('data-st'));
   }
 
   function stopFloor() {
     floor.active = false;
     floor.gen++;
     if (floor.timer) { clearTimeout(floor.timer); floor.timer = null; }
+    if (document.body) document.body.classList.remove('floor-wide');
+    if (floor.resizeObs) { floor.resizeObs.disconnect(); floor.resizeObs = null; }
   }
   function scheduleFloor() {
     if (floor.timer) { clearTimeout(floor.timer); floor.timer = null; }
@@ -685,31 +1062,39 @@
     floor.active = true;
     floor.data = null;
     floor.prev = null;
+    floor.prevSt = null;
     floor.errAt = null;
     floor.bandHtml = null;
-    var line = [];
-    FLOOR_STATIONS.forEach(function (st, i) {
-      if (i > 0) line.push('<div class="floor-arrow-wrap" aria-hidden="true">' + floorArrowSvg(st.key) + '</div>');
-      var charHtml = floorCharFailed[st.img] ? FLOOR_CHAR_SVG
-        : '<img class="floor-char" src="/admin/img/char-' + st.img + '.png" alt="" width="96" height="96" data-char="' + st.img + '">';
-      line.push('<section class="floor-st" data-station="' + st.key + '" aria-label="' + esc(st.name) + '">' +
-        '<div class="floor-desk">' + charHtml + '</div>' +
-        '<div class="floor-name">' + esc(st.name) + (st.sub ? '<small>' + esc(st.sub) + '</small>' : '') + '</div>' +
-        '<div class="floor-sub"></div>' +
-        '<div class="floor-badges">' + pill('読み込み中', 'gray') + '</div></section>');
-    });
+    floor.filter = null;
+    floor.open = {};
+    floor.menuOpen = false;
+    floor.userScrolled = false;
+    floor.autoScrollAt = 0;
+    document.body.classList.add('floor-wide');
     view.innerHTML = '<div class="floor-view">' +
       '<div id="floor-band" class="floor-band" aria-live="polite"><span class="muted">読み込み中…</span></div>' +
       '<div class="row floor-head-row"><h1>工場</h1><span class="muted" id="floor-updated"></span></div>' +
-      '<div class="floor-line-wrap"><div class="floor-line">' + line.join('') + '</div></div>' +
-      '<div class="card"><h2>制作キュー</h2><div id="floor-queue" class="loading">' + floorSkeletonHtml() + '</div></div>' +
-      '</div>';
-    Array.prototype.forEach.call(view.querySelectorAll('img[data-char]'), bindFloorChar);
-    fetchFloor();
+      '<div class="scene-stage">' +
+      '<button type="button" id="scene-filter" class="scene-filter hidden"></button>' +
+      '<div class="scene-scroll" id="scene-scroll"><div class="scene" id="scene"></div></div>' +
+      '<section class="fq-card" aria-labelledby="fq-h"><div id="floor-queue" class="loading">' + floorSkeletonHtml() + '</div></section>' +
+      '</div></div>';
+    buildScene($('#scene'));
+    var fv = view.querySelector('.floor-view');
+    fv.addEventListener('click', onFloorClick);
+    fv.addEventListener('keydown', onFloorKey);
+    $('#scene-scroll').addEventListener('scroll', onSceneScroll, { passive: true });
+    // 場面の幅が変わったら札の寄せ直し（札の大きさは cqw と clamp で場面の幅に追従する）
+    if (typeof ResizeObserver === 'function') {
+      floor.resizeObs = new ResizeObserver(function () { clampScenePills(); });
+      floor.resizeObs.observe($('#scene'));
+    }
+    // 隠れたタブで開いた時は取りに行かない（見えるようになったら onFloorVisibility が取る）
+    if (!document.hidden) fetchFloor();
   }
 
   // smoke（§N-5 (n3)）から描画の純関数を呼べるようにする。画面の動作には使わない
-  window.FactoryAdminFloor = { floorBandHtml: floorBandHtml, floorStationModel: floorStationModel, floorQueueHtml: floorQueueHtml, floorChipsHtml: floorChipsHtml };
+  window.FactoryAdminFloor = { floorBandHtml: floorBandHtml, floorQueueHtml: floorQueueHtml, floorChipsHtml: floorChipsHtml, sanitizeCharSvg: sanitizeCharSvg };
 
   // ---- 画面: 素材一覧 ----
   function viewMaterials(view, q) {

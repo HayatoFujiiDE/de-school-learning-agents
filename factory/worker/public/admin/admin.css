@@ -154,7 +154,9 @@ body.has-foot .toast { bottom: 96px; }
   .aq-card { padding: 14px 14px 14px 12px; }
 }
 
-/* ---- 工場ビュー（§N-3）。動いている物だけが動く。prefers-reduced-motion では全部止める ---- */
+/* ---- 工場ビュー（§N-3 / §N-6）。動いている物だけが動く。prefers-reduced-motion では全部止める ----
+ * 配色はこの画面に限り参考画像に合わせる（§N-6）: 床 #eceaf3〜#f6f5fa、流れの青 #3d8bf2、濃紺 #1f2937、完了の緑 #22a55b、要確認の黄 #f6c343、失敗の赤 #e5484d */
+body.floor-wide .view { max-width: 1600px; padding-left: 12px; padding-right: 12px; }
 .floor-band { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; background: var(--white); border: 1px solid var(--line); border-left: 6px solid var(--ai); border-radius: var(--radius); padding: 12px 14px; margin: 0 0 12px; min-height: 52px; }
 .floor-band-title { font-weight: 700; margin-right: 4px; }
 .floor-band-calm { color: var(--green); font-weight: 600; }
@@ -166,72 +168,259 @@ body.has-foot .toast { bottom: 96px; }
 .floor-head-row { justify-content: space-between; margin: 0 0 8px; }
 .floor-head-row h1 { margin: 0; }
 
-.floor-line-wrap { overflow-x: auto; margin: 0 0 16px; padding: 2px 0 6px; -webkit-overflow-scrolling: touch; }
-.floor-line { display: flex; align-items: stretch; min-width: 1040px; }
-.floor-st { flex: 1 1 0; min-width: 140px; display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; background: var(--white); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 8px; }
-.floor-st.moving { border-color: var(--orange); }
-.floor-st.waiting { border-color: var(--ai); background: var(--ai-soft); }
-.floor-desk { position: relative; width: 112px; height: 104px; display: flex; align-items: flex-end; justify-content: center; }
-.floor-desk::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 10px; border-radius: 6px; background: var(--orange-soft); border: 1px solid var(--line); }
-.floor-char-body { fill: var(--line); }
-.floor-char-eye { fill: var(--muted); }
-.floor-char { display: block; width: 96px; height: 96px; margin-bottom: 6px; object-fit: contain; }
-.floor-st.moving .floor-char { animation: floor-bob 1.6s ease-in-out infinite; }
-.floor-name { font-weight: 700; line-height: 1.3; }
-.floor-name small { display: block; font-weight: 400; font-size: 12px; color: var(--muted); }
-.floor-sub { font-size: 12px; color: var(--muted); min-height: 16px; }
-.floor-badges { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
-.floor-badges .pill { font-weight: 600; }
-.floor-pulse { animation: floor-pulse 1.4s ease-in-out infinite; }
-.floor-arrow-wrap { flex: 0 0 36px; display: flex; align-items: center; justify-content: center; }
-.floor-arrow line, .floor-carrow line { stroke: var(--line); stroke-width: 2.5; stroke-dasharray: 5 3; stroke-linecap: round; }
-.floor-arrow path, .floor-carrow path { fill: none; stroke: var(--line); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
-.floor-arrow.flowing line, .floor-arrow.flowing path, .floor-carrow.flowing line, .floor-carrow.flowing path { stroke: var(--orange); }
-.floor-arrow.flowing line, .floor-carrow.flowing line { animation: floor-flow .8s linear infinite; }
+/* 線のアイコン・状態の印 */
+.floor-view .scene-ic { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.scene-sym { flex: none; display: block; }
+.scene-sym path { fill: none; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.scene-sym-done circle { fill: #22a55b; }
+.scene-sym-done path { stroke: #fff; }
+.scene-sym-waiting circle { fill: #f6c343; }
+.scene-sym-waiting path { stroke: #1f2937; stroke-width: 2.8; }
+.scene-sym-failed circle { fill: #e5484d; }
+.scene-sym-failed path { stroke: #fff; }
+.scene-ring { flex: none; display: block; border-radius: 50%;
+  background: conic-gradient(#3d8bf2 0 72%, rgba(61, 139, 242, .2) 72% 100%);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - .3em), #000 calc(100% - .28em));
+  mask: radial-gradient(farthest-side, transparent calc(100% - .3em), #000 calc(100% - .28em));
+  animation: scene-spin 1s linear infinite; }
+.scene-ring.still { animation: none; }
 
-/* 回転リング（動いている物の印） */
-.floor-ring { display: inline-block; width: 10px; height: 10px; margin-right: 4px; vertical-align: -1px; border-radius: 50%;
-  background: conic-gradient(var(--orange) 0 75%, var(--orange-soft) 75% 100%);
-  -webkit-mask: radial-gradient(circle, transparent 2px, #000 2.5px); mask: radial-gradient(circle, transparent 2px, #000 2.5px);
-  animation: floor-spin .9s linear infinite; }
+/* ---- 場面（§N-6-1〜§N-6-4）。座標は floor-scene.js の SCENE（背景 1706 × 600 に対する %）。大きさは場面の幅（cqw）に追従 ---- */
+.scene-stage { position: relative; margin: 0 0 16px; padding: 0 0 14px; border-radius: 22px; overflow: hidden; background: linear-gradient(180deg, #e4e1f0, #eceaf3 55%, #f6f5fa); box-shadow: inset 0 0 0 1px rgba(214, 212, 228, .8); }
+.scene-scroll { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
+.scene { position: relative; width: 100%; min-width: 880px; aspect-ratio: 1706 / 600; overflow: hidden; container-type: inline-size; }
+/* 背景画像は ::before に置き、下端だけ床の色へ溶かす（表のカードの下へ床が続いて見えるように）。重ねる物は z-index 1 以上 */
+.scene::before { content: ''; position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 0; pointer-events: none;
+  background: url(/admin/img/scene-bg.webp) center / 100% 100% no-repeat;
+  -webkit-mask-image: linear-gradient(180deg, #000 88%, transparent); mask-image: linear-gradient(180deg, #000 88%, transparent); }
+.scene-pos { position: absolute; z-index: 4; transform: translate(-50%, -50%); }
+.scene-pill-pos { transform: translate(-50%, -20%); } /* 状態札は 1 行。座標は札の上端寄り（キャラ・ノート PC の下に出す） */
 
-/* 制作キュー */
-.floor-table td { vertical-align: middle; }
-.floor-table td:nth-child(3), .floor-table td:nth-child(4), .floor-table td:nth-child(5), .floor-table th:nth-child(3), .floor-table th:nth-child(4), .floor-table th:nth-child(5) { white-space: nowrap; width: 1%; }
-.floor-title { min-width: 160px; }
-.floor-meta { font-size: 12px; }
-.floor-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; row-gap: 4px; }
-.floor-chip { display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px; border-radius: 999px; font-size: 12px; white-space: nowrap; border: 1px solid transparent; }
-.floor-chip small { font-size: 11px; margin-left: 2px; }
-.floor-chip.done { background: var(--green-soft); color: var(--green); }
-.floor-chip.active { background: var(--white); border-color: var(--orange); color: #8a5000; font-weight: 600; }
-.floor-chip.waiting { background: var(--ai-soft); border-color: var(--ai); color: #8a5a00; font-weight: 600; }
-.floor-chip.failed { background: var(--red-soft); border-color: var(--red); color: var(--red); font-weight: 600; }
-.floor-chip.pending { background: var(--gray-soft); color: var(--muted); opacity: .55; }
-.floor-chip.skipped { background: var(--gray-soft); color: var(--muted); text-decoration: line-through; }
-.floor-icon { font-weight: 700; }
-.floor-carrow { flex: 0 0 auto; }
-.floor-prog { white-space: nowrap; }
-.floor-prog span { font-size: 12px; color: var(--muted); margin-left: 6px; }
-.floor-bar { -webkit-appearance: none; appearance: none; width: 90px; height: 8px; border: 0; border-radius: 999px; background: var(--gray-soft); vertical-align: middle; overflow: hidden; }
-.floor-bar::-webkit-progress-bar { background: var(--gray-soft); border-radius: 999px; }
-.floor-bar::-webkit-progress-value { background: var(--green); border-radius: 999px; }
-.floor-bar::-moz-progress-bar { background: var(--green); border-radius: 999px; }
-.floor-empty { margin: 0 0 10px; }
-.floor-skel { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
-.floor-skel i { display: block; height: 14px; border-radius: 6px; background: var(--gray-soft); }
+/* 矢印（inline SVG・3 次ベジェ）。流れ先が動いている・人の番なら破線が流れ、青い点（素材）が移動する */
+.scene-arrows { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; overflow: visible; }
+.scene-arrow { opacity: .6; transition: opacity .4s; }
+.scene-arrow.flowing { opacity: 1; }
+.scene-arrow-glow { fill: none; stroke: #fff; stroke-width: 13; stroke-linecap: round; stroke-linejoin: round; opacity: .7; }
+.scene-arrow-line, .scene-arrow-head { fill: none; stroke: #3d8bf2; stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; }
+.scene-arrow.dashed .scene-arrow-line { stroke-dasharray: 9 11; }
+.scene-arrow.dashed .scene-arrow-glow:first-child { stroke-dasharray: 9 11; stroke-width: 11; }
+.scene-arrow.flowing.dashed .scene-arrow-line, .scene-arrow.flowing.dashed .scene-arrow-glow:first-child { animation: scene-dash 1s linear infinite; }
+.scene-arrow-sheen { display: none; fill: none; stroke: rgba(255, 255, 255, .4); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 3 40; }
+.scene-arrow.flowing:not(.dashed) .scene-arrow-sheen { display: inline; animation: scene-sheen 1.6s linear infinite; }
+.scene-arrow-dots { display: none; }
+.scene-arrow.flowing .scene-arrow-dots { display: inline; }
+.scene-arrow-dot { fill: #3d8bf2; stroke: #fff; stroke-width: 2; }
+
+/* クリック範囲（机の楕円）。押している間は床に青い輪 */
+.scene-hit { position: absolute; z-index: 2; margin: 0; padding: 0; border: 0; border-radius: 50%; background: transparent; font: inherit; color: inherit; cursor: pointer; }
+.scene-hit:focus-visible { outline: 2px dashed #3d8bf2; outline-offset: -4px; }
+.scene-glow { position: absolute; z-index: 1; border-radius: 50%; pointer-events: none; opacity: 0; transition: opacity .25s;
+  background: radial-gradient(closest-side, rgba(61, 139, 242, .42), rgba(61, 139, 242, .18) 55%, rgba(61, 139, 242, 0)); }
+.scene-glow.on { opacity: 1; }
+
+/* キャラ（svg は部位 .ch-body / .ch-eyes / .ch-hands を動かす。png は画像全体を揺らす） */
+.scene-char { position: absolute; z-index: 3; cursor: pointer; }
+.scene-char.flip { transform: scaleX(-1); }
+.scene-char .ch-svg, .scene-char .ch-img { display: block; width: 100%; height: 100%; overflow: visible; }
+.scene-char .ch-body, .scene-char .ch-eyes, .scene-char .ch-hands { transform-box: fill-box; }
+.scene-char .ch-body { transform-origin: 50% 100%; }
+.scene-char .ch-eyes { transform-origin: 50% 50%; animation: scene-blink var(--blink-dur, 6s) var(--blink-delay, 0s) ease-in-out infinite; }
+.scene-char.is-moving .ch-body { animation: scene-bob 1.6s ease-in-out infinite; }
+.scene-char.is-moving .ch-hands { animation: scene-type .35s ease-in-out infinite alternate; }
+.scene-char.is-moving .ch-img { animation: scene-bob-img 1.6s ease-in-out infinite; }
+.scene-char.jump .ch-svg, .scene-char.jump .ch-img { animation: scene-jump .6s ease-out 1; }
+
+/* 机の上の光の粒（動いている時）・人の番の「!」の吹き出し・作り直しの吹き出し */
+.scene-spark { position: absolute; z-index: 4; width: 3cqw; height: 3.2cqw; transform: translate(-50%, -50%); pointer-events: none; display: none; }
+.scene-spark.on { display: block; }
+.scene-spark i { position: absolute; bottom: 0; width: .55cqw; height: .55cqw; border-radius: 50%; opacity: 0; background: radial-gradient(circle, #fff 0 30%, #9cc6ff 55%, rgba(156, 198, 255, 0) 72%); animation: scene-rise 1.8s ease-out infinite; }
+.scene-spark i:nth-child(1) { left: 6%; }
+.scene-spark i:nth-child(2) { left: 46%; animation-delay: .6s; }
+.scene-spark i:nth-child(3) { left: 82%; animation-delay: 1.2s; }
+.scene-alert { position: absolute; z-index: 5; display: none; align-items: center; justify-content: center; width: 2.3cqw; height: 2.3cqw; min-width: 20px; min-height: 20px; transform: translate(-50%, -50%);
+  border-radius: 50% 50% 50% 14%; background: #f6c343; color: #1f2937; font-weight: 900; font-size: clamp(12px, 1.45cqw, 24px); line-height: 1; pointer-events: none;
+  box-shadow: 0 0 0 .12em #fff, 0 .3em .8em rgba(246, 195, 67, .55); }
+.scene-alert.on { display: flex; animation: scene-hop 1s ease-in-out infinite; }
+.scene-bubble { position: absolute; z-index: 4; display: none; align-items: center; justify-content: center; width: 3.5cqw; height: 2.9cqw; transform: translate(-50%, -50%); border-radius: .8cqw; background: #fff; color: #3d8bf2; pointer-events: none; box-shadow: 0 .35cqw 1cqw rgba(60, 60, 110, .16); }
+.scene-bubble::after { content: ''; position: absolute; left: 22%; bottom: -.45cqw; width: .9cqw; height: .9cqw; background: #fff; transform: rotate(45deg); border-radius: 0 0 .2cqw 0; }
+.scene-bubble.on { display: flex; }
+.scene-bubble .scene-ic { position: relative; z-index: 1; width: 58%; height: 58%; stroke-width: 2.8; }
+
+/* 名札（白い角丸カード + 線のアイコン + 太字） */
+.scene-tag { display: inline-flex; align-items: center; gap: .45em; padding: .52em 1.05em .52em .8em; border-radius: .7em; background: rgba(255, 255, 255, .96); color: #1f2937;
+  font-size: clamp(12px, 1.4cqw, 24px); font-weight: 800; line-height: 1.2; white-space: nowrap; cursor: pointer;
+  box-shadow: 0 .5em 1.3em rgba(70, 70, 120, .13), 0 .06em .25em rgba(70, 70, 120, .08); }
+.scene-tag .scene-ic { width: 1.3em; height: 1.3em; stroke-width: 2.1; flex: none; }
+.scene-tag.on { outline: .14em solid #3d8bf2; outline-offset: .1em; }
+
+/* 状態札（濃紺の角丸ピル・白い太字。動いている時は左に青い回転リング、下に細い青いバー） */
+.scene-pill { display: inline-flex; align-items: center; gap: .55em; padding: .5em 1.1em .5em .65em; border-radius: 1em; background: #1f2937; color: #fff;
+  font-size: clamp(11.5px, 1.17cqw, 20px); font-weight: 700; line-height: 1.25; white-space: nowrap; cursor: pointer;
+  box-shadow: 0 0 0 .1em rgba(255, 255, 255, .85), 0 .45em 1.1em rgba(31, 41, 55, .26); }
+.scene-pill .scene-sym, .scene-pill .scene-ring { width: 1.45em; height: 1.45em; }
+.scene-pill .scene-ring { background: conic-gradient(#3d8bf2 0 72%, rgba(255, 255, 255, .22) 72% 100%); }
+.scene-pill .scene-sym-done path { stroke: #1f2937; stroke-width: 2.8; }
+.scene-pill-text { display: flex; flex-direction: column; gap: .22em; }
+.scene-pill-line { display: flex; align-items: baseline; white-space: nowrap; }
+.scene-pill-sub { font-size: max(10.5px, .82em); font-weight: 700; opacity: .9; }
+.scene-pill-bar { -webkit-appearance: none; appearance: none; display: block; width: 100%; min-width: 5.6em; height: .26em; border: 0; border-radius: 999px; background: rgba(255, 255, 255, .2); overflow: hidden; }
+.scene-pill-bar::-webkit-progress-bar { background: rgba(255, 255, 255, .2); border-radius: 999px; }
+.scene-pill-bar::-webkit-progress-value { background: #3d8bf2; border-radius: 999px; }
+.scene-pill-bar::-moz-progress-bar { background: #3d8bf2; border-radius: 999px; }
+.scene-pill.idle { background: #fff; color: #6b7080; padding: .5em 1.15em; box-shadow: 0 0 0 .07em rgba(214, 214, 228, .95), 0 .35em .9em rgba(70, 70, 120, .12); }
+.scene-pill.idle.branch { color: #6b7080; font-size: clamp(11px, 1.06cqw, 18px); }
+.scene-pill.human { background: #1f2937; color: #f6c343; box-shadow: 0 0 0 .1em rgba(246, 195, 67, .75), 0 .45em 1.1em rgba(31, 41, 55, .26); animation: scene-pulse 1.4s ease-in-out infinite; }
+.scene-pill.human .scene-sym-waiting circle { fill: #f6c343; }
+.scene-pill.human .scene-sym-waiting path { stroke: #1f2937; }
+.scene-pill.failed { background: #e5484d; color: #fff; }
+.scene-pill.failed .scene-sym-failed circle { fill: #fff; }
+.scene-pill.failed .scene-sym-failed path { stroke: #e5484d; }
+.scene-pill.on { outline: .16em solid #3d8bf2; outline-offset: .12em; }
+.scene-pill.jump { animation: scene-pjump .6s ease-out 1; }
+
+/* 絞り込み中（§N-6-4）: 場面の上に「◯◯にいる素材だけ表示中 ✕」 */
+.scene-filter { position: absolute; z-index: 7; top: 12px; left: 50%; transform: translateX(-50%); font: inherit; font-size: 14px; font-weight: 700; padding: 8px 16px; border: 0; border-radius: 999px; background: #1f2937; color: #fff; cursor: pointer; white-space: nowrap; box-shadow: 0 0 0 2px rgba(255, 255, 255, .9), 0 6px 18px rgba(31, 41, 55, .3); }
+.scene-filter:hover { background: #2c3a4f; }
+.scene-filter:focus-visible { outline: 3px solid #3d8bf2; outline-offset: 2px; }
+.scene-filter-x { margin-left: 6px; opacity: .85; }
+
+/* ---- 制作キュー（§N-6-5）---- */
+.fq-card { position: relative; z-index: 6; margin: -2.6% 1% 0; padding: 14px 12px 8px; border-radius: 20px; background: #fff; box-shadow: 0 12px 32px rgba(60, 60, 110, .12), 0 1px 3px rgba(60, 60, 110, .06); }
+.fq-head { display: flex; align-items: center; gap: 12px; padding: 4px 6px 12px; }
+.fq-head h2 { margin: 0; font-size: 20px; font-weight: 800; color: #1f2937; }
+.fq-count { margin-left: 12px; font-weight: 700; }
+.fq-more { position: relative; margin-left: auto; }
+.fq-more-btn { margin: 0; padding: 2px 10px 6px; border: 0; border-radius: 10px; background: none; color: #1f2937; font: inherit; font-size: 22px; font-weight: 900; line-height: 1; letter-spacing: 1px; cursor: pointer; }
+.fq-more-btn:hover, .fq-more-btn[aria-expanded="true"] { background: #f1f1f7; }
+.fq-more-btn:focus-visible { outline: 3px solid #3d8bf2; outline-offset: 1px; }
+.fq-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 10; width: min(380px, 80vw); padding: 12px 14px; border-radius: 12px; background: #fff; color: #1f2937; font-size: 13px; line-height: 1.7;
+  box-shadow: 0 10px 30px rgba(40, 40, 80, .18), 0 0 0 1px rgba(220, 220, 235, .9); }
+.fq-pop[hidden] { display: none; }
+.floor-view .fq-menu { width: 24px; height: 24px; color: #1f2937; stroke-width: 2.6; flex: none; }
+.fq-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.fq-table { width: 100%; min-width: 1360px; table-layout: fixed; border-collapse: separate; border-spacing: 0; } /* 列幅は固定（▶ の詳細を開いても変わらない）。工程チップは常に 1 行、狭い幅は横スクロール */
+.fq-c-name { width: 216px; }
+.fq-c-prog { width: 228px; }
+.fq-c-status { width: 160px; }
+.fq-c-op { width: 120px; } /* 長い「取り込みをやり直す」だけ 2 行に折る */
+.fq-table td.fq-opcell { padding-left: 8px; padding-right: 8px; }
+.fq-table th { padding: 9px 12px; border: 0; background: #f1f1f7; color: #3f4453; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.fq-table th:first-child { border-radius: 10px 0 0 10px; padding-left: 80px; }
+.fq-table th:last-child { border-radius: 0 10px 10px 0; }
+.fq-table td { padding: 12px; border-bottom: 1px solid #ededf3; vertical-align: middle; background: #fff; }
+.fq-table tbody tr:last-child td { border-bottom: 0; }
+.fq-row.att td { background: #fff6dc; border-bottom-color: transparent; }
+.fq-row.att td:first-child { border-radius: 12px 0 0 12px; }
+.fq-row.att td:last-child { border-radius: 0 12px 12px 0; }
+.fq-row.att.open td:first-child { border-radius: 12px 0 0 0; }
+.fq-row.att.open td:last-child { border-radius: 0 12px 0 0; }
+.fq-table td.fq-prog, .fq-table td.fq-status { white-space: nowrap; }
+.fq-name-in { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fq-toggle { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0; padding: 0; border: 0; border-radius: 8px; background: none; color: #1f2937; cursor: pointer; }
+.fq-toggle:hover { background: rgba(31, 41, 55, .06); }
+.fq-toggle:focus-visible { outline: 3px solid #3d8bf2; outline-offset: 1px; }
+.floor-view .fq-toggle .scene-ic { width: 18px; height: 18px; fill: currentColor; stroke-width: 1.6; transition: transform .15s; }
+.fq-row.open .fq-toggle .scene-ic { transform: rotate(90deg); }
+.fq-kind { position: relative; flex: none; display: inline-flex; margin-right: 4px; color: #1f2937; }
+.floor-view .fq-kind .scene-ic { width: 28px; height: 28px; stroke-width: 1.8; }
+.floor-view .fq-kind .scene-ic-sub { position: absolute; right: -7px; bottom: -5px; width: 16px; height: 16px; border-radius: 4px; background: #fff; stroke-width: 2; }
+.fq-row.att .fq-kind .scene-ic-sub { background: #fff6dc; }
+.fq-title { min-width: 0; color: #1f2937; font-size: 17px; font-weight: 800; text-decoration: none; overflow-wrap: anywhere; }
+.fq-title:hover { text-decoration: underline; }
+.fq-ver { flex: none; color: #8b90a0; font-size: 12px; font-weight: 600; }
+
+/* 工程チップ: done = 白地 + 緑の塗り丸 ✓ / active = 青枠 + 青い回転リング / waiting = 黄地 + 「!」丸 / failed = 赤地 + × / pending = 灰の枠と文字 / skipped = 灰 + 取り消し線 */
+.fq-chips { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px 0; }
+.fq-step { display: inline-flex; align-items: center; flex: none; }
+.fq-chip { display: inline-flex; align-items: center; gap: 4px; height: 33px; padding: 0 9px 0 4px; border: 1.5px solid #e3e3ec; border-radius: 999px; background: #f7f7fa; color: #2b3040; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.fq-chip .scene-sym, .fq-chip .scene-ring, .fq-sub .scene-sym { width: 19px; height: 19px; font-size: 12.5px; }
+.floor-view .fq-chip .fq-step-ic { width: 16px; height: 16px; margin-left: 4px; stroke-width: 1.9; }
+.fq-chip.active { border: 2px solid #3d8bf2; background: #eef5ff; color: #1d4f9c; }
+.fq-chip.waiting { border: 2px solid #f6c343; background: #fff3cc; color: #2b2a20; }
+.fq-chip.failed { border: 2px solid #e5484d; background: #fdecec; color: #b4232a; }
+.fq-chip.pending { border-color: #dcdde6; background: #fff; color: #9a9eab; }
+.fq-chip.skipped { border-color: #e6e6ec; background: #f2f2f5; color: #a6a9b4; }
+.fq-chip.skipped .fq-chip-t { text-decoration: line-through; }
+.fq-chip.fq-fork { height: auto; padding: 0; gap: 0; border: 0; background: none; align-self: stretch; }
+.fq-fork-col { display: flex; flex-direction: column; gap: 6px; }
+.fq-sub { display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 9px 0 3px; border: 1.5px solid #e3e3ec; border-radius: 999px; background: #f7f7fa; color: #2b3040; font-size: 12.5px; font-weight: 700; white-space: nowrap; }
+.fq-brace { flex: none; align-self: stretch; width: 18px; height: auto; min-height: 66px; }
+.fq-brace path { fill: none; stroke: #3d8bf2; stroke-width: 3; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.fq-arr { flex: none; width: 13px; height: 12px; margin: 0 1px; }
+.fq-arr path { fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.fq-arr.done path { stroke: #b9bccb; }
+.fq-arr.todo path { stroke: #c9ccd8; }
+.fq-arr.todo .fq-arr-l { stroke-dasharray: 2.2 2.8; }
+.fq-arr.on path { stroke: #3d8bf2; stroke-width: 2.2; }
+.fq-arr.flow .fq-arr-f { stroke: rgba(255, 255, 255, .9); stroke-width: 1.6; stroke-dasharray: 1.5 14; animation: fq-flow .9s linear infinite; } /* active の直前だけ流れる（実線の上を小さな光が動く） */
+
+/* 進捗（青い角丸バー + 太字の %）・ステータス札・操作 */
+.fq-prog-in { display: flex; align-items: center; gap: 12px; }
+.fq-bar { -webkit-appearance: none; appearance: none; display: block; width: 150px; height: 14px; border: 0; border-radius: 999px; background: #e2e3ea; overflow: hidden; }
+.fq-bar::-webkit-progress-bar { background: #e2e3ea; border-radius: 999px; }
+.fq-bar::-webkit-progress-value { background: linear-gradient(90deg, #4f9bf5, #2f7fe6); border-radius: 999px; }
+.fq-bar::-moz-progress-bar { background: linear-gradient(90deg, #4f9bf5, #2f7fe6); border-radius: 999px; }
+.fq-prog b { min-width: 3.1em; color: #1f2937; font-size: 17px; font-weight: 800; }
+.fq-st { display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px 9px 12px; border-radius: 13px; font-size: 15px; font-weight: 800; white-space: nowrap; }
+.fq-st .scene-sym { width: 23px; height: 23px; }
+.fq-st.waiting { background: #fff0bf; color: #1f2937; box-shadow: inset 0 0 0 1.5px rgba(246, 195, 67, .7); }
+.fq-st.running { background: #dcf3e2; color: #1d6b3a; box-shadow: inset 0 0 0 1.5px rgba(34, 165, 91, .25); }
+.floor-view .fq-st .fq-st-ic { width: 19px; height: 19px; fill: currentColor; stroke-width: 1.4; }
+.fq-st.failed { background: #fde3e3; color: #b4232a; box-shadow: inset 0 0 0 1.5px rgba(229, 72, 77, .35); }
+.fq-st.ended { background: #eeeef2; color: #7a7f8c; padding-left: 16px; }
+.fq-op { display: inline-block; padding: 7px 10px; border: 1.5px solid #d9dbe5; border-radius: 10px; background: #fff; color: #1f2937; font-size: 13px; font-weight: 700; text-decoration: none; white-space: normal; text-align: center; line-height: 1.35; }
+.fq-op.primary { border-color: #3d8bf2; background: #3d8bf2; color: #fff; }
+.fq-op:hover { filter: brightness(.96); }
+.fq-op:focus-visible { outline: 3px solid #3d8bf2; outline-offset: 2px; }
+
+/* ▶ で開く詳細 */
+.fq-table tr.fq-detail td { padding: 6px 16px 16px 82px; background: #fafafd; }
+.fq-table tr.fq-detail.att td { background: #fffbef; border-radius: 0 0 12px 12px; }
+.fq-detail-in { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(220px, 1.3fr); gap: 8px 28px; font-size: 13px; line-height: 1.6; }
+.fq-detail-steps { list-style: none; margin: 0; padding: 0; }
+.fq-detail-steps b { display: inline-block; min-width: 5.5em; }
+.fq-detail-steps li.pending, .fq-detail-steps li.skipped { color: #9a9eab; }
+.fq-detail-steps li.failed { color: #b4232a; }
+.fq-detail-steps li.active { color: #1d4f9c; }
+.fq-detail-steps li.waiting { color: #7a5a00; }
+.fq-facts { margin: 0; }
+.fq-facts div { display: flex; gap: 10px; }
+.fq-facts dt { flex: none; min-width: 6.5em; color: #6b7080; }
+.fq-facts dd { margin: 0; overflow-wrap: anywhere; }
+.fq-links { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 16px; margin: 4px 0 0; }
+.fq-links a { color: #2f6fd6; font-weight: 700; }
+.fq-empty { padding: 6px 6px 14px; }
+.fq-empty p { margin: 0 0 10px; }
+.floor-skel { display: flex; gap: 12px; padding: 12px 6px; border-bottom: 1px solid #ededf3; }
+.floor-skel i { display: block; height: 14px; border-radius: 6px; background: #eeeef3; }
 .floor-skel i:nth-child(1) { width: 22%; }
 .floor-skel i:nth-child(2) { width: 48%; }
 .floor-skel i:nth-child(3) { width: 12%; }
 
-@keyframes floor-spin { to { transform: rotate(360deg); } }
-@keyframes floor-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
-@keyframes floor-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.1); } }
-@keyframes floor-flow { to { stroke-dashoffset: -16; } }
+@keyframes scene-spin { to { transform: rotate(360deg); } }
+@keyframes scene-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+@keyframes scene-bob-img { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4%); } }
+@keyframes scene-type { from { transform: translateY(0); } to { transform: translateY(-4px); } }
+@keyframes scene-blink { 0%, 93%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.12); } }
+@keyframes scene-jump { 0%, 100% { transform: translateY(0); } 35% { transform: translateY(-9%); } 70% { transform: translateY(0); } 85% { transform: translateY(-2%); } }
+@keyframes scene-pjump { 0%, 100% { transform: translateY(0); } 35% { transform: translateY(-.5em); } 70% { transform: translateY(0); } }
+@keyframes scene-pulse { 0%, 100% { transform: scale(1); box-shadow: 0 0 0 .1em rgba(246, 195, 67, .75), 0 .45em 1.1em rgba(31, 41, 55, .26); } 50% { transform: scale(1.05); box-shadow: 0 0 0 .1em rgba(246, 195, 67, .95), 0 0 1.3em rgba(246, 195, 67, .7); } }
+@keyframes scene-hop { 0%, 100% { transform: translate(-50%, -50%); } 40% { transform: translate(-50%, -85%); } 60% { transform: translate(-50%, -50%); } }
+@keyframes scene-rise { 0% { transform: translateY(0) scale(.6); opacity: 0; } 20% { opacity: 1; } 100% { transform: translateY(-2.6cqw) scale(1); opacity: 0; } }
+@keyframes scene-dash { to { stroke-dashoffset: -20; } }
+@keyframes scene-sheen { to { stroke-dashoffset: -32; } }
+@keyframes fq-flow { to { stroke-dashoffset: -15.5; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .floor-view, .floor-view * { animation: none !important; transition: none !important; }
+  .floor-view *, .floor-view *::before, .floor-view *::after { animation: none !important; transition: none !important; }
+  .floor-view .scene-arrow-dots { display: none !important; }
+}
+@media (max-width: 879px) {
+  .scene-stage { padding-bottom: 8px; border-radius: 16px; }
+  .fq-card { margin: 10px 8px 0; padding: 12px 10px 6px; border-radius: 16px; }
 }
 @media (max-width: 640px) {
   .floor-band-err { margin-left: 0; width: 100%; }
+  .scene-filter { top: 8px; font-size: 13px; padding: 6px 12px; }
+  .fq-head h2 { font-size: 18px; }
 }
