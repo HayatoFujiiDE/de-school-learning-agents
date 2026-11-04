@@ -32,6 +32,8 @@
     return 'mc';
   }
 
+  // 保存データの版（§U-12 指摘 6）。版が無い・古い活動は読み込み時に migrate で不足欄を補う
+  var SCHEMA = 2;
   // ---------- 活動を作る ----------
   function newAct(o) {
     var clock = toMin(o.now || '10:20');
@@ -43,7 +45,7 @@
       stepsKind: o.stepsKind || 'theme', candidate: !!o.candidate, baseVis: o.ext ? clone(o.ext.visible || []) : null,
       changes: [], shelf: [], thread: [],
       state: 'working', pauseCount: 0, declined: 0, offered: false, resumeNote: null, lastPause: null,
-      clock: clock, seq: 0, draft: ''
+      clock: clock, seq: 0, draft: '', v: SCHEMA
     };
     return refreshSteps(a);
   }
@@ -202,7 +204,11 @@
       if (!chs.length) return null;
       if (chs.length >= 2) { target = chState(a, chs[chs.length - 2]); time = chs[chs.length - 2].time; } else { target = baseState(a); time = a.baseTime; }
     }
-    if (target.stage === undefined || same(target, curState(a))) return null;
+    return restoreState(a, target, time);
+  }
+  // 状態（作業対象 + 見えている写真）へ戻し、「{time} のところに戻した」を変化として積む。今と同じなら null
+  function restoreState(a, target, time) {
+    if (!target || target.stage === undefined || same(target, curState(a))) return null;
     var before = clone(curState(a)), A = clone(a);
     A.stage = clone(target.stage);
     if (A.ext && target.vis) A.ext.visible = clone(target.vis);
@@ -210,6 +216,8 @@
     return { act: res.act, change: res.change, undo: { type: 'revert', changeId: res.change.id, stage: before.stage, vis: before.vis } };
   }
   function canRevert(a) { return !!revert(a, null); }
+  // 変化の行の「ここに戻す」: 写真だけの履歴でも、今と違えば出す（§U-12 指摘 5）
+  function canRevertTo(a, changeId) { return !!revert(a, changeId); }
   // 前に戻す の取り消し（5 秒）: 取り消した操作は積まれていなかったことにする
   function undoRevert(a, u) {
     var A = clone(a), last = A.changes[A.changes.length - 1];
@@ -365,7 +373,12 @@
   // ---------- 今の一歩・区切り・背中押し（design-v3 §6-5 / §6-8、U-5） ----------
   function stepNow(a) { return a.steps[a.stepIdx] || null; }
   // 次: 本人が書いた文（空にしたら空のまま。§U-11 指摘 7）→ 無ければ手順の次の一歩
-  function stepNext(a) { if (a.next != null) return a.next ? { text: a.next } : null; return a.steps[a.stepIdx + 1] || null; }
+  // 今と同じ文は次に出さない（§U-12 (e)）
+  function stepNext(a) {
+    var nx = a.next != null ? (a.next ? { text: a.next } : null) : (a.steps[a.stepIdx + 1] || null), now = stepNow(a);
+    if (nx && now && nx.text != null && (nx.text === now[0] || nx.text === now[1])) return null;
+    return nx;
+  }
   function lastChild(a) {
     for (var i = a.thread.length - 1; i >= 0; i--) if (a.thread[i].who === 'child') return a.thread[i].text || '';
     return '';
@@ -416,9 +429,10 @@
     return A;
   }
   // 作品の「続きを作る」: 残した時点（at）を新しい変化として開く（§U-11 指摘 5）。今と同じなら積まない
-  function reopenAt(a, at) {
+  // 保存時点の id が無い作品（未試行で残した等）は、作品が持つ状態 snap へ戻す（§U-12 指摘 4）
+  function reopenAt(a, at, snap, time) {
     var A = resume(a);
-    var r = at && find(A.changes, at) ? revert(A, at) : null;
+    var r = at && find(A.changes, at) ? revert(A, at) : (snap ? restoreState(A, snap, time || A.baseTime) : null);
     return r ? { act: r.act, change: r.change } : { act: A, change: null };
   }
   function stop(a, o) {
@@ -455,6 +469,7 @@
     A.shelf.forEach(function (c) { if (c.state === 'new') c.state = 'passed'; });
     var theme = pickTheme(t);
     A.theme = theme;
+    tick(A, 1);
     addIdeas(A, theme, works);
     // 題材が変わったら手順も新しい題材に（§U-11 指摘 8）。作業対象がまだ無ければ候補状態の手順から
     if (A.stepsKind === 'theme' && !A.stage) { A.candidate = true; A.stepIdx = 0; refreshSteps(A); }
@@ -517,15 +532,16 @@
     o = o || {};
     var k = o.at ? idx(a.changes, o.at) : a.changes.length - 1;
     var ch = k >= 0 ? a.changes[k] : null, snap = ch ? ch.snap : a.stage, photo = null;
-    for (var i = 0; i <= k; i++) if (a.changes[i].photoId && a.ext) photo = find(a.ext.photos, a.changes[i].photoId) || photo;
-    if (!ch && a.ext && a.ext.photos.length) photo = a.ext.photos[a.ext.photos.length - 1];
+    // 写真はその時点で見えていた最後の 1 枚（戻した後なら戻した先の写真。§U-12 回帰 1）
+    var st = ch ? chState(a, ch) : curState(a), ids = st.vis || [];
+    if (a.ext && ids.length) photo = find(a.ext.photos, ids[ids.length - 1]);
     // メモを残した時は本文を持つ（§U-11 指摘 14）
     var art = snap && snap.kind === 'note' ? { note: { title: clone(snap.title), lines: clone(snap.lines) } }
       : (snap ? { stage: clone(snap) } : (photo ? { photo: clone(photo) } : null));
     var title = String(o.title || '').replace(/^\s+|\s+$/g, '') || a.title;
     var like = String(o.like || '').replace(/^\s+|\s+$/g, '');
     var work = { id: o.id, actId: a.id, at: ch ? ch.id : null, atTime: ch ? ch.time : null, title: title, like: like || null, from: 'make',
-      theme: a.theme, art: art, roles: roles(a, ch ? ch.id : null), date: o.date || null };
+      theme: a.theme, art: art, roles: roles(a, ch ? ch.id : null), date: o.date || null, snap: clone(st), snapTime: ch ? ch.time : nowOf(a) };
     return { works: [work].concat(works || []), work: work };
   }
   // 作品に写真・スクショを入れる → 作品 +1 と、外の記録を持つ活動 +1（design-v3 §6-10）
@@ -551,7 +567,8 @@
     if (read.text && !read.declined) pushMsg(a, { who: 'buddy', text: read.text, src: 'read' });
     var work = { id: o.workId, actId: a.id, from: 'capture', title: title, images: caps.map(function (c) { return c.id; }), read: read,
       made: o.made == null ? null : o.made, madeLine: line || null, catalogId: o.catalogId || null, theme: theme,
-      art: { photo: clone(a.ext.photos[0]) }, roles: roles(a), date: o.date || null, like: null };
+      art: { photo: clone(a.ext.photos[0]) }, roles: roles(a), date: o.date || null, like: null,
+      at: a.changes[a.changes.length - 1].id, atTime: a.changes[a.changes.length - 1].time, snap: clone(curState(a)) };
     return { activities: [a].concat(acts || []), works: [work].concat(works || []), work: work, act: a };
   }
 
@@ -584,6 +601,56 @@
     if (m && m.cards) out.cards = m.cards.filter(function (id) { var c = find(a.shelf, id); return c && c.state === 'new'; });
     return out;
   }
+  function findMsg(a, id) { return find(a.thread, id); }
+  // 相談の返事の「違う」: 紐づく変更を戻し、紐づく新しいカードは見送り、返事に使った印を付ける。undo で 3 つとも戻す（§U-12 回帰 3）
+  function declineReply(a, msgId) {
+    var m = findMsg(a, msgId) || {}, tg = replyTarget(a, m), x = clone(a), passed = [];
+    tg.cards.forEach(function (id) { var d = decline(x, id); if (d) { x = d.act; passed.push(id); } });
+    var r = tg.revertTo ? revert(x, tg.revertTo) : null;
+    if (r) x = r.act;
+    var mm = findMsg(x, msgId);
+    if (mm) mm.declined = true;
+    return { act: x, change: r ? r.change : null, passed: passed, undo: { revert: r ? r.undo : null, passed: passed, msg: msgId } };
+  }
+  function undoDeclineReply(a, u) {
+    var y = clone(a);
+    if (u.revert) y = undoRevert(y, u.revert);
+    u.passed.forEach(function (id) { y = undoDecline(y, { cardId: id, prev: 'new' }); });
+    var m = findMsg(y, u.msg);
+    if (m) delete m.declined;
+    if (u.prompt) y.thread = y.thread.filter(function (x) { return x.id !== u.prompt; });
+    return y;
+  }
+  // 前の版の活動の移行（§U-12 指摘 6）。消して作り直さず、不足欄だけを補う。resolve(m) は返事の文を作る（今の表示で）
+  function migrate(a, resolve) {
+    if (a && a.v >= SCHEMA) return a;
+    var A = clone(a);
+    if (!A.stepsKind) {
+      var build = A.id === 'act-build' || same(A.steps, MD.EXT_BUILD_STEPS);
+      A.stepsKind = A.ext ? (build ? 'build' : 'ext') : 'theme';
+    }
+    if (A.candidate === undefined) A.candidate = !!(A.steps && A.steps[0] && same(A.steps[0], MD.CANDIDATE_STEP));
+    if (A.ext) {
+      var ref = {};
+      A.changes.forEach(function (c) { if (c.photoId) ref[c.photoId] = true; });
+      // 変化に紐づかない写真は最初から見えていた扱い
+      var vis = A.ext.photos.filter(function (p) { return !ref[p.id]; }).map(function (p) { return p.id; });
+      if (A.baseVis == null) A.baseVis = vis.slice();
+      A.changes.forEach(function (c) {
+        if (c.photoId && vis.indexOf(c.photoId) < 0) vis = vis.concat([c.photoId]);
+        if (c.vis === undefined) c.vis = vis.slice();
+      });
+      if (!A.ext.visible) A.ext.visible = A.ext.photos.map(function (p) { return p.id; });
+    } else if (A.baseVis === undefined) A.baseVis = null;
+    A.thread.forEach(function (m) {
+      if (m.text == null && (m.r || m.k) && resolve) m.text = resolve(m);
+      if (m.opts) m.opts = m.opts.map(function (o) { return typeof o.label === 'string' || !resolve ? o : { a: o.a, arg: o.arg, label: resolve(o.label) }; });
+    });
+    refreshSteps(A);
+    if (A.stepIdx > A.steps.length - 1) A.stepIdx = Math.max(0, A.steps.length - 1);
+    A.v = SCHEMA;
+    return A;
+  }
   // 「作っている」のまま読み込んだら完了させ、相談列に 1 行（§U-11 指摘 11）
   function finishMaking(a, line) {
     if (!a.shelf.some(function (c) { return c.state === 'making'; })) return a;
@@ -602,6 +669,15 @@
       seen[names[c.id]] = (seen[names[c.id]] || 0) + 1;
     });
     shelf.forEach(function (c) { if (names[c.id] && seen[names[c.id]] > 1) names[c.id] += ' · ' + c.time; });
+    // それでも同じなら、古いほうから順に番号を添える（見送った案を含めて同名を並べない。§U-12 (d)）
+    var fin = {}, k = {};
+    Object.keys(names).forEach(function (id) { fin[names[id]] = (fin[names[id]] || 0) + 1; });
+    shelf.slice().reverse().forEach(function (c) {
+      var nm = names[c.id];
+      if (!nm || fin[nm] < 2) return;
+      k[nm] = (k[nm] || 0) + 1;
+      if (k[nm] > 1) names[c.id] = nm + ' · ' + k[nm];
+    });
     return names;
   }
 
@@ -613,7 +689,8 @@
     resume: resume, stop: stop, undoStop: undoStop, replyKind: replyKind, requestOpt: requestOpt, editQuote: editQuote, removeQuote: removeQuote,
     undoRemoveQuote: undoRemoveQuote, pickSample: pickSample, setNext: setNext, setTitle: setTitle, roles: roles, saveWork: saveWork, addCapture: addCapture,
     demo: demo, cardStage: cardStage, pushMsg: pushMsg, lastWhat: lastWhat, reopenAt: reopenAt, replyTarget: replyTarget,
-    finishMaking: finishMaking, cardNames: cardNames, visiblePhotos: visiblePhotos, cardTitle: cardTitle
+    finishMaking: finishMaking, cardNames: cardNames, visiblePhotos: visiblePhotos, cardTitle: cardTitle,
+    canRevertTo: canRevertTo, restoreState: restoreState, findMsg: findMsg, declineReply: declineReply, undoDeclineReply: undoDeclineReply, migrate: migrate
   };
   Object.keys(pure).forEach(function (k) { M[k] = pure[k]; });
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
@@ -657,9 +734,12 @@
         } catch (e) { failed = true; }
       });
       if (failed) s.saveFailed = true;
-      // 「作っている」の途中で閉じた・読み込んだ活動は、ここで完了させる（§U-11 指摘 11）
+      // 前の版の活動は不足欄を補う（§U-12 指摘 6）。返事の文は今の表示で作って固定する
+      s.activities = s.activities.map(function (a) { return migrate(a, tx); });
+      // 「作っている」の途中で閉じた・読み込んだ活動は、ここで完了させる（§U-11 指摘 11）。新しいカードが入るので棚は開く
       s.activities = s.activities.map(function (a) {
         var ids = a.shelf.filter(function (c) { return c.state === 'making'; }).map(function (c) { return c.id; });
+        if (ids.length) s.makeSide.shelfFolded = false;
         return ids.length ? finishMaking(a, readyLine(settle(a, ids), ids)) : a;
       });
       return s;
@@ -685,7 +765,12 @@
     return u.mk;
   }
   function act(id) { return find(S().activities, id); }
+  function freshIds(a) { return a ? a.shelf.filter(function (c) { return c.state === 'new' || c.state === 'making'; }).map(function (c) { return c.id; }) : []; }
+  function freshCards(a) { return freshIds(a).length; }
+  // 前に無かった新しいカードが入ったら、棚を畳んでいても開く（どの経路でも。§U-12 指摘 12）
   function setAct(a, front) {
+    var before = freshIds(act(a.id));
+    if (freshIds(a).some(function (id) { return before.indexOf(id) < 0; }) && S().makeSide) S().makeSide.shelfFolded = false;
     var list = S().activities.filter(function (x) { return x.id !== a.id; });
     if (front) list.unshift(a);
     else { var i = idx(S().activities, a.id); list.splice(i < 0 ? 0 : i, 0, a); }
@@ -733,7 +818,7 @@
     var from = mk().makeFrom;
     if (from) { if (!a.catalogId) a.catalogId = from.catalogId; a.origin = from.origin || a.origin; }
     mk().makeFrom = null;
-    DES.app.change(function () { S().activities = [a].concat(S().activities); });
+    DES.app.change(function () { if (freshCards(a)) S().makeSide.shelfFolded = false; S().activities = [a].concat(S().activities); });
     go('#make/' + a.id);
   }
   // 話す の bridge（U-2）: 直近の本人発言で題材を決め、引用枠 + 仮の案 3 つの作業台へ
@@ -773,7 +858,7 @@
   M.resumeInfo = function () {
     var id = M.resumeTarget(), a = id ? act(id) : null;
     if (!a) return null;
-    var nx = stepNext(a) || stepNow(a);
+    var nx = stepNext(a);
     return { title: a.title, next: nx ? tx(nx) : '' };
   };
   M.noteTalkStop = function () {
@@ -785,7 +870,7 @@
   M.openWork = function (workId) {
     var w = find(S().works, workId), a = w ? act(w.actId) : null;
     if (!a) return;
-    var r = reopenAt(a, w.at);
+    var r = reopenAt(a, w.at, w.snap, w.atTime || w.snapTime);
     change(function () { setAct(r.act, true); });
     go('#make/' + a.id);
     if (r.change) DES.app.toast(tx(r.change.what));
@@ -1030,11 +1115,12 @@
       return H('div', { class: 'step-line editing' }, [H('span', null, T('step_now') + ':'), H('strong', null, tx(now)), H('span', { 'aria-hidden': 'true' }, '→'),
         inlineEdit('next', a.id, T('step_next'), u.edit.value)]);
     }
-    return H('div', { class: 'step-line' + (u.flashStep === a.id ? ' flash' : ''), 'data-fk': 'step:' + a.id, tabindex: '-1' }, [
-      H('span', null, T('step_now') + ':'), H('strong', null, tx(now)),
-      H('span', { 'aria-hidden': 'true' }, '→'), H('span', null, T('step_next') + ':'), H('strong', null, nx ? tx(nx) : '—'),
-      btn(T('quote_edit'), 'mk-step-edit', { id: a.id, kls: 'ghost', attrs: { 'aria-label': T('step_next') + ' ' + T('quote_edit') } })
-    ]);
+    // 次が無い（または今と同じ）時は「—」も出さず、「次を決める」の小リンクだけ（§U-12 (e)）
+    var tail = nx ? [H('span', { 'aria-hidden': 'true' }, '→'), H('span', null, T('step_next') + ':'), H('strong', null, tx(nx)),
+      btn(T('quote_edit'), 'mk-step-edit', { id: a.id, kls: 'ghost', attrs: { 'aria-label': T('step_next') + ' ' + T('quote_edit') } })]
+      : [H('button', { class: 'link-btn next-set', type: 'button', 'data-action': 'mk-step-edit', 'data-id': a.id }, T('decide_next'))];
+    return H('div', { class: 'step-line' + (u.flashStep === a.id ? ' flash' : ''), 'data-fk': 'step:' + a.id, tabindex: '-1' },
+      [H('span', null, T('step_now') + ':'), H('strong', null, tx(now))].concat(tail));
   }
   function rangeRow(a, p) {
     var st = a.stage, id = 'mk-p-' + p.key, val = st.values[p.key];
@@ -1146,7 +1232,7 @@
     var list = H('ol', { class: 'change-list' }, shown.map(function (ch, i) {
       var ops = [];
       var isLatest = ch.id === a.changes[a.changes.length - 1].id;
-      if (!isLatest && ch.snap !== undefined && !same(ch.snap, a.stage)) ops.push(btn(T('revert_to'), 'mk-revert-to', { id: a.id, arg: ch.id, kls: 'ghost' }));
+      if (!isLatest && canRevertTo(a, ch.id)) ops.push(btn(T('revert_to'), 'mk-revert-to', { id: a.id, arg: ch.id, kls: 'ghost' }));
       if (ch.who === 'ai') ops.push(btn(T('decline'), 'mk-change-decline', { id: a.id, arg: ch.id, kls: 'ghost' }));
       var pt = pickToggle(a, 'changes', ch.id, ch.time);
       if (pt) ops = [pt];
@@ -1469,22 +1555,17 @@
   A['mk-msg-decline'] = function (el) {
     var a = cur(el);
     if (!a) return;
-    var m = find(a.thread, el.getAttribute('data-msg')) || {}, tg = replyTarget(a, m), x = clone(a), passed = [];
-    tg.cards.forEach(function (id) { var d = decline(x, id); if (d) { x = d.act; passed.push(id); } });
-    var r = tg.revertTo ? revert(x, tg.revertTo) : null;
-    if (r) x = r.act;
-    var mm = find(x.thread, m.id);
-    if (mm) mm.declined = true;
+    var d = declineReply(a, el.getAttribute('data-msg')), x = d.act;
     x = diffPrompt(x);
-    change(function () { setAct(x, true); }, { focus: r ? 'stage:' + a.id : null });
+    d.undo.prompt = x.thread[x.thread.length - 1].id;
+    change(function () { setAct(x, true); }, { focus: d.change ? 'stage:' + a.id : null });
     afterChatPush();
-    if (!r && !passed.length) return;
-    DES.app.toast(r ? tx(r.change.what) : T('declined'), { label: T('undo'), fn: function () {
+    if (!d.change && !d.passed.length) return;
+    // 戻す: 値・見送ったカード・返事の「違う」・足した「どこが違う？」をまとめて元へ（§U-12 回帰 3）
+    DES.app.toast(d.change ? tx(d.change.what) : T('declined'), { label: T('undo'), fn: function () {
       var y = act(a.id);
       if (!y) return;
-      if (r) y = undoRevert(y, r.undo);
-      passed.forEach(function (id) { y = undoDecline(y, { cardId: id, prev: 'new' }); });
-      change(function () { setAct(y, true); });
+      change(function () { setAct(undoDeclineReply(y, d.undo), true); });
     } });
   };
   A['mk-diff-pick'] = function (el) {
@@ -1779,7 +1860,7 @@
     if (!a) return;
     var p = pause(a);
     // 次にすること の既定はバディ案（次の一歩。最後の一歩なら今の一歩）。本人が直す・空にできる
-    var def = p.kind === 'next' ? tx(p.step) : (a.next != null ? a.next : tx(stepNext(a) || stepNow(a)));
+    var def = p.kind === 'next' ? tx(p.step) : (a.next != null ? a.next : tx(stepNext(a)));
     mk().dlg = { type: 'pause', act: id, push: p, next: def, closed: false };
     renderPause();
     DES.app.openDialog(dlg, opener);

@@ -266,7 +266,9 @@ window.DES = window.DES || {};
     // ---- §U-11 ----
     only_samples: ['見本は今はこの 3 つ。写真か思いつきからも始められる', '見本は今はこの 3 つだよ。写真か思いつきからもはじめられる'],
     shelf_new_rec: ['棚に「{title}」を置いた', 'たなに「{title}」をおいた'],
-    adopt_reply_pre: ['「{title}」にしたよ。', '「{title}」にしたよ。']
+    adopt_reply_pre: ['「{title}」にしたよ。', '「{title}」にしたよ。'],
+    // ---- §U-12 (e) ----
+    decide_next: ['次を決める', 'つぎを決める']
   };
   // ふりがな（es のみ。§C: nav の「作品」「学びマップ」「今日のお題」）
   var RUBY = {
