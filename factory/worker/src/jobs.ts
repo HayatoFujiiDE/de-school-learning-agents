@@ -36,6 +36,7 @@ import {
 import { JOB_MODEL, cfg, consoleUrl, type Env } from './env';
 import { EDITORIAL_STANDARDS, RUBRIC_COMMON, RUBRIC_KINDS } from './generated/claude-assets';
 import {
+  IMAGE_JOB_LIMIT,
   IMAGE_TOOL_NAME,
   enqueueImage,
   getImage,
@@ -1445,21 +1446,19 @@ class Reconciler {
 
   /**
    * §O-7（旧 §M-2-7 2）: image_id の画像を D1 と R2 から採る。条件（すべて）: 依頼の job_id がこの job・state = 'done'・
-   * format が拡張子と同じ・R2 の r2_key の物体があり SHA-256 が sha256 と一致・大きさ ≤ MAX_FILE_BYTES。違えば null（bad_image_ref）。
-   * 先頭バイトの検査は従来どおり validateOutputs が掛ける
+   * R2 の r2_key の物体があり SHA-256 が sha256 と一致・大きさ ≤ MAX_FILE_BYTES。違えば null（bad_image_ref）。
+   * format が拡張子と同じかは呼び出し側が path ごとに見る。先頭バイトの検査は従来どおり validateOutputs が掛ける
    */
-  private async generatedImageBytes(job: JobRow, ref: { path: string; image_id: string }): Promise<Uint8Array | null> {
-    const row = await getImage(this.db, ref.image_id);
-    if (!row || row.job_id !== job.id || row.state !== 'done' || !row.r2_key || !row.sha256) return null;
-    const ext = ref.path.endsWith('.webp') ? 'webp' : ref.path.endsWith('.png') ? 'png' : null;
-    if (ext === null || row.format !== ext) return null;
+  private async generatedImage(job: JobRow, imageId: string): Promise<{ format: string; bytes: Uint8Array } | null> {
+    const row = await getImage(this.db, imageId);
+    if (!row || row.job_id !== job.id || row.state !== 'done' || !row.r2_key || !row.sha256 || !row.format) return null;
     const obj = await this.env.R2.get(row.r2_key);
     if (!obj) return null;
     const bytes = new Uint8Array(await obj.arrayBuffer());
     if (bytes.byteLength > MAX_FILE_BYTES) return null;
     const digest = await crypto.subtle.digest('SHA-256', bytes);
     const sha = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-    return sha === row.sha256 ? bytes : null;
+    return sha === row.sha256 ? { format: row.format, bytes } : null;
   }
 
   /** §B-4-d 手順 6: inspected → listed → ingested → versioned。各段階の途中経過は reconcile_state_json に置き、ページ / ファイル単位で再開する */
@@ -1557,21 +1556,41 @@ class Reconciler {
       return this.fail(job, 'invalid_outputs');
     }
     const refs = imageRefs.refs.filter((r) => isSafeRelativePath(r.path)); // 安全でない path は R2 のキーにしない（§E の path_outside_part に落ちる）
-    const layout = resolveOutputLayout(rawNames, materialText, refs.map((r) => r.path));
+    // R2 を読む前に数で落とす（material.json が image_id の files を大量に並べても、読む回数は 1 job の上限 8 回まで）:
+    // raw のファイル数 + 異なる参照 path の数 > MAX_FILES は too_many_files、異なる image_id が 8 を超えたら bad_image_ref
+    const refPaths = new Set(refs.map((r) => r.path));
+    const rawCount = new Set(rawNames).size;
+    if (rawCount + refPaths.size > MAX_FILES) {
+      await this.casJob('last_error = ?', '', `too_many_files:${rawCount + refPaths.size}`);
+      return this.fail(job, 'invalid_outputs');
+    }
+    const imageIdsSeen = new Set<string>();
+    for (const ref of refs) {
+      imageIdsSeen.add(ref.image_id);
+      if (imageIdsSeen.size > IMAGE_JOB_LIMIT) {
+        await this.casJob('last_error = ?', '', `bad_image_ref:${ref.path}`.slice(0, 200));
+        return this.fail(job, 'invalid_outputs');
+      }
+    }
+    const layout = resolveOutputLayout(rawNames, materialText, [...refPaths]);
     if (!layout.ok) {
       await this.casJob('last_error = ?', '', layout.detail.slice(0, 200));
       return this.fail(job, 'invalid_outputs');
     }
     const files = new Map<string, Uint8Array>();
     for (const [logical, base] of layout.files) files.set(logical, raw.get(base)!);
+    // 同じ image_id は 1 回だけ読む（契約は 2 つの path からの参照を禁じていないので許し、同じバイト列を両方の path に置く）
+    const loaded = new Map<string, { format: string; bytes: Uint8Array } | null>();
     for (const ref of refs) {
       if (files.has(ref.path)) continue; // 同じ path の重複した参照
-      const bytes = await this.generatedImageBytes(job, ref);
-      if (!bytes) {
+      if (!loaded.has(ref.image_id)) loaded.set(ref.image_id, await this.generatedImage(job, ref.image_id));
+      const img = loaded.get(ref.image_id) ?? null;
+      const ext = ref.path.endsWith('.webp') ? 'webp' : ref.path.endsWith('.png') ? 'png' : null;
+      if (!img || ext === null || img.format !== ext) {
         await this.casJob('last_error = ?', '', `bad_image_ref:${ref.path}`.slice(0, 200));
         return this.fail(job, 'invalid_outputs');
       }
-      files.set(ref.path, bytes);
+      files.set(ref.path, img.bytes);
     }
     const schema = validateOutputs(files);
     if (!schema.ok) {
