@@ -85,7 +85,7 @@ export async function applyTriage(env: Env, v: TriageVersionRow, t: TriageOutput
       db,
       stmt(
         `UPDATE material_versions SET verification_status = 'pending', verification_attempts = 0, verification_token = NULL,
-           verify_phase = NULL, verify_phase_at = NULL, verify_batch_id = NULL, verify_turn = 0, verify_pauses = 0, verify_micro = 0,
+           verify_phase = NULL, verify_phase_at = NULL, verify_batch_id = NULL, verify_turn = 0, verify_pauses = 0, verify_micro = 0, verify_collect_errors = 0,
            auto_reverified = 1, triaged_verification_id = NULL
          WHERE id = ? AND ${GUARD} AND auto_reverified = 0`,
         v.id,

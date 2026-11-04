@@ -849,3 +849,134 @@ describe('§L-2 同期モード（Astra xhigh #2 #3）', () => {
     expect(ver()).toMatchObject({ verification_status: 'pending', verification_token: null, verification_attempts: 1 });
   });
 });
+
+describe('§L-2 4-3 結果取得の一時エラーの回数上限（verify_collect_errors。Astra high #1 / §R-53 (a)）', () => {
+  const submitted = async () => {
+    seed();
+    const s = makeStub();
+    s.status = 'in_progress';
+    await step(s.port);
+    expect(ver().verify_phase).toBe('submitted');
+    s.status = 'ended';
+    return s;
+  };
+  /** collecting のまま 30 分たったことにする（次の cron の掃除が submitted に戻して回収し直す） */
+  const age = () => setPhaseAt('v1', ago(31 * MIN));
+
+  it.each([401, 403])('%s が 6 回続くと試行失敗 + 見積り（5 回までは collecting のまま +1）。次の lease で 0 に戻る', async (status) => {
+    const s = await submitted();
+    const token = String(ver().verification_token);
+    s.resultsError = new PortError(true, status, 'api_error');
+    for (let i = 1; i <= 5; i++) {
+      const out = await step(s.port);
+      expect(out).toContain('collect=results_error');
+      expect(ver()).toMatchObject({ verification_status: 'running', verify_phase: 'collecting', verify_collect_errors: i });
+      expect(vbRows()).toHaveLength(0);
+      age();
+    }
+    const out = await step(s.port);
+    expect(out).toContain('collect=retry:results_error_cap');
+    expect(ver()).toMatchObject({ verification_status: 'pending', verify_phase: null, verify_collect_errors: 0, verification_attempts: 1 });
+    expect(vbRows()).toEqual([{ ref_id: verifyLedgerRefId('v1', token, 0), cents: 150, kind: 'verify' }]);
+    s.resultsError = null;
+    s.status = 'in_progress';
+    await step(s.port); // 新しい試行の lease・提出
+    expect(ver()).toMatchObject({ verification_status: 'running', verify_phase: 'submitted', verify_collect_errors: 0, verification_attempts: 2 });
+  });
+
+  it('新しい試行の lease で 0 に戻る（reverify 等で pending に残った値を持ち越さない）', async () => {
+    seed();
+    db.prepare("UPDATE material_versions SET verify_collect_errors = 5 WHERE id = 'v1'").run();
+    expect(await leaseBatch(env)).toBe('leased:v1');
+    expect(ver()).toMatchObject({ verify_phase: 'to_submit', verify_collect_errors: 0 });
+  });
+
+  it('5 回の一時エラーの後に読めれば回収する（見積りなし）', async () => {
+    const s = await submitted();
+    s.resultsError = new PortError(true, 401, 'api_error');
+    for (let i = 1; i <= 5; i++) {
+      await step(s.port);
+      age();
+    }
+    expect(ver().verify_collect_errors).toBe(5);
+    s.resultsError = null;
+    await step(s.port);
+    expect(ver()).toMatchObject({ verification_status: 'done', verify_phase: null, verify_collect_errors: 0 });
+    expect(vbRows().map((r) => r.cents)).toEqual([4]);
+  });
+
+  it('ターンが進むと 0 に戻る（t0 で 3 回 + t1 で 5 回でも試行は続く）', async () => {
+    const s = await submitted();
+    s.reply = (turn) => (turn === 0 ? ok(pauseMsg()) : ok(reportMsg()));
+    s.resultsError = new PortError(false, undefined, 'connection');
+    for (let i = 1; i <= 3; i++) {
+      await step(s.port);
+      age();
+    }
+    s.resultsError = null;
+    await step(s.port); // t0 回収 → to_submit t1
+    expect(ver()).toMatchObject({ verify_phase: 'to_submit', verify_turn: 1, verify_collect_errors: 0 });
+    s.status = 'in_progress';
+    await step(s.port); // t1 提出
+    s.status = 'ended';
+    s.resultsError = new PortError(true, 503, 'api_error');
+    for (let i = 1; i <= 5; i++) {
+      await step(s.port);
+      age();
+    }
+    expect(ver()).toMatchObject({ verify_turn: 1, verify_collect_errors: 5 });
+    s.resultsError = null;
+    await step(s.port);
+    expect(ver().verification_status).toBe('done');
+  });
+});
+
+describe('§R-53 (b) 同期モードの締め切りは本文の受信まで効く（Astra high #2）', () => {
+  /** ヘッダの後で本文が止まったままの /v1/messages（fetch の signal は見ない） */
+  const stalledFetch = (() => {
+    return (async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(new TextEncoder().encode('{"id":"msg_1","type":"message",'));
+          },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof fetch;
+  })();
+  const params = () => ({ model: 'claude-opus-5-5', max_tokens: 10, messages: [{ role: 'user' as const, content: 'x' }] });
+
+  it('本物の port: createMessage の JSON 本文が止まったら deadline で PortError(timeout)', async () => {
+    const port = realPort({ ...env, ANTHROPIC_API_KEY: 'test-not-a-key' } as Env, { fetchImpl: stalledFetch });
+    const t0 = performance.now();
+    const err = await port.createMessage(params(), { deadline: Date.now() + 1_500, maxTimeoutMs: SYNC_CALL_MAX_MS }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PortError);
+    expect((err as PortError).kind).toBe('timeout');
+    expect(performance.now() - t0).toBeLessThan(5_000);
+  });
+
+  it('同期の 1 件: 本文が止まっても cron の deadline を超えずに抜け、試行は再試行へ（記帳なし）', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-04T03:00:00.000Z'));
+    env = makeEnv({ VERIFY_MODE: 'sync' });
+    seed();
+    const real = realPort({ ...env, ANTHROPIC_API_KEY: 'test-not-a-key' } as Env, { fetchImpl: stalledFetch });
+    const deadline = Date.now() + 61_000; // ターンを始められる残り（60 秒以上）
+    const port = {
+      ...real,
+      // ターンの確認の後、呼び出しまでに 59 秒たったことにする（残り 2 秒で呼ぶ）
+      createMessage: (p: Parameters<FactoryPort['createMessage']>[0], o?: Parameters<FactoryPort['createMessage']>[1]) => {
+        vi.setSystemTime(new Date(Date.now() + 59_000));
+        return real.createMessage(p, o);
+      },
+    } as FactoryPort;
+    const t0 = performance.now();
+    const out = await runVerificationStep(env, port, { deadline });
+    const elapsed = performance.now() - t0;
+    expect(out).toBe('retry:api:PortError');
+    expect(elapsed).toBeGreaterThan(1_000);
+    expect(elapsed).toBeLessThan(6_000); // 残り 2 秒 + 余裕。止まった本文を待ち続けない
+    expect(ver()).toMatchObject({ verification_status: 'pending', verification_token: null });
+    expect(rows(db, "SELECT id FROM cost_ledger WHERE kind = 'verify'")).toHaveLength(0);
+  }, 20_000);
+});

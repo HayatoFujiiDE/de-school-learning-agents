@@ -321,7 +321,7 @@ export async function reverify(c: RouteCtx, vid: string): Promise<Response> {
     db,
     stmt(
       `UPDATE material_versions SET verification_status = 'pending', verification_token = NULL, verification_attempts = 0,
-         verify_phase = NULL, verify_phase_at = NULL, verify_batch_id = NULL, verify_turn = 0, verify_pauses = 0, verify_micro = 0,
+         verify_phase = NULL, verify_phase_at = NULL, verify_batch_id = NULL, verify_turn = 0, verify_pauses = 0, verify_micro = 0, verify_collect_errors = 0,
          triaged_verification_id = NULL
        WHERE id = ? AND status = 'review' AND verification_status IN ('done','failed')`,
       vid,

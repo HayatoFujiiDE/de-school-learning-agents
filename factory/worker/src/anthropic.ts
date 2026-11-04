@@ -292,7 +292,21 @@ export function realPort(env: Env, opts: { fetchImpl?: typeof fetch } = {}): Fac
         return (await readBodyCapped(res, DOWNLOAD_MAX_BYTES, ro.signal)).bytes;
       });
     },
-    createMessage: (params, o) => call(() => longClient.messages.create(params, requestOptions(o))),
+    createMessage: (params, o) => {
+      if (!o?.deadline) return call(() => longClient.messages.create(params, requestOptions(o)));
+      // deadline 付き（同期の検証係 §R-53 (b)・収集部隊）: SDK の timeout はヘッダ受信で解除され JSON 本文の受信には効かないので、
+      // 本文の受信まで縛る絶対期限の AbortSignal を渡し、応答（本文の parse まで）を期限と競わせる（fetch 実装が signal を見なくても抜ける）
+      const ro = requestOptions(o);
+      const signal = AbortSignal.timeout(ro.timeout ?? CALL_TIMEOUT_MAX_MS);
+      return callWithSignal(signal, async () => {
+        const race = abortRace(signal);
+        try {
+          return await Promise.race([longClient.messages.create(params, { ...ro, signal }), race.promise]);
+        } finally {
+          race.dispose();
+        }
+      });
+    },
     // §L-2 / §R-40: batches.create は常に再試行しない（応答不明の再送で迷子の batch を増やさない）。deadline があれば timeout も縛る
     createBatch: (params, o) => call(async () => toBatchView(await client.messages.batches.create(params, { ...requestOptions(o), maxRetries: 0 }))),
     retrieveBatch: (id, o) => call(async () => toBatchView(await client.messages.batches.retrieve(id, {}, requestOptions(o)))),

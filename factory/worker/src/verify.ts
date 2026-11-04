@@ -493,10 +493,11 @@ export interface BatchRow extends VersionForVerify {
   verify_pauses: number;
   verify_micro: number;
   verify_batch_id: string | null;
+  verify_collect_errors: number;
 }
 
 const BATCH_COLS =
-  'id, material_id, r2_prefix, claims_json, verification_token, verify_phase, verify_phase_at, verify_turn, verify_pauses, verify_micro, verify_batch_id';
+  'id, material_id, r2_prefix, claims_json, verification_token, verify_phase, verify_phase_at, verify_turn, verify_pauses, verify_micro, verify_batch_id, verify_collect_errors';
 
 /** CAS の述語（§L-2: id・running・token・turn・phase、回収は batch_id も） */
 interface Lock {
@@ -553,7 +554,7 @@ function failStmts(env: Env, l: Lock, materialId: string, o: { reason: string; t
   const w = lockSql(l);
   out.push({
     sql: `UPDATE material_versions SET verification_status = CASE WHEN ? = 1 OR verification_attempts >= ? THEN 'failed' ELSE 'pending' END,
-            verification_token = NULL, verify_phase = NULL, verify_phase_at = NULL, verify_batch_id = NULL
+            verification_token = NULL, verify_phase = NULL, verify_phase_at = NULL, verify_batch_id = NULL, verify_collect_errors = 0
           WHERE ${w.sql}`,
     params: [o.terminal ? 1 : 0, cfg(env).verifyMaxAttempts, ...w.params],
   });
@@ -622,7 +623,7 @@ export async function leaseBatch(env: Env): Promise<string> {
     db,
     stmt(
       `UPDATE material_versions SET verification_status = 'running', verification_started_at = ?, verification_attempts = verification_attempts + 1, verification_token = ?,
-         verify_phase = 'to_submit', verify_phase_at = ?, verify_turn = 0, verify_pauses = 0, verify_micro = 0, verify_batch_id = NULL
+         verify_phase = 'to_submit', verify_phase_at = ?, verify_turn = 0, verify_pauses = 0, verify_micro = 0, verify_batch_id = NULL, verify_collect_errors = 0
        WHERE id = ? AND verification_status = 'pending' AND verification_attempts < ?`,
       now,
       crypto.randomUUID(),
@@ -760,6 +761,26 @@ export function permanentResultsError(e: unknown): string | null {
   return null;
 }
 
+/** 結果取得の一時エラーの上限（このターンで 6 回目に試行失敗。30 分掃除の周期で約 3 時間） */
+export const COLLECT_ERRORS_MAX = 6;
+
+/**
+ * 結果取得の一時エラーを 1 回数える。collecting の処理権を持っている間は他の cron がこの列を変えないので、取った後の値を読み直して判定する。
+ * 上限に達したら試行失敗 + 見積り、それ以外は同じ CAS で +1 して collecting のまま
+ */
+async function recordCollectError(env: Env, lc: Lock, materialId: string, kind: string): Promise<string> {
+  const cur = await first<{ n: number }>(env.DB, stmt('SELECT verify_collect_errors AS n FROM material_versions WHERE id = ?', lc.id));
+  if (Number(cur?.n ?? 0) + 1 >= COLLECT_ERRORS_MAX) {
+    return failAttempt(env, lc, materialId, { reason: `results_error_cap:${kind}`, ledgerCents: cfg(env).verifyTurnReserveCents });
+  }
+  const w = lockSql(lc);
+  const ok = await cas(env.DB, {
+    sql: `UPDATE material_versions SET verify_collect_errors = verify_collect_errors + 1 WHERE ${w.sql} AND verify_collect_errors = ?`,
+    params: [...w.params, Number(cur?.n ?? 0)],
+  });
+  return ok ? `results_error:${kind}` : 'conflict';
+}
+
 /** 4. 回収（1 件） */
 export async function collectOne(env: Env, port: FactoryPort, r: BatchRow, deadline: number): Promise<string> {
   const c = cfg(env);
@@ -784,14 +805,15 @@ export async function collectOne(env: Env, port: FactoryPort, r: BatchRow, deadl
   }
   const lc = lockOf(r, 'collecting', true);
   // 4-3 結果（16 MiB）。結果が二度と読めない失敗（results_url 無し・404・410・本文不正）は「無い・切れた」と同じく試行失敗 + 見積り。
-  // 一時的な失敗（接続断・timeout・5xx・429 等）は collecting のまま（30 分後に掃除が submitted へ戻して回収し直す）
+  // 一時的な失敗（接続断・timeout・5xx・429・401・403・その他の 4xx）は verify_collect_errors+1 を同じ CAS で書いて collecting のまま
+  // （30 分後に掃除が submitted へ戻して回収し直す）。COLLECT_ERRORS_MAX 回目で試行失敗 + 見積り（§R-53 (a)）
   let results: MessageBatchIndividualResponse[];
   try {
     results = await port.batchResults(r.verify_batch_id, { deadline, maxBytes: VERIFY_RESULTS_MAX_BYTES });
   } catch (e) {
     const permanent = permanentResultsError(e);
     if (permanent) return failAttempt(env, lc, r.material_id, { reason: `results_${permanent}`, ledgerCents: c.verifyTurnReserveCents });
-    return `results_error:${errorKind(e)}`;
+    return recordCollectError(env, lc, r.material_id, errorKind(e));
   }
   const row = results.find((x) => x?.custom_id === `t${r.verify_turn}`);
   // 無い・切れた（上限を超えた行は閉じていないので捨てられる）→ 試行失敗 + 見積り
@@ -812,7 +834,7 @@ export async function collectOne(env: Env, port: FactoryPort, r: BatchRow, deadl
   if (d.kind === 'continue') {
     stmts.push({
       sql: `UPDATE material_versions SET verify_phase = 'to_submit', verify_phase_at = ?, verify_turn = verify_turn + 1, verify_micro = verify_micro + ?,
-              verify_pauses = verify_pauses + ?, verify_batch_id = NULL
+              verify_pauses = verify_pauses + ?, verify_batch_id = NULL, verify_collect_errors = 0
             WHERE ${wc.sql}`,
       params: [now, d.micro, d.pauseInc, ...wc.params],
     });
@@ -820,7 +842,7 @@ export async function collectOne(env: Env, port: FactoryPort, r: BatchRow, deadl
     stmts.push(verificationInsert(r.id, d.report, d.meta, microDollarsToCents(r.verify_micro + d.micro), now, existsLock(lc)));
     stmts.push({
       sql: `UPDATE material_versions SET verification_status = 'done', verification_token = NULL, verify_phase = NULL, verify_phase_at = NULL,
-              verify_batch_id = NULL, verify_micro = verify_micro + ?
+              verify_batch_id = NULL, verify_collect_errors = 0, verify_micro = verify_micro + ?
             WHERE ${wc.sql}`,
       params: [d.micro, ...wc.params],
     });
