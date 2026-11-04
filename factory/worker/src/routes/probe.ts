@@ -54,6 +54,39 @@ export async function probeImageTool(c: RouteCtx): Promise<Response> {
       await setSetting(c.env.DB, 'probe_image_tool', JSON.stringify({ session_id: s.id, agent_id: agent.id }));
       return json(200, { ok: true, agent_id: agent.id, agent_tools: (agent.tools ?? []).map((t) => (t as { type?: string; name?: string }).name ?? (t as { type?: string }).type), session_id: s.id });
     }
+    // p1: OpenAI の画像 1 枚の所要時間と usage（画像本文は返さない）。累計の見積りが $3 を超えたら止める
+    if (step === 'image') {
+      if ((await getSetting(c.env.DB, 'paused')) === '1') return json(409, { error: 'paused' });
+      const MODELS = ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'];
+      const QUALITIES = ['low', 'medium', 'high', 'xhigh', 'max'];
+      const SIZES = ['1024x1024', '1536x1024', '1024x1536'];
+      const model = String(body.model ?? ''), quality = String(body.quality ?? ''), size = String(body.size ?? '');
+      if (!MODELS.includes(model) || !QUALITIES.includes(quality) || !SIZES.includes(size)) return json(400, { error: 'bad_params' });
+      const spent = Number((await getSetting(c.env.DB, 'probe_p1_spent_cents')) ?? '0');
+      if (spent >= 300) return json(409, { error: 'probe_budget_used', spent_cents: spent });
+      const key = (c.env as unknown as { OPENAI_API_KEY?: string }).OPENAI_API_KEY;
+      if (!key) return json(409, { error: 'no_openai_key' });
+      const t0 = Date.now();
+      const r = await fetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ model, prompt: 'A clear educational diagram of a Minecraft-style redstone circuit: a lever, redstone dust, a repeater and a lamp on a grid, labeled in simple shapes, flat colors.', size, quality, n: 1, output_format: 'png' }),
+        signal: AbortSignal.timeout(180_000),
+      });
+      const ms = Date.now() - t0;
+      const j = (await r.json().catch(() => ({}))) as { data?: Array<{ b64_json?: string }>; usage?: Record<string, unknown>; error?: { type?: unknown; code?: unknown; message?: unknown } };
+      const u = (j.usage ?? {}) as { input_tokens?: number; output_tokens?: number; input_tokens_details?: unknown; output_tokens_details?: unknown };
+      // 見積り: text 入力 $5 / 画像出力 $30 per 1M tokens（context.md の公式料金）。切り上げ
+      const cents = Math.ceil(((u.input_tokens ?? 0) * 5 + (u.output_tokens ?? 0) * 30) / 10_000);
+      await setSetting(c.env.DB, 'probe_p1_spent_cents', String(spent + (r.ok ? Math.max(cents, 1) : 0)));
+      const b64 = j.data?.[0]?.b64_json ?? '';
+      return json(200, {
+        ok: r.ok, http: r.status, ms, model, quality, size,
+        usage: { input_tokens: u.input_tokens ?? null, output_tokens: u.output_tokens ?? null, input_details: u.input_tokens_details ?? null, output_details: u.output_tokens_details ?? null },
+        est_cents: cents, spent_cents_after: spent + (r.ok ? Math.max(cents, 1) : 0), image_bytes: Math.floor((b64.length * 3) / 4),
+        error: r.ok ? null : { type: String(j.error?.type ?? ''), code: String(j.error?.code ?? ''), message: String(j.error?.message ?? '').replace(/sk-[A-Za-z0-9_*.-]+/g, '<redacted>').slice(0, 300) },
+      });
+    }
     if (!saved || !sid || sid !== saved.session_id) return json(403, { error: 'not_the_probe_session' });
     if (step === 'events') {
       const p = await client.beta.sessions.events.list(sid, { order: 'asc' } as never);
