@@ -176,7 +176,7 @@ window.DES = window.DES || {};
       var page = H('div', { class: 'chat-page' }, [
         H('div', { class: 'chat-welcome' }, [DES.raw(DES.buddy(56, 'happy')), H('h1', null, T('welcome_h')), H('p', null, T('welcome_p'))]),
         H('div', { class: 'message-list', id: 'message-list' }),
-        H('div', { class: 'chat-bridge' }, [H('p', null, T('bridge')), H('a', { class: 'btn', href: '#make' }, T('make'))]),
+        H('div', { class: 'chat-bridge' }, [H('p', null, T('bridge')), H('a', { class: 'btn', href: '#make', 'data-action': 'bridge-make' }, T('make'))]),
         H('div', { class: 'composer' }, [
           H('label', { class: 'sr-only', for: 'composer' }, T('composer_label')),
           H('textarea', { id: 'composer', rows: '3', placeholder: T('composer_ph'), 'data-ui': 'composer', value: draft }),
@@ -249,4 +249,6 @@ window.DES = window.DES || {};
   var A = DES.actions = DES.actions || {};
   A['send'] = function () { TK.send(); };
   A['media'] = function () { DES.app.toast(T('demo_media')); };
+  // bridge（CONTRACT-v3 §U-2）: 直近の本人発言から題材を決め、仮の案 3 つを置いた作業台を作って開く
+  A['bridge-make'] = function () { DES.make.fromTalk(); };
 })();

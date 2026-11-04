@@ -72,8 +72,18 @@ window.DES = window.DES || {};
   var ROUTES = ['talk', 'plan', 'make', 'works', 'today', 'self', 'map', 'trail', 'paused'];
   var NAV = ['talk', 'make', 'works', 'today', 'self', 'map', 'trail'];
 
-  function route() { var h = window.location.hash.replace(/^#/, ''); return ROUTES.indexOf(h) >= 0 ? h : 'talk'; }
+  // #make/<id>（作業台）と #works/capture は前方一致（CONTRACT-v3 §U-3）。他は完全一致
+  var PREFIX = ['make', 'works'];
+  function route() {
+    var h = window.location.hash.replace(/^#/, ''), base = h.split('/')[0];
+    if (PREFIX.indexOf(base) >= 0) return base;
+    return ROUTES.indexOf(h) >= 0 ? h : 'talk';
+  }
   APP.route = route;
+  APP.routeArg = function () {
+    var h = window.location.hash.replace(/^#/, ''), i = h.indexOf('/');
+    return PREFIX.indexOf(route()) >= 0 && i >= 0 ? h.slice(i + 1) : '';
+  };
   APP.bp = function () {
     var mm = function (q) { return window.matchMedia ? window.matchMedia(q).matches : false; };
     if (mm('(max-width:700px)')) return 's';
@@ -84,6 +94,7 @@ window.DES = window.DES || {};
   function motionOK() { return !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); }
   function panelShown(r) {
     var b = APP.bp();
+    if (r === 'make') return !!DES.ui.planOpen;
     if (r !== 'talk') return false;
     return (b === 'xl' || b === 'l') ? DES.state.panel === 'open' : !!DES.ui.planOpen;
   }
@@ -146,7 +157,8 @@ window.DES = window.DES || {};
   // plan-dialog が開いている間はその内側の末尾に置く（modal の外は操作できないため。T-2）
   var toastTimer = null, toastFn = null, toastGone = null;
   function placeToast() {
-    var el = $('#toast'), p = $('#plan-dialog'), host = p && p.open ? p : document.body;
+    var el = $('#toast'), host = document.body;
+    ['#plan-dialog', '#make-dialog', '#works-dialog'].forEach(function (s) { var d = $(s); if (d && d.open) host = d; });
     if (el.parentNode !== host) host.appendChild(el);
   }
   APP.toast = function (text, action) {
@@ -344,12 +356,14 @@ window.DES = window.DES || {};
     renderSidebar(r);
     renderTopbar(r);
     renderTabbar(r);
-    var main = $('#main'), key = r + '|' + st.mode, rebuild = u.built !== key;
+    var main = $('#main'), key = r + '|' + APP.routeArg() + '|' + st.mode, rebuild = u.built !== key;
     u.built = key;
     if (r === 'talk') DES.talk.renderPage(main, rebuild);
     else if (r === 'plan') DES.plan.renderPage(main);
+    else if (r === 'make') DES.make.render(main, APP.routeArg());
+    else if (r === 'works') DES.works.render(main, APP.routeArg());
     else if (rebuild) {
-      if (r === 'paused') DES.talk.renderPaused(main);
+      if (r === 'paused') { if (DES.make.pausedAct()) DES.make.renderPaused(main); else DES.talk.renderPaused(main); }
       else { main.textContent = ''; main.appendChild(H('p', { class: 'empty-line' }, T('not_yet'))); }
     }
     renderPlanDialog();
@@ -377,6 +391,8 @@ window.DES = window.DES || {};
   A['plan-toggle'] = function (el) {
     var r = route(), b = APP.bp(), st = DES.state;
     if (r === 'plan') { window.location.hash = '#talk'; return; }
+    // 作るでは作業台を残したまま、右から被さる drawer（≤ 700 は上からのシート）で開く（design-v3 §5-2）
+    if (r === 'make') { if (DES.ui.planOpen) APP.closePlanDialog(); else APP.openPlan(el); return; }
     if (r !== 'talk') {
       if (b === 'xl' || b === 'l') { st.panel = 'open'; if (!DES.store.save('panel')) st.saveFailed = true; }
       else DES.ui.openPlanAfterNav = true;
@@ -398,12 +414,15 @@ window.DES = window.DES || {};
 
   function closeTransient() {
     var u = DES.ui;
-    ['#plan-dialog', '#nav-drawer', '#row-sheet', '#pick-sheet', '#mode-dialog'].forEach(function (s) { APP.closeDialog($(s), true); });
+    ['#plan-dialog', '#nav-drawer', '#row-sheet', '#pick-sheet', '#mode-dialog', '#make-dialog', '#works-dialog'].forEach(function (s) { APP.closeDialog($(s), true); });
     u.menu = null; u.edit = null; u.goalEdit = null; u.noSlot = {};
+    DES.make.resetUi();
+    DES.works.resetUi();
   }
   function onHash() {
     var u = DES.ui, st = DES.state, r = route();
     if (u.lastRoute === 'talk' && r !== 'talk') { st.draft.scroll = window.scrollY || 0; if (!DES.store.save('draft')) st.saveFailed = true; }
+    if (u.lastRoute === 'paused' && r !== 'paused') DES.make.clearPaused();
     closeTransient();
     u.lastRoute = r;
     APP.render();
@@ -493,6 +512,8 @@ window.DES = window.DES || {};
     bind();
     DES.plan.initDnD();
     DES.talk.bind();
+    DES.make.bind();
+    DES.works.bind();
     APP.render();
   }
   init();

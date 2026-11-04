@@ -644,7 +644,8 @@
     overlaps(rows, c, ui().actor).sort(function (a, b) { return toMin(a.otherStart) - toMin(b.otherStart); })
       .forEach(function (x) { if (!conf[x.id]) conf[x.id] = x; });
     var seen = ui().seen[o.ctx], nextSeen = {};
-    var optMenu = o.ctx !== 'page' ? (bp() !== 'xl') : (bp() === 's');
+    // drawer / sheet（ctx 'dialog'）は幅 340px 以下なので常に「…」へ収納（T-3）。作るの drawer は ≥ 1121 でも開く（§U）
+    var optMenu = o.ctx === 'dialog' ? true : (o.ctx !== 'page' ? (bp() !== 'xl') : (bp() === 's'));
     var items = { am: [], lunch: [], pm: [] };
     L.forEach(function (r) { items[blockOf(r.start, c)].push({ t: 'row', s: toMin(r.start), e: toMin(r.end), r: r }); });
     freeSlots(rows, c).forEach(function (f) { items[f.block].push({ t: 'free', s: toMin(f.start), e: toMin(f.end), f: f }); });
@@ -780,7 +781,9 @@
       btn(T('fix_time'), 'row-time', { id: r.id, attrs: { role: 'menuitem' } }),
       btn(T('remove'), 'row-remove', { id: r.id, attrs: { role: 'menuitem' } }),
       btn(T('hide'), 'row-hide', { id: r.id, attrs: { role: 'menuitem' } }),
-      btn(T('finished'), 'row-finish', { id: r.id, icon: 'check', attrs: { role: 'menuitem' } })
+      btn(T('finished'), 'row-finish', { id: r.id, icon: 'check', attrs: { role: 'menuitem' } }),
+      // 7 つ目（design-v3 §3 / CONTRACT-v3 §U-3）: その取り組みの作業台、無ければ作るの入口へ
+      btn(T('open_in_make'), 'row-make', { id: r.id, icon: 'make', attrs: { role: 'menuitem' } })
     ];
   }
   P.menuItems = menuItems;
@@ -1002,6 +1005,12 @@
   A['row-show'] = function (el) { act.show(el.getAttribute('data-id')); };
   A['row-finish'] = function (el) { ui().menu = null; act.finish(el.getAttribute('data-id')); };
   A['opt'] = function (el) { ui().menu = null; act.choice(el.getAttribute('data-id'), el.getAttribute('data-arg')); };
+  A['row-make'] = function (el) {
+    var r = find(S().plan, el.getAttribute('data-id'));
+    ui().menu = null;
+    DES.app.closePlanDialog();
+    DES.make.openFromPlan(r);
+  };
   A['free-add'] = function (el) { P.openPick(el.getAttribute('data-arg'), el); };
   A['pick'] = function (el) {
     var dlg = document.querySelector('dialog.pick-sheet');
