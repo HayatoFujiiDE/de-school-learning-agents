@@ -442,3 +442,30 @@ body.floor-wide .view { max-width: 1600px; padding-left: 12px; padding-right: 12
   .aq-own textarea, .rv-reason textarea, .dlg textarea { font-size: 16px; }
   .rv-foot { padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
 }
+
+/* ---- 工場ビューの制作キュー（640px 以下）。表をカードに組み替え、名前・ステータス・進捗・操作を横スクロールなしで見せる。工程チップだけ横スクロール ---- */
+@media (max-width: 640px) {
+  .fq-wrap { overflow-x: visible; }
+  .fq-table, .fq-table tbody { display: block; min-width: 0; width: 100%; }
+  .fq-table colgroup { display: none; }
+  .fq-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .fq-table tr.fq-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name status" "steps steps" "prog op"; align-items: center; gap: 8px 10px;
+    padding: 12px 10px; border-bottom: 1px solid #ededf3; background: #fff; }
+  .fq-table tr.fq-row td { display: block; padding: 0; border: 0; background: none; border-radius: 0; }
+  .fq-table tr.fq-row.att { background: #fff6dc; border-bottom-color: transparent; border-radius: 12px; margin-bottom: 6px; }
+  .fq-table tr.fq-row.att.open { border-radius: 12px 12px 0 0; margin-bottom: 0; }
+  .fq-table td.fq-name { grid-area: name; min-width: 0; }
+  .fq-table td.fq-status { grid-area: status; justify-self: end; }
+  .fq-table td.fq-steps { grid-area: steps; min-width: 0; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding-bottom: 2px; }
+  .fq-table td.fq-steps::-webkit-scrollbar { display: none; }
+  .fq-table td.fq-prog { grid-area: prog; min-width: 0; }
+  .fq-table td.fq-opcell { grid-area: op; justify-self: end; padding: 0; }
+  .fq-bar { width: 100%; min-width: 80px; }
+  .fq-prog-in { gap: 8px; }
+  .fq-prog-in b { flex: none; min-width: 3.2em; text-align: right; }
+  .fq-title { font-size: 16px; }
+  .fq-table tr.fq-detail { display: block; margin-bottom: 6px; }
+  .fq-table tr.fq-detail td { display: block; padding: 6px 12px 14px; }
+  .fq-table tr.fq-detail.att td { border-radius: 0 0 12px 12px; }
+  .fq-detail-in { grid-template-columns: 1fr; }
+}
