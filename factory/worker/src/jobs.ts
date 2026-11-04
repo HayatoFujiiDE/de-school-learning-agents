@@ -92,8 +92,11 @@ export const CUSTOM_TOOL_UNAVAILABLE_MESSAGE = '画像生成はまだ使えま�
 const MAKER_CUSTOM_TOOLS: readonly string[] = [];
 /** §M-5: この custom tool 呼び出しは is_error の結果で返すか */
 export const rejectsCustomTool = (name: string): boolean => name === 'generate_image' || !MAKER_CUSTOM_TOOLS.includes(name);
-/** requires_action の event_ids を探して、idle より古い側を何件まで読むか（ブロック中の tool use は idle の直前にある） */
-const BLOCKED_LOOKBACK = 200;
+/**
+ * requires_action の event_ids のうち、events を最後のページまで辿っても種別が分からなかったものがある reconcile がこの回数続いたら
+ * job を failed（error='blocked_event_unresolved'）。種別が分からない id には何も送らない（custom tool に tool_confirmation を送ると API が 400 を返し回復できない）
+ */
+export const BLOCKED_UNRESOLVED_MAX = 3;
 export const OUTCOME_DESCRIPTION = '注文票の素材を /mnt/session/outputs/ に §E の構成で作る。調査→構成→制作→自分で動作確認→selfcheck の順';
 const KIND_LABEL: Record<number, string> = { 3: '説明と図解', 4: '動かせるもの' };
 export const SUPPORTED_KINDS = [3, 4];
@@ -807,6 +810,8 @@ interface ReconcileState {
   scan?: { answer?: unknown; idle?: unknown; files?: unknown };
   /** 保存（D1 書き込み）の例外が続いた回数。成功した保存で消える */
   save_failures?: number;
+  /** requires_action で種別の分からない event_id が残った reconcile の連続回数（§M-5。BLOCKED_UNRESOLVED_MAX で failed） */
+  blocked_unresolved?: number;
   /** inspected: files.list の途中経過（ページの続き位置）。complete になってから必須ファイルを判定する */
   list?: { cursor: string | null; items: ListedFile[]; round: number; complete: boolean };
   /** listed / ingested: 取り込むファイルと、R2 に置き終えた file_id */
@@ -1048,19 +1053,18 @@ class Reconciler {
     // end_turn の時は define_outcome が見つかるまで（無ければ最後のページまで）辿ってから「既送なし」を確定する。
     // 途中集計（id と種別だけ。本文は持たない）は scan.idle に保存し、時間切れの後は続きから（先頭 event が変わっていたら先頭から）
     // requires_action の時は、まだ返していない event_ids の event 種別（custom_tool_use なら name も。input は持たない）を
-    // idle より古い側から BLOCKED_LOOKBACK 件まで探す（§M-5。見つからない id は従来どおり tool_confirmation の deny）
+    // 全部見つかるか最後のページに達するまで探す（§M-5。件数で打ち切らない。時間切れは保存した続き位置から、ページ数の上限は scan_too_many_pages）
     type Blocked = { type: string; name?: string };
     type IdleAgg = {
       idle: { type: string; event_ids: string[] } | null;
       evalEnd: { result: string } | null;
       hasOutcome: boolean;
       blocked?: Record<string, Blocked>;
-      afterIdle?: number;
     };
     const alreadyDenied = new Set(parseJson<string[]>(job.denied_event_ids_json, []));
     const { agg: seen, head } = await this.scan<unknown, IdleAgg>(job, 'idle', {
       base: { purpose: 'idle', job_status: job.status, job_phase: job.phase, session_status: sessionStatus },
-      init: () => ({ idle: null, evalEnd: null, hasOutcome: false, blocked: {}, afterIdle: 0 }),
+      init: () => ({ idle: null, evalEnd: null, hasOutcome: false, blocked: {} }),
       fetch: (cursor) => this.port.listEventsPage(job.session_id!, { order: 'desc', page: cursor }, this.call),
       idOf: eventId,
       fold: (agg, items) => {
@@ -1082,9 +1086,7 @@ class Reconciler {
             if (typeof e.id === 'string' && agg.idle.event_ids.includes(e.id) && !blocked[e.id]) {
               blocked[e.id] = e.type === 'agent.custom_tool_use' ? { type: String(e.type), name: String(e.name ?? '') } : { type: String(e.type ?? '') };
             }
-            agg.afterIdle = (agg.afterIdle ?? 0) + 1;
-            const pending = agg.idle.event_ids.filter((id) => !alreadyDenied.has(id) && !blocked[id]);
-            if (pending.length === 0 || agg.afterIdle >= BLOCKED_LOOKBACK) return true;
+            if (agg.idle.event_ids.every((id) => alreadyDenied.has(id) || blocked[id])) return true;
             continue;
           }
           if (agg.idle.type !== 'end_turn') return true;
@@ -1101,8 +1103,22 @@ class Reconciler {
 
     if (stop === 'requires_action') {
       const denied = new Set(alreadyDenied);
-      const ids = idleEv.event_ids.filter((id) => !denied.has(id));
-      if (ids.length === 0) return 'already_denied';
+      const pending = idleEv.event_ids.filter((id) => !denied.has(id));
+      if (pending.length === 0) return 'already_denied';
+      // 最後のページまで辿っても種別の分からない id には何も送らず、deny にも数えない（§M-5。誤った種別の応答は API が 400 で拒み、回復を塞ぐ）。
+      // 次の reconcile で先頭から探し直す（scan.idle を捨てる）。連続 BLOCKED_UNRESOLVED_MAX 回で failed
+      const ids = pending.filter((id) => seen.blocked?.[id]);
+      const unresolved = pending.length - ids.length;
+      if (unresolved > 0) {
+        const rounds = (this.state.blocked_unresolved ?? 0) + 1;
+        if (rounds >= BLOCKED_UNRESOLVED_MAX) return this.fail(job, 'blocked_event_unresolved');
+        const { idle: _drop, ...scanRest } = this.state.scan ?? {};
+        await this.writeState(job, null, { ...this.state, scan: scanRest, blocked_unresolved: rounds }, 'blocked_event_unresolved');
+        if (ids.length === 0) return `blocked_unresolved:${rounds}`;
+      } else if (this.state.blocked_unresolved) {
+        const { blocked_unresolved: _reset, ...rest } = this.state;
+        await this.writeState(job, null, rest);
+      }
       await this.extend();
       // custom tool（generate_image 等。§M-5）は tool_confirmation ではなく is_error の custom_tool_result で返す。どちらも deny 数に数える
       await this.port.sendEvents(

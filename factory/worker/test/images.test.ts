@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { FactoryPort, FileMeta, Page } from '../src/anthropic';
 import { validateOutputs } from '../src/checks/schema';
 import type { Env } from '../src/env';
-import { CUSTOM_TOOL_UNAVAILABLE_MESSAGE, reconcileJob } from '../src/jobs';
+import { BLOCKED_UNRESOLVED_MAX, CUSTOM_TOOL_UNAVAILABLE_MESSAGE, reconcileJob } from '../src/jobs';
 import { libraryFile, serveVersionFile } from '../src/routes/library';
 import { d1, migratedDb, one } from './d1-shim';
 import { goodFiles, goodMaterial } from './helpers';
@@ -111,7 +111,7 @@ function seedRunningJob(phase: 'making' | 'questions' = 'making') {
   ).run(phase, T, T);
 }
 
-function makePort(o: { outputs?: Map<string, Uint8Array>; events: unknown[]; sent?: unknown[] }): FactoryPort {
+function makePort(o: { outputs?: Map<string, Uint8Array>; events: unknown[]; sent?: unknown[]; pageSize?: number }): FactoryPort {
   const outputs = o.outputs ?? new Map<string, Uint8Array>();
   const metas: FileMeta[] = [...outputs.keys()].map((p, i) => ({
     id: `file_${i}`,
@@ -128,7 +128,11 @@ function makePort(o: { outputs?: Map<string, Uint8Array>; events: unknown[]; sen
     },
     listSessionsPage: no,
     async listEventsPage(_id, q): Promise<Page<unknown>> {
-      return { data: q.order === 'desc' ? [...o.events].reverse() : o.events, next: null };
+      const all = q.order === 'desc' ? [...o.events].reverse() : o.events;
+      if (!o.pageSize) return { data: all, next: null };
+      const off = q.page ? Number(q.page) : 0;
+      const end = off + o.pageSize;
+      return { data: all.slice(off, end), next: end < all.length ? String(end) : null };
     },
     async sendEvents(_id, evs) {
       for (const e of evs) o.sent?.push(e);
@@ -194,6 +198,7 @@ describe('§M 画像の読み取り対応（段階 1）', () => {
       ['parts/p1/photo-2.webp', tinyPng()], // png の中身に .webp
       ['parts/p1/photo-1.png', new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"></svg>')],
       ['parts/p1/photo-2.webp', new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x41, 0x56, 0x49, 0x20])], // RIFF だが AVI
+      ['parts/p1/photo-2.webp', (() => { const b = tinyWebp(); b[3] = 0x58; return b; })()], // WEBP は正しいが先頭が RIFX
       ['parts/p1/photo-1.png', new Uint8Array([0x89, 0x50, 0x4e, 0x47])], // シグネチャの途中で切れている
     ];
     for (const [path, bytes] of cases) {
@@ -238,9 +243,34 @@ describe('§M 画像の読み取り対応（段階 1）', () => {
     expect((await libraryFile(env, 'v1', 'parts/p1/photo-1.png')).status).toBe(404);
     expect((await libraryFile(env, 'v1', 'parts/p1/photo-2.webp')).status).toBe(404);
 
-    // 承認・現行・配信中になれば同じヘッダで返る
-    db.prepare("UPDATE material_versions SET status = 'approved' WHERE id = 'v1'").run();
-    db.prepare("UPDATE materials SET publish_status = 'available', current_version_id = 'v1', work_status = 'idle' WHERE id = 'm1'").run();
+    // 承認・現行・配信中の 3 条件を 1 つずつ外すと 404（配信の可否の条件は変えない §M-3）
+    const setState = (approved: boolean, current: boolean, available: boolean) => {
+      db.prepare('UPDATE material_versions SET status = ? WHERE id = ?').run(approved ? 'approved' : 'review', 'v1');
+      db.prepare('UPDATE materials SET current_version_id = ?, publish_status = ?, work_status = ? WHERE id = ?').run(
+        current ? 'v1' : null,
+        available ? 'available' : 'stopped',
+        'idle',
+        'm1',
+      );
+    };
+    for (const [approved, current, available] of [
+      [false, true, true],
+      [true, false, true],
+      [true, true, false],
+    ] as const) {
+      setState(approved, current, available);
+      for (const p of ['parts/p1/photo-1.png', 'parts/p1/photo-2.webp'])
+        expect((await libraryFile(env, 'v1', p)).status, `approved=${approved} current=${current} available=${available} ${p}`).toBe(404);
+    }
+
+    // 3 条件がそろえば同じヘッダで返る
+    setState(true, true, true);
+    const okPng = await libraryFile(env, 'v1', 'parts/p1/photo-1.png');
+    expect(okPng.status).toBe(200);
+    expect(okPng.headers.get('content-type')).toBe('image/png');
+    expect(okPng.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(okPng.headers.get('cache-control')).toBe('no-store');
+    expect(okPng.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox");
     const ok = await libraryFile(env, 'v1', 'parts/p1/photo-2.webp');
     expect(ok.status).toBe(200);
     expect(ok.headers.get('content-type')).toBe('image/webp');
@@ -270,6 +300,36 @@ describe('§M 画像の読み取り対応（段階 1）', () => {
     if (r.ok) expect(r.publicPaths).toEqual(expect.arrayContaining(['parts/p1/app.html', 'parts/p1/figure-2.svg', 'parts/p1/figure-1.svg']));
   });
 
+  it('(m5) svg variant の本文検査（禁止語・主張 id 参照）は今までどおり走り、png のバイト列は文字として検査しない', async () => {
+    const enc = new TextEncoder();
+    const m = goodMaterial();
+    const part = (m.parts as Array<Record<string, unknown>>)[0];
+    (part.variants as Array<Record<string, unknown>>).push({ audience: 'secondary', length: 'long', interest: null, game: false, path: 'parts/p1/figure-2.svg' });
+    part.files = [
+      { path: 'parts/p1/figure-1.svg', role: 'figure' },
+      { path: 'parts/p1/photo-1.png', role: 'figure' },
+    ];
+    const files = goodFiles(m);
+    files.set('parts/p1/figure-2.svg', enc.encode('<svg xmlns="http://www.w3.org/2000/svg"><text>点数 [c99]</text></svg>'));
+    // 正しい png の後ろに、同じ禁止語（UTF-8）と ASCII の参照 "[c99]" をバイトとして持たせる
+    const tail = enc.encode('点数 [c99]');
+    const png = new Uint8Array(tinyPng().length + tail.length);
+    png.set(tinyPng());
+    png.set(tail, tinyPng().length);
+    files.set('parts/p1/photo-1.png', png);
+
+    seedRunningJob();
+    expect(await reconcileJob(env, makePort({ outputs: files, events: DONE_EVENTS }), 'j1', { deadline: Date.now() + 25_000 })).toBe('versioned');
+    const checks = JSON.parse(String(one(db, "SELECT checks_json FROM material_versions WHERE job_id = 'j1'").checks_json)) as {
+      forbidden: Array<{ path: string; word: string }>;
+      missing_claim_refs: Array<{ path: string; ref: string }>;
+    };
+    expect(checks.forbidden).toContainEqual(expect.objectContaining({ path: 'parts/p1/figure-2.svg', word: '点数' }));
+    expect(checks.missing_claim_refs).toContainEqual({ path: 'parts/p1/figure-2.svg', ref: 'c99' });
+    expect(checks.forbidden.filter((f) => f.path.endsWith('.png'))).toEqual([]);
+    expect(checks.missing_claim_refs.filter((f) => f.path.endsWith('.png'))).toEqual([]);
+  });
+
   it('(m6) generate_image の custom_tool_use に is_error の結果が 1 回だけ返り、deny 数に数える', async () => {
     seedRunningJob();
     const events = [
@@ -297,5 +357,64 @@ describe('§M 画像の読み取り対応（段階 1）', () => {
     expect(j.status).toBe('running');
     expect(j.deny_count).toBe(2);
     expect(JSON.parse(String(j.denied_event_ids_json)).sort()).toEqual(['sevt_ct_1', 'sevt_tu_1']);
+  });
+
+  /** custom_tool_use と idle の間に filler 件の event を挟む */
+  const blockedEvents = (filler: number, blockedIds = ['sevt_ct_1']) => [
+    { id: 'sevt_1', type: 'user.define_outcome' },
+    { id: 'sevt_ct_1', type: 'agent.custom_tool_use', name: 'generate_image', input: { prompt: 'x' } },
+    ...Array.from({ length: filler }, (_, i) => ({ id: `sevt_f_${i}`, type: 'agent.message' })),
+    { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: blockedIds } },
+  ];
+
+  for (const filler of [199, 200, 250])
+    it(`(m6) idle から ${filler + 1} 件前の custom_tool_use でも custom_tool_result を返す（件数で打ち切って tool_confirmation に落とさない。ページをまたぐ）`, async () => {
+      seedRunningJob();
+      const sent: unknown[] = [];
+      expect(await reconcileJob(env, makePort({ events: blockedEvents(filler), sent, pageSize: 100 }), 'j1', { deadline: Date.now() + 25_000 })).toBe('denied:1');
+      expect(sent).toEqual([
+        { type: 'user.custom_tool_result', custom_tool_use_id: 'sevt_ct_1', content: [{ type: 'text', text: CUSTOM_TOOL_UNAVAILABLE_MESSAGE }], is_error: true },
+      ]);
+      expect(one(db, "SELECT deny_count FROM factory_jobs WHERE id = 'j1'").deny_count).toBe(1);
+    });
+
+  it('(m6) 最後のページまで辿っても種別の分からない id には何も送らず deny に数えない。連続で残れば blocked_event_unresolved で failed', async () => {
+    seedRunningJob();
+    const sent: unknown[] = [];
+    const port = makePort({ events: blockedEvents(3, ['sevt_missing']), sent, pageSize: 2 });
+    for (let round = 1; round < BLOCKED_UNRESOLVED_MAX; round++) {
+      expect(await reconcileJob(env, port, 'j1', { deadline: Date.now() + 25_000 })).toBe(`blocked_unresolved:${round}`);
+      expect(one(db, "SELECT status, deny_count, last_error FROM factory_jobs WHERE id = 'j1'")).toEqual({ status: 'running', deny_count: 0, last_error: 'blocked_event_unresolved' });
+    }
+    expect(await reconcileJob(env, port, 'j1', { deadline: Date.now() + 25_000 })).toBe('failed:blocked_event_unresolved');
+    expect(sent).toEqual([]);
+    expect(one(db, "SELECT status, error, deny_count FROM factory_jobs WHERE id = 'j1'")).toEqual({ status: 'failed', error: 'blocked_event_unresolved', deny_count: 0 });
+    expect(one(db, "SELECT work_status FROM materials WHERE id = 'm1'").work_status).toBe('idle');
+  });
+
+  it('(m6) 分かった id だけ返し、分からなかった id は次の reconcile で先頭から探し直す（見えたら custom_tool_result）', async () => {
+    seedRunningJob();
+    const sent: unknown[] = [];
+    const events: unknown[] = [
+      { id: 'sevt_1', type: 'user.define_outcome' },
+      { id: 'sevt_tu_1', type: 'agent.tool_use', name: 'bash', input: {}, evaluated_permission: 'ask' },
+      { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_ct_1', 'sevt_tu_1'] } },
+    ];
+    const port = makePort({ events, sent });
+    expect(await reconcileJob(env, port, 'j1', { deadline: Date.now() + 25_000 })).toBe('denied:1');
+    expect(sent).toEqual([{ type: 'user.tool_confirmation', tool_use_id: 'sevt_tu_1', result: 'deny', deny_message: expect.any(String) }]);
+    expect(one(db, "SELECT deny_count FROM factory_jobs WHERE id = 'j1'").deny_count).toBe(1);
+
+    // 先頭 event（idle）は同じまま、custom_tool_use が一覧に現れる → 保存済み集計を再利用せず探し直して返す
+    events.splice(1, 0, { id: 'sevt_ct_1', type: 'agent.custom_tool_use', name: 'generate_image', input: {} });
+    expect(await reconcileJob(env, port, 'j1', { deadline: Date.now() + 25_000 })).toBe('denied:1');
+    expect(sent.slice(1)).toEqual([
+      { type: 'user.custom_tool_result', custom_tool_use_id: 'sevt_ct_1', content: [{ type: 'text', text: CUSTOM_TOOL_UNAVAILABLE_MESSAGE }], is_error: true },
+    ]);
+    const j = one(db, "SELECT deny_count, reconcile_state_json FROM factory_jobs WHERE id = 'j1'");
+    expect(j.deny_count).toBe(2);
+    expect(JSON.parse(String(j.reconcile_state_json)).blocked_unresolved).toBeUndefined();
+    expect(await reconcileJob(env, port, 'j1', { deadline: Date.now() + 25_000 })).toBe('already_denied');
+    expect(sent).toHaveLength(2);
   });
 });
