@@ -953,7 +953,7 @@ type Cause = 'contradicted' | 'source_not_listed' | 'maker_url_not_fetched' | 'q
 - (l4) approve: auto ok の 3 項目を省略して承認できる / auto が review の項目を省略すると 400 / action が none 以外なら 409 `auto_triage_pending`
 - (l5) 画面: 要確認 0 件・N 件の両方で描画、キー操作で 3 項目が切り替わる、ダイアログ表示中・送信中・キーリピートではキーが効かない、理由の書きかけがあると J/K が効かない、固定フッターの承認が条件どおり有効化（smoke で DOM の要素数を数える）
 
-## §M 画像の読み取り対応（段階 1。v3.7-stage1。2026-11-04 夜凍結。生成＝段階 2 は docs/plans/image-generation/plan-v6.md の GO 後に §M-2 として足す）
+## §M 画像の読み取り対応（段階 1。v3.7-stage1。2026-11-04 夜凍結。生成＝段階 2 は §O）
 
 - §M-1 拡張子: `parts[].variants[].path` は従来どおり `.md` `.svg` `.html`（`isPartPath` を変えない）。`parts[].files[].path` だけ新しい `isPartFilePath` で `.md` `.svg` `.html` `.png` `.webp` を許す
 - §M-2 中身の検査（取り込み時。`validateOutputs`）: `.png` は先頭 8 バイトが `89 50 4E 47 0D 0A 1A 0A`、`.webp` は先頭 4 バイト `RIFF` かつ 8〜11 バイト目 `WEBP`。違えば `invalid_outputs`（detail `bad_image:<path>`）。大きさは既存の 1 ファイル上限のまま
@@ -1190,6 +1190,15 @@ state は `done` / `active` / `waiting` (人の番) / `failed` / `pending` / `sk
 - 戻りの長い矢印（作り直し・自動の作り直し → 職人）は描かない。代わりにその札の 2 行目に小さく「↩ 職人へ」を出す（動いている時だけ）
 - 背景の小物と重複しないように: 背景にはすでに段ボール箱（右下の机）と青いキューブ（下段右の机）がある。キャラ画像側に同じ小物が描かれていても消さなくてよいが、重なって不自然なら anchor を左へずらす（実装側の判断で ±30 まで）
 
+## §O 画像生成（段階 2。v3.9。2026-11-05 凍結。Astra high GO）
+
+本文（正本）は `docs/plans/image-generation/contract-O-draft.md`（§O-0〜§O-11）。同書が「そのまま使う」と指定した `docs/plans/image-generation/contract-M2-draft.md` の節（§M-2-2 a〜c、§M-2-4 e、§M-2-5 a、§M-2-6 a の文と表、§M-2-7）は、同書の差し替えを当てた形で本契約の一部とする。旧下書きのそれ以外の節（状態機械・精算・通知・枠・probe）は使わない。
+
+- 保証は §O-0 の G1〜G3 だけ（月の画像の記帳 ≤ 3000¢ / 1 job 累積 8 枚 / 実額 > U・不明で停止、超過額の上界は主張しない）
+- 職人へ返す形は形 A（base64 直。probe p5、`docs/plans/image-generation/probe-results.md`）
+- 段階 1（§M）の互換（generate_image に is_error）は、§O を deploy して職人定義に tool を足すまで有効。降格の条件は §O-3 e
+- 一時 route `/api/probe/image-tool` と `src/routes/probe.ts` は §O の実装で削除する
+
 ## §R 裁定記録（2026-11-04。Astra medium + 3 視点レビューの指摘への裁定）
 
 1. **`tool_choice: any` は Opus 5.5 で 400** → `auto` + `strict: true` + 再送ループ（§F-3）。採用
@@ -1258,3 +1267,4 @@ v3.5（2026-11-04 段階 0 の実測。最初の本物の session sesn_01Jfui3ap
 52. §L v3.6.2 は Astra high で GO。MINOR（ターン数が §F-3 の 8 回と食い違い）は `verify_turn+1 < 8` に揃えた
 53. 実装レビュー（Astra）の反映: (a) §L-2 の結果取得の一時エラーに永続の回数上限（`verify_collect_errors`、6 回で試行失敗）。migration 0003 は本番未適用なので同じファイルに列を足す (b) 同期モードの締め切りは本文の受信まで効く signal で切る (c) §M-5b 種別が分からない待ちは同じ idle event に 5 分以上の間隔で 3 回数えてから失敗
 54. 予算に当たった job の増額（2026-11-05 オーナー指示「許可したら増額して進むようにして」）: §B-4-d の「Worker からは増額しない」を「運営の明示操作だけが増額する」（§B-4-f `raise-budget`）に置き換え。1 job $50 まで・日次上限・paused を通し、増額の update 自体が作業を再開させる（公式 managed-agents/budgets）。cron・webhook・職人からは増額しない。同日、deny 上限の入口判定（Issue #1、ebf9d9d）を §B-4 0-b の例外として追記済み
+55. 画像生成 段階 2（§O）: 計画 v1〜v9 と旧下書き §M-2 は Astra high で REVISE を繰り返した（指摘 69 件）。RCA の根本原因は、要件（1 素材 8 枚・月 $30）より強い保証（実費の数値上界・試行ごとの精算・結果の到達保証）を自作して合格条件にし、session の events が示す「結果が届いたか」を Worker の状態で推測したこと。§O は保証を G1〜G3 に絞り、精算・通知・枠の状態を持たない形で書き直し、3 回目の Astra high で GO。旧下書きの司令塔の裁定 3（超過の iax 記帳）は取り下げ、6（15 分で is_error）は回数で終端にする形へ変えた。日次上限は取り置きの時だけ判定する（「毎回掛ける」は司令塔の解釈で、オーナーの決定ではなかった）。既存の欠陥（tooManyDenies の後始末）は Issue #2

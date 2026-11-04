@@ -1,4 +1,4 @@
-# §O 画像生成（段階 2）— 契約の下書き v2（2026-11-05。未凍結）
+# §O 画像生成（段階 2）— 契約 v2.3（2026-11-05 凍結。Astra high GO、review-O3）
 
 この版は単独で読める。旧下書き `contract-M2-draft.md` と plan-v4〜v6 への差分ではない。書き直した理由は RCA（下の「書き直しの理由」）。旧下書きから**そのまま使う節**は、節番号を明記して参照する（§O-2 の tool 定義・入力検査・system prompt）。
 
@@ -271,7 +271,7 @@ H2 は人が OpenAI の利用画面で実額を確かめてから押す前提（
 | R1 の後 | 終端 | reconcile が返す | 次の reconcile |
 | C3 の後に遅れた consumer の R1 | failed | R1 は 0 行（state 条件）。R2 の物体は孤立 | — |
 | reconcile が sendEvents の後、保存の前に落ちた | 終端（D1 は送信を記録しない） | 次の reconcile が events の `answered` で見る。見えなければもう一度送る（p4a で無害） | 次の reconcile |
-| job が cancel / failed になった時に queued | queued | D は 0 行。C2 が failed `job_ended` | 次の cron |
+| job が cancel / failed になった時に queued | queued | D は 0 行。C2 が failed `job_ended` | `enqueued_at` から 5 分を過ぎた後、C2 がその依頼を選べた cron（各 20 件の上限で後回しになることがある） |
 | job が終端の時に dispatched | dispatched | 生成は進む。R1 で done。job が終端なので reconcile は noop（`jobs.ts:964`）で返さない。done の行は残り、掃除の対象になる。F は dispatched が無くなってから | R1 か C3 |
 
 どの行も cron が回る限り有限回で終端になり、終端の依頼は reconcile が返すか、job が終わって不要になる。
@@ -453,7 +453,7 @@ UI acceptance criteria（ui-interaction-completeness）:
 | t11 | deny 数の派生を 3 か所で使う: refused / failed 9 件 → 入口で `too_many_denies` | 8 件では止まらない |
 | t12 | 入力検査（旧 t17）・U の表（旧 t18）・取り込みの image_id（旧 t19 の `uploaded` を `done` に）・鍵の印（旧 t20）・(m6) の置き換え（旧 t23） | 旧と同じ |
 | t13 | migration 0004: 既存の台帳と `idx_cost_ledger_vb` が残る・image は job ごとに 1 行（ih と if で 2 行にならない） | — |
-| t14 | 結果の形（§O-6 で決めた形 A か B）と文の表 | — |
+| t14 | 結果の形（形 A: image の base64 block + text）と文の表。fake の画像に 1.5 MB の PNG（base64 で約 2 MB）を使うケースを必ず含め、reconcile が R2 から読んで送る本文の大きさを記録する | 小さい画像だけでは基準を満たさない |
 
 ### smoke（fake の Anthropic + fake の OpenAI、ローカル queue）
 
@@ -477,6 +477,7 @@ UI acceptance criteria（ui-interaction-completeness）:
 2. queue を作り（ふじさんに確認）段階 2 を deploy。職人定義にはまだ tool を足さない
 3. 職人定義に §O-2 を足して `ant apply --dry-run` → `ant apply`（tools に `generate_image`）→ 実 session で 1 枚（見て採用・描き直し → 取り込み → 確認画面）
 4. `background: transparent`・`webp` を 1 枚（param 名の確認）
+5. **quality max・1536x1024 を 1 枚**（PNG 1.5 MB 級、base64 で約 2 MB）。custom_tool_result が 200 で受理され、職人が内容を言えることを確かめる。駄目なら §O-6 の形 B に切り替える（この確認を済ませるまで、職人定義の rubric と案内で max を勧めない）
 
 ### 検証コマンド
 
