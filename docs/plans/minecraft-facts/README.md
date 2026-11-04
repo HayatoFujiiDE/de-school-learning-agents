@@ -43,3 +43,15 @@ R2 `facts/{edition}/{version}/` に JSON で置き、事実ごとに `fact_id` �
 3. 最初は Java 26.3 だけで始めるか
 4. Workers Paid（月 $5）と実験の月の上限
 5. Docker イメージを作る場所（Mac か CI）
+
+## 実装（段階 A: パッチノート）
+
+状態: 部品だけ作った。cron にはつないでいない。本番で定期的に動かすには**オーナーの承認が要る**。
+
+- **集めるもの**: Mojang が公開しているパッチノート（Java 版・Bedrock 版）と、Java 版のバージョン一覧（version manifest）だけ。server.jar などゲーム本体は取らない（EULA が要らない範囲）
+- **形**: バージョンごとに 1 つの JSON。変更点を「見出しの道筋（例: 新機能 › コマンド）＋本文の平文」に分け、1 件ずつ `fact_id`（版・見出し・本文から決まる番号。同じ内容なら毎回同じ）を付ける。強さは `primary_doc`。HTML のタグやリンク先は残さず、平文だけにする
+- **置き場（予定）**: R2 の `facts/{edition}/{version}/patch-notes.json`。版の一覧は `facts/{edition}/index.json`（内容のハッシュを持ち、変わっていない版は書き直さない）
+- **上限**: 1 回で取る版は指定した数まで / 1 回の取得は 10 秒まで / 一覧は 4MB・1 版の本文は 2MB まで / 全体の締め切りを過ぎたら次を始めない / 取りに行くのは `launchercontent.mojang.com` と `piston-meta.mojang.com` の https だけ（一覧に別のリンクが書かれていても取らない。転送も追わない）
+- **repo に入れないもの**: 取ってきた Mojang の本文（著作物のため）。repo にあるのはコードと手書きの小さなテスト用データだけ
+- **試運転**: `factory/worker` で `node scripts/mc-facts-dryrun.mjs <出力ディレクトリ>`。Java の release を最新 3 件まで取り、指定したディレクトリにだけ書く。画面には件数だけ出る。2026-11-04 の試運転: 26.3（変更点 2031 件）/ 26.2（684 件）/ 26.1.2（1 件）、2 回目は 3 件とも「変わらず」で書き込みなし
+- コード: `factory/worker/src/mc-facts/`、テスト: `factory/worker/test/mc-facts.test.ts`
