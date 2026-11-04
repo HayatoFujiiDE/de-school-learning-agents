@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "origin": {
+    "base_url": "https://api.anthropic.com",
+    "organization_id": "082b3f29-10eb-41d5-847a-ea6dd0545f17",
+    "workspace_id": "wrkspc_01C8KTBP1wzm2z1nte3xyEZt"
+  },
+  "resources": {
+    "./claude/agents/material-maker.md": {
+      "kind": "agent",
+      "id": "agent_015ajCKLmg7Q8rAAksvBzJ1N",
+      "version": "1",
+      "hash": "9b148d64f71800af54e382ecf335ad57",
+      "remote_hash": "42a85b3916899d3ef7c654299f6b4a2b"
+    },
+    "./claude/environments/cloud.yaml": {
+      "kind": "environment",
+      "id": "env_01Mrm4nNyypF4B2pjaxhdXSJ",
+      "hash": "0f81103cff80b548029ec80f1e1188b6",
+      "remote_hash": "de484c1cf5def4c01e9febef7c5c2426"
+    }
+  }
+}

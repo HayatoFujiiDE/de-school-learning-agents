@@ -15,14 +15,14 @@
     "run_worker_first": true
   },
   "d1_databases": [
-    { "binding": "DB", "database_name": "factory", "database_id": "<set-after-create>", "migrations_dir": "migrations" }
+    { "binding": "DB", "database_name": "factory", "database_id": "9e7d22c5-7cc6-46e2-9fff-1fa1d6bc205a", "migrations_dir": "migrations" }
   ],
   "r2_buckets": [
     { "binding": "R2", "bucket_name": "factory-materials" }
   ],
   "vars": {
-    "FACTORY_AGENT_ID": "",
-    "FACTORY_ENV_ID": "",
+    "FACTORY_AGENT_ID": "agent_015ajCKLmg7Q8rAAksvBzJ1N",
+    "FACTORY_ENV_ID": "env_01Mrm4nNyypF4B2pjaxhdXSJ",
     "ANTHROPIC_WORKSPACE": "default",
     "ACCESS_TEAM_DOMAIN": "",
     "ACCESS_AUD": "",
