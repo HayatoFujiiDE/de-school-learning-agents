@@ -309,10 +309,17 @@
   function pyMarks(v) { return { objects: v.count || 3, trail: trailLen(v.speed || 2) }; }
   function circuitMarks(variant, v) {
     var c = circuitNums(variant, v);
-    return { cells: Math.max(1, Math.min(8, Math.round(c.V / 1.5))), teeth: 2 + (v.ohm || 0), rays: Math.round(c.B / 100 * 8), glow: Math.round(13 + c.B / 5) };
+    // 電池の数は上限で止めない（電池 2 個の回路 6 V → 9 V でも数が変わる。§U-12 指摘 b）
+    return { cells: Math.max(1, Math.round(c.V / 1.5)), teeth: 2 + (v.ohm || 0), rays: Math.round(c.B / 100 * 8), glow: Math.round(13 + c.B / 5), speed: null };
+  }
+  // 速さの目盛り（画面の右上に 5 つ。速さの数だけ塗る）: 線の長さが図の端で止まっても、速さが変われば必ず図が変わる（§U-12 回帰 2）
+  function speedMeter(sp) {
+    var out = '';
+    for (var i = 0; i < 5; i++) out += '<rect x="' + (176 + i * 8) + '" y="' + (22 - i) + '" width="5" height="' + (4 + i) + '" rx="1" fill="' + (i < sp ? ORANGE : PAPER) + '" stroke="' + OLIVE + '" stroke-width="0.8"/>';
+    return out;
   }
   function pyArt(variant, v) {
-    var mk = pyMarks(v), n = mk.objects, L = mk.trail, out = screen(), i;
+    var mk = pyMarks(v), n = mk.objects, L = mk.trail, out = screen() + speedMeter(v.speed || 2), i;
     if (variant === 'maze') {
       out += '<path d="M40 120 H110 V96 H70 V70 H150 V44 H200" stroke="' + INK + '" stroke-width="1.4" fill="none" stroke-linejoin="round"/>';
       for (i = 0; i < n; i++) {
@@ -324,14 +331,15 @@
       return wrap(out);
     }
     for (i = 0; i < n; i++) {
-      var x = 40 + (i + 0.5) * (160 / n), y = 62 + ((i * 23) % 34);
+      // 線の長さ（最大 41）が画面の上・右の端で止まらない位置に置く
+      var x = variant === 'coin' ? 34 + (i + 0.5) * (134 / n) : 40 + (i + 0.5) * (160 / n), y = 74 + ((i * 7) % 22);
       if (variant === 'coin') {
         // コインは右から左へ流れる。後ろに速さの長さの線
         out += line(x + 9, y + 10, x + 9 + L, y + 10, OLIVE, 1.4, ' stroke-dasharray="3 3"');
         out += '<circle cx="' + r1(x) + '" cy="' + r1(y + 10) + '" r="7" fill="' + SOFT + '" stroke="' + INK + '" stroke-width="1.2"/>' + line(x, y + 6, x, y + 14, OLIVE, 1);
       } else {
         // 星・岩は上から落ちる。上に速さの長さの線
-        out += line(x, y - 1, x, Math.max(31, y - 1 - L), OLIVE, 1.4, ' stroke-dasharray="3 3"');
+        out += line(x, y - 1, x, y - 1 - L, OLIVE, 1.4, ' stroke-dasharray="3 3"');
         if (variant === 'dodge') out += '<path d="M' + r1(x - 8) + ' ' + r1(y + 12) + 'l3 -8 8 -3 6 5 -1 8 -8 3z" fill="' + MID + '" stroke="' + INK + '" stroke-width="1.2" stroke-linejoin="round"/>';
         else out += star(x, y + 8, 7);
       }
@@ -350,10 +358,14 @@
     out += '<path d="M' + (cx - 5) + ' ' + (cy + 4) + ' q2.5 -9 5 0 q2.5 -9 5 0" stroke="' + OLIVE + '" stroke-width="1.1" fill="none"/>';
     return out;
   }
-  // 電池（左の辺）: 1.5 V ごとに 1 つ。縦に並べる
+  // 電池（左の辺）: 1.5 V ごとに 1 つ。6 つを越えたら 2 列に並べる
   function cells(x, n) {
-    var gap = n > 5 ? 9 : 12, top = 75 - (n - 1) * gap / 2, out = '<rect x="' + (x - 14) + '" y="' + (top - 7) + '" width="28" height="' + ((n - 1) * gap + 14) + '" fill="#fcfbf8" stroke="none"/>';
-    for (var i = 0; i < n; i++) { var y = top + i * gap; out += line(x - 11, y - 3, x + 11, y - 3, INK, 1.5) + line(x - 5, y + 2, x + 5, y + 2, INK, 2.8); }
+    var cols = n > 6 ? 2 : 1, per = Math.ceil(n / cols), gap = per > 5 ? 9 : 12, top = 75 - (per - 1) * gap / 2;
+    var half = cols === 2 ? 26 : 14, out = '<rect x="' + (x - half) + '" y="' + (top - 7) + '" width="' + (half * 2) + '" height="' + ((per - 1) * gap + 14) + '" fill="#fcfbf8" stroke="none"/>';
+    for (var i = 0; i < n; i++) {
+      var col = cols === 2 ? (i < per ? -1 : 1) : 0, row = cols === 2 ? i % per : i, cx = x + col * 13, y = top + row * gap, w = cols === 2 ? 9 : 11;
+      out += line(cx - w, y - 3, cx + w, y - 3, INK, 1.5) + line(cx - w / 2, y + 2, cx + w / 2, y + 2, INK, 2.8);
+    }
     return out;
   }
   // 抵抗（上の辺のぎざぎざ）: 大きいほどぎざぎざが多い
@@ -459,7 +471,7 @@
         { id: 'act-build-m2', who: 'buddy', time: '10:14', r: 'photo', text: '塔を 2 倍にしたんだね。前の写真と並べて見る？', change: 'act-build-c2', opts: [{ a: 'mk-compare-photos', label: '比べる' }] }
       ],
       state: 'working', pauseCount: 0, declined: 0, offered: false, resumeNote: null,
-      clock: 614, seq: 10, touched: 1, draft: ''
+      clock: 614, seq: 10, touched: 1, draft: '', v: 2
     }];
   };
 

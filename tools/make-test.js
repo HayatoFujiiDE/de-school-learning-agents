@@ -440,6 +440,119 @@ t('U11-d 棚のカード名が同名で並ばない', function () {
   eq(list.length, new Set(list).size, 'U11-d demo-full のカード名は別々', list);
 });
 
+// ======================================================================
+// §U-12 の再現テスト（再レビューの回帰 1〜3・残り 4/5/7/9/12/22/b/d・移行 6・実機 (e)(f)）
+// ======================================================================
+t('U12-1 作品に残す写真は今見えている写真', function () {
+  var e = M.addPhoto(M.fromExt('photo', { id: 'u1', now: '10:20' }), 'shot').act;
+  var rv = M.revert(e, null).act;
+  var w = M.saveWork([], rv, { id: 'w1' }).work;
+  eq(w.art && w.art.photo && w.art.photo.id, rv.ext.visible[rv.ext.visible.length - 1], 'U12-1 戻した後の 1 枚目を作品に');
+});
+t('U12-b 3 題材 × 2 値: 隣り合う全値で線画（SVG 文字列）が変わる', function () {
+  var same = [], total = 0;
+  MD.THEMES.forEach(function (th) {
+    var T0 = MD.theme(th), ps = T0.params;
+    T0.variants.forEach(function (va) {
+      ps.forEach(function (p, pi) {
+        var q = ps[1 - pi];
+        for (var qv = q.min; qv <= q.max; qv++) {
+          for (var v = p.min; v < p.max; v++) {
+            var a = {}, b = {};
+            a[p.key] = v; a[q.key] = qv; b[p.key] = v + 1; b[q.key] = qv;
+            total += 1;
+            if (MD.art({ kind: 'sample', theme: th, variant: va, values: a }) === MD.art({ kind: 'sample', theme: th, variant: va, values: b })) same.push(th + '.' + va + ' ' + p.key + ' ' + v + '→' + (v + 1) + ' (' + q.key + '=' + qv + ')');
+          }
+        }
+      });
+    });
+  });
+  ok(total > 100, 'U12-b 組み合わせを全部見ている', total);
+  eq(same.length, 0, 'U12-b 線画が同じになる組み合わせは 0 件', same.slice(0, 8));
+});
+t('U12-3 返事の「違う」を戻すと、その返事の「違う」も戻る', function () {
+  var x = M.test(M.setParam(sample('mc'), 'size', 6));
+  var a = x.act;
+  M.pushMsg(a, { who: 'buddy', r: 'test', text: 'x', change: x.change.id });
+  var mid = a.thread[a.thread.length - 1].id;
+  var d = M.declineReply(a, mid);
+  eq(d.act.stage.values.size, 4, 'U12-3 違う → 試す前の値');
+  eq(M.findMsg(d.act, mid).declined, true, 'U12-3 違う → 返事は使った印');
+  var u = M.undoDeclineReply(d.act, d.undo);
+  eq(u.stage.values.size, 6, 'U12-3 戻す → 値が戻る');
+  eq(!!M.findMsg(u, mid).declined, false, 'U12-3 戻す → 返事の「違う」も戻る');
+});
+t('U12-4 保存時点を持たない作品も、残した時点で再開して変化を積む', function () {
+  var a = sample('mc');
+  var w = M.saveWork([], a, { id: 'w4' }).work;
+  ok(w.snap && w.snap.stage && w.snap.stage.values.size === 4, 'U12-4 作品に残した時点の状態');
+  var y = M.test(M.setParam(a, 'size', 8)).act;
+  var r = M.reopenAt(y, w.at, w.snap);
+  eq(r.act.stage.values.size, 4, 'U12-4 未試行で残した作品 → その時の値で開く');
+  ok(r.change && r.change.kind === 'revert', 'U12-4 変化として積む');
+  var ac = M.addCapture([], [], { workId: 'w4c', actId: 'a4c', images: ['cap-mc'], title: '', made: 0, madeLine: '', read: { text: 'x', edited: false, declined: false }, now: '10:20', mode: 'js' });
+  ok(!!ac.work.at && !!ac.work.snap, 'U12-4 キャプチャーの作品も時点を持つ');
+  var more = M.addPhoto(ac.act, 'photo').act;
+  var rc = M.reopenAt(more, ac.work.at, ac.work.snap);
+  eq(rc.act.ext.visible, ac.act.ext.visible, 'U12-4 キャプチャーの作品 → 入れた時の写真で開く');
+});
+t('U12-5 写真だけの履歴にも「ここに戻す」', function () {
+  var e = M.addPhoto(M.fromExt('photo', { id: 'u5', now: '10:20' }), 'shot').act;
+  eq(M.canRevertTo(e, e.changes[0].id), true, 'U12-5 1 枚目へ戻れる');
+  eq(M.canRevertTo(e, e.changes[1].id), false, 'U12-5 今と同じ所へは出さない');
+});
+t('U12-6 前の版の活動を読み込むと不足欄を補う', function () {
+  // 前版（§U-11 以前）の形: stepsKind・ext.visible・changes[].vis・返事の text が無い。引用はマイクラ → Python に直した後で手順は古いまま
+  var old = {
+    id: 'old1', title: 'マイクラの建物', origin: 'make', theme: 'py', catalogId: null, sampleId: null, quote: { text: 'Python', removed: false },
+    stage: null, base: null, baseTime: '10:20', ext: null,
+    steps: [['案を選ぶ', '案をえらぶ'], ['大きさを変える', '大きさをかえる'], ['ブロックを選ぶ', 'ブロックをえらぶ'], ['入口をあける', '入り口をあける']], stepIdx: 0, next: null,
+    changes: [], shelf: [{ id: 'old1-k2', batch: 'old1-b1', kind: 'draft', theme: 'py', variant: 'dodge', values: { speed: 3, count: 4 }, time: '10:20', state: 'new' }],
+    thread: [{ id: 'old1-m1', who: 'buddy', time: '10:20', r: 'land' }, { id: 'old1-m2', who: 'buddy', time: '10:21', k: 'leave_ask', ask: true, opts: [{ a: 'mk-leave-opt', arg: 'redo', label: { k: 'leave_opts_draft', i: 0 } }] }],
+    state: 'working', pauseCount: 0, declined: 0, offered: false, resumeNote: null, clock: 620, seq: 3, draft: ''
+  };
+  var oldExt = {
+    id: 'old2', title: '写真から', origin: 'make', theme: 'mc', stage: null, base: null, baseTime: '10:20', quote: null,
+    ext: { link: null, photos: [{ id: 'old2-ph1', theme: 'mc', n: 0, kind: 'photo', time: '10:22' }, { id: 'old2-ph2', theme: 'mc', n: 1, kind: 'shot', time: '10:24' }] },
+    steps: [['写真を入れる', '写真を入れる'], ['屋根を置く', 'やねをおく']], stepIdx: 1, next: null,
+    changes: [{ id: 'old2-c1', who: 'own', kind: 'photo', time: '10:22', what: { k: 'added_photo' }, snap: null, photoId: 'old2-ph1' },
+      { id: 'old2-c2', who: 'own', kind: 'shot', time: '10:24', what: { k: 'added_shot' }, snap: null, photoId: 'old2-ph2' }],
+    shelf: [], thread: [], state: 'working', pauseCount: 0, declined: 0, offered: false, resumeNote: null, clock: 624, seq: 5, draft: ''
+  };
+  function res(m) { return m.r ? MD.pick(MD.replies[m.r], 'js') : (m.k ? '[' + m.k + (m.i != null ? ':' + m.i : '') + ']' : ''); }
+  var m1 = M.migrate(old, res), m2 = M.migrate(oldExt, res);
+  eq(m1.v, 2, 'U12-6 版 v:2');
+  eq(m1.stepsKind, 'theme', 'U12-6 stepsKind を補う');
+  eq(m1.candidate, true, 'U12-6 候補状態の印を補う');
+  ok(JSON.stringify(m1.steps).indexOf('ブロック') < 0 && JSON.stringify(m1.steps).indexOf('速さ') >= 0, 'U12-6 手順を今の題材（Python）に', m1.steps);
+  eq(m1.thread[0].text, MD.replies.land[0], 'U12-6 返事の text を補う');
+  eq(m1.thread[1].opts[0].label, '[leave_opts_draft:0]', 'U12-6 返事のボタン名も文字列に');
+  eq(m2.stepsKind, 'ext', 'U12-6 外の記録は ext');
+  eq(m2.ext.visible, ['old2-ph1', 'old2-ph2'], 'U12-6 見えている写真を補う');
+  eq(m2.baseVis, [], 'U12-6 始めの写真を補う');
+  eq(m2.changes.map(function (c) { return c.vis; }), [['old2-ph1'], ['old2-ph1', 'old2-ph2']], 'U12-6 変化ごとの写真を補う');
+  eq(M.canRevert(m2), true, 'U12-6 移行後は前に戻せる');
+  eq(M.migrate(m2, res), m2, 'U12-6 v:2 はそのまま');
+  eq(M.fromSample('mc', { id: 'n6', now: '10:20' }).v, 2, 'U12-6 新しい活動は v:2');
+  eq(MD.seedActivities()[0].v, 2, 'U12-6 最初からある活動も v:2');
+});
+t('U12-e 次は今と違う一歩か、無ければ空', function () {
+  var full = M.test(M.setParam(M.test(M.setParam(sample('mc'), 'size', 6)).act, 'block', 1)).act;
+  eq(M.stepNext(full), null, 'U12-e 最後の一歩なら次は無し');
+  var now = MD.pick(M.stepNow(full), 'js');
+  var cp = M.resume(M.confirmPause(full, { next: now, closed: false }));
+  eq(M.stepNext(cp), null, 'U12-e 次に今と同じ文を書いても次には出さない');
+  var es = M.resume(M.confirmPause(full, { next: MD.pick(M.stepNow(full), 'es'), closed: false }));
+  eq(M.stepNext(es), null, 'U12-e es の同じ文でも出さない');
+  eq(M.stepNext(M.setNext(full, '窓を増やす')), { text: '窓を増やす' }, 'U12-e 違う文なら出す');
+});
+t('U12-d 見送った案を含め同名カードが並ばない', function () {
+  var c = M.fromText('Python ゲームA', { id: 'd12', now: '10:20' });
+  var e = M.editQuote(c, 'Python ゲームB', [], 'js').act;
+  var names = M.cardNames(e.shelf, 'js'), list = e.shelf.map(function (x) { return names[x.id]; });
+  eq(list.length, new Set(list).size, 'U12-d 名前は全部ちがう', list);
+});
+
 console.log('make-test: ' + pass + ' passed, ' + fail + ' failed');
 console.log('MAKE_TEST=' + (fail === 0 ? 'PASS' : 'FAIL'));
 process.exitCode = fail === 0 ? 0 : 1;
