@@ -1,12 +1,13 @@
 // fetch / scheduled の入口とルーティング（契約 §B-1, §B-3）。フレームワークは使わない。
 // run_worker_first: true なので静的ファイルを含む全リクエストがここを通る。
-import { handleFakeControl } from './anthropic';
+import { getImagePort, getPort, handleFakeControl } from './anthropic';
 import { jsonError, requireAccess } from './access';
 import { runCron } from './cron';
 import type { Env } from './env';
+import { getSetting } from './db';
 import { json, makeCtx, type RouteCtx } from './http';
+import { runImage } from './images';
 import { getFloor } from './routes/floor';
-import { probeImageTool } from './routes/probe';
 import { answerJobRoute, cancelJobRoute, createJob, getJobDetail, raiseBudgetRoute, reconcileJobRoute, reingestJobRoute, startJobRoute } from './routes/jobs';
 import { libraryAvailable, libraryFile } from './routes/library';
 import { createMaterial, getMaterialDetail, listMaterials, rollbackMaterial, stopMaterial } from './routes/materials';
@@ -29,7 +30,6 @@ type Handler = (c: RouteCtx, ...params: string[]) => Promise<Response>;
 const ID = '([A-Za-z0-9-]{1,64})';
 
 const ROUTES: Array<[string, RegExp, Handler]> = [
-  ['POST', /^\/api\/probe\/image-tool$/, probeImageTool], // 一時的（画像 段階 2 のプローブ p2〜p4。確認後に外す）
   ['POST', /^\/api\/materials$/, createMaterial],
   ['GET', /^\/api\/materials$/, listMaterials],
   ['GET', new RegExp(`^/api/materials/${ID}$`), getMaterialDetail],
@@ -129,4 +129,22 @@ export default {
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
     await runCron(env);
   },
-} satisfies ExportedHandler<Env>;
+
+  // 画像生成の consumer（契約 §O-4 b verbatim）。max_batch_size 1・max_retries 2・max_concurrency 2（wrangler.jsonc）
+  async queue(batch: MessageBatch<{ request_id: string }>, env: Env, ctx: ExecutionContext): Promise<void> {
+    const portCtx = { hostname: null, fakeEnabledSetting: await getSetting(env.DB, 'fake_enabled') };
+    const port = await getPort(env, portCtx);
+    const images = await getImagePort(env, portCtx);
+    for (const msg of batch.messages) {
+      const id = String((msg.body as { request_id?: unknown })?.request_id ?? '');
+      if (!/^img_[0-9a-f]{32}$/.test(id)) { msg.ack(); continue; }
+      try {
+        await runImage(env, port, images, id, { deadline: Date.now() + 5 * 60_000 });
+        msg.ack();
+      } catch (e) {
+        console.log(JSON.stringify({ at: 'image_queue', request_id: id, error: e instanceof Error ? e.name : 'error' }));
+        msg.retry();
+      }
+    }
+  },
+} satisfies ExportedHandler<Env, { request_id: string }>;
