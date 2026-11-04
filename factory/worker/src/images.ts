@@ -1,3 +1,4 @@
+import { MAX_FILE_BYTES } from './checks/schema';
 // 画像生成 段階 2（契約 §O。正本 docs/plans/image-generation/contract-O-draft.md v2.3）。
 // U の表・入力検査（純関数）、遷移の SQL（I 登録 / D 呼ぶ権利 / R 結果 / C cron の回収 / F 取り置きの確定 / H 運営の操作。verbatim）、
 // haltReasonFor（停止の理由の純関数）、consumer の手順 runImage、cron 段 3-c imageCronStep。
@@ -32,8 +33,8 @@ export const IMAGE_CRON_BUDGET_MS = 60_000;
 export const IMAGE_CRON_BATCH = 20;
 /** reconcile の走査で input を保持する上限（JSON.stringify の文字数。超えたら {oversized:true}） */
 export const IMAGE_INPUT_MAX_CHARS = 16_384;
-/** 使える画像の大きさの上限（超えたら failed too_large） */
-export const IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+/** 使える画像の大きさの上限（超えたら failed too_large）。取り込みの 1 ファイル上限（MAX_FILE_BYTES）と同じにする — 大きい画像を done にすると取り込みで素材全体が file_too_large で弾かれるため（司令塔の統合時の判断。応答本文の上限 4 MiB は openai.ts） */
+export const IMAGE_MAX_BYTES = MAX_FILE_BYTES;
 /** 掃除（§O-6 c）: job が更新されてからの日数 */
 export const IMAGE_CLEAN_AFTER_MS = 30 * 86_400_000;
 /** consumer の終わりの reconcile の締め切り（§O-4 c 5） */
@@ -636,7 +637,7 @@ export function classifyImageOutcome(o: GenOutcome): ImageResult {
       // 登録の後で鍵が消えた（呼んでいない）。鍵が使えない（auth）として停止する
       return { state: 'failed', error: 'auth', usage_json: null, actual_cents: null };
     case 'bad_response':
-      // 応答あり・画像が使えない（本文が不正・4 MiB 超）: 読めた usage、無ければ missing
+      // 応答あり・画像が使えない（本文が不正・2 MiB 超）: 読めた usage、無ければ missing
       return { state: 'failed', error: 'bad_response', ...usageCols(e.usage, 'missing') };
     default:
       // 応答あり・HTTP の失敗: 読めれば usage、無ければ NULL（課金なしとみなす）
@@ -658,7 +659,7 @@ export function haltReasonFor(o: { requestId: string; u: number; result: ImageRe
 const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const startsWith = (b: Uint8Array, sig: number[], at = 0) => b.byteLength >= at + sig.length && sig.every((x, i) => b[at + i] === x);
 
-/** b64 を画像として読めるか（base64・4 MiB・先頭バイトが format と一致） */
+/** b64 を画像として読めるか（base64・2 MiB・先頭バイトが format と一致） */
 export function decodeImage(b64: string, format: string): { ok: true; bytes: Uint8Array } | { ok: false; error: 'bad_response' | 'too_large' } {
   let bin: string;
   try {

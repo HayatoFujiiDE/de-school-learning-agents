@@ -25,11 +25,16 @@ import { decide, listReview, reverify, reviewDetail, reviewFile } from './routes
 import { addStandard, getStandards } from './routes/standards';
 import { getStatus, setPause } from './routes/status';
 import { handleWebhook } from './routes/webhook';
+import { getImagesStatus, haltImages, imageRequestFile, unhaltImages } from './routes/images';
 
 type Handler = (c: RouteCtx, ...params: string[]) => Promise<Response>;
 const ID = '([A-Za-z0-9-]{1,64})';
 
 const ROUTES: Array<[string, RegExp, Handler]> = [
+  ['GET', /^\/api\/images\/status$/, getImagesStatus],
+  ['POST', /^\/api\/images\/halt$/, haltImages],
+  ['POST', /^\/api\/images\/unhalt$/, unhaltImages],
+  ['GET', /^\/api\/images\/requests\/(img_[0-9a-f]{32})\/file$/, imageRequestFile],
   ['POST', /^\/api\/materials$/, createMaterial],
   ['GET', /^\/api\/materials$/, listMaterials],
   ['GET', new RegExp(`^/api/materials/${ID}$`), getMaterialDetail],
