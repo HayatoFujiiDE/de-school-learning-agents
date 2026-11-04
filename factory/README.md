@@ -39,10 +39,16 @@ npm run smoke                         # 受け入れ基準を fake で一周（S
    npm run deploy                                 # check-no-fake を通してから wrangler deploy
    npx wrangler secret put ANTHROPIC_API_KEY      # プロンプトに値を貼る
    npx wrangler secret put ANTHROPIC_WEBHOOK_SIGNING_KEY
+   npx wrangler secret put XAI_API_KEY            # 収集部隊の X 検索用（任意。無ければ RSS だけで動く）
    ```
 3. Cloudflare Access（Zero Trust）: アプリケーションを作り、対象を `<worker の URL>/admin*` と `/api/*` にする。**`/api/library/*` と `/webhook` は対象に含めない**。AUD と team domain を `wrangler.jsonc` の `ACCESS_AUD` / `ACCESS_TEAM_DOMAIN` に書いて再 deploy
 4. Anthropic Console → Manage → Webhooks: URL `https://<worker の URL>/webhook`、購読する種類は `session.status_idled`, `session.status_terminated`, `session.outcome_evaluation_ended`, `session.status_run_started`。表示された `whsec_` を手順 2 の `wrangler secret put ANTHROPIC_WEBHOOK_SIGNING_KEY` で投入
 5. Console の Spend limit（月の上限）を設定する
+6. 入口（提案箱・収集部隊・会議。契約 §K）
+   - `factory/scout/sources.json` を編集して情報源を決める（RSS 10 本・X の handle 20 件まで）。変更したら `npm run build:assets` → `npm run deploy`
+   - 収集は週 1（`SCOUT_DAY`、既定 月曜）、会議は月 2 回（`MEETING_DAYS`、既定 1 日と 15 日）に cron が起こす。管理画面の「収集を今すぐ」「会議を今すぐ」で手動起動できる。月次上限は `SCOUT_MONTHLY_CAP_CENTS`（$5）/ `MEETING_MONTHLY_CAP_CENTS`（$2）
+   - 最初の手動起動で確かめること: `SCOUT_XAI_MODEL`（既定 `grok-4.3`）が x_search に対応しているか、所要時間が 25 秒に収まるか（収まらなければ cron 任せにする）
+   - バディ側から提案を送る `POST /api/intake` は Cloudflare Access の service token で呼ぶ（`CF-Access-Client-Id` / `CF-Access-Client-Secret` と `Origin` ヘッダ）。`supporter_checked: true` が無い提案は受け付けない
 
 ## 運用の勘所
 
