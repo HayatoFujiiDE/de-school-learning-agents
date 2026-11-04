@@ -1,6 +1,6 @@
 # 計画 v6: 画像生成（v5 への Astra REVISE を反映。v6 が v5 以下の本文に優先する。状態表は v5 §5-2 に本書 §3 の追記を足したものが正本）
 
-状態（2026-11-04 夜）: v6 は未レビュー。migration は **0004**（0003 は契約 §L）。
+状態（2026-11-04 夜）: v6 は Astra high で REVISE（probe の 2 件）。§7 で反映済み・再レビュー待ち。migration は **0004**（0003 は契約 §L）。
 
 ## 1. B1 枠は「最初の有償の試行」と同時にしか取れない
 
@@ -58,7 +58,8 @@ WHERE id = ?att AND state = 'reserved' AND dispatch_token = ?token
           AND EXISTS (SELECT 1 FROM factory_jobs j WHERE j.id = image_attempts.job_id AND j.status IN ('running','budget_reached') AND j.phase = 'making')
           AND EXISTS (SELECT 1 FROM image_requests r WHERE r.id = image_attempts.request_id AND r.gen = 'reserved' AND r.attempt_id = image_attempts.id) )
      OR ( kind = 'probe'
-          AND EXISTS (SELECT 1 FROM settings WHERE key = 'image_probe_allowed' AND value = image_attempts.id) )
+          AND EXISTS (SELECT 1 FROM settings WHERE key = 'image_probe_allowed' AND value = image_attempts.id)
+          AND EXISTS (SELECT 1 FROM image_requests r WHERE r.id = image_attempts.request_id AND r.gen = 'reserved' AND r.attempt_id = image_attempts.id) )
       );
 ```
 
@@ -86,7 +87,7 @@ v5 では upload と通知の主体が consumer だけで、Queue の再試行�
 
 ```sql
 SELECT COUNT(*) FROM image_requests WHERE gen IN ('queued','reserved','dispatched','stored');
-SELECT COUNT(*) FROM image_requests WHERE gen IN ('uploaded','refused','failed') AND notify IN ('none','sending','unknown');
+SELECT COUNT(*) FROM image_requests WHERE kind = 'job' AND gen IN ('uploaded','refused','failed') AND notify IN ('none','sending','unknown');
 SELECT COUNT(*) FROM image_attempts WHERE state IN ('reserved','dispatched');
 ```
 `unknown`（課金不明）の attempt は halted のまま残してよい（人が OpenAI の使用量と照合して精算する）。上の 3 つが 0 なら、生きた session に未回答の generate_image は無い（通知は `sent` か `abandoned`）。
@@ -119,3 +120,17 @@ SELECT COUNT(*) FROM image_attempts WHERE state IN ('reserved','dispatched');
 ## 6. 作業順
 
 v5 §6 のまま（#1 の契約 v3.7 に本書 §1〜§3 の SQL 全文と完了条件を入れる）。
+
+## 7. v6 レビュー（Astra high・REVISE）の反映
+
+- **probe の dispatch も request の有効性を見る**（§2 の SQL に反映）: probe 分岐にも `r.gen = 'reserved' AND r.attempt_id = image_attempts.id` を入れた。DLQ が request を failed にした後の dispatch は 0 行
+- **probe は通知の対象外**: `image_requests.kind`（`'job'|'probe'`）を足し、probe の request は作る時に `notify = 'skip'`（終端。session に返す相手がいない）。結果は管理画面が D1 から読む。rollback の完了条件（§3）の通知待ちは `kind = 'job'` だけを数える
+- **probe の許可と予約**:
+  - 許可は管理画面の操作 1 回で 1 件: `INSERT INTO settings(key, value, updated_at) VALUES ('image_probe_allowed', ?att, ?now) ON CONFLICT(key) DO NOTHING`（既に別の許可があれば 0 行 → 画面に「前の probe が終わっていません」）
+  - 予約は job と同じ 1 文目に条件を集めた INSERT（§1 の形）で、job の条件の代わりに: `kind='probe'`・許可の value がこの attempt・その月の probe の試行 < 12・月の image 記帳 + U ≤ 3000・日次合計 + U ≤ DAILY_CAP・halted でない。2〜4 文目は §1 と同じく「1 の行がある」ことを条件にする（枠は取らない）
+  - 許可の削除は、使った attempt の時だけ: `DELETE FROM settings WHERE key = 'image_probe_allowed' AND value = ?att`（attempt が settled / void / unknown になった batch の中で。別の許可を消さない）
+- **二表の間の停止窓**:
+  - attempt `dispatched` / request `reserved`（dispatch CAS の後、request を進める前に止まった）: halt の引き取りは **attempt が `reserved` の時だけ** void・返金する。dispatched は 5 分の規則（unknown + halted + request failed `result_unknown`）に任せる。void と unknown は state の述語で排他（両方は起きない）
+  - request `stored` で attempt がまだ `dispatched`（勝者 CAS の後・精算の前に止まった）: 勝者 CAS の batch で usage を attempt の `usage_json` に保存する。cron は「request stored かつ attempt dispatched かつ usage_json あり」を精算する（consumer と同じ精算の SQL。state の述語で 1 回）。5 分の unknown 規則は「request が `reserved`」の時だけに絞る（stored の画像を unknown にしない）
+- **variants の拡張子は今のまま**: v6 §4 の「variants は `.md` だけ」は既存素材を壊しうるので撤回。variants は現行の `isPartPath` のまま、files（添付）にだけ `.png` `.webp` を足す。確認画面は files の画像だけを `<img>` で描く
+- 検証に追加: t9 probe の request が failed の後の dispatch 0 行 / t10 probe 成功後に rollback の完了条件が 0 / t11 許可の削除が別 attempt の許可を消さない / t12 attempt dispatched・request reserved で halt → void 0・返金 0・5 分で unknown / t13 stored・精算前停止 → cron が usage_json で 1 回だけ精算し、upload も進む / t14 既存の svg / html の variants を持つ fixture が段階 1 の後も取り込める
