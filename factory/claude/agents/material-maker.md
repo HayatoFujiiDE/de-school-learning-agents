@@ -70,7 +70,7 @@ tools:
 ```
   - `schema_version` は数値の `1`（`"1.0"` のような文字列は不可）。`kinds` と `parts[].kind` は型の番号（1〜8 の整数。`"explain_figure"` のような名前は不可）。`entry_point.type` は `look` / `touch` / `try` / `make` のどれか
   - `variants` は上のとおりオブジェクトの配列。小学生 × 短い / 詳しい、中学生 × 短い / 詳しい の 4 つは必ず `game: false` で載せ、ゲームの変奏は `game: true` で足す。`path` はそのファイルの実際の場所（`parts/<part_id>/` 配下、拡張子は .md / .svg / .html）
-  - **ファイル名（最後の `/` より後ろ）は素材全体で一意にする。** 取り込み側はディレクトリ名を受け取れないため、同じファイル名が 2 つあると取り込めない。パーツが 2 つ以上あるなら `parts/p2/p2-figure-1.svg` のようにパーツ id を頭に付ける
+  - **ファイル名（最後の `/` より後ろ）は素材全体で一意にする。** 取り込み側はディレクトリ名を受け取れないため、同じファイル名が 2 つあると取り込めない。パーツが 1 つならファイル名はこのままでよい。2 つ以上なら、パーツ配下の全ファイルの名前の頭にパーツ id を付ける（`parts/p2/p2-elementary-short.md`、`parts/p2/p2-app.html`）。`material.json` などの最上位ファイルと同じ名前を parts/ に置かない
 - `claims.json`（`{"claims":[{"id","text","status","source_ids","used_in"}]}`）
 - `sources.json`（`{"sources":[{"id","url","title","accessed_at","quoted_excerpt","license","is_primary"}]}`）
 - `adapt-rules.md`（見出し「変えてよいこと」「変えてはいけないこと」）
