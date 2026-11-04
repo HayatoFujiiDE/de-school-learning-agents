@@ -81,11 +81,19 @@ export function validateVerdicts(input: unknown, claimIds: string[]): VerdictRep
   return { verdicts, overall_note: typeof o.overall_note === 'string' ? o.overall_note.slice(0, 4000) : '' };
 }
 
-/** usage から定価計算（セント。小数は切り上げ） */
+/** 定価（micro-dollars、小数のまま）: 入力 $4・cache write 1.25 倍・cache read 0.1 倍・出力 $20 / 1M（tokens × $/1M = micro-dollars） */
+function listPriceMicro(u: Message['usage']): number {
+  return (
+    (u.input_tokens ?? 0) * PRICE_IN +
+    (u.cache_creation_input_tokens ?? 0) * PRICE_IN * 1.25 +
+    (u.cache_read_input_tokens ?? 0) * PRICE_IN * 0.1 +
+    (u.output_tokens ?? 0) * PRICE_OUT
+  );
+}
+
+/** 同期モードの 1 呼び出しの実費（micro-dollars、切り上げ）。定価（listPriceMicro） */
 export function usageMicroDollars(u: Message['usage'] | undefined): number {
-  if (!u) return 0;
-  const input = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
-  return input * PRICE_IN + (u.output_tokens ?? 0) * PRICE_OUT; // tokens × $/1M = micro-dollars
+  return u ? Math.ceil(listPriceMicro(u)) : 0;
 }
 export const microDollarsToCents = (m: number) => Math.ceil(m / 10_000);
 
@@ -203,13 +211,7 @@ export function verifierParams(env: Env, messages: MessageParam[], o: { batch: b
  * 入力 $4・cache write 1.25 倍・cache read 0.1 倍（公式値より多めの可能性あり §R-49 (c)）・出力 $20 / 1M
  */
 export function batchUsageMicroDollars(u: Message['usage'] | undefined): number {
-  if (!u) return 0;
-  const m =
-    (u.input_tokens ?? 0) * PRICE_IN +
-    (u.cache_creation_input_tokens ?? 0) * PRICE_IN * 1.25 +
-    (u.cache_read_input_tokens ?? 0) * PRICE_IN * 0.1 +
-    (u.output_tokens ?? 0) * PRICE_OUT;
-  return Math.ceil(m * 0.5);
+  return u ? Math.ceil(listPriceMicro(u) * 0.5) : 0;
 }
 
 export interface VerifyMeta {
@@ -281,10 +283,17 @@ async function failExhausted(db: D1Database, max: number): Promise<void> {
 // 同期モード（VERIFY_MODE=sync。§F-3 のまま、tool だけ §L-2 にそろえる）
 // ---------------------------------------------------------------------------------------------
 
+/** 同期モードの 1 呼び出しの timeout の上限（deadline があれば min(残り時間, これ)） */
+export const SYNC_CALL_MAX_MS = 10 * 60_000;
+/** 同期モードで新しいターンを始めるのに必要な残り時間。足りなければ始めない（試行は running のまま、30 分の掃除が pending に戻す） */
+export const SYNC_MIN_TURN_MS = 60_000;
+
 type AttemptResult =
   | { ok: true; report: VerdictReport; microDollars: number; meta: VerifyMeta }
   /** terminal=true は再試行しても同じ結果になる失敗（attempts に関係なく failed） */
-  | { ok: false; reason: string; microDollars: number; terminal?: boolean };
+  | { ok: false; reason: string; microDollars: number; terminal?: boolean }
+  /** cron の期限が近くて次のターンを始めなかった（試行は確定させない） */
+  | { ok: false; reason: 'deadline'; microDollars: number; abandoned: true };
 
 async function runAttempt(env: Env, port: FactoryPort, v: VersionForVerify, deadline: number | undefined): Promise<AttemptResult> {
   const claimIds = claimIdsOf(v.claims_json);
@@ -296,10 +305,11 @@ async function runAttempt(env: Env, port: FactoryPort, v: VersionForVerify, dead
   let pauses = 0;
   let containerId: string | null = null;
   for (let turn = 0; turn < MAX_TURNS; turn++) {
+    if (deadline !== undefined && deadline - Date.now() < SYNC_MIN_TURN_MS) return { ok: false, reason: 'deadline', microDollars: micro, abandoned: true };
     const params = verifierParams(env, messages, { batch: false, container: containerId });
     let resp: Message;
     try {
-      resp = await port.createMessage(params, deadline ? { deadline } : undefined);
+      resp = await port.createMessage(params, deadline !== undefined ? { deadline, maxTimeoutMs: SYNC_CALL_MAX_MS } : undefined);
     } catch (e) {
       return { ok: false, reason: `api:${errorKind(e)}`, microDollars: micro };
     }
@@ -326,23 +336,20 @@ async function runAttempt(env: Env, port: FactoryPort, v: VersionForVerify, dead
   return { ok: false, reason: 'turn_limit', microDollars: micro };
 }
 
-/** 同期モードの 1 件（§B-5-3 / §F-3）。deadline は呼び出し側が渡した時だけ外部呼び出しに付ける */
+/**
+ * 同期モードの 1 件（§B-5-3 / §F-3）。deadline（cron の絶対期限）があれば各呼び出しの timeout を min(残り, SYNC_CALL_MAX_MS) にし、
+ * 残りが SYNC_MIN_TURN_MS 未満なら lease も新しいターンもしない（§R-50 (h)）
+ */
 async function runSyncStep(env: Env, port: FactoryPort, deadline: number | undefined): Promise<string> {
   const db = env.DB;
   const max = cfg(env).verifyMaxAttempts;
-  // running で 30 分超 → pending（attempts は増やさない）。同期モードでは phase の有無に関係なく §F-3 のとおり戻し、Batch の列も消す
-  await cas(
-    db,
-    stmt(
-      `UPDATE material_versions SET verification_status = 'pending', verification_token = NULL,
-         verify_phase = NULL, verify_phase_at = NULL, verify_batch_id = NULL
-       WHERE verification_status = 'running' AND verification_started_at < ?`,
-      isoPlus(-PHASE_STALE_MS),
-    ),
-  );
+  // running（phase NULL = 同期の試行・migration 前の行）で 30 分超 → pending（attempts は増やさない）。
+  // phase を持つ行（Batch の試行）は触らない（runVerificationStep が Batch の段で最後まで回す §R-51 (b)）
+  await cas(db, stmt(PRE_SQL_LEGACY_STALE, isoPlus(-PHASE_STALE_MS)));
   await failExhausted(db, max);
 
   if ((await getSetting(db, 'paused')) === '1') return 'paused';
+  if (deadline !== undefined && deadline - Date.now() < SYNC_MIN_TURN_MS) return 'no_time';
   if ((await todayCostCents(db)) >= cfg(env).dailyCapCents) return 'daily_cap_reached';
 
   const pick = await first<{ id: string }>(
@@ -379,11 +386,16 @@ async function runSyncStep(env: Env, port: FactoryPort, deadline: number | undef
   const now = nowIso();
   const P = `SELECT 1 FROM material_versions pv WHERE pv.id = ? AND pv.verification_status = 'running' AND pv.verification_token = ?`;
   const stmts: Stmt[] = [];
+  const ledger = stmt("INSERT INTO cost_ledger (id, day, kind, ref_id, cents, created_at) VALUES (?, ?, 'verify', ?, ?, ?)", crypto.randomUUID(), tokyoDay(), v.id, cents, now);
+  if (!result.ok && 'abandoned' in result) {
+    // 期限で次のターンを始めなかった: かかった分だけ記帳し、試行は running のまま（30 分の掃除が pending に戻す）
+    if (cents > 0) await conditionalBatch(db, [ledger]);
+    console.log(JSON.stringify({ at: 'verify', mode: 'sync', version_id: v.id, result: 'deadline' }));
+    return 'deadline';
+  }
   if (cents > 0) {
     // 費用は世代に関係なく実際にかかったので必ず記録する
-    stmts.push(
-      stmt("INSERT INTO cost_ledger (id, day, kind, ref_id, cents, created_at) VALUES (?, ?, 'verify', ?, ?, ?)", crypto.randomUUID(), tokyoDay(), v.id, cents, now),
-    );
+    stmts.push(ledger);
   }
   if (result.ok) {
     stmts.push(
@@ -739,6 +751,15 @@ async function decideTurn(env: Env, r: BatchRow, row: MessageBatchIndividualResp
   return { kind: 'continue', micro, pauseInc, next };
 }
 
+/** batchResults の失敗のうち、回収し直しても結果が読めないもの（種別を返す）。一時的な失敗は null */
+export function permanentResultsError(e: unknown): string | null {
+  if (!(e instanceof PortError)) return null;
+  if (e.kind === 'invalid_results') return 'invalid';
+  if (e.kind === 'no_results_url') return 'no_results_url';
+  if (e.responded && (e.status === 404 || e.status === 410)) return `gone_${e.status}`;
+  return null;
+}
+
 /** 4. 回収（1 件） */
 export async function collectOne(env: Env, port: FactoryPort, r: BatchRow, deadline: number): Promise<string> {
   const c = cfg(env);
@@ -762,14 +783,14 @@ export async function collectOne(env: Env, port: FactoryPort, r: BatchRow, deadl
     return 'conflict';
   }
   const lc = lockOf(r, 'collecting', true);
-  // 4-3 結果（16 MiB）。応答不明・接続断は collecting のまま（30 分後に掃除が submitted へ戻して回収し直す）
+  // 4-3 結果（16 MiB）。結果が二度と読めない失敗（results_url 無し・404・410・本文不正）は「無い・切れた」と同じく試行失敗 + 見積り。
+  // 一時的な失敗（接続断・timeout・5xx・429 等）は collecting のまま（30 分後に掃除が submitted へ戻して回収し直す）
   let results: MessageBatchIndividualResponse[];
   try {
     results = await port.batchResults(r.verify_batch_id, { deadline, maxBytes: VERIFY_RESULTS_MAX_BYTES });
   } catch (e) {
-    if (e instanceof PortError && e.kind === 'invalid_results') {
-      return failAttempt(env, lc, r.material_id, { reason: 'results_invalid', ledgerCents: c.verifyTurnReserveCents });
-    }
+    const permanent = permanentResultsError(e);
+    if (permanent) return failAttempt(env, lc, r.material_id, { reason: `results_${permanent}`, ledgerCents: c.verifyTurnReserveCents });
     return `results_error:${errorKind(e)}`;
   }
   const row = results.find((x) => x?.custom_id === `t${r.verify_turn}`);
@@ -810,7 +831,7 @@ export async function collectOne(env: Env, port: FactoryPort, r: BatchRow, deadl
   return out;
 }
 
-async function runBatchStep(env: Env, port: FactoryPort, deadline: number): Promise<string> {
+async function runBatchStep(env: Env, port: FactoryPort, deadline: number, o: { lease: boolean } = { lease: true }): Promise<string> {
   const db = env.DB;
   const parts: string[] = [];
   const step = async (name: string, f: () => Promise<string | string[]>) => {
@@ -823,7 +844,7 @@ async function runBatchStep(env: Env, port: FactoryPort, deadline: number): Prom
     }
   };
   await step('sweep', () => sweepBatch(env));
-  await step('lease', () => leaseBatch(env));
+  if (o.lease) await step('lease', () => leaseBatch(env));
   await step('submit', async () => {
     const rows = await all<BatchRow>(
       db,
@@ -852,11 +873,17 @@ async function runBatchStep(env: Env, port: FactoryPort, deadline: number): Prom
 }
 
 /**
- * cron の verify 段（§B-5-3 / §L-2）。VERIFY_MODE=sync なら §F-3 の同期ループ、既定の batch なら 掃除 → lease → 提出（≤2）→ 回収（≤3）。
- * opts.deadline は cron の絶対期限。batch で渡されなければ今から DEFAULT_BATCH_BUDGET_MS。戻り値はログ用の文字列
+ * cron の verify 段（§B-5-3 / §L-2）。既定の batch は 掃除 → lease → 提出（≤2）→ 回収（≤3）。
+ * VERIFY_MODE=sync は、先に phase を持つ行（切替前の Batch の試行）を Batch の段（lease なし）で回してから、§F-3 の同期ループで 1 件。
+ * opts.deadline は cron の絶対期限（両モードとも全呼び出しに渡す）。渡されなければ batch は今から DEFAULT_BATCH_BUDGET_MS、sync は期限なし。
+ * 戻り値はログ用の文字列
  */
 export async function runVerificationStep(env: Env, port: FactoryPort, opts: { deadline?: number } = {}): Promise<string> {
-  // 同期モード（戻し用）は従来どおり cron の締め切りを渡さない（1 呼び出し 60 秒の上限で長い検証が切れるため）
-  if (cfg(env).verifyMode === 'sync') return runSyncStep(env, port, undefined);
-  return runBatchStep(env, port, opts.deadline ?? Date.now() + DEFAULT_BATCH_BUDGET_MS);
+  const batchDeadline = opts.deadline ?? Date.now() + DEFAULT_BATCH_BUDGET_MS;
+  if (cfg(env).verifyMode === 'sync') {
+    const drain = await runBatchStep(env, port, batchDeadline, { lease: false });
+    const sync = await runSyncStep(env, port, opts.deadline);
+    return drain === 'idle' ? sync : `${sync} drain:${drain}`;
+  }
+  return runBatchStep(env, port, batchDeadline);
 }

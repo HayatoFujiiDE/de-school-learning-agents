@@ -32,6 +32,8 @@ export interface FileMeta {
 /** 外部呼び出しのオプション。deadline があれば timeout = min(残り時間, 60 秒)、再試行 0（reconcile 用） */
 export interface CallOpts {
   deadline?: number;
+  /** deadline がある時の 1 呼び出しの timeout の上限（既定 60 秒）。同期の検証係（§F-3）は長い呼び出しなので大きくする */
+  maxTimeoutMs?: number;
 }
 
 /** batches.results のオプション。maxBytes を省略すると BATCH_RESULTS_MAX_BYTES（会議の 1 MiB） */
@@ -150,7 +152,7 @@ const CALL_TIMEOUT_MAX_MS = 60_000;
 export function requestOptions(o?: CallOpts): { timeout?: number; maxRetries?: number } {
   if (!o?.deadline) return {};
   const remaining = o.deadline - Date.now();
-  return { timeout: Math.max(1_000, Math.min(remaining, CALL_TIMEOUT_MAX_MS)), maxRetries: 0 };
+  return { timeout: Math.max(1_000, Math.min(remaining, o.maxTimeoutMs ?? CALL_TIMEOUT_MAX_MS)), maxRetries: 0 };
 }
 
 /**

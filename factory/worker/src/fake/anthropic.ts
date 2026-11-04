@@ -310,6 +310,9 @@ export function createFakePort(env: Env): FactoryPort {
         // claims.json の fake_batch_result: 'errored' | 'expired' | 'canceled' でその結果、
         // fake_results_bytes: n が上限（o.maxBytes）を超えれば本物と同じく閉じた行が無い = 空を返す
         const k = fakeKeys(c.verify.claims_text);
+        // fake_results_error: 404 / 410 / 500 等の数値で API エラー、'no_results_url' で results_url の無い ended batch（本物の port と同じ PortError）
+        if (k.fake_results_error === 'no_results_url') throw new PortError(true, undefined, 'no_results_url');
+        if (typeof k.fake_results_error === 'number') throw new PortError(true, k.fake_results_error, 'api_error');
         if (Number(k.fake_results_bytes ?? 0) > (o?.maxBytes ?? BATCH_RESULTS_MAX_BYTES)) return [];
         const rt = typeof k.fake_batch_result === 'string' ? k.fake_batch_result : 'succeeded';
         if (rt !== 'succeeded') return [{ custom_id: c.custom_id ?? '', result: { type: rt } } as unknown as MessageBatchIndividualResponse];

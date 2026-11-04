@@ -3,7 +3,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Message } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { MessageBatchIndividualResponse } from '@anthropic-ai/sdk/resources/messages/batches';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PortError, realPort, type BatchResultsOpts, type FactoryPort } from '../src/anthropic';
 import { tokyoDay } from '../src/db';
 import type { Env } from '../src/env';
@@ -11,10 +11,9 @@ import { createFakePort } from '../src/fake/anthropic';
 import type { RouteCtx } from '../src/http';
 import { reverify } from '../src/routes/review';
 import {
-  batchUsageMicroDollars,
+  SYNC_CALL_MAX_MS,
   claimSubmit,
   leaseBatch,
-  microDollarsToCents,
   runVerificationStep,
   sweepBatch,
   verifyConversationKey,
@@ -35,6 +34,8 @@ const HOUR = 3600_000;
 let db: DatabaseSync;
 let r2: Map<string, string>;
 let env: Env;
+/** R2.get の中で 1 回だけ走らせる処理（key を受け取り、true を返すとその key を読めなかったことにする） */
+let r2GetHook: null | ((key: string) => boolean) = null;
 
 function makeEnv(vars: Record<string, string> = {}): Env {
   return {
@@ -44,6 +45,13 @@ function makeEnv(vars: Record<string, string> = {}): Env {
         r2.set(k, String(v));
       },
       async get(k: string) {
+        if (r2GetHook) {
+          const h = r2GetHook;
+          if (h(k)) {
+            r2GetHook = null;
+            return null;
+          }
+        }
         const b = r2.get(k);
         return b === undefined ? null : { text: async () => b };
       },
@@ -127,7 +135,13 @@ interface Stub {
   /** custom_id の turn ごとの結果（result の中身） */
   reply: (turn: number) => unknown;
   createError: Error | null;
+  /** createBatch の中で（応答の前に）1 回だけ走らせる処理 */
+  createHook: null | (() => Promise<void>);
   retrieveError: Error | null;
+  /** batchResults が投げる例外（resultsHook の後） */
+  resultsError: Error | null;
+  /** batchResults の行の custom_id を差し替える（「結果に t{turn} の行が無い」） */
+  resultsCustomId: string | null;
   /** n 件の retrieve が揃うまで待たせる（2 つの cron が同じ ended batch を見る） */
   retrieveBarrier: number;
   /** batchResults の中で 1 回だけ走らせる処理（回収中に他の cron が動く） */
@@ -142,7 +156,10 @@ function makeStub(): Stub {
     status: 'ended',
     reply: (turn) => (turn === 0 ? ok(reportMsg()) : ok(reportMsg())),
     createError: null,
+    createHook: null,
     retrieveError: null,
+    resultsError: null,
+    resultsCustomId: null,
     retrieveBarrier: 0,
     resultsHook: null,
     calls: { retrieve: 0, results: 0 },
@@ -162,6 +179,11 @@ function makeStub(): Stub {
     listBatchesPage: no,
     xaiResponses: no,
     async createBatch(params) {
+      if (s.createHook) {
+        const h = s.createHook;
+        s.createHook = null;
+        await h();
+      }
       if (s.createError) throw s.createError;
       const id = `msgbatch_${s.created.length + 1}`;
       s.created.push({ id, custom_id: params.requests[0].custom_id, params: params.requests[0].params as unknown as Record<string, unknown> });
@@ -191,8 +213,9 @@ function makeStub(): Stub {
         s.resultsHook = null;
         await h();
       }
+      if (s.resultsError) throw s.resultsError;
       const custom = b?.custom_id ?? 't0';
-      return [{ custom_id: custom, result: s.reply(Number(custom.slice(1))) } as unknown as MessageBatchIndividualResponse];
+      return [{ custom_id: s.resultsCustomId ?? custom, result: s.reply(Number(custom.slice(1))) } as unknown as MessageBatchIndividualResponse];
     },
   };
   return s;
@@ -208,7 +231,11 @@ function routeCtx(): RouteCtx {
 beforeEach(() => {
   db = migratedDb();
   r2 = new Map();
+  r2GetHook = null;
   env = makeEnv();
+});
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('§L-7 (l2) Batch 検証の状態遷移', () => {
@@ -240,9 +267,9 @@ describe('§L-7 (l2) Batch 検証の状態遷移', () => {
     await step(s.port); // 回収: pause_turn → to_submit（turn 1）。提出段は回収段より前なので t1 は次の cron
     v = ver();
     expect(v).toMatchObject({ verification_status: 'running', verify_phase: 'to_submit', verify_turn: 1, verify_pauses: 1, verify_batch_id: null });
-    const m0 = batchUsageMicroDollars(USAGE as Message['usage']);
-    expect(v.verify_micro).toBe(m0);
-    expect(vbRows()).toEqual([{ ref_id: verifyLedgerRefId('v1', token, 0), cents: microDollarsToCents(m0), kind: 'verify' }]);
+    // Batch: 0.5 × (10,000 × $4 + 2,000 × $4 × 1.25 + 4,000 × $4 × 0.1 + 1,000 × $20) / 1M = 0.5 × 71,600 = 35,800 μUSD → 4 ¢
+    expect(v.verify_micro).toBe(35_800);
+    expect(vbRows()).toEqual([{ ref_id: verifyLedgerRefId('v1', token, 0), cents: 4, kind: 'verify' }]);
     const t1 = JSON.parse(r2.get(verifyConversationKey('v1', token, 1))!) as Array<{ role: string }>;
     expect(t1.map((m) => m.role)).toEqual(['user', 'assistant']);
 
@@ -255,7 +282,7 @@ describe('§L-7 (l2) Batch 検証の状態遷移', () => {
     expect(vbRows().map((r) => r.ref_id)).toEqual([verifyLedgerRefId('v1', token, 0), verifyLedgerRefId('v1', token, 1)]);
     const vs = verifs();
     expect(vs).toHaveLength(1);
-    expect(vs[0]).toMatchObject({ attempt: 1, claims_total: 2, confirmed: 2, cost_cents: microDollarsToCents(m0 * 2) });
+    expect(vs[0]).toMatchObject({ attempt: 1, claims_total: 2, confirmed: 2, cost_cents: 8 });  // 35,800 × 2 = 71,600 μUSD → 8 ¢
     const result = JSON.parse(String(vs[0].result_json)) as { meta: Record<string, unknown>; verdicts: unknown[] };
     expect(result.meta).toEqual({ mode: 'batch', turns: 2, fetch_errors: { url_not_accessible: 1, max_uses_exceeded: 1 }, fetched_ok: [URL_OK] });
   });
@@ -401,8 +428,7 @@ describe('§L-7 (l2) Batch 検証の状態遷移', () => {
     s.status = 'ended';
     await step(s.port);
     expect(ver().verification_status).toBe('done');
-    const m = microDollarsToCents(batchUsageMicroDollars(USAGE as Message['usage']));
-    expect(vbRows().map((r) => r.cents)).toEqual([m]);
+    expect(vbRows().map((r) => r.cents)).toEqual([4]); // 35,800 μUSD の実費だけ（見積り 150 ではない）
   });
 
   it('retrieve が失敗し、submitted から 48 時間超なら試行失敗 + 見積り（48 時間未満なら待つ）', async () => {
@@ -580,9 +606,246 @@ describe('§L-2 fake の Batch（smoke と同じ経路）と同期モード', ()
     const seen: Array<Record<string, unknown>> = [];
     const port = { ...makeStub().port, createMessage: async (p: unknown) => (seen.push(p as Record<string, unknown>), reportMsg()) } as FactoryPort;
     expect(await runVerificationStep(env, port)).toBe('done');
+    // 定価: 10,000 × $4 + 2,000 × $4 × 1.25 + 4,000 × $4 × 0.1 + 1,000 × $20 = 71,600 μUSD → 8 ¢
+    expect(rows(db, "SELECT cents FROM cost_ledger WHERE kind = 'verify'").map((r) => r.cents)).toEqual([8]);
+    expect(verifs()[0].cost_cents).toBe(8);
     expect((seen[0].tools as Array<Record<string, unknown>>)[0]).toMatchObject({ type: 'web_fetch_20250910', max_content_tokens: 20000 });
     expect(seen[0].cache_control).toBeUndefined();
     expect(JSON.parse(String(verifs()[0].result_json)).meta).toMatchObject({ mode: 'sync', turns: 1, fetched_ok: [URL_OK] });
     expect(ver().verify_phase).toBeNull();
+  });
+});
+
+describe('§L-2 回収の失敗の分類（Astra xhigh #1）', () => {
+  const submitted = async () => {
+    seed();
+    const s = makeStub();
+    s.status = 'in_progress';
+    await step(s.port);
+    expect(ver().verify_phase).toBe('submitted');
+    s.status = 'ended';
+    return s;
+  };
+
+  it.each([
+    ['results_url が無い', new PortError(true, undefined, 'no_results_url'), 'results_no_results_url'],
+    ['404', new PortError(true, 404, 'api_error'), 'results_gone_404'],
+    ['410', new PortError(true, 410, 'api_error'), 'results_gone_410'],
+    ['本文が JSONL でない', new PortError(true, undefined, 'invalid_results'), 'results_invalid'],
+  ])('結果が二度と読めない（%s）→ 試行失敗 + 見積り（collecting ↔ submitted を回り続けない）', async (_n, err, reason) => {
+    const s = await submitted();
+    const token = String(ver().verification_token);
+    s.resultsError = err;
+    const out = await step(s.port);
+    expect(out).toContain(`collect=retry:${reason}`);
+    expect(ver()).toMatchObject({ verification_status: 'pending', verify_phase: null, verify_batch_id: null, verification_attempts: 1 });
+    expect(vbRows()).toEqual([{ ref_id: verifyLedgerRefId('v1', token, 0), cents: 150, kind: 'verify' }]);
+    expect(verifs()).toHaveLength(0);
+  });
+
+  it.each([
+    ['timeout', new PortError(false, undefined, 'timeout')],
+    ['接続断', new PortError(false, undefined, 'connection')],
+    ['500', new PortError(true, 500, 'api_error')],
+    ['429', new PortError(true, 429, 'api_error')],
+  ])('一時的な失敗（%s）は collecting のまま → 30 分後に submitted へ戻して回収し直す（見積りなし）', async (_n, err) => {
+    const s = await submitted();
+    s.resultsError = err;
+    const out = await step(s.port);
+    expect(out).toContain('collect=results_error');
+    expect(ver()).toMatchObject({ verification_status: 'running', verify_phase: 'collecting' });
+    expect(vbRows()).toHaveLength(0);
+    s.resultsError = null;
+    await step(s.port); // 30 分未満: 何もしない
+    expect(ver().verify_phase).toBe('collecting');
+    setPhaseAt('v1', ago(31 * MIN));
+    await step(s.port); // 掃除 → submitted → 回収
+    expect(ver().verification_status).toBe('done');
+    expect(vbRows().map((r) => r.cents)).toEqual([4]);
+  });
+
+  it.each([
+    [410, { verification_status: 'pending', verify_phase: null }, 1],
+    [500, { verification_status: 'running', verify_phase: 'collecting' }, 0],
+  ])('fake: fake_results_error=%s', async (code, want, ledger) => {
+    seed(1, { fake_results_error: code, claims: [{ id: 'c1', source_ids: ['s1'] }] });
+    await step(createFakePort(env));
+    expect(ver()).toMatchObject(want);
+    expect(vbRows()).toHaveLength(ledger);
+  });
+});
+
+describe('§L-2 CAS の条件を 1 つだけ変えると 0 行（まだ記帳されていない ref でも EXISTS が記帳を止める。Astra xhigh #4）', () => {
+  /** 処理権を取った後、外部呼び出しの間に 1 つの条件だけが変わる */
+  const mutations: Array<[string, string]> = [
+    ['token', "UPDATE material_versions SET verification_token = 'tok_other' WHERE id = 'v1'"],
+    ['turn', "UPDATE material_versions SET verify_turn = verify_turn + 1 WHERE id = 'v1'"],
+    ['batch_id', "UPDATE material_versions SET verify_batch_id = 'msgbatch_other' WHERE id = 'v1'"],
+    ['phase', "UPDATE material_versions SET verify_phase = 'submitted' WHERE id = 'v1'"],
+    ['status', "UPDATE material_versions SET verification_status = 'done' WHERE id = 'v1'"],
+  ];
+  const kinds = ['続き（pause_turn）', 'report', '結果の行が無い（見積り）'] as const;
+  const cases = mutations.flatMap(([name, sql]) => kinds.map((k) => [name, sql, k] as const));
+
+  it.each(cases)('回収の最後の batch: %s だけ違う × %s → 記帳・verifications・遷移すべて 0', async (name, sql, kind) => {
+    seed();
+    const s = makeStub();
+    s.status = 'in_progress';
+    await step(s.port);
+    s.status = 'ended';
+    if (kind === '続き（pause_turn）') s.reply = () => ok(pauseMsg());
+    if (kind === '結果の行が無い（見積り）') s.resultsCustomId = 't9';
+    s.resultsHook = async () => {
+      db.prepare(sql).run();
+    };
+    const before = ver();
+    await step(s.port);
+    expect(vbRows()).toHaveLength(0);
+    expect(verifs()).toHaveLength(0);
+    const after = ver();
+    // 変えた列以外は collecting を取った時のまま（最後の batch の UPDATE が当たっていない）
+    expect(after.verify_micro).toBe(0);
+    expect(after.verify_pauses).toBe(0);
+    expect(after.verify_turn).toBe(name === 'turn' ? Number(before.verify_turn) + 1 : before.verify_turn);
+    expect(after.verify_phase).toBe(name === 'phase' ? 'submitted' : 'collecting');
+    expect(after.verification_status).toBe(name === 'status' ? 'done' : 'running');
+  });
+
+  const submitMutations = mutations.filter(([n]) => n !== 'batch_id').map(([n, sql]) => [n, n === 'phase' ? sql.replace("'submitted'", "'to_submit'") : sql] as const);
+  it.each(submitMutations.flatMap(([n, sql]) => (['成功', '失敗（見積り）'] as const).map((k) => [n, sql, k] as const)))(
+    '提出: createBatch の間に %s だけ違う × %s → submitted にならず見積りも 0',
+    async (name, sql, kind) => {
+      seed();
+      const s = makeStub();
+      s.status = 'in_progress';
+      s.createHook = async () => {
+        db.prepare(sql).run();
+      };
+      if (kind === '失敗（見積り）') s.createError = new PortError(false, undefined, 'timeout');
+      await step(s.port);
+      const v = ver();
+      expect(vbRows()).toHaveLength(0);
+      expect(v.verify_batch_id).toBeNull();
+      expect(v.verify_phase).toBe(name === 'phase' ? 'to_submit' : 'submitting');
+    },
+  );
+
+  it('終端の失敗（part_missing）の improvement_notes も同じ述語: 読む間に token が変わったら 0 行（対照: 変わらなければ failed + 1 行）', async () => {
+    seed();
+    r2GetHook = (k) => k.endsWith('parts/p1/elementary-short.md');
+    await step(makeStub().port);
+    expect(ver()).toMatchObject({ verification_status: 'failed', verify_phase: null });
+    expect(rows(db, 'SELECT id FROM improvement_notes')).toHaveLength(1);
+
+    db.prepare("DELETE FROM improvement_notes").run();
+    db.prepare("UPDATE material_versions SET verification_status = 'pending', verification_attempts = 0 WHERE id = 'v1'").run();
+    r2GetHook = (k) => {
+      if (!k.endsWith('parts/p1/elementary-short.md')) return false;
+      db.prepare("UPDATE material_versions SET verification_token = 'tok_other' WHERE id = 'v1'").run();
+      return true;
+    };
+    await step(makeStub().port);
+    expect(ver()).toMatchObject({ verification_status: 'running', verification_token: 'tok_other', verify_phase: 'submitting' });
+    expect(rows(db, 'SELECT id FROM improvement_notes')).toHaveLength(0);
+  });
+});
+
+describe('§L-2 pause_turn の上限（5 回まで続け、6 回目で失敗）', () => {
+  it('pause_turn が 5 回までは次のターンを出し、6 回目で試行失敗 too_many_pauses', async () => {
+    seed();
+    const s = makeStub();
+    s.reply = () => ok(pauseMsg());
+    const seenPauses: number[] = [];
+    let out = '';
+    for (let i = 0; i < 20 && !out.includes('too_many_pauses'); i++) {
+      out = await step(s.port);
+      const v = ver();
+      if (v.verify_phase === 'to_submit') seenPauses.push(Number(v.verify_pauses));
+    }
+    expect(out).toContain('collect=retry:too_many_pauses');
+    expect(Math.max(...seenPauses)).toBe(5);
+    expect(s.created.map((c) => c.custom_id)).toEqual(['t0', 't1', 't2', 't3', 't4', 't5']);
+    expect(vbRows()).toHaveLength(6); // 6 回目のターンの実費も失敗の batch で記帳
+    expect(ver()).toMatchObject({ verification_status: 'pending', verify_phase: null });
+  });
+});
+
+describe('§L-2 同期モード（Astra xhigh #2 #3）', () => {
+  it('sync に切り替えても phase を持つ行（submitted）は Batch の段で回収・記帳され、新しい lease は同期ループ', async () => {
+    seed(2);
+    const s = makeStub();
+    s.status = 'in_progress';
+    await step(s.port); // batch モードで v1 を提出
+    expect(ver('v1').verify_phase).toBe('submitted');
+    const token = String(ver('v1').verification_token);
+    env = makeEnv({ VERIFY_MODE: 'sync' });
+    s.status = 'ended';
+    let messages = 0;
+    const port = { ...s.port, createMessage: async () => (messages++, reportMsg()) } as FactoryPort;
+    // 30 分を過ぎても sync の掃除は phase のある行を pending に戻さない
+    db.prepare("UPDATE material_versions SET verification_started_at = ? WHERE id = 'v1'").run(ago(31 * MIN));
+    const out = await runVerificationStep(env, port, { deadline: Date.now() + 10 * MIN });
+    expect(out).toContain('drain:');
+    expect(ver('v1').verification_status).toBe('done');
+    expect(vbRows()).toEqual([{ ref_id: verifyLedgerRefId('v1', token, 0), cents: 4, kind: 'verify' }]);
+    expect(ver('v2')).toMatchObject({ verification_status: 'done', verify_phase: null }); // 同期で 1 件
+    expect(messages).toBe(1);
+    expect(s.created).toHaveLength(1); // 新しい batch は作らない
+  });
+
+  it('sync でも to_submit の続きのターンは Batch で提出する（lease はしない）', async () => {
+    seed();
+    const s = makeStub();
+    s.reply = (turn) => (turn === 0 ? ok(pauseMsg()) : ok(reportMsg()));
+    await step(s.port); // t0 → to_submit t1
+    expect(ver()).toMatchObject({ verify_phase: 'to_submit', verify_turn: 1 });
+    env = makeEnv({ VERIFY_MODE: 'sync' });
+    await runVerificationStep(env, { ...s.port, createMessage: no } as FactoryPort, { deadline: Date.now() + 10 * MIN });
+    expect(ver().verification_status).toBe('done');
+    expect(s.created.map((c) => c.custom_id)).toEqual(['t0', 't1']);
+  });
+
+  it('期限切れの deadline では lease も createMessage もしない', async () => {
+    env = makeEnv({ VERIFY_MODE: 'sync' });
+    seed();
+    let calls = 0;
+    const port = { ...makeStub().port, createMessage: async () => (calls++, reportMsg()) } as FactoryPort;
+    expect(await runVerificationStep(env, port, { deadline: Date.now() - 1 })).toBe('no_time');
+    expect(calls).toBe(0);
+    expect(ver()).toMatchObject({ verification_status: 'pending', verification_attempts: 0 });
+  });
+
+  it('deadline を全呼び出しに渡し、timeout の上限は同期用（SYNC_CALL_MAX_MS）', async () => {
+    env = makeEnv({ VERIFY_MODE: 'sync' });
+    seed();
+    const opts: unknown[] = [];
+    const deadline = Date.now() + 14 * MIN;
+    const port = { ...makeStub().port, createMessage: async (_p: unknown, o: unknown) => (opts.push(o), reportMsg()) } as FactoryPort;
+    expect(await runVerificationStep(env, port, { deadline })).toBe('done');
+    expect(opts).toEqual([{ deadline, maxTimeoutMs: SYNC_CALL_MAX_MS }]);
+    expect(SYNC_CALL_MAX_MS).toBe(600_000);
+  });
+
+  it('途中のターンで残り時間が足りなければ次のターンを始めない（かかった分だけ記帳し、試行は 30 分の掃除が pending に戻す）', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-04T03:00:00.000Z'));
+    env = makeEnv({ VERIFY_MODE: 'sync' });
+    seed();
+    let calls = 0;
+    const port = {
+      ...makeStub().port,
+      createMessage: async () => {
+        calls++;
+        vi.setSystemTime(new Date(Date.now() + 10 * MIN)); // 1 ターン目に 10 分かかった
+        return pauseMsg();
+      },
+    } as FactoryPort;
+    expect(await runVerificationStep(env, port, { deadline: Date.now() + 5 * MIN })).toBe('deadline');
+    expect(calls).toBe(1);
+    expect(ver()).toMatchObject({ verification_status: 'running', verify_phase: null, verification_attempts: 1 });
+    expect(rows(db, "SELECT cents FROM cost_ledger WHERE kind = 'verify'").map((r) => r.cents)).toEqual([8]); // 71,600 μUSD
+    vi.setSystemTime(new Date(Date.now() + 31 * MIN));
+    await sweepBatch(env);
+    expect(ver()).toMatchObject({ verification_status: 'pending', verification_token: null, verification_attempts: 1 });
   });
 });
