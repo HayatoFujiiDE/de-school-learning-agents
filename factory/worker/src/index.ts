@@ -6,6 +6,7 @@ import { runCron } from './cron';
 import type { Env } from './env';
 import { json, makeCtx, type RouteCtx } from './http';
 import { getFloor } from './routes/floor';
+import { probeImageTool } from './routes/probe';
 import { answerJobRoute, cancelJobRoute, createJob, getJobDetail, reconcileJobRoute, reingestJobRoute, startJobRoute } from './routes/jobs';
 import { libraryAvailable, libraryFile } from './routes/library';
 import { createMaterial, getMaterialDetail, listMaterials, rollbackMaterial, stopMaterial } from './routes/materials';
@@ -28,6 +29,7 @@ type Handler = (c: RouteCtx, ...params: string[]) => Promise<Response>;
 const ID = '([A-Za-z0-9-]{1,64})';
 
 const ROUTES: Array<[string, RegExp, Handler]> = [
+  ['POST', /^\/api\/probe\/image-tool$/, probeImageTool], // 一時的（画像 段階 2 のプローブ p2〜p4。確認後に外す）
   ['POST', /^\/api\/materials$/, createMaterial],
   ['GET', /^\/api\/materials$/, listMaterials],
   ['GET', new RegExp(`^/api/materials/${ID}$`), getMaterialDetail],
