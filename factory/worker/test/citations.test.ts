@@ -106,3 +106,31 @@ describe('accumulateCitations（ページ分割で流し込んでも同じ結果
     expect(whole.sources.map((s) => s.check_detail)).toEqual(['ok', 'quote_not_found']);
   });
 });
+
+describe('accumulateCitations の集計は出典単位・URL 単位（tool_result 数 × 出典数で肥大しない）', () => {
+  // 合成入力: 出典 200 件（引用 700 文字・URL は 10 種）、web_fetch 300 回の結果がどれも全出典の引用を含む。
+  // さらに web_fetch 以外の tool（sources.json を表示した等）の結果 300 件も全出典の引用を含む。
+  // 旧実装（tool_use_id ごとに一致した出典 id の配列を持つ）では 300 × 200 個の id を持ち、JSON が 1,000,000 文字を超える
+  const N_SOURCES = 200;
+  const N_RESULTS = 300;
+  const sources = Array.from({ length: N_SOURCES }, (_, i) => {
+    const id = `src-${String(i).padStart(3, '0')}-kkkkkkkkkk`;
+    return { id, url: `https://example.com/page/${i % 10}`, quoted_excerpt: `[${id}] ${'あいうえおかきくけこ'.repeat(70)}`.slice(0, 700), is_primary: true };
+  });
+  const page = sources.map((s) => s.quoted_excerpt).join(' ');
+  const events: unknown[] = [];
+  for (let j = 0; j < N_RESULTS; j++) {
+    events.push(fetchUse(`sevt_fetch_${j}`, `https://example.com/page/${j % 10}`), result(`sevt_fetch_${j}`, page));
+    events.push({ type: 'agent.tool_use', id: `sevt_bash_${j}`, name: 'bash', input: { command: 'cat sources.json' } }, result(`sevt_bash_${j}`, page));
+  }
+
+  it('JSON にしても 1,000,000 文字未満で、判定は全出典 ok', async () => {
+    const { accumulateCitations, finishCitations, newCitationAcc } = await import('../src/checks/citations');
+    const acc = newCitationAcc();
+    for (let k = 0; k < events.length; k += 20) accumulateCitations(acc, sources, events.slice(k, k + 20));
+    expect(JSON.stringify(acc).length).toBeLessThan(1_000_000);
+    const r = finishCitations(acc, sources);
+    expect(r.summary).toEqual({ total: N_SOURCES, fetched: N_SOURCES, quoted: N_SOURCES });
+    expect(new Set(r.sources.map((s) => s.check_detail))).toEqual(new Set(['ok']));
+  });
+});

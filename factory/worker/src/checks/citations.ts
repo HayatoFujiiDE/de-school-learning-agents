@@ -57,47 +57,92 @@ function looksOffloaded(text: string): boolean {
 }
 
 /**
- * events をページ単位で流し込める集計状態（JSON にして reconcile_state_json に保存できる）。
- * 本文そのものは持たず、tool_result ごとに「本文があったか / offload らしいか / 引用が見つかった出典 id」だけを持つ。順序に依存しない。
+ * events をページ単位で流し込める集計状態（JSON にして reconcile_state_json に保存できる）。順序に依存しない。
+ * 本文そのものは持たず、出典照合の判定に要る値だけを URL 単位・出典単位で持つ（tool_result ごとの配列は持たない）:
+ *   fetches: web_fetch の tool_use id → 正規化 URL（fetch 回数ぶん）
+ *   urls:    正規化 URL → その URL の fetch 結果に本文があったか(t) / offload らしいか(o)（URL 数ぶん）
+ *   q:       引用が「その出典の URL の fetch 結果」に見つかった出典 id の集合（出典数ぶん）
+ *   nf:      web_fetch 以外の tool_use id（その結果は照合に使わないので、結果が来ても何も持たない。id だけ）
+ *   pend:    tool_use より先に来た tool_result の要約（use が来た時点で urls / q へ移して消す。古い順に読めば空のまま）
  */
 export interface CitationAcc {
-  fetches: Record<string, string>; // web_fetch の tool_use id → 正規化 URL
-  results: Record<string, { t: 0 | 1; o: 0 | 1; q: string[] }>; // tool_use_id → 要約
+  fetches: Record<string, string>;
+  urls: Record<string, { t: 0 | 1; o: 0 | 1 }>;
+  q: Record<string, 1>;
+  nf: Record<string, 1>;
+  pend: Record<string, { t: 0 | 1; o: 0 | 1; q: string[] }>;
 }
 
-export const newCitationAcc = (): CitationAcc => ({ fetches: {}, results: {} });
+export const newCitationAcc = (): CitationAcc => ({ fetches: {}, urls: {}, q: {}, nf: {}, pend: {} });
+
+/** 保存済みの値が今の形か（旧形式 {fetches, results} は false → 呼び出し側が先頭から集計し直す） */
+export function isCitationAcc(x: unknown): x is CitationAcc {
+  const a = x as Record<string, unknown> | null;
+  return !!a && typeof a === 'object' && ['fetches', 'urls', 'q', 'nf', 'pend'].every((k) => !!a[k] && typeof a[k] === 'object');
+}
+
+function markUrl(acc: CitationAcc, url: string, t: 0 | 1, o: 0 | 1): void {
+  const prev = acc.urls[url];
+  acc.urls[url] = { t: prev?.t === 1 || t === 1 ? 1 : 0, o: prev?.o === 1 || o === 1 ? 1 : 0 };
+}
 
 export function accumulateCitations(acc: CitationAcc, sources: CitationSourceInput[], events: unknown[]): CitationAcc {
-  const excerpts = sources.map((s) => ({ id: s.id, ex: normalizeSpace(s.quoted_excerpt ?? '') })).filter((x) => x.ex.length > 0);
+  const excerpts = sources
+    .map((s) => ({ id: s.id, url: normalizeUrl(s.url), ex: normalizeSpace(s.quoted_excerpt ?? '') }))
+    .filter((x) => x.ex.length > 0);
+  const byUrl = new Map<string, Array<{ id: string; ex: string }>>();
+  for (const x of excerpts) {
+    const arr = byUrl.get(x.url) ?? [];
+    arr.push({ id: x.id, ex: x.ex });
+    byUrl.set(x.url, arr);
+  }
+  const urlOf = new Map(excerpts.map((x) => [x.id, x.url]));
+
   for (const raw of events) {
     const ev = raw as AnyEvent;
     if (!ev || typeof ev !== 'object') continue;
-    if (ev.type === 'agent.tool_use' && ev.name === 'web_fetch' && typeof ev.id === 'string') {
+    if (ev.type === 'agent.tool_use' && typeof ev.id === 'string') {
       const url = (ev.input as Record<string, unknown> | undefined)?.url;
-      if (typeof url === 'string') acc.fetches[ev.id] = normalizeUrl(url);
+      const pending = acc.pend[ev.id];
+      delete acc.pend[ev.id];
+      if (ev.name === 'web_fetch' && typeof url === 'string') {
+        const u = normalizeUrl(url);
+        acc.fetches[ev.id] = u;
+        if (pending) {
+          if (pending.t === 1) markUrl(acc, u, pending.t, pending.o);
+          for (const sid of pending.q) if (urlOf.get(sid) === u) acc.q[sid] = 1;
+        }
+      } else {
+        acc.nf[ev.id] = 1;
+      }
     } else if (ev.type === 'agent.tool_result' && typeof ev.tool_use_id === 'string') {
+      const id = ev.tool_use_id;
+      if (acc.nf[id]) continue;
       const t = resultText(ev);
-      const prev = acc.results[ev.tool_use_id];
-      const norm = t === null ? '' : normalizeSpace(t);
-      const q = t === null ? [] : excerpts.filter((x) => norm.includes(x.ex)).map((x) => x.id);
-      acc.results[ev.tool_use_id] = {
-        t: prev?.t === 1 || t !== null ? 1 : 0,
-        o: prev?.o === 1 || (t !== null && looksOffloaded(t)) ? 1 : 0,
-        q: [...new Set([...(prev?.q ?? []), ...q])],
-      };
+      if (t === null) continue; // 本文の無い結果は「結果が無い」と同じ扱い（判定に影響しない）
+      const norm = normalizeSpace(t);
+      const o: 0 | 1 = looksOffloaded(t) ? 1 : 0;
+      const u = acc.fetches[id];
+      if (u !== undefined) {
+        markUrl(acc, u, 1, o);
+        for (const x of byUrl.get(u) ?? []) if (!acc.q[x.id] && norm.includes(x.ex)) acc.q[x.id] = 1;
+      } else {
+        // use がまだ来ていない（順序が逆）。どの URL か分からないので一致した出典 id を仮に持つ
+        const prev = acc.pend[id];
+        const q = excerpts.filter((x) => norm.includes(x.ex)).map((x) => x.id);
+        acc.pend[id] = { t: 1, o: prev?.o === 1 || o === 1 ? 1 : 0, q: [...new Set([...(prev?.q ?? []), ...q])] };
+      }
     }
   }
   return acc;
 }
 
 export function finishCitations(acc: CitationAcc, sources: CitationSourceInput[]): CitationResult {
+  const fetchedUrls = new Set(Object.values(acc.fetches));
   const out: CitationResult['sources'] = [];
   for (const s of sources) {
     const target = normalizeUrl(s.url);
-    const matchIds = Object.entries(acc.fetches)
-      .filter(([, u]) => u === target)
-      .map(([id]) => id);
-    const fetched: 0 | 1 = matchIds.length > 0 ? 1 : 0;
+    const fetched: 0 | 1 = fetchedUrls.has(target) ? 1 : 0;
     let quote: 0 | 1 = 0;
     let detail: CheckDetail;
     const excerpt = normalizeSpace(s.quoted_excerpt ?? '');
@@ -106,21 +151,15 @@ export function finishCitations(acc: CitationAcc, sources: CitationSourceInput[]
     } else if (!excerpt) {
       detail = 'no_excerpt';
     } else {
-      let anyText = false;
-      let offloaded = false;
-      for (const id of matchIds) {
-        const r = acc.results[id];
-        if (!r || r.t === 0) continue;
-        anyText = true;
-        if (r.q.includes(s.id)) {
-          quote = 1;
-          break;
-        }
-        if (r.o === 1) offloaded = true;
+      const u = acc.urls[target];
+      if (acc.q[s.id] === 1) {
+        quote = 1;
+        detail = 'ok';
+      } else if (!u || u.t === 0 || u.o === 1) {
+        detail = 'result_unavailable';
+      } else {
+        detail = 'quote_not_found';
       }
-      if (quote) detail = 'ok';
-      else if (!anyText || offloaded) detail = 'result_unavailable';
-      else detail = 'quote_not_found';
     }
     if (!s.is_primary) detail = 'secondary';
     out.push({ source_id: s.id, url_was_fetched: fetched, quote_found: quote, check_detail: detail });

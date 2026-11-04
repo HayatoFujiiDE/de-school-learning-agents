@@ -12,7 +12,7 @@ export const VERIFIER_MODEL = 'claude-opus-5-5';
 export const VERDICTS = ['confirmed', 'hypothesis', 'unverified', 'contradicted'] as const;
 const MAX_PAUSES = 5;
 const MAX_TURNS = 8;
-/** 検証係への入力（claims + sources + parts/** 全本文）の上限。超えたら切り詰めずにその試行を failed にする */
+/** 検証係への入力（claims + sources + 取り込んだ parts/** 全本文）の上限。超えたら切り詰めずにその試行を failed にする */
 export const VERIFY_INPUT_CHAR_LIMIT = 400_000;
 // Opus 5.5 の定価（USD / 1M tokens）。web_fetch は無料
 const PRICE_IN = 4;
@@ -93,14 +93,40 @@ export interface VersionForVerify {
   material_id: string;
   r2_prefix: string;
   claims_json: string;
-  public_paths_json: string;
 }
 
-/** parts/** の本文（.md / .html / .svg）を全部入れる。上限を超えたら null（切り詰めない） */
+/** 検証係に入れる parts/** の数の上限（R2 の一覧の件数。拡張子で絞る前）。超えたら null */
+export const VERIFY_PARTS_LIMIT = 500;
+
+/**
+ * 取り込んだ parts/**（R2 の r2_prefix + 'parts/' 配下）を R2.list で全部列挙し、.md / .html / .svg を path 昇順で返す。
+ * 公開 manifest（public_paths_json）には頼らない（manifest に載らない parts も検証する。§R-31）。件数が上限を超えたら null
+ */
+export async function listPartPaths(r2: R2Bucket, r2Prefix: string): Promise<string[] | null> {
+  const prefix = r2Prefix + 'parts/';
+  const keys: string[] = [];
+  let cursor: string | undefined;
+  for (let i = 0; i <= VERIFY_PARTS_LIMIT; i++) {
+    const page = await r2.list({ prefix, ...(cursor ? { cursor } : {}) });
+    for (const o of page.objects) keys.push(o.key);
+    if (keys.length > VERIFY_PARTS_LIMIT) return null;
+    if (!page.truncated) {
+      return keys
+        .map((k) => k.slice(r2Prefix.length))
+        .filter((p) => /\.(md|html|svg)$/.test(p))
+        .sort();
+    }
+    cursor = page.cursor;
+  }
+  return null; // 空ページが続く等で終わらない一覧は上限超過と同じ扱い
+}
+
+/** parts/** の本文（.md / .html / .svg）を全部入れる。上限（文字数・件数）を超えたら null（切り詰めない） */
 export async function buildUserContent(env: Pick<Env, 'R2'>, v: VersionForVerify): Promise<string | null> {
   const sourcesObj = await env.R2.get(v.r2_prefix + 'sources.json');
   const sourcesText = sourcesObj ? await sourcesObj.text() : '{"sources":[]}';
-  const paths = (JSON.parse(v.public_paths_json) as string[]).filter((p) => p.startsWith('parts/') && /\.(md|html|svg)$/.test(p));
+  const paths = await listPartPaths(env.R2, v.r2_prefix);
+  if (paths === null) return null;
   let total = v.claims_json.length + sourcesText.length;
   const bodies: string[] = [];
   for (const p of paths) {
@@ -229,7 +255,7 @@ export async function runVerificationStep(env: Env, port: FactoryPort): Promise<
   if (!acquired) return 'conflict';
   const v = await first<VersionForVerify>(
     db,
-    stmt('SELECT id, material_id, r2_prefix, claims_json, public_paths_json FROM material_versions WHERE id = ?', pick.id),
+    stmt('SELECT id, material_id, r2_prefix, claims_json FROM material_versions WHERE id = ?', pick.id),
   );
   if (!v) return 'missing';
 
@@ -286,7 +312,7 @@ export async function runVerificationStep(env: Env, port: FactoryPort): Promise<
           `INSERT INTO improvement_notes (id, material_id, source, note, created_at) SELECT ?, ?, 'verification', ?, ? WHERE EXISTS (${PV})`,
           crypto.randomUUID(),
           v.material_id,
-          `検証できませんでした（${result.reason}）。本文の合計が ${VERIFY_INPUT_CHAR_LIMIT} 文字を超えています。版 ${v.id}`,
+          `検証できませんでした（${result.reason}）。本文の合計が ${VERIFY_INPUT_CHAR_LIMIT} 文字、または parts のファイル数が ${VERIFY_PARTS_LIMIT} 件を超えています。版 ${v.id}`,
           now,
           v.id,
           token,

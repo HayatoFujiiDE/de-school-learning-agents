@@ -4,8 +4,8 @@
 
 import type { BetaManagedAgentsEventParams } from '@anthropic-ai/sdk/resources/beta/sessions/events';
 import type { SessionCreateParams } from '@anthropic-ai/sdk/resources/beta/sessions/sessions';
-import { PortError, type CallOpts, type FactoryPort } from './anthropic';
-import { accumulateCitations, finishCitations, newCitationAcc, type CitationAcc } from './checks/citations';
+import { PortError, type CallOpts, type FactoryPort, type FileMeta } from './anthropic';
+import { accumulateCitations, finishCitations, isCitationAcc, newCitationAcc, type CitationAcc } from './checks/citations';
 import { checkForbidden } from './checks/forbidden';
 import { MAX_FILE_BYTES, MAX_FILES, REQUIRED_FILES, contentDigestInput, normalizeOutputPath, validateOutputs } from './checks/schema';
 import {
@@ -25,7 +25,10 @@ import {
 } from './db';
 import { JOB_MODEL, cfg, consoleUrl, type Env } from './env';
 import { EDITORIAL_STANDARDS, RUBRIC_COMMON, RUBRIC_KINDS } from './generated/claude-assets';
+import { OutOfTime, SAVE_FAILURES_MAX, ScanLimit, ScanStalled, runScan, stateJsonForSave, type ScanIO, type ScanState } from './scan';
 import { isActiveJob, isTerminalJob } from './state';
+
+export { OutOfTime } from './scan';
 
 export interface JobRow {
   id: string;
@@ -369,38 +372,52 @@ export async function recoverCreating(env: Env, port: FactoryPort, job: JobRow):
 }
 
 // ---------------------------------------------------------------------------
-// 共通: events をページで辿る（§B-4-d「最後のページまで」）
+// 共通: events / files をページで辿る（§B-4-d「最後のページまで」）。続き位置と途中集計は src/scan.ts の runScan が
+// reconcile_state_json.scan.<目的> に保存し、時間切れの後は続きから再開する
 
-const MAX_PAGES = 500; // 有限ループの上限（1 ページ 20 件でも 1 万件）
+const MAX_PAGES = 500; // ページ数の上限（runScan の走査は呼び出しをまたいだ合計、ingest の古い順の読みは 1 回の呼び出しごと。1 ページ 20 件でも 1 万件）
 
-export class OutOfTime extends Error {
-  constructor() {
-    super('out_of_time');
-    this.name = 'OutOfTime';
+/** event の id（SDK の BetaManagedAgents*Event は全 type が id: string を持つ） */
+const eventId = (e: unknown): string | null => {
+  const id = (e as { id?: unknown } | null)?.id;
+  return typeof id === 'string' ? id : null;
+};
+
+/** reconcile_state_json の保存が終端の失敗になった（大きすぎる / 保存の例外が続いた） */
+class StateWriteStop extends Error {
+  constructor(public readonly code: 'state_too_large' | 'save_failed') {
+    super(code);
+    this.name = 'StateWriteStop';
   }
 }
 
+/** 保存の例外の回数だけを、保存済みの JSON に足す（大きな本体は書き直さない） */
+const BUMP_SAVE_FAILURES_SQL = `json_set(CASE WHEN json_valid(reconcile_state_json) THEN reconcile_state_json ELSE '{}' END, '$.save_failures', ?)`;
+
 /**
- * events を order 順にページで辿り、visit が true を返したらそこで止める。
- * 各ページの取得前に before()（lease 延長と残時間の確認）を呼ぶ。最後のページまで辿れたら complete=true。
- * 途中で時間切れなら OutOfTime を投げる（呼び出し側は「見つからなかった」と確定しない）。
+ * reconcile_state_json を書く直前のガード（§R-32 の段階保存の共通部分）:
+ * - JSON が STATE_MAX_BYTES を超えたら書かずに StateWriteStop('state_too_large')（D1 の行上限に当てない）
+ * - write が例外なら回数を bump で残し、SAVE_FAILURES_MAX 回目で StateWriteStop('save_failed')。それ未満は例外をそのまま投げる
+ * 戻り値: write の CAS 結果（false = 所有権を失った）と、保存した state（save_failures は成功で 0 に戻るので持たない）
  */
-async function scanEvents(
-  port: FactoryPort,
-  sessionId: string,
-  order: 'asc' | 'desc',
-  visit: (ev: Record<string, unknown>) => boolean,
-  o: { before: () => Promise<void>; call: CallOpts },
-): Promise<{ stopped: boolean }> {
-  let page: string | null = null;
-  for (let i = 0; i < MAX_PAGES; i++) {
-    await o.before();
-    const p = await port.listEventsPage(sessionId, { order, page }, o.call);
-    for (const ev of p.data) if (visit((ev ?? {}) as Record<string, unknown>)) return { stopped: true };
-    if (!p.next) return { stopped: false };
-    page = p.next;
+async function guardedStateWrite(
+  state: ReconcileState,
+  write: (json: string) => Promise<boolean>,
+  bump: (n: number) => Promise<unknown>,
+): Promise<{ ok: boolean; state: ReconcileState }> {
+  const json = stateJsonForSave(state as Record<string, unknown>);
+  if (json === null) throw new StateWriteStop('state_too_large');
+  let ok: boolean;
+  try {
+    ok = await write(json);
+  } catch (e) {
+    const n = (Number.isInteger(state.save_failures) ? state.save_failures! : 0) + 1;
+    await bump(n).catch(() => undefined);
+    if (n >= SAVE_FAILURES_MAX) throw new StateWriteStop('save_failed');
+    throw e;
   }
-  throw new Error('too_many_pages');
+  const { save_failures: _drop, ...rest } = state;
+  return { ok, state: rest };
 }
 
 const deadlineGuard = (deadline: number) => async () => {
@@ -476,6 +493,33 @@ export function sanitizeQuestions(raw: unknown): Question[] {
 
 const ANSWER_BUDGET_MS = 25_000;
 
+/** answer の排他（answer_token）を他の呼び出しに取られた */
+class LostAnswerClaim extends Error {
+  constructor() {
+    super('lost_answer_claim');
+    this.name = 'LostAnswerClaim';
+  }
+}
+
+/** 回答送信中（answer_token を持つ）に終端の失敗が起きた時: job failed + material idle（§B-2 の条件付き batch、述語 = needs_answer かつ answer_token 一致） */
+async function failAnswering(db: D1Database, job: JobRow, token: string, error: string): Promise<boolean> {
+  const now = nowIso();
+  const P = `SELECT 1 FROM factory_jobs pj WHERE pj.id = ? AND pj.status = 'needs_answer' AND pj.answer_token = ?`;
+  const r = await conditionalBatch(db, [
+    stmt(`UPDATE materials SET work_status = 'idle', updated_at = ? WHERE id = ? AND work_status = 'making' AND EXISTS (${P})`, now, job.material_id, job.id, token),
+    stmt(
+      `UPDATE factory_jobs SET status = 'failed', error = ?, last_error = ?, answer_state = 'saved', answer_token = NULL, updated_at = ?
+       WHERE id = ? AND status = 'needs_answer' AND answer_token = ?`,
+      error,
+      error,
+      now,
+      job.id,
+      token,
+    ),
+  ]);
+  return r.ok;
+}
+
 export async function answerJob(env: Env, port: FactoryPort, jobId: string, body: unknown): Promise<ApiResult> {
   const db = env.DB;
   let job = await getJob(db, jobId);
@@ -544,13 +588,47 @@ export async function answerJob(env: Env, port: FactoryPort, jobId: string, body
   const kinds = parseJson<number[]>(material?.kinds_json, []);
   const answers = parseJson<Array<{ question_id: string; answer: string }>>(job.answers_json, []);
   const deadline = Date.now() + ANSWER_BUDGET_MS;
+  // 走査の続き位置は reconcile_state_json.scan.answer。書くのは answer_token を持つこの呼び出しだけ
+  // （needs_answer の間 reconcile は reconcile_state_json を書かない: 書き込みの述語が status IN ('running','budget_reached')）
+  let state = parseJson<ReconcileState>((await getJob(db, jobId))?.reconcile_state_json, {});
+  const saveScan = async (s: ScanState<{ found: boolean }>, lastError?: string): Promise<void> => {
+    const r = await guardedStateWrite(
+      { ...state, scan: { ...state.scan, answer: s } },
+      (json) =>
+        cas(
+          db,
+          stmt(
+            `UPDATE factory_jobs SET reconcile_state_json = ?, last_error = COALESCE(?, last_error), updated_at = ?
+             WHERE id = ? AND status = 'needs_answer' AND answer_state = 'sending' AND answer_token = ?`,
+            json,
+            lastError ?? null,
+            nowIso(),
+            jobId,
+            token,
+          ),
+        ),
+      (n) => cas(db, stmt(`UPDATE factory_jobs SET reconcile_state_json = ${BUMP_SAVE_FAILURES_SQL} WHERE id = ? AND answer_token = ?`, n, jobId, token)),
+    );
+    if (!r.ok) throw new LostAnswerClaim();
+    state = r.state;
+  };
   try {
-    // 4. 送信（define_outcome が既にあれば送らない。全ページを見て確定する）
-    const found = await scanEvents(port, job.session_id!, 'desc', (e) => e.type === 'user.define_outcome', {
+    // 4. 送信（define_outcome が既にあれば送らない。全ページを見て確定する。時間切れなら続き位置を残して、次の送信で続きから）
+    const found = await runScan<unknown, { found: boolean }>({
+      saved: state.scan?.answer,
+      base: { purpose: 'answer', job_status: 'needs_answer', job_phase: job.phase, session_status: null },
+      init: () => ({ found: false }),
+      fetch: (cursor) => port.listEventsPage(job!.session_id!, { order: 'desc', page: cursor }, { deadline }),
+      idOf: eventId,
+      fold: (agg, items) => {
+        if (items.some((e) => (e as { type?: unknown } | null)?.type === 'user.define_outcome')) agg.found = true;
+        return agg.found;
+      },
       before: deadlineGuard(deadline),
-      call: { deadline },
+      save: saveScan,
+      maxPages: MAX_PAGES,
     });
-    if (!found.stopped) {
+    if (!found.agg.found) {
       const text = [
         '# 運営からの回答',
         ...answers.map((a) => {
@@ -562,12 +640,21 @@ export async function answerJob(env: Env, port: FactoryPort, jobId: string, body
       await port.sendEvents(job.session_id!, [{ type: 'user.message', content: [{ type: 'text', text }] }, defineOutcomeEvent(kinds)], { deadline });
     }
   } catch (e) {
+    // 終端: 走査が進まない / 上限 / state を保存できない → job を failed にして止める（無限に再試行しない）
+    const terminal =
+      e instanceof ScanStalled ? 'scan_stalled' : e instanceof ScanLimit ? e.code : e instanceof StateWriteStop ? e.code : null;
+    if (terminal) {
+      const failed = await failAnswering(db, job, token, terminal);
+      console.log(JSON.stringify({ at: 'answer', job_id: jobId, result: failed ? `failed:${terminal}` : 'state_changed' }));
+      return err(409, 'not_waiting', terminal);
+    }
+    if (e instanceof LostAnswerClaim) return err(409, 'answer_in_flight');
     // 6. 失敗 → saved に戻す
     await cas(
       db,
       stmt(
         `UPDATE factory_jobs SET answer_state = 'saved', answer_token = NULL, last_error = ? WHERE id = ? AND answer_token = ? AND answer_state = 'sending'`,
-        e instanceof OutOfTime ? 'events_scan_incomplete' : errorKind(e),
+        e instanceof OutOfTime ? (e.noProgress ? 'scan_no_progress' : 'events_scan_incomplete') : errorKind(e),
         jobId,
         token,
       ),
@@ -614,6 +701,10 @@ interface ListedFile {
 }
 
 interface ReconcileState {
+  /** 走査の途中経過（src/scan.ts の ScanState。目的ごと）。本文は持たない */
+  scan?: { answer?: unknown; idle?: unknown; files?: unknown };
+  /** 保存（D1 書き込み）の例外が続いた回数。成功した保存で消える */
+  save_failures?: number;
   /** inspected: files.list の途中経過（ページの続き位置）。complete になってから必須ファイルを判定する */
   list?: { cursor: string | null; items: ListedFile[]; round: number; complete: boolean };
   /** listed / ingested: 取り込むファイルと、R2 に置き終えた file_id */
@@ -647,6 +738,7 @@ export async function reconcileJob(env: Env, port: FactoryPort, jobId: string, o
     result = await r.run();
   } catch (e) {
     if (e instanceof LostLease) result = 'lost_lease';
+    else if (e instanceof OutOfTime && e.noProgress) result = 'deferred_no_progress';
     else if (e instanceof OutOfTime) result = 'deferred';
     else {
       result = 'error';
@@ -667,8 +759,18 @@ export async function reconcileJob(env: Env, port: FactoryPort, jobId: string, o
   return result;
 }
 
+/** 終端へ落とした（または落とそうとして状態が変わっていた）。result はログ用の状態名 */
+class Stopped extends Error {
+  constructor(public readonly result: string) {
+    super(result);
+    this.name = 'Stopped';
+  }
+}
+
 class Reconciler {
   private db: D1Database;
+  /** reconcile_state_json の今の中身（この lease で書いた最新）。書くのは writeState だけ */
+  private state: ReconcileState = {};
   constructor(
     private env: Env,
     private port: FactoryPort,
@@ -707,7 +809,17 @@ class Reconciler {
   }
 
   async run(): Promise<string> {
+    try {
+      return await this.runInner();
+    } catch (e) {
+      if (e instanceof Stopped) return e.result;
+      throw e;
+    }
+  }
+
+  private async runInner(): Promise<string> {
     let job = await this.load();
+    this.state = parseJson<ReconcileState>(job.reconcile_state_json, {});
     if (isTerminalJob(job.status) || job.status === 'queued' || job.status === 'creating') return 'noop';
     if (!job.session_id) return 'no_session';
 
@@ -742,7 +854,7 @@ class Reconciler {
         }
         return this.fail(job, 'terminated_without_outputs');
       case 'idle':
-        return this.onIdle(job);
+        return this.onIdle(job, session.status);
       default:
         return 'unknown_session_status';
     }
@@ -778,7 +890,7 @@ class Reconciler {
   }
 
   /** 終端（failed）へ落とす。述語に「読んだ時点の status と phase」を含め、途中で状態が進んでいたら何もしない */
-  private async fail(job: JobRow, error: string): Promise<string> {
+  private async fail(job: JobRow, error: string, alsoLastError = false): Promise<string> {
     const now = nowIso();
     const P = `SELECT 1 FROM factory_jobs pj WHERE pj.id = ? AND pj.reconcile_token = ? AND pj.status = ? AND pj.phase = ?`;
     const r = await conditionalBatch(this.db, [
@@ -792,9 +904,10 @@ class Reconciler {
         job.phase,
       ),
       stmt(
-        `UPDATE factory_jobs SET status = 'failed', error = ?, updated_at = ?
+        `UPDATE factory_jobs SET status = 'failed', error = ?, last_error = COALESCE(?, last_error), updated_at = ?
          WHERE id = ? AND reconcile_token = ? AND status = ? AND phase = ? AND status IN ('running','needs_answer','budget_reached')`,
         error,
+        alsoLastError ? error : null,
         now,
         job.id,
         this.token,
@@ -805,33 +918,63 @@ class Reconciler {
     return r.ok ? `failed:${error}` : 'state_changed';
   }
 
-  private async onIdle(job: JobRow): Promise<string> {
+  /**
+   * 走査（idle / files）を reconcile_state_json.scan.<key> に所有権付きで保存しながら進め、時間切れの後は続きから再開する。
+   * 終端の失敗（連続時間切れ / ページ・件数の上限 / state を保存できない）は job を failed にして Stopped を投げる
+   */
+  private async scan<T, A>(job: JobRow, key: 'idle' | 'files', io: Omit<ScanIO<T, A>, 'saved' | 'before' | 'save' | 'maxPages'>): Promise<{ agg: A; head: string | null }> {
+    try {
+      return await runScan<T, A>({
+        ...io,
+        saved: this.state.scan?.[key],
+        before: this.extend,
+        save: (st, lastError) => this.writeState(job, null, { ...this.state, scan: { ...this.state.scan, [key]: st } }, lastError),
+        maxPages: MAX_PAGES,
+      });
+    } catch (e) {
+      if (e instanceof ScanStalled) throw new Stopped(await this.fail(job, 'scan_stalled', true));
+      if (e instanceof ScanLimit) throw new Stopped(await this.fail(job, e.code, true));
+      throw e;
+    }
+  }
+
+  private async onIdle(job: JobRow, sessionStatus: string): Promise<string> {
     // 新しい順に辿り、最新の status_idle・最新の outcome_evaluation_end・define_outcome の有無を集める。
-    // end_turn の時は define_outcome が見つかるまで（無ければ最後のページまで）辿ってから「既送なし」を確定する
-    type IdleEv = { stop_reason?: { type?: string; event_ids?: string[] } };
-    const seen: { idle: IdleEv | null; evalEnd: { result?: string } | null; hasOutcome: boolean } = { idle: null, evalEnd: null, hasOutcome: false };
-    await scanEvents(
-      this.port,
-      job.session_id!,
-      'desc',
-      (e) => {
-        if (!seen.idle && e.type === 'session.status_idle') seen.idle = e as IdleEv;
-        if (!seen.evalEnd && e.type === 'span.outcome_evaluation_end') seen.evalEnd = e as { result?: string };
-        if (e.type === 'user.define_outcome') seen.hasOutcome = true;
-        if (!seen.idle) return false;
-        if (seen.idle.stop_reason?.type !== 'end_turn') return true;
-        return seen.hasOutcome;
+    // end_turn の時は define_outcome が見つかるまで（無ければ最後のページまで）辿ってから「既送なし」を確定する。
+    // 途中集計（id と種別だけ。本文は持たない）は scan.idle に保存し、時間切れの後は続きから（先頭 event が変わっていたら先頭から）
+    type IdleAgg = { idle: { type: string; event_ids: string[] } | null; evalEnd: { result: string } | null; hasOutcome: boolean };
+    const { agg: seen, head } = await this.scan<unknown, IdleAgg>(job, 'idle', {
+      base: { purpose: 'idle', job_status: job.status, job_phase: job.phase, session_status: sessionStatus },
+      init: () => ({ idle: null, evalEnd: null, hasOutcome: false }),
+      fetch: (cursor) => this.port.listEventsPage(job.session_id!, { order: 'desc', page: cursor }, this.call),
+      idOf: eventId,
+      fold: (agg, items) => {
+        for (const raw of items) {
+          const e = (raw ?? {}) as { type?: unknown; result?: unknown; stop_reason?: { type?: unknown; event_ids?: unknown } };
+          if (!agg.idle && e.type === 'session.status_idle') {
+            const ids = e.stop_reason?.event_ids;
+            agg.idle = {
+              type: String(e.stop_reason?.type ?? ''),
+              event_ids: Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : [],
+            };
+          }
+          if (!agg.evalEnd && e.type === 'span.outcome_evaluation_end') agg.evalEnd = { result: String(e.result ?? '') };
+          if (e.type === 'user.define_outcome') agg.hasOutcome = true;
+          if (!agg.idle) continue;
+          if (agg.idle.type !== 'end_turn') return true;
+          if (agg.hasOutcome) return true;
+        }
+        return false;
       },
-      { before: this.extend, call: this.call },
-    );
+    });
     const idleEv = seen.idle;
     const hasOutcome = seen.hasOutcome;
     if (!idleEv) return 'no_idle_event';
-    const stop = idleEv.stop_reason?.type ?? '';
+    const stop = idleEv.type;
 
     if (stop === 'requires_action') {
       const denied = new Set(parseJson<string[]>(job.denied_event_ids_json, []));
-      const ids = (idleEv.stop_reason?.event_ids ?? []).filter((id) => typeof id === 'string' && !denied.has(id));
+      const ids = idleEv.event_ids.filter((id) => !denied.has(id));
       if (ids.length === 0) return 'already_denied';
       await this.extend();
       await this.port.sendEvents(
@@ -858,7 +1001,7 @@ class Reconciler {
     }
 
     if (stop === 'end_turn') {
-      if (job.phase === 'questions') return this.onQuestionsEnd(job, hasOutcome);
+      if (job.phase === 'questions') return this.onQuestionsEnd(job, hasOutcome, sessionStatus, head);
       const ev = seen.evalEnd;
       if (!ev) {
         if (!hasOutcome) {
@@ -883,28 +1026,26 @@ class Reconciler {
     await this.port.sendEvents(job.session_id!, [defineOutcomeEvent(parseJson<number[]>(material?.kinds_json, []))], this.call);
   }
 
-  /** files.list を最後のページまで（保存しない。質問フェーズ用） */
-  private async listAllFiles(sessionId: string): Promise<ListedFile[]> {
-    const out: ListedFile[] = [];
-    let page: string | null = null;
-    for (let i = 0; i < MAX_PAGES; i++) {
-      await this.extend();
-      const p = await this.port.listFilesPage(sessionId, page, this.call);
-      for (const f of p.data) out.push({ file_id: f.id, filename: f.filename, size: f.size_bytes, created_at: f.created_at });
-      if (out.length > LIST_ITEMS_MAX) throw new Error('too_many_files');
-      if (!p.next) return out;
-      page = p.next;
-    }
-    throw new Error('too_many_pages');
-  }
-
   /** §B-4-b */
-  private async onQuestionsEnd(job: JobRow, hasOutcome: boolean): Promise<string> {
+  private async onQuestionsEnd(job: JobRow, hasOutcome: boolean, sessionStatus: string, head: string | null): Promise<string> {
     if (job.status !== 'running') return 'noop';
-    const files = await this.listAllFiles(job.session_id!);
-    const qf = files
-      .filter((f) => normalizeOutputPath(f.filename) === 'questions.json')
-      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0];
+    // files.list を最後のページまで。集計は最新の questions.json 1 件だけ。続き位置は scan.files（文脈の head は直前の idle 走査の先頭 event）
+    type QAgg = { q: { file_id: string; size: number; created_at: string } | null };
+    const { agg } = await this.scan<FileMeta, QAgg>(job, 'files', {
+      base: { purpose: 'files', job_status: job.status, job_phase: job.phase, session_status: sessionStatus },
+      head,
+      init: () => ({ q: null }),
+      fetch: (cursor) => this.port.listFilesPage(job.session_id!, cursor, this.call),
+      fold: (acc, items) => {
+        for (const f of items) {
+          if (normalizeOutputPath(f.filename) !== 'questions.json') continue;
+          if (!acc.q || acc.q.created_at < f.created_at) acc.q = { file_id: f.id, size: f.size_bytes, created_at: f.created_at };
+        }
+        return false;
+      },
+      maxItems: LIST_ITEMS_MAX,
+    });
+    const qf = agg.q;
     let questions: Question[] = [];
     if (qf && qf.size <= MAX_FILE_BYTES) {
       await this.extend();
@@ -922,24 +1063,38 @@ class Reconciler {
     return 'needs_answer';
   }
 
-  private async saveStage(stage: string, state: ReconcileState): Promise<void> {
-    const saved = await this.casJob(
-      'reconcile_stage = ?, reconcile_state_json = ?',
-      "status IN ('running','budget_reached')",
-      stage,
-      JSON.stringify(state),
-    );
-    if (!saved) throw new LostLease();
+  /**
+   * reconcile_state_json を書く（stage=null なら reconcile_stage は変えない）。lease（reconcile_token）と status の CAS 付き。
+   * 大きすぎる / 保存の例外が続いた時は job を failed にして Stopped（同じページで永久に再失敗しない）
+   */
+  private async writeState(job: JobRow, stage: string | null, state: ReconcileState, lastError?: string): Promise<void> {
+    const cond = "status IN ('running','budget_reached')";
+    let r: { ok: boolean; state: ReconcileState };
+    try {
+      r = await guardedStateWrite(
+        { ...state, save_failures: this.state.save_failures },
+        (json) =>
+          stage === null
+            ? this.casJob('reconcile_state_json = ?, last_error = COALESCE(?, last_error)', cond, json, lastError ?? null)
+            : this.casJob('reconcile_stage = ?, reconcile_state_json = ?, last_error = COALESCE(?, last_error)', cond, stage, json, lastError ?? null),
+        (n) => cas(this.db, stmt(`UPDATE factory_jobs SET reconcile_state_json = ${BUMP_SAVE_FAILURES_SQL} WHERE id = ? AND reconcile_token = ?`, n, this.jobId, this.token)),
+      );
+    } catch (e) {
+      if (e instanceof StateWriteStop) throw new Stopped(await this.fail(job, e.code, true));
+      throw e;
+    }
+    if (!r.ok) throw new LostLease();
+    this.state = r.state;
   }
 
   /** §B-4-d 手順 6: inspected → listed → ingested → versioned。各段階の途中経過は reconcile_state_json に置き、ページ / ファイル単位で再開する */
   private async ingest(job: JobRow, missingError: string): Promise<string> {
     let stage = job.reconcile_stage;
-    let state = parseJson<ReconcileState>(job.reconcile_state_json, {});
+    let state: ReconcileState = this.state;
     const sid = job.session_id!;
     if (stage === 'none') {
       state = {};
-      await this.saveStage('inspected', state);
+      await this.writeState(job, 'inspected', state);
       stage = 'inspected';
     }
 
@@ -957,7 +1112,7 @@ class Reconciler {
           if (list.items.length > LIST_ITEMS_MAX) return this.fail(job, 'invalid_outputs');
           list = { ...list, cursor: p.next, complete: !p.next };
           state = { ...state, list };
-          await this.saveStage('inspected', state);
+          await this.writeState(job, 'inspected', state);
         }
         byPath = new Map();
         for (const f of list.items) {
@@ -970,14 +1125,14 @@ class Reconciler {
         if (list.round >= 2) return this.fail(job, missingError);
         list = { cursor: null, items: [], round: list.round + 1, complete: false };
         state = { ...state, list };
-        await this.saveStage('inspected', state);
+        await this.writeState(job, 'inspected', state);
         if (Date.now() > this.deadline - 9_000) throw new OutOfTime();
         await sleep(3_000);
       }
       const files = [...byPath.values()];
       if (files.length > MAX_FILES || files.some((f) => f.size > MAX_FILE_BYTES)) return this.fail(job, 'invalid_outputs');
       state = { files: files.map(({ file_id, filename, size }) => ({ file_id, filename, size })), done: [] };
-      await this.saveStage('listed', state);
+      await this.writeState(job, 'listed', state);
       stage = 'listed';
     }
 
@@ -993,9 +1148,9 @@ class Reconciler {
         await this.env.R2.put(prefix + f.filename, bytes);
         done.add(f.file_id);
         state = { ...state, done: [...done] };
-        await this.saveStage('listed', state);
+        await this.writeState(job, 'listed', state);
       }
-      await this.saveStage('ingested', state);
+      await this.writeState(job, 'ingested', state);
       stage = 'ingested';
     }
 
@@ -1006,7 +1161,7 @@ class Reconciler {
     for (const f of state.files ?? []) {
       const obj = await this.env.R2.get(prefix + f.filename);
       if (!obj) {
-        await this.saveStage('listed', { files: state.files, done: [] }); // R2 に無い → 取り直す
+        await this.writeState(job, 'listed', { files: state.files, done: [] }); // R2 に無い → 取り直す
         return 'refetch';
       }
       files.set(f.filename, new Uint8Array(await obj.arrayBuffer()));
@@ -1019,7 +1174,8 @@ class Reconciler {
     const citeSources = schema.sources.map((s) => ({ id: s.id, url: s.url, quoted_excerpt: s.quoted_excerpt, is_primary: s.is_primary }));
 
     // events を古い順に最後のページまで。ページごとに集計と続き位置を保存する
-    let ev = state.ev ?? { cursor: null, acc: newCitationAcc(), grader: null, complete: false };
+    // 旧形式の集計（tool_result ごとの配列）が残っていたら先頭から集計し直す
+    let ev = state.ev && isCitationAcc(state.ev.acc) ? state.ev : { cursor: null, acc: newCitationAcc(), grader: null, complete: false };
     for (let i = 0; !ev.complete; i++) {
       if (i >= MAX_PAGES) throw new Error('too_many_pages');
       await this.extend();
@@ -1032,7 +1188,7 @@ class Reconciler {
       }
       ev = { cursor: p.next, acc: ev.acc, grader, complete: !p.next };
       state = { ...state, ev };
-      await this.saveStage('ingested', state);
+      await this.writeState(job, 'ingested', state);
     }
     const cit = finishCitations(ev.acc, citeSources);
     const grader = ev.grader;
