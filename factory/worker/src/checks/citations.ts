@@ -70,9 +70,10 @@ function looksOffloaded(text: string): boolean {
  */
 export interface CitationAcc {
   /** 形式の版（旧形式は false 判定 → 呼び出し側が先頭から集計し直す） */
-  v: 2;
+  v: 3;
   fetches: Record<string, string>;
-  urls: Record<string, { t: 0 | 1; o: 0 | 1 }>;
+  /** t=本文あり / o=offload らしい / e=エラーの結果を見た / s=エラーでない結果を見た（§R-48） */
+  urls: Record<string, { t: 0 | 1; o: 0 | 1; e?: 0 | 1; s?: 0 | 1 }>;
   q: Record<string, 1>;
   nf: Record<string, 1>;
 }
@@ -82,19 +83,20 @@ const key = (raw: string): string => KEY_PREFIX + raw;
 const has = (rec: Record<string, unknown>, raw: string): boolean => Object.hasOwn(rec, key(raw));
 const get = <V>(rec: Record<string, V>, raw: string): V | undefined => (has(rec, raw) ? rec[key(raw)] : undefined);
 
-export const newCitationAcc = (): CitationAcc => ({ v: 2, fetches: {}, urls: {}, q: {}, nf: {} });
+export const newCitationAcc = (): CitationAcc => ({ v: 3, fetches: {}, urls: {}, q: {}, nf: {} });
 
 const isPlainRecord = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x);
 
 /** 保存済みの値が今の形か（旧形式 {fetches, results} / {…, pend} は false → 呼び出し側が先頭から集計し直す） */
 export function isCitationAcc(x: unknown): x is CitationAcc {
-  if (!isPlainRecord(x) || x.v !== 2) return false;
+  if (!isPlainRecord(x) || x.v !== 3) return false; // v2 は「試みた fetch」も fetched に数えていた（§R-48）ので先頭から集計し直す
   return (['fetches', 'urls', 'q', 'nf'] as const).every((k) => Object.hasOwn(x, k) && isPlainRecord(x[k]));
 }
 
-function markUrl(acc: CitationAcc, url: string, t: 0 | 1, o: 0 | 1): void {
+function markUrl(acc: CitationAcc, url: string, t: 0 | 1, o: 0 | 1, e: 0 | 1 = 0, s: 0 | 1 = 0): void {
   const prev = get(acc.urls, url);
-  acc.urls[key(url)] = { t: prev?.t === 1 || t === 1 ? 1 : 0, o: prev?.o === 1 || o === 1 ? 1 : 0 };
+  const or = (a: unknown, b: 0 | 1): 0 | 1 => (a === 1 || b === 1 ? 1 : 0);
+  acc.urls[key(url)] = { t: or(prev?.t, t), o: or(prev?.o, o), e: or(prev?.e, e), s: or(prev?.s, s) };
 }
 
 export function accumulateCitations(acc: CitationAcc, sources: CitationSourceInput[], events: unknown[]): CitationAcc {
@@ -117,7 +119,7 @@ export function accumulateCitations(acc: CitationAcc, sources: CitationSourceInp
         const u = normalizeUrl(url);
         acc.fetches[key(ev.id)] = u;
         delete acc.nf[key(ev.id)]; // 同じ id が先に url 無し / web_fetch 以外として来ていても、web_fetch として扱う
-        markUrl(acc, u, 0, 0); // fetch した URL として残す（result を処理して fetches から消えた後も url_was_fetched の根拠になる）
+        markUrl(acc, u, 0, 0); // 試みた URL として残す。開けたか（s）は result で決まる。result が来ないまま終われば §F-1 の result_unavailable
       } else {
         acc.nf[key(ev.id)] = 1;
       }
@@ -127,10 +129,16 @@ export function accumulateCitations(acc: CitationAcc, sources: CitationSourceInp
       const u = get(acc.fetches, id);
       if (u === undefined) continue; // 対応する web_fetch の use が未到着（古い順の契約では来ない）/ 処理済み → 無視
       delete acc.fetches[key(id)];
+      // エラーの結果（url_not_accessible 等）は「開いた」に数えない（§R-48）。開けた時だけ url_was_fetched の根拠にする
+      if ((ev as { is_error?: unknown }).is_error === true) {
+        markUrl(acc, u, 0, 0, 1);
+        continue;
+      }
+      markUrl(acc, u, 0, 0, 0, 1);
       const t = resultText(ev);
-      if (t === null) continue; // 本文の無い結果は「結果が無い」と同じ扱い（判定に影響しない）
+      if (t === null) continue; // 本文の無い結果（PDF の base64 等）は開けたが照合できない → result_unavailable
       const norm = normalizeSpace(t);
-      markUrl(acc, u, 1, looksOffloaded(t) ? 1 : 0);
+      markUrl(acc, u, 1, looksOffloaded(t) ? 1 : 0, 0, 1);
       for (const x of byUrl.get(u) ?? []) if (!has(acc.q, x.id) && norm.includes(x.ex)) acc.q[key(x.id)] = 1;
     }
   }
@@ -142,7 +150,10 @@ export function finishCitations(acc: CitationAcc, sources: CitationSourceInput[]
   for (const s of sources) {
     const target = normalizeUrl(s.url);
     const u = get(acc.urls, target);
-    const fetched: 0 | 1 = u !== undefined ? 1 : 0;
+    // 開いた = エラーでない結果を見た、または結果がまだ来ていない fetch がある（§F-1 の result_unavailable）。
+    // 試みた fetch が全部エラー（url_not_accessible 等）なら開いていない（§R-48）
+    const pending = Object.values(acc.fetches).includes(target);
+    const fetched: 0 | 1 = u !== undefined && (u.s === 1 || pending || u.e !== 1) ? 1 : 0;
     let quote: 0 | 1 = 0;
     let detail: CheckDetail;
     const excerpt = normalizeSpace(s.quoted_excerpt ?? '');

@@ -53,6 +53,18 @@ describe('checkCitations', () => {
     expect(r.sources[0]).toMatchObject({ url_was_fetched: 1, quote_found: 0, check_detail: 'quote_not_found' });
   });
 
+  it('試みた fetch が全部エラー（url_not_accessible）なら開いていない（§R-48）。1 回でも開けていれば開いた', () => {
+    const err = (id: string) => ({ type: 'agent.tool_result', id: `r_${id}`, tool_use_id: id, is_error: true, content: [{ type: 'text', text: 'Web fetch error: url_not_accessible' }] });
+    const src = [{ id: 's1', url: 'https://minecraft.wiki/w/Redstone_Dust', quoted_excerpt: '信号を運ぶ', is_primary: true }];
+    const failed = checkCitations(src, [fetchUse('a', src[0].url), err('a'), fetchUse('b', src[0].url), err('b')]);
+    expect(failed.sources[0]).toMatchObject({ url_was_fetched: 0, quote_found: 0, check_detail: 'not_fetched' });
+    expect(failed.summary.fetched).toBe(0);
+    const okLater = checkCitations(src, [fetchUse('a', src[0].url), err('a'), fetchUse('b', src[0].url), result('b', 'ダストは信号を運ぶ。')]);
+    expect(okLater.sources[0]).toMatchObject({ url_was_fetched: 1, quote_found: 1, check_detail: 'ok' });
+    const errOnlyThenPending = checkCitations(src, [fetchUse('a', src[0].url), err('a'), fetchUse('b', src[0].url)]);
+    expect(errOnlyThenPending.sources[0]).toMatchObject({ url_was_fetched: 1, check_detail: 'result_unavailable' });
+  });
+
   it('tool_result が無い時は result_unavailable', () => {
     const r = checkCitations([{ id: 's1', url: 'https://minecraft.wiki/w/Redstone_Dust', quoted_excerpt: 'x', is_primary: true }], [
       fetchUse('sevt_1', 'https://minecraft.wiki/w/Redstone_Dust'),
@@ -153,6 +165,7 @@ describe('accumulateCitations（古い順にページ分割で流し込んでも
   it('旧形式（pend を持つ / 版の無い形）は isCitationAcc=false（呼び出し側が先頭から集計し直す）', () => {
     expect(isCitationAcc({ fetches: {}, urls: {}, q: {}, nf: {}, pend: {} })).toBe(false);
     expect(isCitationAcc({ fetches: {}, results: {} })).toBe(false);
+    expect(isCitationAcc({ v: 2, fetches: {}, urls: {}, q: {}, nf: {} })).toBe(false); // v2 は試みた fetch も数えていた（§R-48）
     expect(isCitationAcc({ v: 2, fetches: [], urls: {}, q: {}, nf: {} })).toBe(false);
     expect(isCitationAcc(newCitationAcc())).toBe(true);
   });
