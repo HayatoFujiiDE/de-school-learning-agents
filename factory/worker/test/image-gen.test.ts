@@ -401,10 +401,11 @@ describe('§O-8 t6 R の表（fake のシナリオ）', () => {
     expect(halted()).toBe(`usage_missing:${id}`);
   });
 
-  it('too_large（4 MiB 超）と分類・停止の純関数', () => {
-    const big = new Uint8Array(4 * 1024 * 1024 + 1);
-    big.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-    expect(decodeImage(bytesToBase64(big), 'png')).toEqual({ ok: false, error: 'too_large' });
+  it('too_large（2 MiB = MAX_FILE_BYTES 超。§R-56）と分類・停止の純関数', () => {
+    const png = (n: number) => { const b = new Uint8Array(n); b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]); return b; };
+    expect(decodeImage(bytesToBase64(png(2 * 1024 * 1024)), 'png').ok).toBe(true);
+    expect(decodeImage(bytesToBase64(png(2 * 1024 * 1024 + 1)), 'png')).toEqual({ ok: false, error: 'too_large' });
+    expect(decodeImage(bytesToBase64(png(4 * 1024 * 1024 + 1)), 'png')).toEqual({ ok: false, error: 'too_large' });
     expect(decodeImage(bytesToBase64(TINY_PNG), 'webp')).toEqual({ ok: false, error: 'bad_response' });
     expect(decodeImage('%%%', 'png')).toEqual({ ok: false, error: 'bad_response' });
     const tl = classifyImageOutcome({ kind: 'image', usable: false, error: 'too_large', usage: null });
