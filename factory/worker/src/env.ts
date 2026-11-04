@@ -16,6 +16,12 @@ export interface Env {
   SESSION_BUDGET_REWORK_CENTS: string;
   VERIFY_MAX_FETCHES: string;
   VERIFY_MAX_ATTEMPTS: string;
+  // §L-2（検証係の Batch 化）。wrangler.jsonc に既定値がある
+  VERIFY_MODE?: string;
+  VERIFY_MAX_CONTENT_TOKENS?: string;
+  VERIFY_INFLIGHT?: string;
+  VERIFY_TURN_RESERVE_CENTS?: string;
+  VERIFY_ATTEMPT_CAP_CENTS?: string;
   // 入口（§K-0）。wrangler.jsonc に既定値がある。無い時は cfg() の既定を使う
   SCOUT_XAI_MODEL?: string;
   SCOUT_MAX_TURNS?: string;
@@ -48,9 +54,15 @@ export const cfg = (env: Env) => ({
   maxConcurrent: intVar(env.MAX_CONCURRENT_JOBS, 2),
   dailyCapCents: intVar(env.DAILY_CAP_CENTS, 1500),
   budgetDraftCents: intVar(env.SESSION_BUDGET_DRAFT_CENTS, 300),
-  budgetReworkCents: intVar(env.SESSION_BUDGET_REWORK_CENTS, 500),
+  budgetReworkCents: intVar(env.SESSION_BUDGET_REWORK_CENTS, 1000),
   verifyMaxFetches: intVar(env.VERIFY_MAX_FETCHES, 25),
   verifyMaxAttempts: intVar(env.VERIFY_MAX_ATTEMPTS, 3),
+  // §L-2
+  verifyMode: (env.VERIFY_MODE === 'sync' ? 'sync' : 'batch') as 'sync' | 'batch',
+  verifyMaxContentTokens: intVar(env.VERIFY_MAX_CONTENT_TOKENS, 20000),
+  verifyInflight: intVar(env.VERIFY_INFLIGHT, 2),
+  verifyTurnReserveCents: intVar(env.VERIFY_TURN_RESERVE_CENTS, 150),
+  verifyAttemptCapCents: intVar(env.VERIFY_ATTEMPT_CAP_CENTS, 400),
   workspace: env.ANTHROPIC_WORKSPACE || 'default',
   // §K-0
   scoutModel: (env.SCOUT_XAI_MODEL || 'grok-4.3').trim(),
