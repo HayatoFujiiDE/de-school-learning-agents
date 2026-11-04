@@ -7,7 +7,7 @@
 // ログには id と金額と結果の種別だけを出す（メモ本文・運営のメールは出さない）。
 
 import { PortError, type FactoryPort } from './anthropic';
-import { cas, errorKind, getSetting, nowIso, stmt } from './db';
+import { cas, errorKind, first, getSetting, nowIso, stmt } from './db';
 import { cfg, type Env } from './env';
 import { getJob, todayCostCents, type ApiResult } from './jobs';
 
@@ -74,8 +74,14 @@ export async function raiseBudget(env: Env, port: FactoryPort, jobId: string, bo
   const to = newBudgetCents(job, sessionCost, add);
   if (to > JOB_BUDGET_CAP_CENTS) return fail(409, 'job_budget_cap');
   // 5. 日次上限: 新しい予算で増える支出の余地（新予算 − 台帳に載っている使った額）を今日の費用に足して判定する
+  // startJob（§B-4-a）と同じ守り: 再開すると running に戻るので、同時に動く数と、動いている job の予算の予約も数える
+  const run = await first<{ n: number; b: number | null }>(
+    db,
+    stmt("SELECT COUNT(*) AS n, SUM(budget_cents) AS b FROM factory_jobs WHERE status IN ('creating','running') AND id <> ?", jobId),
+  );
+  if (Number(run?.n ?? 0) >= cfg(env).maxConcurrent) return fail(409, 'too_many_running');
   const headroom = to - job.list_cost_cents;
-  if ((await todayCostCents(db)) + headroom > cfg(env).dailyCapCents) return fail(409, 'daily_cap');
+  if ((await todayCostCents(db)) + Math.max(0, Number(run?.b ?? 0)) + headroom >= cfg(env).dailyCapCents) return fail(409, 'daily_cap');
 
   // 6. Anthropic 側の予算を先に上げる。D1 はどちらの失敗でも変えない
   try {

@@ -147,7 +147,7 @@ describe('raiseBudget（stub port）', () => {
     expect(ok.updates).toEqual([{ id: 'sesn_1', cents: 5000 }]);
   });
 
-  it('409 daily_cap: 今日の費用 + 新予算で増える余地（新予算 − D1 の使った額）が日次上限（既定 1500）を超える。ちょうど上限は通る', async () => {
+  it('409 daily_cap: 今日の費用 + 新予算で増える余地（新予算 − D1 の使った額）が日次上限（既定 1500）以上なら止める（startJob と同じ >=）。上限未満は通る', async () => {
     seed();
     db.prepare("INSERT INTO cost_ledger (id, day, kind, ref_id, cents, created_at) VALUES ('c0', '2000-01-01', 'session', 'jx', 9999, ?)").run(T); // 別の日は数えない
     ledger(999); // 余地は 2016 − 1015 = 1001 → 999 + 1001 = 2000 > 1500
@@ -155,10 +155,34 @@ describe('raiseBudget（stub port）', () => {
     expect(await raiseBudget(env, s.port, 'j1', { add_cents: 1000 })).toEqual({ status: 409, body: { error: 'daily_cap' } });
     expect(s.updates).toEqual([]);
     expect(jobRow().budget_cents).toBe(1000);
-    // add 500: 余地 1516 − 1015 = 501 → 999 + 501 = 1500（ちょうど上限）は通る
+    // add 500: 余地 1516 − 1015 = 501 → 999 + 501 = 1500（ちょうど上限）は startJob と同じく止める
+    expect(await raiseBudget(env, s.port, 'j1', { add_cents: 500 })).toEqual({ status: 409, body: { error: 'daily_cap' } });
+    // 上限未満（台帳 998 → 1499）は通る
+    db.prepare('DELETE FROM cost_ledger').run();
+    ledger(998);
     const r = await raiseBudget(env, s.port, 'j1', { add_cents: 500 });
     expect(r.status).toBe(200);
     expect(s.updates).toEqual([{ id: 'sesn_1', cents: 1516 }]);
+  });
+
+  it('409 daily_cap: 動いている他の job の予算も予約として数える（startJob と同じ）', async () => {
+    seed();
+    db.prepare("INSERT INTO materials (id, slug, title, kinds_json, work_status, publish_status, brief_md, created_at, updated_at) VALUES ('m2', 'm2', 't', '[3]', 'making', 'none', 'b', ?, ?)").run(T, T);
+    db.prepare("INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, session_id, brief_md, budget_cents, created_at, updated_at) VALUES ('j2', 'm2', 'draft', 'claude-sonnet-5-5', 'making', 'running', 'sesn_2', 'b', 800, ?, ?)").run(T, T);
+    const s = stubPort(); // 余地 1001 + 他の予算 800 = 1801 >= 1500
+    expect(await raiseBudget(env, s.port, 'j1', { add_cents: 1000 })).toEqual({ status: 409, body: { error: 'daily_cap' } });
+    expect(s.updates).toEqual([]);
+  });
+
+  it('409 too_many_running: 同時に動く数が上限なら増額しない（再開すると running に戻るため）', async () => {
+    seed();
+    for (let i = 0; i < 3; i++) {
+      db.prepare(`INSERT INTO materials (id, slug, title, kinds_json, work_status, publish_status, brief_md, created_at, updated_at) VALUES ('mr${i}', 'mr${i}', 't', '[3]', 'making', 'none', 'b', ?, ?)`).run(T, T);
+      db.prepare(`INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, session_id, brief_md, budget_cents, created_at, updated_at) VALUES ('r${i}', 'mr${i}', 'draft', 'claude-sonnet-5-5', 'making', 'running', 'sesn_r${i}', 'b', 0, ?, ?)`).run(T, T);
+    }
+    const s = stubPort();
+    expect(await raiseBudget({ ...env, MAX_CONCURRENT_JOBS: '3' } as never, s.port, 'j1', { add_cents: 500 })).toEqual({ status: 409, body: { error: 'too_many_running' } });
+    expect(s.updates).toEqual([]);
   });
 
   it('409 daily_cap: session の使った額が D1 より新しい分も余地に数える（台帳にまだ載っていない）', async () => {

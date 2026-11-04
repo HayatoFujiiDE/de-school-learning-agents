@@ -210,7 +210,7 @@ body `{answers: [{question_id, answer}]}`。4 状態 `answer_state: none | saved
 #### f. 予算に当たった job の増額（`POST /api/jobs/:id/raise-budget`。2026-11-05 オーナー指示で追加。「Worker からは増額しない」を置き換え）
 body `{add_cents: 500 | 1000 | 2000, note?}`。運営の明示操作だけが増額する（cron・webhook・職人からは増やさない）。
 1. `status='budget_reached'` かつ session あり（違えば 409 `not_budget_reached`）。`paused` なら 409 `paused`
-2. 新予算 = `max(budget_cents, list_cost_cents) + add_cents`。1 job は 5000（$50）まで（超えたら 409 `job_budget_cap`）。`todayCostCents + (新予算 − D1 の list_cost_cents) > DAILY_CAP_CENTS` なら 409 `daily_cap`（台帳にまだ載っていない使った額も余地に含める）
+2. 新予算 = `max(budget_cents, list_cost_cents) + add_cents`。1 job は 5000（$50）まで（超えたら 409 `job_budget_cap`）。startJob（§B-4-a）と同じ守りを掛ける: `creating/running` の数が `MAX_CONCURRENT_JOBS` 以上なら 409 `too_many_running`。`todayCostCents + SUM(他の creating/running の budget_cents) + (新予算 − D1 の list_cost_cents) >= DAILY_CAP_CENTS` なら 409 `daily_cap`（台帳にまだ載っていない使った額も余地に含める）
 3. `sessions.update(budget = 新予算)`。API が拒否したら 502 `raise_failed`。D1 は変えない
 4. D1 CAS `budget_cents = 新予算 WHERE status='budget_reached' AND budget_cents = 旧値`（0 行は 409 `conflict`。Anthropic 側は上げたまま）
 5. 再開は送らない: 公式仕様で、受理された budget の update が止まった作業を自動で再開する（予算で止まっている間の `user.message` は 400）。job を `running` に戻すのは従来どおり reconcile（running を見たら budget_reached → running）。新予算の基準は update 直前の `sessions.retrieve` の `usage.list_cost` + 1¢ も含めた max。update の結果不明（timeout・接続）は 502 `raise_unknown`、明示の拒否は 502 `raise_failed`
