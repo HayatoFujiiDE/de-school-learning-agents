@@ -65,7 +65,7 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
 
   // 3. 検証（1 件）
   try {
-    out.verify = await runVerificationStep(env, port);
+    out.verify = await runVerificationStep(env, port, { deadline: cronStart + CRON_LIMIT_MS - INTAKE_END_MARGIN_MS });
   } catch (e) {
     out.verify_error = e instanceof Error ? e.name : 'error';
   }

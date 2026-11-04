@@ -192,13 +192,15 @@ async function main() {
   {
     const fakeMsgs = (await calls('')).length; // 呼び出し記録が読めること
     const all = (await api('GET', '/__fake/calls')).json?.calls ?? [];
-    const msg = all.find((c) => c.op === 'messages.create');
+    const msg = all.find((c) => c.op === 'batches.create' && c.params?.kind === 'verify');
     check(
-      '(c) 検証係は tool_choice auto + report_verdicts strict + web_fetch_20260209',
+      '(c) 検証係は Batch（§L-2）: tool_choice auto + report_verdicts strict + web_fetch_20250910 + top-level cache_control',
       msg?.params?.tool_choice?.type === 'auto' &&
         msg?.params?.tools?.some((t) => t.name === 'report_verdicts' && t.strict === true) &&
-        msg?.params?.tools?.some((t) => t.type === 'web_fetch_20260209'),
-      `calls=${fakeMsgs} ${JSON.stringify(msg?.params?.tool_choice ?? null)}`,
+        msg?.params?.tools?.some((t) => t.type === 'web_fetch_20250910') &&
+        msg?.params?.cache_control === 'ephemeral' &&
+        !all.some((c) => c.op === 'messages.create' && c.params?.tools?.some?.((t) => t.name === 'report_verdicts')),
+      `calls=${fakeMsgs} ${JSON.stringify(msg?.params ?? null).slice(0, 200)}`,
     );
   }
   await reviewScreenSmoke(aD);
@@ -323,12 +325,12 @@ async function main() {
   {
     const pt = await makeVersion('done-pause-turn', 'pt');
     const ptD = await cronUntil(pt.versionId, (d) => d.version?.verification_status === 'done');
-    const msgs = ((await api('GET', '/__fake/calls')).json?.calls ?? []).filter((c) => c.op === 'messages.create');
-    const cont = msgs.filter((c) => c.params?.container === 'container_fake_pause_1');
+    const vb = ((await api('GET', '/__fake/calls')).json?.calls ?? []).filter((c) => c.op === 'batches.create' && c.params?.kind === 'verify');
+    const cont = vb.filter((c) => (c.params?.messages ?? 0) > 1);
     check(
-      '(F-3) pause_turn の後の継続リクエストに container が付き、検証 done',
-      ptD?.version?.verification_status === 'done' && cont.length === 1 && cont[0].params?.messages === 2,
-      `vs=${ptD?.version?.verification_status} cont=${cont.length} msgs=${cont[0]?.params?.messages}`,
+      '(F-3/§L-2) pause_turn の後は次のターンを別の batch で出し（会話を引き継ぐ）、検証 done',
+      ptD?.version?.verification_status === 'done' && cont.length >= 1 && cont.every((c) => c.custom_id && c.custom_id !== 't0'),
+      `vs=${ptD?.version?.verification_status} cont=${cont.length} ids=${cont.map((c) => c.custom_id).join(',')}`,
     );
   }
 
@@ -668,7 +670,7 @@ async function intakeSmoke() {
     const prioritized = (list.json?.proposals ?? []).filter((x) => x.source_kind !== 'meeting' && x.priority === 5 && x.meeting_reason);
     check('(r) source_kind=meeting の提案が入り、既存提案に優先度と会議の理由が付く', meetRows.length >= 1 && meetRows[0].priority === 3 && prioritized.length === 1, `meeting=${meetRows.length} prioritized=${prioritized.length}`);
     const calls = (await api('GET', '/__fake/calls')).json?.calls ?? [];
-    const bc = calls.filter((c) => c.op === 'batches.create');
+    const bc = calls.filter((c) => c.op === 'batches.create' && c.params?.kind !== 'verify'); // 検証係の Batch（§L-2）は会議の数に入れない
     check('(r) Batch は 1 件（sonnet・adaptive・json_schema）', bc.length === 1 && bc[0].params?.requests === 1 && bc[0].params?.model === 'claude-sonnet-5-5' && bc[0].params?.thinking?.type === 'adaptive' && bc[0].params?.output_format === 'json_schema', `create=${bc.length}`);
   }
 

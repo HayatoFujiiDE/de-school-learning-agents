@@ -9,7 +9,7 @@
 
 import type { Message, MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { MessageBatchIndividualResponse } from '@anthropic-ai/sdk/resources/messages/batches';
-import { BATCH_LIST_LIMIT, PortError, type BatchView, type FactoryPort, type FileMeta, type SessionView } from '../anthropic';
+import { BATCH_LIST_LIMIT, BATCH_RESULTS_MAX_BYTES, PortError, type BatchView, type FactoryPort, type FileMeta, type SessionView } from '../anthropic';
 import { getSetting, nowIso, setSetting } from '../db';
 import type { Env } from '../env';
 import { SCOUT_FEEDS } from '../generated/scout-sources';
@@ -30,6 +30,8 @@ interface Call {
   params?: Record<string, unknown>;
   batch_id?: string;
   custom_id?: string;
+  /** 検証係の batch（§L-2）だけ: 1 件目の user 文の claims_json と、送った assistant turn の数 */
+  verify?: { claims_text: string; assistant_turns: number };
 }
 
 interface Staged<T> {
@@ -229,50 +231,7 @@ export function createFakePort(env: Env): FactoryPort {
           container: typeof params.container === 'string' ? params.container : null,
         },
       });
-      // claims.json の各 claim に fixture 専用キー fake_verdict があればそれを、無ければ confirmed を返す。
-      // 最上位の fake_pause_turns: n があれば、assistant の turn が n 未満の間は container 付きの pause_turn を返す
-      const claimsText = extractTagged(content, 'claims_json') ?? '{"claims":[]}';
-      let claims: Array<{ id: string; fake_verdict?: string }> = [];
-      let pauseTurns = 0;
-      try {
-        const parsed = JSON.parse(claimsText) as { claims?: Array<{ id: string; fake_verdict?: string }>; fake_pause_turns?: number };
-        claims = parsed.claims ?? [];
-        pauseTurns = Number(parsed.fake_pause_turns ?? 0);
-      } catch {
-        claims = [];
-      }
-      const assistantTurns = params.messages.filter((m) => m.role === 'assistant').length;
-      const fakeContainer = { id: 'container_fake_pause_1', expires_at: new Date(Date.now() + 3600_000).toISOString(), skills: null };
-      if (assistantTurns < pauseTurns) {
-        return {
-          id: `msg_fake_${crypto.randomUUID().slice(0, 8)}`,
-          type: 'message',
-          role: 'assistant',
-          model: params.model,
-          container: fakeContainer,
-          content: [{ type: 'text', text: '出典を開いています', citations: null }],
-          stop_reason: 'pause_turn',
-          stop_sequence: null,
-          usage: { input_tokens: 6000, output_tokens: 300, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-        } as unknown as Message;
-      }
-      const verdicts = claims.map((c) => ({
-        claim_id: c.id,
-        verdict: c.fake_verdict ?? 'confirmed',
-        reason: 'fake: 出典の本文で確かめた',
-        opened_urls: [],
-      }));
-      return {
-        id: `msg_fake_${crypto.randomUUID().slice(0, 8)}`,
-        type: 'message',
-        role: 'assistant',
-        model: params.model,
-        container: pauseTurns > 0 ? fakeContainer : null,
-        content: [{ type: 'tool_use', id: 'toolu_fake_1', name: 'report_verdicts', input: { verdicts, overall_note: 'fake' }, caller: { type: 'direct' } }],
-        stop_reason: 'tool_use',
-        stop_sequence: null,
-        usage: { input_tokens: 12000, output_tokens: 800, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-      } as unknown as Message;
+      return verifierReply(params.model, extractTagged(content, 'claims_json') ?? '{"claims":[]}', params.messages.filter((m) => m.role === 'assistant').length);
     },
     // ---- 入口（§K-8）----
     async xaiResponses(req) {
@@ -286,6 +245,33 @@ export function createFakePort(env: Env): FactoryPort {
     async createBatch(params) {
       const id = `msgbatch_fake_${crypto.randomUUID().replace(/-/g, '')}`;
       const r = params.requests[0];
+      if (r && isVerifierParams(r.params)) {
+        // 検証係（§L-2）: 1 ターン = 1 batch。claims と assistant turn の数を残し、retrieve / results で検証係の応答を作る
+        const first = r.params.messages[0]?.content;
+        await appendCall(db, {
+          op: 'batches.create',
+          at: nowIso(),
+          batch_id: id,
+          custom_id: r.custom_id,
+          params: {
+            kind: 'verify',
+            requests: params.requests.length,
+            model: r.params.model,
+            max_tokens: r.params.max_tokens,
+            thinking: r.params.thinking,
+            tool_choice: r.params.tool_choice,
+            cache_control: r.params.cache_control?.type ?? null,
+            tools: toolSummary(r.params.tools),
+            messages: r.params.messages.length,
+          },
+          verify: {
+            claims_text: extractTagged(typeof first === 'string' ? first : '', 'claims_json') ?? '{"claims":[]}',
+            assistant_turns: r.params.messages.filter((m) => m.role === 'assistant').length,
+          },
+        });
+        const now = new Date();
+        return { id, processing_status: 'in_progress', created_at: now.toISOString(), expires_at: new Date(now.getTime() + 86_400_000).toISOString() };
+      }
       await appendCall(db, {
         op: 'batches.create',
         at: nowIso(),
@@ -303,15 +289,33 @@ export function createFakePort(env: Env): FactoryPort {
       return { id, processing_status: 'in_progress', created_at: now.toISOString(), expires_at: new Date(now.getTime() + 86_400_000).toISOString() };
     },
     async retrieveBatch(id): Promise<BatchView> {
-      const c = (await readCalls(db)).find((x) => x.op === 'batches.create' && x.batch_id === id);
+      const calls = await readCalls(db);
+      const c = calls.find((x) => x.op === 'batches.create' && x.batch_id === id);
       if (!c) throw notFound();
+      if (c.verify) {
+        // claims.json の fake_batch_in_progress: n があれば、この batch の retrieve の n 回目までは in_progress
+        const n = Number(fakeKeys(c.verify.claims_text).fake_batch_in_progress ?? 0);
+        const seen = calls.filter((x) => x.op === 'batches.retrieve' && x.batch_id === id).length;
+        await appendCall(db, { op: 'batches.retrieve', at: nowIso(), batch_id: id });
+        return { id, processing_status: seen < n ? 'in_progress' : 'ended', created_at: c.at, expires_at: new Date(Date.parse(c.at) + 86_400_000).toISOString(), request_total: 1 };
+      }
       const fx = JSON.parse(FIXTURE_FILES['meeting/batch.json'] ?? '{}') as { processing_status?: BatchView['processing_status'] };
       return { id, processing_status: fx.processing_status ?? 'ended', created_at: c.at, expires_at: new Date(Date.parse(c.at) + 86_400_000).toISOString() };
     },
-    async batchResults(id): Promise<MessageBatchIndividualResponse[]> {
+    async batchResults(id, o): Promise<MessageBatchIndividualResponse[]> {
       const c = (await readCalls(db)).find((x) => x.op === 'batches.create' && x.batch_id === id);
       if (!c) throw notFound();
       await appendCall(db, { op: 'batches.results', at: nowIso(), batch_id: id });
+      if (c.verify) {
+        // claims.json の fake_batch_result: 'errored' | 'expired' | 'canceled' でその結果、
+        // fake_results_bytes: n が上限（o.maxBytes）を超えれば本物と同じく閉じた行が無い = 空を返す
+        const k = fakeKeys(c.verify.claims_text);
+        if (Number(k.fake_results_bytes ?? 0) > (o?.maxBytes ?? BATCH_RESULTS_MAX_BYTES)) return [];
+        const rt = typeof k.fake_batch_result === 'string' ? k.fake_batch_result : 'succeeded';
+        if (rt !== 'succeeded') return [{ custom_id: c.custom_id ?? '', result: { type: rt } } as unknown as MessageBatchIndividualResponse];
+        const message = verifierReply(VERIFIER_FAKE_MODEL, c.verify.claims_text, c.verify.assistant_turns);
+        return [{ custom_id: c.custom_id ?? '', result: { type: 'succeeded', message } } as unknown as MessageBatchIndividualResponse];
+      }
       const fx = JSON.parse(FIXTURE_FILES['meeting/results.json'] ?? '{}') as {
         result_type?: string;
         stop_reason?: string;
@@ -356,6 +360,81 @@ export function createFakePort(env: Env): FactoryPort {
       }));
     },
   };
+}
+
+const VERIFIER_FAKE_MODEL = 'claude-opus-5-5';
+
+/** 検証係の params か（report_verdicts を持つ） */
+function isVerifierParams(p: MessageCreateParamsNonStreaming): boolean {
+  return (p.tools ?? []).some((t) => (t as { name?: string }).name === 'report_verdicts');
+}
+
+function toolSummary(tools: MessageCreateParamsNonStreaming['tools']) {
+  return (tools ?? []).map((t) => ({
+    name: (t as { name?: string }).name,
+    type: (t as { type?: string }).type ?? 'custom',
+    strict: (t as { strict?: boolean }).strict,
+    max_uses: (t as { max_uses?: number }).max_uses,
+    max_content_tokens: (t as { max_content_tokens?: number }).max_content_tokens,
+  }));
+}
+
+/** claims.json の最上位にある fixture 専用キー（fake_*）だけを読む */
+function fakeKeys(claimsText: string): Record<string, unknown> {
+  try {
+    const o = JSON.parse(claimsText) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(o).filter(([k]) => k.startsWith('fake_')));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 検証係の応答（同期の messages.create と Batch の results で共通）。
+ * claims.json の各 claim に fixture 専用キー fake_verdict があればそれを、無ければ confirmed を返す。
+ * 最上位の fake_pause_turns: n があれば、assistant の turn が n 未満の間は container 付きの pause_turn を返す
+ */
+function verifierReply(model: string, claimsText: string, assistantTurns: number): Message {
+  let claims: Array<{ id: string; fake_verdict?: string }> = [];
+  let pauseTurns = 0;
+  try {
+    const parsed = JSON.parse(claimsText) as { claims?: Array<{ id: string; fake_verdict?: string }>; fake_pause_turns?: number };
+    claims = parsed.claims ?? [];
+    pauseTurns = Number(parsed.fake_pause_turns ?? 0);
+  } catch {
+    claims = [];
+  }
+  const fakeContainer = { id: 'container_fake_pause_1', expires_at: new Date(Date.now() + 3600_000).toISOString(), skills: null };
+  if (assistantTurns < pauseTurns) {
+    return {
+      id: `msg_fake_${crypto.randomUUID().slice(0, 8)}`,
+      type: 'message',
+      role: 'assistant',
+      model,
+      container: fakeContainer,
+      content: [{ type: 'text', text: '出典を開いています', citations: null }],
+      stop_reason: 'pause_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 6000, output_tokens: 300, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+    } as unknown as Message;
+  }
+  const verdicts = claims.map((c) => ({
+    claim_id: c.id,
+    verdict: c.fake_verdict ?? 'confirmed',
+    reason: 'fake: 出典の本文で確かめた',
+    opened_urls: [],
+  }));
+  return {
+    id: `msg_fake_${crypto.randomUUID().slice(0, 8)}`,
+    type: 'message',
+    role: 'assistant',
+    model,
+    container: pauseTurns > 0 ? fakeContainer : null,
+    content: [{ type: 'tool_use', id: 'toolu_fake_1', name: 'report_verdicts', input: { verdicts, overall_note: 'fake' }, caller: { type: 'direct' } }],
+    stop_reason: 'tool_use',
+    stop_sequence: null,
+    usage: { input_tokens: 12000, output_tokens: 800, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+  } as unknown as Message;
 }
 
 /** 収集部隊の Haiku 仕分け（fixture: scout/haiku.json） */

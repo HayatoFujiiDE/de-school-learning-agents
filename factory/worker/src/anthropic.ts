@@ -34,6 +34,11 @@ export interface CallOpts {
   deadline?: number;
 }
 
+/** batches.results のオプション。maxBytes を省略すると BATCH_RESULTS_MAX_BYTES（会議の 1 MiB） */
+export interface BatchResultsOpts extends CallOpts {
+  maxBytes?: number;
+}
+
 export interface Page<T> {
   data: T[];
   /** 次のページの cursor。null なら最後のページ */
@@ -54,6 +59,8 @@ export interface BatchView {
 export const BATCH_RESULTS_MAX = 10;
 /** batches.results の本文を読む量の上限（これを超えた分は読まずに切る。切れた行は使わない） */
 export const BATCH_RESULTS_MAX_BYTES = 1024 * 1024;
+/** 検証係（§L-2）の batches.results の本文の上限。会議は BATCH_RESULTS_MAX_BYTES のまま */
+export const VERIFY_RESULTS_MAX_BYTES = 16 * 1024 * 1024;
 /** files.download の本文を読む量の上限（成果物 1 ファイルの上限と同じ。超えたら MAX_FILE_BYTES + 1 bytes で切って返し、呼び出し側の大きさ検査で落とす） */
 export const DOWNLOAD_MAX_BYTES = MAX_FILE_BYTES;
 /** batches.list で読む件数（1 ページだけ） */
@@ -75,7 +82,8 @@ export interface FactoryPort {
   /** 入口（§K-5）: Message Batches */
   createBatch(params: BatchCreateParams, o?: CallOpts): Promise<BatchView>;
   retrieveBatch(batchId: string, o?: CallOpts): Promise<BatchView>;
-  batchResults(batchId: string, o?: CallOpts): Promise<MessageBatchIndividualResponse[]>;
+  /** 本文は o.maxBytes（既定 BATCH_RESULTS_MAX_BYTES）まで読む。超えた時は改行で閉じた行だけを返す（切れた行は使わない） */
+  batchResults(batchId: string, o?: BatchResultsOpts): Promise<MessageBatchIndividualResponse[]>;
   /** messages.batches.list の 1 ページ目だけ（新しい順に BATCH_LIST_LIMIT 件）。応答不明だった batches.create の復旧（§R-40）に使う */
   listBatchesPage(o?: CallOpts): Promise<BatchView[]>;
   /** 入口（§K-4-3）: xAI Responses API（x_search）。XAI_API_KEY が無ければ XaiError('no_key')。失敗は XaiError */
@@ -207,11 +215,11 @@ export async function readBodyCapped(res: Response, maxBytes: number, signal: Ab
 }
 
 /**
- * batches.results の JSONL を読む（BATCH_RESULTS_MAX 行 / BATCH_RESULTS_MAX_BYTES まで）。
+ * batches.results の JSONL を読む（BATCH_RESULTS_MAX 行 / maxBytes（既定 BATCH_RESULTS_MAX_BYTES）まで）。
  * 上限で切った時は、最後まで改行で閉じた行だけを使う（切れた行は捨てる）。
  */
-export function parseResultsJsonl(bytes: Uint8Array, truncated: boolean): MessageBatchIndividualResponse[] {
-  let text = new TextDecoder().decode(truncated ? bytes.subarray(0, BATCH_RESULTS_MAX_BYTES) : bytes);
+export function parseResultsJsonl(bytes: Uint8Array, truncated: boolean, maxBytes: number = BATCH_RESULTS_MAX_BYTES): MessageBatchIndividualResponse[] {
+  let text = new TextDecoder().decode(truncated ? bytes.subarray(0, maxBytes) : bytes);
   if (truncated) {
     const nl = text.lastIndexOf('\n');
     text = nl < 0 ? '' : text.slice(0, nl);
@@ -283,7 +291,8 @@ export function realPort(env: Env, opts: { fetchImpl?: typeof fetch } = {}): Fac
       });
     },
     createMessage: (params, o) => call(() => longClient.messages.create(params, requestOptions(o))),
-    createBatch: (params, o) => call(async () => toBatchView(await client.messages.batches.create(params, requestOptions(o)))),
+    // §L-2 / §R-40: batches.create は常に再試行しない（応答不明の再送で迷子の batch を増やさない）。deadline があれば timeout も縛る
+    createBatch: (params, o) => call(async () => toBatchView(await client.messages.batches.create(params, { ...requestOptions(o), maxRetries: 0 }))),
     retrieveBatch: (id, o) => call(async () => toBatchView(await client.messages.batches.retrieve(id, {}, requestOptions(o)))),
     batchResults: (id, o) => {
       // SDK の batches.results()（resources/messages/batches.js）は retrieve → results_url を GET して JSONLDecoder を返すだけで、
@@ -293,8 +302,9 @@ export function realPort(env: Env, opts: { fetchImpl?: typeof fetch } = {}): Fac
         const batch = await client.messages.batches.retrieve(id, {}, ro);
         if (!batch.results_url) throw new PortError(true, undefined, 'no_results_url');
         const res = await client.get<unknown>(batch.results_url, { ...ro, headers: { Accept: 'application/binary' } }).asResponse();
-        const body = await readBodyCapped(res, BATCH_RESULTS_MAX_BYTES, ro.signal);
-        return parseResultsJsonl(body.bytes, body.truncated);
+        const maxBytes = o?.maxBytes ?? BATCH_RESULTS_MAX_BYTES;
+        const body = await readBodyCapped(res, maxBytes, ro.signal);
+        return parseResultsJsonl(body.bytes, body.truncated, maxBytes);
       });
     },
     listBatchesPage: (o) =>
