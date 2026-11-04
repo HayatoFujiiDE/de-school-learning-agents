@@ -140,8 +140,10 @@ export function openAiPort(env: Env, opts: { fetchImpl?: typeof fetch } = {}): I
         // 本文の途中の中断（応答不明）
         throw new OpenAiError(false, undefined, signal.aborted ? 'timeout' : 'connection', null);
       }
+      // 本文が上限で切れたら、status に依らず bad_response（usage は読めない → R の表で usage_missing の停止）。§M-2-4 e
+      if (body.truncated) throw new OpenAiError(true, res.status, 'bad_response', null);
       let parsed: Record<string, unknown> | null = null;
-      if (!body.truncated) {
+      {
         try {
           parsed = obj(JSON.parse(new TextDecoder().decode(body.bytes)));
         } catch {

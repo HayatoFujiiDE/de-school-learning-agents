@@ -111,7 +111,8 @@ export const DENY_MESSAGE = '無人運用のためこの操作は許可できま
 /** §M-5: 職人定義に無い custom tool への custom_tool_result の本文（generate_image は §O の画像生成で扱う） */
 export const CUSTOM_TOOL_UNAVAILABLE_MESSAGE = '画像生成はまだ使えません。図は SVG で描いてください。';
 /** 職人（factory/claude/agents/material-maker.md）が定義する custom tool の名前（§O-2 = 旧 §M-2-2 b） */
-export const MAKER_CUSTOM_TOOLS: readonly string[] = [IMAGE_TOOL_NAME];
+// 文字列で持つ（images.ts からの import は index → cron → images → jobs の循環で初期化前に評価され undefined になる）
+export const MAKER_CUSTOM_TOOLS: readonly string[] = ['generate_image'];
 /** §M-5: この custom tool 呼び出しは is_error の結果で返すか（generate_image 以外の custom tool は従来どおり is_error） */
 export const rejectsCustomTool = (name: string): boolean => !MAKER_CUSTOM_TOOLS.includes(name);
 /**
@@ -1581,8 +1582,16 @@ class Reconciler {
     for (const [logical, base] of layout.files) files.set(logical, raw.get(base)!);
     // 同じ image_id は 1 回だけ読む（契約は 2 つの path からの参照を禁じていないので許し、同じバイト列を両方の path に置く）
     const loaded = new Map<string, { format: string; bytes: Uint8Array } | null>();
+    const pathImage = new Map<string, string>();
     for (const ref of refs) {
-      if (files.has(ref.path)) continue; // 同じ path の重複した参照
+      // 同じ path の重複した参照: 同じ image_id なら 1 回だけ置く。別の image_id なら後の参照を検査せずに通さない（取り違え・別 job の画像の混入を防ぐ）
+      const prev = pathImage.get(ref.path);
+      if (prev !== undefined) {
+        if (prev === ref.image_id) continue;
+        await this.casJob('last_error = ?', '', `bad_image_ref:${ref.path}`.slice(0, 200));
+        return this.fail(job, 'invalid_outputs');
+      }
+      pathImage.set(ref.path, ref.image_id);
       if (!loaded.has(ref.image_id)) loaded.set(ref.image_id, await this.generatedImage(job, ref.image_id));
       const img = loaded.get(ref.image_id) ?? null;
       const ext = ref.path.endsWith('.webp') ? 'webp' : ref.path.endsWith('.png') ? 'png' : null;

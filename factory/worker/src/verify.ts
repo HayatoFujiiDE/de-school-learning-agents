@@ -194,7 +194,7 @@ async function imageLines(env: Pick<Env, 'R2'> & { DB?: D1Database }, v: Version
   if (!env.DB) return { error: 'part_missing' };
   const lines = ['# 画像（生成した絵。画像そのものは渡さない）'];
   for (const r of refs.refs) {
-    const row = await first<{ input_json: string }>(env.DB, stmt('SELECT input_json FROM image_requests WHERE id = ?', r.image_id));
+    const row = await first<{ input_json: string }>(env.DB, stmt("SELECT input_json FROM image_requests WHERE id = ? AND state = 'done' AND job_id = (SELECT job_id FROM material_versions WHERE id = ?)", r.image_id, v.id));
     if (!row) return { error: 'part_missing' };
     let input: Record<string, unknown> = {};
     try {

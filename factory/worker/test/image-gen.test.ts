@@ -864,6 +864,32 @@ describe('§O-8 t12 入力検査・U の表・取り込みの image_id・鍵の�
     expect(r2Gets.filter((k) => k.startsWith('img/'))).toEqual([]);
   });
 
+  it('同じ path に別の image_id（実装レビュー M1）: 自 job の画像 → 別 job の画像の順でも invalid_outputs。同じ path・同じ image_id は通る', async () => {
+    const OTHER = `img_${'d'.repeat(32)}`;
+    seedJob('j1');
+    seedJob('j2');
+    await seedImage();
+    await seedImage({ id: OTHER, job: 'j2' });
+    const mixed = [
+      { path: 'parts/p1/photo-1.png', role: 'figure', image_id: IMG },
+      { path: 'parts/p1/photo-1.png', role: 'figure', image_id: OTHER },
+    ];
+    expect(await ingest(goodFiles(imageMaterial(mixed)))).toBe('failed:invalid_outputs');
+    expect(lastError().last_error).toBe('bad_image_ref:parts/p1/photo-1.png');
+    // 対照: 同じ path・同じ image_id の重複は取り込める
+    db = migratedDb();
+    r2 = new Map();
+    r2Gets = [];
+    env = makeEnv();
+    seedJob('j1');
+    await seedImage();
+    const same = [
+      { path: 'parts/p1/photo-1.png', role: 'figure', image_id: IMG },
+      { path: 'parts/p1/photo-1.png', role: 'figure', image_id: IMG },
+    ];
+    expect(await ingest(goodFiles(imageMaterial(same)))).toBe('versioned');
+  });
+
   it('鍵の印（旧 t20）: fetch の例外・応答 headers・本文・本文受信中の例外に印を入れても、ログ・D1・R2・custom_tool_result に出ない', async () => {
     const MARK = 'MARK7f3a9c';
     const logs: string[] = [];
@@ -920,6 +946,12 @@ describe('§O-8 t12 入力検査・U の表・取り込みの image_id・鍵の�
   it('検証係の入力（§M-2-7 5）: image_id の files ごとに 正確さ・prompt・alt の行を足す。依頼の行が無ければ part_missing', async () => {
     seedJob('j1');
     insertImage({ id: IMG, tu: 'tu_x', state: 'done', r2_key: 'k', sha: 's', input: { prompt: 'a red\ncube', alt: '赤い立方体', accuracy: 'scientific' } });
+    // 版 v1 は job j1 のもの（検証係は版の job の done の依頼だけを読む）
+    db.prepare(
+      `INSERT INTO material_versions (id, material_id, version, job_id, session_id, r2_prefix, content_sha256, material_json, claims_json, adapt_rules_md,
+         checks_json, public_paths_json, status, created_at)
+       VALUES ('v1', 'm_j1', 1, 'j1', 'sesn_j1', 'p/', 'x', '{}', '{}', '', '{}', '[]', 'review', ?)`,
+    ).run(T);
     const files: Record<string, string> = {
       'p/sources.json': '{"sources":[]}',
       'p/parts/p1/a.md': '本文',
@@ -937,6 +969,12 @@ describe('§O-8 t12 入力検査・U の表・取り込みの image_id・鍵の�
     expect(String(await buildUserContent({ R2: bucket }, v))).not.toContain('# 画像');
     // 参照した依頼の行が無い
     files['p/material.json'] = JSON.stringify(imageMaterial([{ path: 'parts/p1/photo-1.png', image_id: `img_${'b'.repeat(32)}` }]));
+    expect(await buildUserContent({ R2: bucket, DB: env.DB }, v)).toEqual({ error: 'part_missing' });
+    // 別 job の done の依頼は読まない（実装レビュー M1: 別 job の prompt が検証入力に混ざらない）
+    const OTHER = `img_${'c'.repeat(32)}`;
+    seedJob('j2');
+    insertImage({ id: OTHER, tu: 'tu_y', job: 'j2', state: 'done', r2_key: 'k2', sha: 's2', input: { prompt: 'other job secret', alt: 'x', accuracy: 'standard' } });
+    files['p/material.json'] = JSON.stringify(imageMaterial([{ path: 'parts/p1/photo-1.png', image_id: OTHER }]));
     expect(await buildUserContent({ R2: bucket, DB: env.DB }, v)).toEqual({ error: 'part_missing' });
   });
 });
@@ -1022,4 +1060,27 @@ describe('§O-8 t14 結果の形（形 A: base64 直）', () => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('実装レビューの修正（2026-11-05）', () => {
+  it('本文が 4 MiB で切れたら status に依らず bad_response・usage は null（M3）。対照: 切れない 400 は bad_request', async () => {
+    const big = new Uint8Array(4 * 1024 * 1024 + 10).fill(0x20);
+    for (const status of [200, 400, 429, 500]) {
+      const port = openAiPort({ OPENAI_API_KEY: 'k' } as unknown as Env, { fetchImpl: (async () => new Response(big, { status })) as unknown as typeof fetch });
+      const e = await port.generate({ model: 'm', prompt: 'p', size: '1024x1024', quality: 'high', output_format: 'png', background: 'opaque', n: 1 }, { deadline: Date.now() + 10_000 }).catch((x: unknown) => x);
+      expect(e).toBeInstanceOf(OpenAiError);
+      expect((e as OpenAiError).kind).toBe('bad_response');
+      expect((e as OpenAiError).usage).toBeNull();
+    }
+    const small = openAiPort({ OPENAI_API_KEY: 'k' } as unknown as Env, { fetchImpl: (async () => new Response('{"error":{"code":"x"}}', { status: 400 })) as unknown as typeof fetch });
+    const e2 = await small.generate({ model: 'm', prompt: 'p', size: '1024x1024', quality: 'high', output_format: 'png', background: 'opaque', n: 1 }, { deadline: Date.now() + 10_000 }).catch((x: unknown) => x);
+    expect((e2 as OpenAiError).kind).toBe('bad_request');
+  });
+
+  it('MAKER_CUSTOM_TOOLS は循環 import の順でも generate_image を持つ（m1）', async () => {
+    const jobs = await import('../src/jobs');
+    expect(jobs.MAKER_CUSTOM_TOOLS).toEqual(['generate_image']);
+    expect(jobs.rejectsCustomTool('generate_image')).toBe(false);
+    expect(jobs.rejectsCustomTool('draw_chart')).toBe(true);
+  });
 });

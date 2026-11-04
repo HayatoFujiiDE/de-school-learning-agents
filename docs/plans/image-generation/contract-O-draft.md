@@ -203,7 +203,7 @@ ON CONFLICT(key) DO NOTHING;
 | 画像が使え、usage あり、実額 ≤ U | done / NULL | usage / 実額 | NULL |
 | 画像が使え、usage あり、実額 > U | done / NULL | usage / 実額 | `over_reserve:<request id>` |
 | 画像が使え、usage なし | done / NULL | `{"missing":true}` / NULL | `usage_missing:<request id>` |
-| 応答あり・画像が使えない（不正・4 MiB 超・R2 put 失敗） | failed / `bad_response` か `too_large` | 読めた usage / 実額、無ければ missing / NULL | 上の 2 行と同じ規則（実額 > U → over_reserve、missing → usage_missing） |
+| 応答あり・画像が使えない（不正・画像が 2 MiB = `MAX_FILE_BYTES` 超・R2 put 失敗。応答本文が 4 MiB で切れた時は status に依らずこの行） | failed / `bad_response` か `too_large` | 読めた usage / 実額、無ければ missing / NULL | 上の 2 行と同じ規則（実額 > U → over_reserve、missing → usage_missing） |
 | 応答あり・HTTP の失敗 429 / 5xx / 400 / moderation | failed / `rate_limited` / `server` / `bad_request` / `moderation` | 読めれば usage、無ければ NULL（課金なしとみなす） | 実額 > U なら over_reserve、それ以外 NULL |
 | 応答あり・quota / 残高 | failed / `quota` | 同上 | `quota` |
 | 応答あり・401 / 403 | failed / `auth` | 同上 | `auth` |
