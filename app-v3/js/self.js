@@ -9,7 +9,7 @@ window.DES = window.DES || {};
   var SELF = window.DES.self = {};
   var HAIRS = ['h1', 'h2', 'h3', 'none'], COLORS = ['c1', 'c2', 'c3', 'c4'];
   var RX = ['pending', 'agreed', 'edited', 'away'];
-  var IDEA_ST = ['trying', 'result', 'away'], IDEA_RES = ['fit', 'meh', 'adjust'];
+  var IDEA_ST = ['trying', 'result', 'away'], IDEA_RES = ['fit', 'meh', 'adjust'], IDEA_PREV = ['idle', 'trying', 'result'];
   var MAXLEN = 200;
 
   function DS() { return window.DES; }
@@ -33,12 +33,16 @@ window.DES = window.DES || {};
   function isStr(v) { return typeof v === 'string'; }
   function isInt(v) { return typeof v === 'number' && Math.floor(v) === v; }
   function isVer(v) { return isObj(v) && isStr(v.text) && isStr(v.at); }
+  // 保存値から来る id は data-* と selector に入るため、形を絞る（改行・引用符などを通さない）
+  var ID_RE = /^[A-Za-z0-9_-]{1,64}$/, KEY_RE = /^[a-z]+:[A-Za-z0-9_-]{1,64}$/;
+  function isId(v) { return isStr(v) && ID_RE.test(v); }
   function cpVer(v) { return { text: v.text, at: v.at }; }
   function clean(t) { return String(t == null ? '' : t).replace(/^\s+|\s+$/g, '').slice(0, MAXLEN); }
   function today() {
     var d = DS().data, t = d && d.today;
     return isStr(t) && t.length >= 10 ? t.slice(5, 10) : (SD() && SD().asOf) || '01-01';
   }
+  // 新しい id は dispatch 側で作って action に入れる（reduce は時刻・連番を読まない。V-10 の 3）
   var seq = 0;
   function newId() { seq += 1; return 'n' + Date.now().toString(36) + '-' + seq; }
   SELF.newId = newId;
@@ -71,44 +75,47 @@ window.DES = window.DES || {};
     if (isObj(v.avatar) && HAIRS.indexOf(v.avatar.hair) >= 0 && COLORS.indexOf(v.avatar.color) >= 0) s.avatar = { hair: v.avatar.hair, color: v.avatar.color };
     if (isObj(v.rx)) Object.keys(v.rx).forEach(function (k) {
       var r = v.rx[k];
-      if (!isObj(r) || RX.indexOf(r.state) < 0 || !Array.isArray(r.vers) || !r.vers.every(isVer)) return;
+      if (!isId(k) || !isObj(r) || RX.indexOf(r.state) < 0 || !Array.isArray(r.vers) || !r.vers.every(isVer)) return;
       if (!isInt(r.cur) || r.cur < -1 || r.cur >= r.vers.length) return;
       if (r.state === 'edited' && r.cur < 0) return;
       s.rx[k] = { state: r.state, vers: r.vers.map(cpVer), cur: r.cur };
     });
     if (Array.isArray(v.notes)) v.notes.forEach(function (n) {
-      if (!isObj(n) || !isStr(n.id) || !isStr(n.axis)) return;
-      if (!(n.group == null || isStr(n.group)) || !(n.on == null || isStr(n.on))) return;
+      if (!isObj(n) || !isId(n.id) || !axisById(n.axis)) return;
+      if (!(n.group == null || isId(n.group)) || !(n.on == null || isId(n.on))) return;
       if (!Array.isArray(n.vers) || !n.vers.length || !n.vers.every(isVer)) return;
       if (!isInt(n.cur) || n.cur < 0 || n.cur >= n.vers.length || typeof n.gone !== 'boolean') return;
       s.notes.push({ id: n.id, axis: n.axis, group: n.group == null ? null : n.group, on: n.on == null ? null : n.on, vers: n.vers.map(cpVer), cur: n.cur, gone: n.gone });
     });
-    if (isObj(v.door)) Object.keys(v.door).forEach(function (k) { if (v.door[k] === 'added' || v.door[k] === 'not_now') s.door[k] = v.door[k]; });
+    if (isObj(v.door)) Object.keys(v.door).forEach(function (k) { if (isId(k) && (v.door[k] === 'added' || v.door[k] === 'not_now')) s.door[k] = v.door[k]; });
     if (isObj(v.kufu)) {
       var k = v.kufu;
       if (Array.isArray(k.scenes)) k.scenes.forEach(function (x) {
-        if (isObj(x) && isStr(x.id) && isStr(x.text) && isStr(x.at) && typeof x.gone === 'boolean') s.kufu.scenes.push({ id: x.id, text: x.text, at: x.at, gone: x.gone });
+        if (isObj(x) && isId(x.id) && isStr(x.text) && isStr(x.at) && typeof x.gone === 'boolean') s.kufu.scenes.push({ id: x.id, text: x.text, at: x.at, gone: x.gone });
       });
       if (isObj(k.ideas)) Object.keys(k.ideas).forEach(function (id) {
         var e = k.ideas[id];
-        if (!isObj(e) || IDEA_ST.indexOf(e.status) < 0 || !(e.result === null || IDEA_RES.indexOf(e.result) >= 0) || !isStr(e.note) || !isStr(e.at)) return;
+        if (!isId(id) || !isObj(e) || IDEA_ST.indexOf(e.status) < 0 || !(e.result === null || IDEA_RES.indexOf(e.result) >= 0) || !isStr(e.note) || !isStr(e.at)) return;
         if (!(e.text == null || isStr(e.text))) return;
+        if (!(e.prev == null || IDEA_PREV.indexOf(e.prev) >= 0)) return;
         s.kufu.ideas[id] = { status: e.status, result: e.result, note: e.note, at: e.at, text: e.text == null ? null : e.text };
+        if (e.status === 'away' && e.prev) s.kufu.ideas[id].prev = e.prev;
       });
       if (Array.isArray(k.own)) k.own.forEach(function (x) {
-        if (isObj(x) && isStr(x.id) && isStr(x.scene) && isStr(x.text) && isStr(x.at) && typeof x.gone === 'boolean') s.kufu.own.push({ id: x.id, scene: x.scene, text: x.text, at: x.at, gone: x.gone });
+        if (isObj(x) && isId(x.id) && isId(x.scene) && isStr(x.text) && isStr(x.at) && typeof x.gone === 'boolean') s.kufu.own.push({ id: x.id, scene: x.scene, text: x.text, at: x.at, gone: x.gone });
       });
     }
     if (Array.isArray(v.log)) v.log.forEach(function (l) {
-      if (isObj(l) && isStr(l.id) && isStr(l.item) && isStr(l.act) && isStr(l.text) && isStr(l.at)) s.log.push({ id: l.id, item: l.item, act: l.act, text: l.text, at: l.at });
+      if (isObj(l) && isId(l.id) && isId(l.item) && isStr(l.act) && isStr(l.text) && isStr(l.at)) s.log.push({ id: l.id, item: l.item, act: l.act, text: l.text, at: l.at });
     });
-    if (isObj(v.draft) && isStr(v.draft.target) && isStr(v.draft.mode) && isStr(v.draft.text)) s.draft = { target: v.draft.target, mode: v.draft.mode, text: v.draft.text.slice(0, MAXLEN) };
+    if (isObj(v.draft) && isStr(v.draft.target) && KEY_RE.test(v.draft.target) && isStr(v.draft.mode) && isStr(v.draft.text)) s.draft = { target: v.draft.target, mode: v.draft.mode, text: v.draft.text.slice(0, MAXLEN) };
     return s;
   };
 
   function rxGet(s, id) { return s.rx[id] || { state: 'pending', vers: [], cur: -1 }; }
+  var curLid = null;
   function logPush(s, item, act, text, at) {
-    s.log.push({ id: newId(), item: item, act: act, text: text || '', at: at });
+    s.log.push({ id: curLid || ('l' + s.log.length + '-' + item), item: item, act: act, text: text || '', at: at });
     if (s.log.length > 300) s.log.splice(0, s.log.length - 300);
   }
   // 工夫の状態: 保存した値 > データの seed > idle（null）
@@ -187,7 +194,7 @@ window.DES = window.DES || {};
       case 'noteAdd':
         t = clean(a.text);
         if (!t || !axisById(a.axis)) return false;
-        s.notes.push({ id: isStr(a.nid) ? a.nid : newId(), axis: a.axis, group: isStr(a.group) ? a.group : null, on: isStr(a.on) ? a.on : null, vers: [{ text: t, at: at }], cur: 0, gone: false });
+        s.notes.push({ id: isId(a.nid) ? a.nid : 'note' + s.notes.length, axis: a.axis, group: isStr(a.group) ? a.group : null, on: isStr(a.on) ? a.on : null, vers: [{ text: t, at: at }], cur: 0, gone: false });
         return true;
       case 'noteEdit':
         n = findBy(s.notes, a.id);
@@ -220,29 +227,45 @@ window.DES = window.DES || {};
       case 'result':
         e = ideaCur(s, a.id);
         if (!e || e.status !== 'trying' || (a.result !== 'fit' && a.result !== 'meh')) return false;
-        s.kufu.ideas[a.id] = { status: 'result', result: a.result, note: clean(a.note), at: at, text: e.text || null };
+        s.kufu.ideas[a.id] = { status: 'result', result: a.result, note: a.note != null ? clean(a.note) : (e.note || ''), at: at, text: e.text || null };
         return true;
       case 'adjust':
         e = ideaCur(s, a.id);
         t = clean(a.text);
         if (!e || e.status !== 'trying' || !t || ideaBase(s, a.id).indexOf(t) >= 0) return false;
-        s.kufu.ideas[a.id] = { status: 'trying', result: 'adjust', note: e.note || '', at: at, text: t };
+        s.kufu.ideas[a.id] = { status: 'trying', result: 'adjust', note: a.note != null ? clean(a.note) : (e.note || ''), at: at, text: t };
+        return true;
+      case 'ideaNote':
+        // 結果のひとことを入力中に保存する（試し中だけ。少し変える の編集欄に移っても残る）
+        e = s.kufu.ideas[a.id];
+        if (!e || e.status !== 'trying') return false;
+        t = clean(a.note);
+        if (t === e.note) return false;
+        e.note = t;
         return true;
       case 'ideaAway':
         if (!ideaKnown(s, a.id)) return false;
         e = ideaCur(s, a.id);
         if (e && e.status === 'away') return false;
-        s.kufu.ideas[a.id] = { status: 'away', result: null, note: '', at: at, text: (e && e.text) || null };
+        // 今はいい: 結果・ひとこと・直した文は持ったまま外す（もどすで戻せるように）
+        s.kufu.ideas[a.id] = { status: 'away', result: e ? e.result : null, note: (e && e.note) || '', at: at, text: (e && e.text) || null, prev: e ? e.status : 'idle' };
         return true;
       case 'ideaBack':
+        // もどす: 結果があれば結果へ、直した文・ひとことがあれば試し中へ、何も無ければ idle へ
         e = s.kufu.ideas[a.id];
         if (!e || e.status !== 'away') return false;
-        delete s.kufu.ideas[a.id];
+        // 外す前の状態（prev）があればそこへ戻す。古い保存値で prev が無いときは中身から決める
+        if (e.prev === 'idle') delete s.kufu.ideas[a.id];
+        else if (e.prev === 'result' && (e.result === 'fit' || e.result === 'meh')) s.kufu.ideas[a.id] = { status: 'result', result: e.result, note: e.note, at: e.at, text: e.text };
+        else if (e.prev === 'trying') s.kufu.ideas[a.id] = { status: 'trying', result: e.result === 'adjust' ? 'adjust' : null, note: e.note, at: e.at, text: e.text };
+        else if (e.result === 'fit' || e.result === 'meh') s.kufu.ideas[a.id] = { status: 'result', result: e.result, note: e.note, at: e.at, text: e.text };
+        else if (e.result === 'adjust' || e.text || e.note) s.kufu.ideas[a.id] = { status: 'trying', result: e.result, note: e.note, at: e.at, text: e.text };
+        else delete s.kufu.ideas[a.id];
         return true;
       case 'sceneAdd':
         t = clean(a.text);
         if (!t) return false;
-        s.kufu.scenes.push({ id: isStr(a.nid) ? a.nid : newId(), text: t, at: at, gone: false });
+        s.kufu.scenes.push({ id: isId(a.nid) ? a.nid : 'scene' + s.kufu.scenes.length, text: t, at: at, gone: false });
         return true;
       case 'sceneEdit':
         x = findBy(s.kufu.scenes, a.id);
@@ -258,7 +281,7 @@ window.DES = window.DES || {};
       case 'ownAdd':
         t = clean(a.text);
         if (!t || !sceneKnown(s, a.scene)) return false;
-        s.kufu.own.push({ id: isStr(a.nid) ? a.nid : newId(), scene: a.scene, text: t, at: at, gone: false });
+        s.kufu.own.push({ id: isId(a.nid) ? a.nid : 'own' + s.kufu.own.length, scene: a.scene, text: t, at: at, gone: false });
         return true;
       case 'ownEdit':
         x = findBy(s.kufu.own, a.id);
@@ -279,7 +302,7 @@ window.DES = window.DES || {};
         return true;
       case 'draft':
         if (a.draft === null) { if (s.draft === null) return false; s.draft = null; return true; }
-        if (!isObj(a.draft) || !isStr(a.draft.target) || !isStr(a.draft.mode) || !isStr(a.draft.text)) return false;
+        if (!isObj(a.draft) || !isStr(a.draft.target) || !KEY_RE.test(a.draft.target) || !isStr(a.draft.mode) || !isStr(a.draft.text)) return false;
         s.draft = { target: a.draft.target, mode: a.draft.mode, text: a.draft.text.slice(0, MAXLEN) };
         return true;
     }
@@ -291,7 +314,11 @@ window.DES = window.DES || {};
     if (!isObj(a) || !isStr(a.type)) return state;
     if (a.type === 'undo') return SELF.validate(a.prev);
     var s = SELF.validate(state);
-    return step(s, a, isStr(a.at) ? a.at : today()) ? s : state;
+    curLid = isId(a.lid) ? a.lid : null;
+    // 日付は action から（dispatch が必ず入れる）。無い action には日付を付けない
+    var changed = step(s, a, isStr(a.at) ? a.at : '');
+    curLid = null;
+    return changed ? s : state;
   };
 
   // ---------- 表示の部品 ----------
@@ -310,7 +337,8 @@ window.DES = window.DES || {};
   function licon(n) { return raw('<svg class="ico" aria-hidden="true" viewBox="0 0 24 24"><path d="' + LOCAL_ICONS[n] + '"/></svg>'); }
   var KIND_ICON = { ai: function () { return icon('spark'); }, env: function () { return licon('pin'); }, tool: function () { return icon('make'); }, self: function () { return licon('pen'); } };
   function bud(size, mood) { return raw(DS().buddy(size, mood)); }
-  function q(v) { return String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
+  // 引用符つき属性値の selector 用（改行・引用符・\ をエスケープ）
+  function q(v) { return window.CSS && CSS.escape ? CSS.escape(String(v)) : String(v).replace(/[\\"]/g, '\\$&').replace(/[\n\r\f]/g, ' '); }
   function md(d, time) {
     if (!isStr(d)) return '';
     var p = d.split('-'), s = (+p[0]) + '/' + (+p[1]);
@@ -338,8 +366,12 @@ window.DES = window.DES || {};
   // 状態を変える唯一の経路: reduce → 保存 → 再描画 → トースト（戻す 5 秒）
   function dispatch(action, o) {
     o = o || {};
+    if (!isStr(action.at)) action.at = today();
+    if (!isStr(action.lid)) action.lid = newId();
     var prev = st, next = SELF.reduce(st, action);
     if (next === st) return false;
+    // 残した編集欄の下書きは同じ変更で消す。戻すは下書きごと操作前へ戻す
+    if (o.clearDraft && next.draft && next.draft.target === o.clearDraft) next = SELF.reduce(next, { type: 'draft', draft: null });
     st = next;
     persist();
     ui.reply = o.reply || null;
@@ -353,8 +385,9 @@ window.DES = window.DES || {};
           st = SELF.reduce(st, { type: 'undo', prev: prev });
           persist();
           ui.reply = null; ui.open = null; ui.edit = null; ui.hist = null; ui.kmenu = null; ui.howwas = null;
+          ui.restore = true;
           ui.flash = o.flash || null;
-          ui.focus = o.undoFocus || o.focus || null;
+          ui.focus = o.clearDraft && prev.draft && prev.draft.target === o.clearDraft && o.clearDraft.indexOf('rnote:') !== 0 ? 'ta:' + o.clearDraft : (o.undoFocus || o.focus || null);
           rerender();
         }
       };
@@ -418,7 +451,8 @@ window.DES = window.DES || {};
       case 'note':
         n = findBy(st.notes, id);
         if (!n || n.gone) return null;
-        return { owner: 'note:' + id, base: noteText(n), ret: 'row:note:' + id, label: TX('fix_label') };
+        it = n.on ? itemById(n.on) : null;
+        return { owner: 'note:' + id, base: noteText(n), ret: 'row:note:' + id, label: TX('fix_label'), fold: it && it.fold ? it.axis : null };
       case 'scene':
         if (id === 'new') return { owner: key, base: '', ret: 'addscene', label: TX('write_label'), ph: KX('scene_ph') };
         x = ownScene(id);
@@ -430,12 +464,19 @@ window.DES = window.DES || {};
       case 'oidea':
         x = findBy(st.kufu.own, id);
         if (!x || x.gone) return null;
-        return { owner: key, base: x.text, ret: 'kmore:' + id, label: TX('fix_label') };
+        return { owner: key, base: x.text, ret: isFit(id) ? 'fedit:' + id : 'kmore:' + id, label: TX('fix_label') };
       case 'adjust':
         if (!ideaKnown(st, id) || ideaState(id).status !== 'trying') return null;
         return { owner: key, base: ideaText(id), ret: 'howwas:' + id, label: TX('fix_label') };
     }
     return null;
+  }
+  function isFit(id) { var e = ideaState(id); return e.status === 'result' && e.result === 'fit'; }
+  // 結果のひとこと: 入力中の値 > 下書き（rnote:<id>）> 保存済み
+  function rnoteVal(id) {
+    if (ui.rnote[id] != null) return ui.rnote[id];
+    if (st.draft && st.draft.target === 'rnote:' + id) return st.draft.text;
+    return ideaState(id).note || '';
   }
   function draftText(key, base) { return st.draft && st.draft.target === key ? st.draft.text : base; }
 
@@ -522,6 +563,7 @@ window.DES = window.DES || {};
     var r = rxOf(it.id), kids = [];
     if (it.src === 'ai' && r.state !== 'edited') {
       kids.push(bud(18, 'think'), srcChip('ai'));
+      if (it.axis === 'exp' && it.date) kids.push(H('span', { class: 'sr-only' }, md(it.date)));
       if (r.state === 'agreed') {
         var l = lastLog(it.id, 'agree');
         kids.push(H('span', { class: 'chip src-own sx-agreed', 'aria-label': TX('agreed_chip') }, [icon('check'), H('span', null, TX('agreed_chip'))]), l ? dateEl(l.at) : null);
@@ -530,7 +572,7 @@ window.DES = window.DES || {};
     } else if (it.src === 'ai') {
       kids.push(srcChip('own'), dateEl(r.vers[r.cur].at));
     } else {
-      kids.push(srcChip(it.src), noDate ? null : dateEl(it.date, it.time));
+      kids.push(srcChip(it.src), noDate ? H('span', { class: 'sr-only' }, md(it.date, it.time)) : dateEl(it.date, it.time));
     }
     if (it.cond) kids.push(H('span', { class: 'chip sx-cond' }, TX('cond_' + it.cond)));
     return H('span', { class: 'srow-meta' }, kids);
@@ -553,10 +595,9 @@ window.DES = window.DES || {};
       if (ek === 'fix:' + it.id) { kids.push(editorEl(ek)); return H('div', { class: 'srow-open' }, kids); }
       var ops;
       if (r.state === 'agreed') ops = [btn(TX('react_fix'), 'sx-fixopen', it.id), btn(TX('react_not_now'), 'sx-away', it.id), btn(TX('back_to_ai'), 'sx-toai', it.id)];
-      else if (r.state === 'edited') ops = [btn(TX('edit'), 'sx-fixopen', it.id), btn(TX('react_not_now'), 'sx-away', it.id), btn(TX('back_to_ai'), 'sx-toai', it.id)];
+      else if (r.state === 'edited') ops = [btn(TX('react_agree'), 'sx-agree', it.id), btn(TX('edit'), 'sx-fixopen', it.id), btn(TX('react_not_now'), 'sx-away', it.id), btn(TX('back_to_ai'), 'sx-toai', it.id)];
       else ops = [btn(TX('react_agree'), 'sx-agree', it.id), btn(TX('react_fix'), 'sx-fixopen', it.id), btn(TX('react_not_now'), 'sx-away', it.id)];
-      var links = [linkBtn(TX('react_talk'), 'sx-talk', it.id)];
-      if (r.state !== 'pending' || r.vers.length) links.unshift(linkBtn(TX('history'), 'sx-hist', it.id, { expanded: ui.hist === it.id }));
+      var links = [linkBtn(TX('history'), 'sx-hist', it.id, { expanded: ui.hist === it.id }), linkBtn(TX('react_talk'), 'sx-talk', it.id)];
       kids.push(H('div', { class: 'sx-react' }, ops.concat(links)));
       if (r.state === 'pending') kids.push(H('p', { class: 'hint' }, TX('react_hint')));
       return H('div', { class: 'srow-open' }, kids);
@@ -649,7 +690,16 @@ window.DES = window.DES || {};
       body.push(H('div', { class: 'sx-away' }, [
         linkBtn(TX('put_away', { n: away.length }), 'sx-awayfold', ax.id, { fk: 'awaybtn:' + ax.id, expanded: aOpen }),
         aOpen ? H('ul', { class: 'sx-away-list' }, away.map(function (it) {
-          return H('li', { class: 'sx-away-i' }, [H('span', { class: 'sx-btext' }, itemText(it)), btn(TX('put_back'), it.kind === 'door' ? 'sx-doorback' : 'sx-back', it.id, { kls: 'ghost' })]);
+          return H('li', { class: 'sx-away-i' }, [
+            H('div', { class: 'sx-away-row' }, [
+              H('span', { class: 'sx-btext' }, itemText(it)),
+              H('span', { class: 'sx-away-ops' }, [
+                it.kind === 'door' ? null : linkBtn(TX('history'), 'sx-hist', it.id, { fk: 'awayhist:' + it.id, expanded: ui.hist === it.id }),
+                btn(TX('put_back'), it.kind === 'door' ? 'sx-doorback' : 'sx-back', it.id, { kls: 'ghost' })
+              ])
+            ]),
+            ui.hist === it.id ? historyEl(it) : null
+          ]);
         })) : null
       ]));
     }
@@ -676,13 +726,13 @@ window.DES = window.DES || {};
   }
   function budEl() {
     var c = commentInfo();
-    return H('div', { class: 'self-bud' }, [H('div', { class: 'sx-bud-pair' }, [
+    return H('div', { class: 'self-bud' }, [
       H('div', { class: 'sx-bubble' }, [
+        bud(44, 'neutral'),
         H('p', null, c.text),
         c.link ? H('button', { type: 'button', class: 'link-btn', 'data-action': c.action, 'data-id': c.id, 'data-fk': 'budlink' }, c.link) : null
-      ]),
-      bud(44, 'neutral')
-    ])]);
+      ])
+    ]);
   }
 
   function avatarEl(av, kls, alt) {
@@ -718,6 +768,7 @@ window.DES = window.DES || {};
     }
     if (adjusted || x.own) head.push(srcChip('own'));
     var kids = [H('div', { class: 'kidea-head' }, head), H('p', { class: 'kidea-text' }, ideaText(x.id))];
+    if (s.status === 'trying' && s.note && !open) kids.push(H('p', { class: 'kidea-res' }, [srcChip('own'), H('span', { class: 'sx-btext' }, s.note)]));
     if (s.status === 'result' && s.result === 'meh') {
       kids.push(H('p', { class: 'kidea-res' }, [H('span', { class: 'chip' }, KX('r_meh')), s.note ? H('span', { class: 'sx-btext' }, s.note) : null]));
     }
@@ -739,7 +790,7 @@ window.DES = window.DES || {};
             btn(KX('r_meh'), 'sx-result', x.id, { arg: 'meh' }),
             btn(KX('r_adjust'), 'sx-adjust', x.id)
           ]),
-          H('input', { type: 'text', class: 'sx-rnote', maxlength: String(MAXLEN), placeholder: KX('r_note_ph'), 'aria-label': KX('r_note_ph'), 'data-sx-rnote': x.id, 'data-fk': 'rnote:' + x.id, value: ui.rnote[x.id] || '' })
+          H('input', { type: 'text', class: 'sx-rnote', maxlength: String(MAXLEN), placeholder: KX('r_note_ph'), 'aria-label': KX('r_note_ph'), 'data-sx-rnote': x.id, 'data-fk': 'rnote:' + x.id, value: rnoteVal(x.id) })
         ]));
       }
       if (menu) {
@@ -784,7 +835,7 @@ window.DES = window.DES || {};
     if (away.length) {
       var aOpen = !!ui.kfold[sc.id];
       right.push(H('div', { class: 'sx-away' }, [
-        H('button', { type: 'button', class: 'link-btn', 'data-action': 'sx-kfold', 'data-id': sc.id, 'data-fk': 'kfold:' + sc.id, 'aria-expanded': aOpen ? 'true' : 'false' }, [KX('not_now'), H('span', { class: 'chip sx-count' }, String(away.length))]),
+        H('button', { type: 'button', class: 'link-btn', 'data-action': 'sx-kfold', 'data-id': sc.id, 'data-fk': 'kfold:' + sc.id, 'aria-expanded': aOpen ? 'true' : 'false' }, KX('away_head', { n: away.length })),
         aOpen ? H('ul', { class: 'sx-away-list' }, away.map(function (x) {
           return H('li', { class: 'sx-away-i' }, [H('span', { class: 'sx-btext' }, ideaText(x.id)), btn(TX('put_back'), 'sx-kback', x.id, { kls: 'ghost' })]);
         })) : null
@@ -801,13 +852,18 @@ window.DES = window.DES || {};
       ideasOfScene(sc.id).forEach(function (x) {
         var s = ideaState(x.id);
         if (s.status !== 'result' || s.result !== 'fit') return;
-        var seedNote = s.seeded && x.data.seed && x.data.seed.note;
-        out.push(H('li', { class: 'kfit-i' + (ui.flash === 'idea:' + x.id ? ' sx-enter' : '') }, [
+        var seedNote = s.seeded && x.data.seed && x.data.seed.note, own = x.own || !!s.text, ek = ui.edit && ui.edit.key;
+        out.push(H('li', { class: 'kfit-i' + (own ? ' f-own' : '') + (ui.flash === 'idea:' + x.id ? ' sx-enter' : ''), 'data-idea': x.id }, [
           icon('check'),
-          H('div', null, [
-            H('p', { class: 'kfit-text' }, [ideaText(x.id), H('span', { class: 'kfit-meta' }, ' · ' + sceneName(sc.id) + (s.at ? ' · ' + md(s.at) : ''))]),
+          H('div', { class: 'kfit-body' }, [
+            own ? H('p', { class: 'kfit-note' }, [srcChip('own')]) : null,
+            ek === 'oidea:' + x.id ? editorEl(ek) : H('p', { class: 'kfit-text' }, [ideaText(x.id), H('span', { class: 'kfit-meta' }, ' · ' + sceneName(sc.id) + (s.at ? ' · ' + md(s.at) : ''))]),
             seedNote ? H('p', { class: 'kfit-note' }, [srcChip(seedNote.src), H('span', null, seedNote.text)]) : null,
-            !seedNote && s.note ? H('p', { class: 'kfit-note' }, [srcChip('own'), H('span', null, s.note)]) : null
+            !seedNote && s.note ? H('p', { class: 'kfit-note' }, [srcChip('own'), H('span', null, s.note)]) : null,
+            x.own && ek !== 'oidea:' + x.id ? H('div', { class: 'sx-react' }, [
+              btn(TX('edit'), 'sx-edit', 'oidea:' + x.id, { kls: 'ghost', fk: 'fedit:' + x.id }),
+              btn(TX('remove'), 'sx-kdel', x.id, { kls: 'ghost', fk: 'fdel:' + x.id })
+            ]) : null
           ])
         ]));
       });
@@ -841,8 +897,16 @@ window.DES = window.DES || {};
           H('span', { class: 'date-stamp' }, ST(t.as_of))
         ])
       ]),
-      // DOM の順 = 390 の縦の順（hub → 吹き出し → 関心 → 志向性 → 体験 → 心理 → 習熟）。広い幅では grid-area で置く
-      H('div', { class: 'self-orbit' }, [hubEl(), budEl(), ax('int'), ax('ori'), ax('exp'), ax('psy'), ax('mas')]),
+      // V-10: 3 列の独立した縦積み（左 = 関心 → 体験 / 中央 = 本人 + バディ / 右 = 志向性 → 心理 → 習熟）。
+      // ≤ 700 は列を display:contents にして order で 1 列に並べ直す（hub → 吹き出し → 関心 → 志向性 → 体験 → 心理 → 習熟）
+      // ≤ 700 は DOM も表示と同じ 1 列の順にする（Tab・読み上げの順を揃える。幅の区切りが変わると app.js が描き直す）
+      DS().app.bp() === 's'
+        ? H('div', { class: 'self-orbit is-flat' }, [hubEl(), budEl(), ax('int'), ax('ori'), ax('exp'), ax('psy'), ax('mas')])
+        : H('div', { class: 'self-orbit' }, [
+          H('div', { class: 'self-col col-c' }, [hubEl(), budEl()]),
+          H('div', { class: 'self-col col-l' }, [ax('int'), ax('exp')]),
+          H('div', { class: 'self-col col-r' }, [ax('ori'), ax('psy'), ax('mas')])
+        ]),
       kufuEl(),
       H('p', { class: 'privacy-line' }, [H('span', { class: 'privacy-note' }, [icon('lock'), H('span', null, ST(t.share))])])
     ]);
@@ -852,6 +916,11 @@ window.DES = window.DES || {};
     ui.restore = false;
     var d = st.draft;
     if (!d) return;
+    if (d.target.indexOf('rnote:') === 0) {
+      var rid = d.target.slice(6);
+      if (ideaKnown(st, rid) && ideaState(rid).status === 'trying') { ui.howwas = rid; ui.rnote[rid] = d.text; } else setDraft(null);
+      return;
+    }
     var info = editorInfo(d.target);
     if (!info) { setDraft(null); return; }
     ui.open = info.owner;
@@ -931,14 +1000,15 @@ window.DES = window.DES || {};
         else { a = { type: 'sceneEdit', id: id, text: t }; o = { toast: TX('t_fixed'), focus: 'sedit:' + id, flash: 'scene:' + id }; }
         break;
       case 'idea': a = { type: 'ownAdd', nid: nid, scene: id, text: t }; o = { toast: KX('t_idea'), focus: 'ktry:' + nid, flash: 'idea:' + nid, undoFocus: 'addidea:' + id }; break;
-      case 'oidea': a = { type: 'ownEdit', id: id, text: t }; o = { toast: TX('t_fixed'), focus: 'kmore:' + id, flash: 'idea:' + id }; break;
-      case 'adjust': a = { type: 'adjust', id: id, text: t }; o = { toast: TX('t_result'), focus: 'howwas:' + id, flash: 'idea:' + id }; break;
+      case 'oidea': a = { type: 'ownEdit', id: id, text: t }; o = { toast: TX('t_fixed'), focus: isFit(id) ? 'fedit:' + id : 'kmore:' + id, flash: 'idea:' + id }; break;
+      case 'adjust': a = { type: 'adjust', id: id, text: t, note: rnoteVal(id) }; delete ui.rnote[id]; o = { toast: TX('t_result'), focus: 'howwas:' + id, flash: 'idea:' + id }; break;
       default: return;
     }
-    var keepDraft = st.draft;
-    setDraft(null);
+    // 下書きは同じ変更の中で消す（dispatch の clearDraft）。戻すと下書きと編集欄も戻る
+    var keep = { edit: ui.edit, open: ui.open };
     ui.edit = null; ui.open = null; closeTransient();
-    if (!dispatch(a, o)) { st = SELF.reduce(st, { type: 'draft', draft: keepDraft }); persist(); }
+    o.clearDraft = key;
+    if (!dispatch(a, o)) { ui.edit = keep.edit; ui.open = keep.open; }
   }
   function syncSave(key, ta) {
     var info = editorInfo(key);
@@ -1021,6 +1091,9 @@ window.DES = window.DES || {};
   A['sx-hist'] = function (el) {
     var id = aid(el);
     ui.reply = null;
+    leaveEdit();
+    if (ui.open && ui.open !== id) ui.open = null;
+    ui.kmenu = null; ui.howwas = null;
     ui.hist = ui.hist === id ? null : id;
     ui.focus = el.getAttribute('data-fk');
     rerender();
@@ -1077,12 +1150,16 @@ window.DES = window.DES || {};
     rerender();
   };
   A['sx-result'] = function (el) {
-    var id = aid(el), res = el.getAttribute('data-arg'), note = ui.rnote[id] || '';
+    var id = aid(el), res = el.getAttribute('data-arg'), note = rnoteVal(id);
     closeTransient();
     delete ui.rnote[id];
-    dispatch({ type: 'result', id: id, result: res, note: note }, { toast: TX('t_result'), focus: res === 'fit' ? 'fitlist' : 'ktry:' + id, flash: 'idea:' + id, undoFocus: 'howwas:' + id });
+    dispatch({ type: 'result', id: id, result: res, note: note }, { toast: TX('t_result'), focus: res === 'fit' ? 'fitlist' : 'ktry:' + id, flash: 'idea:' + id, undoFocus: 'howwas:' + id, clearDraft: 'rnote:' + id });
   };
-  A['sx-adjust'] = function (el) { openEditor('adjust:' + aid(el)); };
+  A['sx-adjust'] = function (el) {
+    var id = aid(el);
+    ui.rnote[id] = rnoteVal(id);
+    openEditor('adjust:' + id);
+  };
   A['sx-kmenu'] = function (el) {
     var id = aid(el), was = ui.kmenu === id;
     leaveEdit(); ui.open = null; closeTransient();
@@ -1094,12 +1171,13 @@ window.DES = window.DES || {};
     var id = aid(el), sc = null;
     ideasScene(id, function (s) { sc = s; });
     closeTransient();
-    dispatch({ type: 'ideaAway', id: id }, { focus: sc ? 'kfold:' + sc : null });
+    dispatch({ type: 'ideaAway', id: id }, { toast: KX('t_away'), focus: sc ? 'kfold:' + sc : null, undoFocus: 'kmore:' + id });
   };
   A['sx-kback'] = function (el) {
     var id = aid(el);
     closeTransient();
-    dispatch({ type: 'ideaBack', id: id }, { focus: ideaState(id).status === 'trying' ? 'howwas:' + id : 'ktry:' + id, flash: 'idea:' + id });
+    var back = SELF.reduce(st, { type: 'ideaBack', id: id }), bs = ideaCur(back, id), focus = !bs ? 'ktry:' + id : bs.status === 'trying' ? 'howwas:' + id : (bs.result === 'fit' ? 'fitlist' : 'ktry:' + id);
+    dispatch({ type: 'ideaBack', id: id }, { toast: KX('t_back'), noUndo: true, focus: focus, flash: 'idea:' + id });
   };
   A['sx-kfold'] = function (el) { var id = aid(el); closeTransient(); ui.kfold[id] = !ui.kfold[id]; ui.focus = 'kfold:' + id; rerender(); };
   A['sx-ktalk'] = function (el) {
@@ -1108,18 +1186,18 @@ window.DES = window.DES || {};
     if (d && d.idea.prefill) { toTalk(d.idea.prefill); return; }
     var sid = null;
     ideasScene(id, function (s) { sid = s; });
-    toTalk(fmt(kufu.prefill, { scene: sceneText(sid), kind: kufu.kinds.tool.js }));
+    toTalk(fmt(kufu.prefill.tool, { scene: sceneText(sid) }));
   };
   A['sx-kprefill'] = function (el) {
     var sid = aid(el), kind = el.getAttribute('data-arg'), kufu = SD().kufu;
-    if (!kufu.kinds[kind]) return;
-    toTalk(fmt(kufu.prefill, { scene: sceneText(sid), kind: kufu.kinds[kind].js }));
+    if (!kufu.prefill[kind]) return;
+    toTalk(fmt(kufu.prefill[kind], { scene: sceneText(sid) }));
   };
   A['sx-kdel'] = function (el) {
     var id = aid(el), o = findBy(st.kufu.own, id);
     if (!o) return;
     closeTransient();
-    dispatch({ type: 'ownDel', id: id }, { toast: TX('t_removed'), focus: 'addidea:' + o.scene, undoFocus: 'kmore:' + id });
+    dispatch({ type: 'ownDel', id: id }, { toast: TX('t_removed'), focus: 'addidea:' + o.scene, undoFocus: isFit(id) ? 'fdel:' + id : 'kmore:' + id });
   };
   A['sx-sdel'] = function (el) {
     var id = aid(el);
@@ -1167,14 +1245,16 @@ window.DES = window.DES || {};
       ])
     ]));
     dlg.appendChild(H('div', { class: 'dialog-footer' }, [
-      H('button', { class: 'btn primary', type: 'button', 'data-action': 'sx-avatar-ok' }, TX('avatar_ok')),
-      H('button', { class: 'btn', type: 'button', 'data-action': 'dialog-close' }, TX('cancel'))
+      H('button', { class: 'btn primary small', type: 'button', 'data-action': 'sx-avatar-ok' }, TX('avatar_ok')),
+      H('button', { class: 'btn small', type: 'button', 'data-action': 'dialog-close' }, TX('cancel'))
     ]));
   }
   A['sx-avatar'] = function (el) {
     var dlg = sheet();
     if (!dlg) return;
-    closeTransient();
+    // 開いている編集欄・行は先に閉じる（変更ありの下書きは残る）。dialog の裏に編集欄を残さない
+    leaveEdit(); ui.open = null; closeTransient();
+    rerender();
     ui.pick = { hair: st.avatar.hair, color: st.avatar.color };
     fillSheet();
     DS().app.openDialog(dlg, el);
@@ -1198,7 +1278,13 @@ window.DES = window.DES || {};
       return;
     }
     var rn = t.getAttribute('data-sx-rnote');
-    if (rn) ui.rnote[rn] = t.value;
+    if (rn) {
+      ui.rnote[rn] = t.value;
+      var nn = SELF.reduce(st, { type: 'ideaNote', id: rn, note: t.value });
+      if (nn !== st) st = nn;
+      setDraft({ target: 'rnote:' + rn, mode: 'rnote', text: t.value });
+      persist();
+    }
   });
   document.addEventListener('change', function (e) {
     var t = e.target, dlg = sheet();
@@ -1224,7 +1310,11 @@ window.DES = window.DES || {};
     if (ui.edit) { e.preventDefault(); cancelEdit(ui.edit.key); return; }
     if (ui.kmenu) { id = ui.kmenu; ui.kmenu = null; ui.focus = 'kmore:' + id; }
     else if (ui.howwas) { id = ui.howwas; ui.howwas = null; ui.focus = 'howwas:' + id; }
-    else if (ui.hist) { id = ui.hist; ui.hist = null; ui.focus = ui.open === id ? 'row:' + id : 'histlink:' + id; }
+    else if (ui.hist) {
+      id = ui.hist; ui.hist = null;
+      var hi = itemById(id);
+      ui.focus = hi && isAwayItem(hi) ? 'awayhist:' + id : ui.open === id ? 'row:' + id : (rxOf(id).state === 'edited' ? 'histlink:' + id : 'row:' + id);
+    }
     else if (ui.open) { id = ui.open; ui.open = null; ui.focus = 'row:' + id; }
     else return;
     e.preventDefault();

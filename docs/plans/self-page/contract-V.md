@@ -112,7 +112,7 @@
 | idle / trying | 今はいい | away | 折りたたみ（もどす可） |
 | tool の工夫 | 話すで一緒に考える | — | `DES.talk.prefill` で `ideas[].prefill`（無ければ prefill テンプレート）を下書き。（§U の作るが main に入ったら「作るで開く」に差し替える — 本スコープでは talk） |
 | — | 自分の工夫を書く | own 追加 | textarea → 残す → kind:'self'・本人の言葉の形で一覧に足す。トースト `t_idea` |
-| — | 帯の見出し右 `add_scene` | 場面追加 | textarea（`scene_ph`）→ 残す → 新しい場面ブロック（own 形）。工夫は空で、バディ 1 行 `new_scene_buddy` + `kinds` の ai / env / tool の 3 ボタン → `DES.talk.prefill`（`prefill` テンプレートに scene と kind を入れる）。直す / 消す（戻す付き）。トースト `t_scene` |
+| — | 帯の見出し右 `add_scene` | 場面追加 | textarea（`scene_ph`）→ 残す → 新しい場面ブロック（own 形）。工夫は空で、バディ 1 行 `new_scene_buddy` + `kinds` の ai / env / tool の 3 ボタン → `DES.talk.prefill`（`kufu.prefill[kind]` に scene を入れる）。直す / 消す（戻す付き）。トースト `t_scene` |
 
 - 初期: k2-self は seed により result/fit（「自分に合う工夫」に「形だけ先に決めて、色と長さはあとにする · アクセサリー作り · 10/30」が最初から 1 件ある）。k1 は全部 idle
 - 同時に見える操作を抑える: 工夫の行の操作は「試してみる」1 つ + `more` メニュー（今はいい / tool は話すで一緒に考える）。trying になったら「やってみてどうだった？」1 つに置き換わる
