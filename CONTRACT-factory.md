@@ -941,6 +941,15 @@ type Cause = 'contradicted' | 'source_not_listed' | 'maker_url_not_fetched' | 'q
 - (l4) approve: auto ok の 3 項目を省略して承認できる / auto が review の項目を省略すると 400 / action が none 以外なら 409 `auto_triage_pending`
 - (l5) 画面: 要確認 0 件・N 件の両方で描画、キー操作で 3 項目が切り替わる、ダイアログ表示中・送信中・キーリピートではキーが効かない、理由の書きかけがあると J/K が効かない、固定フッターの承認が条件どおり有効化（smoke で DOM の要素数を数える）
 
+## §M 画像の読み取り対応（段階 1。v3.7-stage1。2026-11-04 夜凍結。生成＝段階 2 は docs/plans/image-generation/plan-v6.md の GO 後に §M-2 として足す）
+
+- §M-1 拡張子: `parts[].variants[].path` は従来どおり `.md` `.svg` `.html`（`isPartPath` を変えない）。`parts[].files[].path` だけ新しい `isPartFilePath` で `.md` `.svg` `.html` `.png` `.webp` を許す
+- §M-2 中身の検査（取り込み時。`validateOutputs`）: `.png` は先頭 8 バイトが `89 50 4E 47 0D 0A 1A 0A`、`.webp` は先頭 4 バイト `RIFF` かつ 8〜11 バイト目 `WEBP`。違えば `invalid_outputs`（detail `bad_image:<path>`）。大きさは既存の 1 ファイル上限のまま
+- §M-3 配信（`routes/library.ts` と確認画面のファイル配信）: `.png` → `image/png`、`.webp` → `image/webp`。どちらも `x-content-type-options: nosniff`、`cache-control: no-store`、`content-security-policy: default-src 'none'; sandbox`。配信の可否（承認済み・現行・配信中・manifest 内）の条件は変えない
+- §M-4 確認画面: 「説明と表現」の図・画像のサムネイル（§L-6 4.）は files の svg / png / webp を `<img>` で出す（svg は既存の配信の CSP のまま）。variants はテキストとして描く（変えない）
+- §M-5 互換（段階 2 から戻した時のため）: requires_action で `custom_tool_use` の name が `generate_image`（または職人定義に無い custom tool）なら、`user.custom_tool_result` を `is_error: true`・本文「画像生成はまだ使えません。図は SVG で描いてください。」で返し、既存の deny 数に数える。既にこの扱いがあれば文言だけそろえる
+- §M-6 受け入れ: (m1) files の png / webp が通り版に入る・public_paths に入る (m2) variants の png / webp は `path_outside_part` で落ちる（負例）(m3) 拡張子と先頭バイトが合わない png / webp は `bad_image` (m4) 配信のヘッダが §M-3 どおり・承認前は 404 (m5) 既存の svg / html の variants を持つ fixture が今までどおり通る (m6) generate_image の custom_tool_use に is_error が 1 回だけ返る。fixture のバイナリは最小の正しい png / webp（数十バイト）をテスト内で作る
+
 ## §R 裁定記録（2026-11-04。Astra medium + 3 視点レビューの指摘への裁定）
 
 1. **`tool_choice: any` は Opus 5.5 で 400** → `auto` + `strict: true` + 再送ループ（§F-3）。採用
