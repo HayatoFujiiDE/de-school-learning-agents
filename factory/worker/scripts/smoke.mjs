@@ -1,4 +1,4 @@
-// smoke（契約 §H (a)〜(e),(g)〜(i),(k)〜(n)、§K-8 (o)〜(s)、§L-7 (l5)）。scripts/smoke.sh が wrangler dev（fake）を起動してから呼ぶ。
+// smoke（契約 §H (a)〜(e),(g)〜(i),(k)〜(n)、§K-8 (o)〜(s)、§L-7 (l5)、§N-5 (n2)(n3)）。scripts/smoke.sh が wrangler dev（fake）を起動してから呼ぶ。
 // 出力: 1 行ずつ `PASS <名前>` / `FAIL <名前> <理由>`。最後に SMOKE_RESULT=PASS|FAIL。応答本文は必要な field だけを見る。
 import crypto from 'node:crypto';
 import http from 'node:http';
@@ -163,6 +163,26 @@ async function main() {
   {
     const m = (await api('GET', `/api/materials/${aMid}`)).json?.material;
     check('(b) material work_status=review, publish_status=none', m?.work_status === 'review' && m?.publish_status === 'none', `${m?.work_status}/${m?.publish_status}`);
+  }
+
+  // ---- (n2) 工場ビュー（§N-1 / §N-2）: ingest 後の版（検証前）の行が verify active か review waiting ----
+  {
+    const fl = await api('GET', '/api/floor');
+    const keys = ['intake', 'maker', 'clerk', 'verifier', 'reviewer', 'library'];
+    check(
+      '(n2) GET /api/floor 200・stations 6 キー・queue が配列',
+      fl.status === 200 && !!fl.json?.stations && keys.every((k) => typeof fl.json.stations[k] === 'object') && Object.keys(fl.json.stations).length === 6 && Array.isArray(fl.json?.queue),
+      `status=${fl.status} stations=${Object.keys(fl.json?.stations ?? {}).join(',')}`,
+    );
+    const row = (fl.json?.queue ?? []).find((q) => q.material?.id === aMid);
+    const st = (k) => row?.steps?.find((x) => x.key === k)?.state;
+    check(
+      '(n2) smoke の素材の行: 工程 7 個・verify active（または review waiting）・版が review',
+      row?.steps?.length === 7 && (st('verify') === 'active' || st('review') === 'waiting') && row?.version?.id === aVid && row?.version?.status === 'review',
+      `steps=${(row?.steps ?? []).map((x) => x.state).join(',')} progress=${row?.progress_pct} att=${row?.attention}`,
+    );
+    const leak = /brief_md|questions_json|answers_json|answer_token|reconcile_token|verification_token/.test(fl.text);
+    check('(n2) /api/floor に brief・questions・answers・token 類が載らない', !leak, 'leak');
   }
 
   // ---- (d) 同じ webhook を 2 回 ----
@@ -429,6 +449,30 @@ async function main() {
     const adminLocal = await fetch(`${BASE}/admin/`);
     const adminHtml = await adminLocal.text();
     check('(l) localhost（dev bypass）では /admin が 200 で管理画面 + CSP', adminLocal.status === 200 && adminHtml.includes('コンテンツファクトリー') && /default-src 'self'/.test(adminLocal.headers.get('content-security-policy') ?? ''), `status=${adminLocal.status}`);
+  }
+
+  // ---- (n3) 工場ビューの入口（§N-3）: /admin/ に #/materials のリンク、admin.js を起動せず読んで例外なし ----
+  {
+    const html = await (await fetch(`${BASE}/admin/`)).text();
+    check('(n3) /admin/ の HTML に #/materials のリンク', html.includes('href="#/materials"') && html.includes('href="#/"'), 'no link');
+    const code = await (await fetch(`${BASE}/admin/admin.js`)).text();
+    const win = { __FACTORY_ADMIN_NO_BOOT__: true };
+    let err = null;
+    try {
+      vm.runInNewContext(code, { window: win, console }, { timeout: 2000 });
+    } catch (e) {
+      err = String(e && e.message).slice(0, 120);
+    }
+    const F = win.FactoryAdminFloor;
+    check('(n3) admin.js を __FACTORY_ADMIN_NO_BOOT__ で読んでも例外なし・工場の描画関数がある', !err && !!F && typeof F.floorQueueHtml === 'function', err ?? 'no FactoryAdminFloor');
+    if (F) {
+      const fl = (await api('GET', '/api/floor')).json;
+      const q = fl?.queue ?? [];
+      const out = F.floorQueueHtml(q);
+      const rows = (out.match(/data-floor-row="/g) || []).length;
+      const chips = (out.match(/class="floor-chip /g) || []).length;
+      check('(n3) 実 API の queue を描画: 行数が一致・チップは 7 × 行数', rows === q.length && chips === 7 * q.length, `rows=${rows}/${q.length} chips=${chips}`);
+    }
   }
 
   // ---- personal data 確認 ----

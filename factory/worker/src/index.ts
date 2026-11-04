@@ -5,6 +5,7 @@ import { jsonError, requireAccess } from './access';
 import { runCron } from './cron';
 import type { Env } from './env';
 import { json, makeCtx, type RouteCtx } from './http';
+import { getFloor } from './routes/floor';
 import { answerJobRoute, cancelJobRoute, createJob, getJobDetail, reconcileJobRoute, reingestJobRoute, startJobRoute } from './routes/jobs';
 import { libraryAvailable, libraryFile } from './routes/library';
 import { createMaterial, getMaterialDetail, listMaterials, rollbackMaterial, stopMaterial } from './routes/materials';
@@ -45,6 +46,7 @@ const ROUTES: Array<[string, RegExp, Handler]> = [
   ['POST', new RegExp(`^/api/review/${ID}/decision$`), decide],
   ['POST', new RegExp(`^/api/review/${ID}/reverify$`), reverify],
   ['GET', /^\/api\/status$/, getStatus],
+  ['GET', /^\/api\/floor$/, getFloor], // 工場ビュー（§N-1）
   ['POST', /^\/api\/status\/pause$/, setPause],
   ['GET', /^\/api\/standards$/, getStandards],
   ['POST', /^\/api\/standards$/, addStandard],

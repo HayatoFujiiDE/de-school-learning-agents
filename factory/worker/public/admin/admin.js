@@ -437,6 +437,280 @@
     }, function () { /* 会議の表示は補助。失敗しても一覧は使える */ });
   }
 
+  // ---- 画面: 工場（§N-3）。読み取り専用。書き込み操作は置かず、既存の画面へ送る ----
+  var FLOOR_POLL_MS = 15000;
+  var FLOOR_ATT = [['answer', '回答待ち', 'yellow'], ['review', '確認待ち', 'yellow'], ['failed', '失敗', 'red'], ['budget', '予算の上限', 'yellow']];
+  var FLOOR_ATT_LABEL = { answer: '回答待ち', review: '確認待ち', failed: '失敗', budget: '予算の上限' };
+  var FLOOR_STATE_LABEL = { done: '済み', active: '進行中', waiting: 'あなたの番', failed: '失敗', pending: 'これから', skipped: 'なし' };
+  var FLOOR_STATE_ICON = { done: '✓', waiting: '!', failed: '×' };
+  // 持ち場（左から右）。steps は「右隣に動いている物があるか」の判定に使う工程の key
+  var FLOOR_STATIONS = [
+    { key: 'intake', img: 'scout', name: '入口', sub: '収集部隊・会議', steps: ['order'] },
+    { key: 'maker', img: 'maker', name: '職人', sub: '', steps: ['questions', 'making'] },
+    { key: 'clerk', img: 'clerk', name: '受付', sub: '取り込み・機械照合', steps: ['ingest'] },
+    { key: 'verifier', img: 'verifier', name: '検証係', sub: '', steps: ['verify'] },
+    { key: 'reviewer', img: 'reviewer', name: '確認する人', sub: '', steps: ['review'] },
+    { key: 'library', img: 'library', name: '倉庫', sub: '利用できる', steps: ['publish'] }
+  ];
+  // 画像が無い時の丸いキャラ（薄い灰色の楕円 + 目 2 つ）。画像と同じ 96×96
+  var FLOOR_CHAR_SVG = '<svg class="floor-char" viewBox="0 0 96 96" width="96" height="96" aria-hidden="true" focusable="false">' +
+    '<ellipse class="floor-char-body" cx="48" cy="54" rx="34" ry="30"/><circle class="floor-char-eye" cx="37" cy="50" r="4.5"/><circle class="floor-char-eye" cx="59" cy="50" r="4.5"/></svg>';
+  var floorCharFailed = {};
+  // timer は 1 つだけ。gen は画面を開き直すたびに増え、古い応答を捨てる。inflight は取得中の gen（同じ gen で二重に取りに行かない）
+  var floor = { active: false, gen: 0, timer: null, inflight: null, data: null, prev: null, errAt: null, bandHtml: null };
+
+  function hhmm(d) { var p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(d.getHours()) + ':' + p(d.getMinutes()); }
+  function ringHtml() { return '<span class="floor-ring" aria-hidden="true"></span>'; }
+
+  /** 人の番の帯（§N-3 1.）。att = floor.attention、errAt = 更新に失敗した時刻（HH:MM）か null */
+  function floorBandHtml(att, errAt) {
+    att = att || {};
+    var pills = FLOOR_ATT.filter(function (a) { return Number(att[a[0]] || 0) > 0; }).map(function (a) {
+      return '<button type="button" class="floor-att ' + a[2] + '" data-floor-goto="' + a[0] + '">' + esc(a[1] + ' ' + att[a[0]]) + '</button>';
+    });
+    return (pills.length ? '<span class="floor-band-title">あなたの番</span>' + pills.join('') : '<span class="floor-band-calm">あなたの番の作業はありません</span>') +
+      (errAt ? '<span class="floor-band-err">更新できませんでした（' + esc(errAt) + '）</span>' : '');
+  }
+
+  /** 持ち場ごとのバッジ・補足・動き（§N-3 2.〜4.）。d = /api/floor の応答 */
+  function floorStationModel(d) {
+    var s = (d && d.stations) || {};
+    var it = s.intake || {}, mk = s.maker || {}, ck = s.clerk || {}, vf = s.verifier || {}, rv = s.reviewer || {}, lb = s.library || {};
+    var queue = (d && d.queue) || [];
+    var makingFailed = queue.filter(function (r) { return (r.steps || []).some(function (x) { return x.key === 'making' && x.state === 'failed'; }); }).length;
+    var making = Math.max(0, Number(mk.creating || 0) + Number(mk.running || 0) - Number(ck.ingesting || 0));
+    function b(text, cls, kind) { return { text: text, cls: cls, kind: kind }; }
+    var out = {};
+    out.intake = { badges: [], sub: '提案箱 ' + Number(it.proposed || 0) + ' 件' };
+    if (it.scout_running) out.intake.badges.push(b('収集中', 'orange', 'moving'));
+    if (it.meeting_pending) out.intake.badges.push(b('会議の結果待ち', 'orange', 'moving'));
+    out.maker = { badges: [], sub: Number(mk.queued || 0) > 0 ? '順番待ち ' + mk.queued : '' };
+    if (making > 0) out.maker.badges.push(b('制作中 ' + making + ' / ' + Number(mk.max_concurrent || 0), 'orange', 'moving'));
+    if (Number(mk.needs_answer || 0) > 0) out.maker.badges.push(b('回答待ち ' + mk.needs_answer, 'yellow', 'waiting'));
+    if (Number(mk.budget_reached || 0) > 0) out.maker.badges.push(b('予算の上限 ' + mk.budget_reached, 'yellow', 'waiting'));
+    if (makingFailed > 0) out.maker.badges.push(b('失敗 ' + makingFailed, 'red', 'failed'));
+    out.clerk = { badges: [], sub: '' };
+    if (Number(ck.ingesting || 0) > 0) out.clerk.badges.push(b('取り込み中', 'orange', 'moving'));
+    if (Number(ck.failed_invalid_outputs || 0) > 0) out.clerk.badges.push(b('失敗 ' + ck.failed_invalid_outputs, 'red', 'failed'));
+    out.verifier = { badges: [], sub: Number(vf.pending || 0) > 0 ? '順番待ち ' + vf.pending : '' };
+    if (Number(vf.running || 0) > 0) out.verifier.badges.push(b('検証中 ' + vf.running, 'orange', 'moving'));
+    if (Number(vf.failed || 0) > 0) out.verifier.badges.push(b('失敗 ' + vf.failed, 'red', 'failed'));
+    out.reviewer = { badges: [], sub: Number(rv.needs_review_total || 0) > 0 ? '要確認 合計 ' + rv.needs_review_total : '' };
+    if (Number(rv.waiting || 0) > 0) out.reviewer.badges.push(b('確認待ち ' + rv.waiting, 'yellow', 'waiting'));
+    out.library = { badges: [], sub: Number(lb.stopped || 0) > 0 ? '止めている ' + lb.stopped : '' };
+    if (Number(lb.available || 0) > 0) out.library.badges.push(b('利用できる ' + lb.available, 'green', 'stock'));
+    FLOOR_STATIONS.forEach(function (st) {
+      var m = out[st.key];
+      m.moving = m.badges.some(function (x) { return x.kind === 'moving'; });
+      m.waiting = m.badges.some(function (x) { return x.kind === 'waiting'; });
+      // 右隣に流れてくる物: この持ち場の工程が active / waiting の行がある
+      m.inflow = m.moving || m.waiting || queue.some(function (r) {
+        return (r.steps || []).some(function (x) { return st.steps.indexOf(x.key) >= 0 && (x.state === 'active' || x.state === 'waiting'); });
+      });
+    });
+    return out;
+  }
+  function floorBadgesHtml(m) {
+    if (!m.badges.length) return pill('待機', 'gray');
+    return m.badges.map(function (x) {
+      return '<span class="pill ' + x.cls + (x.kind === 'waiting' ? ' floor-pulse' : '') + '">' + (x.kind === 'moving' ? ringHtml() : '') + esc(x.text) + '</span>';
+    }).join(' ');
+  }
+  function floorArrowSvg(key) {
+    return '<svg class="floor-arrow" data-arrow="' + esc(key) + '" viewBox="0 0 36 24" width="36" height="24" aria-hidden="true" focusable="false">' +
+      '<line class="floor-dash" x1="2" y1="12" x2="27" y2="12"/><path class="floor-head" d="M25 6 L33 12 L25 18"/></svg>';
+  }
+
+  /** 工程チップ 7 個（§N-3 5.）。チップ間の矢印は active の直前だけ流れる */
+  function floorChipsHtml(steps) {
+    return '<div class="floor-chips">' + (steps || []).map(function (s, i) {
+      var arrow = i === 0 ? '' : '<svg class="floor-carrow' + (s.state === 'active' ? ' flowing' : '') + '" viewBox="0 0 14 10" width="14" height="10" aria-hidden="true" focusable="false"><line class="floor-dash" x1="1" y1="5" x2="9" y2="5"/><path d="M8 2 L12 5 L8 8"/></svg>';
+      var icon = s.state === 'active' ? ringHtml() : FLOOR_STATE_ICON[s.state] ? '<span class="floor-icon" aria-hidden="true">' + FLOOR_STATE_ICON[s.state] + '</span>' : '';
+      var showDetail = s.detail && (s.state === 'active' || s.state === 'waiting' || s.state === 'failed' || s.key === 'publish');
+      var title = s.label + '：' + (FLOOR_STATE_LABEL[s.state] || s.state) + (s.detail ? '（' + s.detail + '）' : '');
+      return arrow + '<span class="floor-chip ' + esc(s.state) + '" data-step="' + esc(s.key) + '" title="' + esc(title) + '" aria-label="' + esc(title) + '">' + icon +
+        esc(s.label) + (showDetail ? '<small>' + esc(s.detail) + '</small>' : '') + '</span>';
+    }).join('') + '</div>';
+  }
+  function floorRowStatusHtml(r) {
+    if (r.attention) return pill(FLOOR_ATT_LABEL[r.attention] || r.attention, r.attention === 'failed' ? 'red' : 'yellow');
+    var steps = r.steps || [];
+    if (steps.some(function (x) { return x.state === 'active'; })) return pill('稼働中', 'green');
+    if (r.job && r.job.status === 'queued') return pill('順番待ち', 'gray');
+    return pill('終了', 'gray');
+  }
+  function floorOpHtml(r) {
+    var m = r.material || {}, j = r.job, v = r.version;
+    if (r.attention === 'answer' && j) return '<a class="btn small primary" href="#/job/' + esc(j.id) + '">回答する</a>';
+    if (r.attention === 'review' && v) return '<a class="btn small primary" href="#/review/' + esc(v.id) + '">確認する</a>';
+    if (r.attention === 'failed' && j && j.status === 'failed' && j.error === 'invalid_outputs') return '<a class="btn small" href="#/job/' + esc(j.id) + '">取り込みをやり直す</a>';
+    return '<a class="btn small" href="#/material/' + esc(m.id) + '">詳細</a>';
+  }
+  /** 制作キューの表（0 件なら案内） */
+  function floorQueueHtml(queue) {
+    queue = queue || [];
+    if (!queue.length) {
+      return '<p class="floor-empty">動いている素材はありません。新しい素材を注文するか、提案箱から採択してください</p>' +
+        '<div class="row"><a class="btn primary" href="#/new">新しい素材を注文する</a><a class="btn" href="#/proposals">提案箱を見る</a></div>';
+    }
+    return '<div class="table-wrap"><table class="floor-table"><thead><tr><th>題名</th><th>工程</th><th>進捗</th><th>状態</th><th>操作</th></tr></thead><tbody>' +
+      queue.map(function (r) {
+        var m = r.material || {}, v = r.version;
+        var pct = Math.max(0, Math.min(100, Number(r.progress_pct || 0)));
+        return '<tr data-floor-row="' + esc(m.id) + '"' + (r.attention ? ' data-floor-att="' + esc(r.attention) + '"' : '') + '>' +
+          '<td class="floor-title"><a href="#/material/' + esc(m.id) + '">' + esc(m.title) + '</a><div class="muted floor-meta">' + esc(m.slug) + (v ? ' ・ v' + esc(v.version) : '') + '</div></td>' +
+          '<td>' + floorChipsHtml(r.steps) + '</td>' +
+          '<td class="floor-prog"><progress class="floor-bar" max="100" value="' + pct + '" aria-label="進捗 ' + pct + '%"></progress><span>' + pct + '%</span></td>' +
+          '<td>' + floorRowStatusHtml(r) + '</td>' +
+          '<td>' + floorOpHtml(r) + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+  function floorSkeletonHtml() {
+    var row = '<div class="floor-skel"><i></i><i></i><i></i></div>';
+    return row + row + row;
+  }
+  function floorRowKey(r) { return (r.steps || []).map(function (x) { return x.state; }).join(','); }
+
+  function floorFlash(el) {
+    if (!el) return;
+    el.classList.remove('flash');
+    void el.offsetWidth;
+    el.classList.add('flash');
+    setTimeout(function () { el.classList.remove('flash'); }, 1500);
+  }
+  function bindFloorChar(img) {
+    var key = img.getAttribute('data-char');
+    function swap() {
+      floorCharFailed[key] = true;
+      var holder = document.createElement('span');
+      holder.className = 'floor-char-wrap';
+      holder.innerHTML = FLOOR_CHAR_SVG;
+      if (img.parentNode) img.parentNode.replaceChild(holder.firstChild, img);
+    }
+    img.onerror = swap;
+    if (img.complete && img.naturalWidth === 0 && img.getAttribute('src')) swap();
+  }
+
+  function renderFloorBand() {
+    var el = $('#floor-band');
+    if (!el) return;
+    var html = floorBandHtml(floor.data ? floor.data.attention : null, floor.errAt);
+    if (floor.data === null && !floor.errAt) html = '<span class="muted">読み込み中…</span>';
+    if (html === floor.bandHtml) return; // 同じ内容は書き直さない（aria-live が毎回読み上げないように）
+    floor.bandHtml = html;
+    el.innerHTML = html;
+    Array.prototype.forEach.call(el.querySelectorAll('[data-floor-goto]'), function (btn) {
+      btn.addEventListener('click', function () {
+        var row = document.querySelector('[data-floor-att="' + btn.getAttribute('data-floor-goto') + '"]');
+        if (!row) return;
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        floorFlash(row);
+      });
+    });
+  }
+  function renderFloor(d) {
+    floor.data = d;
+    renderFloorBand();
+    var model = floorStationModel(d);
+    FLOOR_STATIONS.forEach(function (st, i) {
+      var card = document.querySelector('[data-station="' + st.key + '"]');
+      if (!card) return;
+      var m = model[st.key];
+      card.classList.toggle('moving', m.moving);
+      card.classList.toggle('waiting', m.waiting);
+      card.querySelector('.floor-badges').innerHTML = floorBadgesHtml(m);
+      card.querySelector('.floor-sub').textContent = m.sub || '';
+      if (i > 0) {
+        var ar = document.querySelector('[data-arrow="' + st.key + '"]');
+        if (ar) ar.classList.toggle('flowing', m.inflow);
+      }
+    });
+    var q = $('#floor-queue');
+    if (!q) return;
+    q.classList.remove('loading');
+    q.innerHTML = floorQueueHtml(d.queue);
+    var prev = floor.prev;
+    var next = {};
+    (d.queue || []).forEach(function (r) {
+      var id = r.material && r.material.id;
+      next[id] = floorRowKey(r);
+      if (prev && Object.prototype.hasOwnProperty.call(prev, id) && prev[id] !== next[id]) {
+        var row = Array.prototype.filter.call(q.querySelectorAll('[data-floor-row]'), function (el) { return el.getAttribute('data-floor-row') === id; })[0];
+        floorFlash(row);
+      }
+    });
+    floor.prev = next;
+    var upd = $('#floor-updated');
+    if (upd) upd.textContent = '更新 ' + hhmm(new Date());
+  }
+
+  function stopFloor() {
+    floor.active = false;
+    floor.gen++;
+    if (floor.timer) { clearTimeout(floor.timer); floor.timer = null; }
+  }
+  function scheduleFloor() {
+    if (floor.timer) { clearTimeout(floor.timer); floor.timer = null; }
+    if (!floor.active || document.hidden) return; // 隠れている間は止める（戻ったら即 1 回）
+    floor.timer = setTimeout(function () { floor.timer = null; fetchFloor(); }, FLOOR_POLL_MS);
+  }
+  function fetchFloor() {
+    if (!floor.active || floor.inflight === floor.gen) return;
+    var gen = floor.gen;
+    floor.inflight = gen;
+    api('GET', '/api/floor').then(function (d) {
+      if (gen !== floor.gen) return;
+      floor.errAt = null;
+      renderFloor(d);
+    }, function (e) {
+      if (gen !== floor.gen) return;
+      // 失敗したら前回の表示を残し、帯に小さく出す。次の周期で再試行
+      floor.errAt = hhmm(new Date());
+      renderFloorBand();
+      var q = $('#floor-queue');
+      if (q && !floor.data) { q.classList.remove('loading'); q.innerHTML = '<p class="err">読み込めませんでした: ' + esc(e.message) + '</p>'; }
+    }).then(function () {
+      if (floor.inflight === gen) floor.inflight = null;
+      if (gen === floor.gen) scheduleFloor();
+    });
+  }
+  function onFloorVisibility() {
+    if (!floor.active) return;
+    if (document.hidden) { if (floor.timer) { clearTimeout(floor.timer); floor.timer = null; } return; }
+    fetchFloor();
+  }
+
+  function viewFloor(view) {
+    stopFloor();
+    floor.active = true;
+    floor.data = null;
+    floor.prev = null;
+    floor.errAt = null;
+    floor.bandHtml = null;
+    var line = [];
+    FLOOR_STATIONS.forEach(function (st, i) {
+      if (i > 0) line.push('<div class="floor-arrow-wrap" aria-hidden="true">' + floorArrowSvg(st.key) + '</div>');
+      var charHtml = floorCharFailed[st.img] ? FLOOR_CHAR_SVG
+        : '<img class="floor-char" src="/admin/img/char-' + st.img + '.png" alt="" width="96" height="96" data-char="' + st.img + '">';
+      line.push('<section class="floor-st" data-station="' + st.key + '" aria-label="' + esc(st.name) + '">' +
+        '<div class="floor-desk">' + charHtml + '</div>' +
+        '<div class="floor-name">' + esc(st.name) + (st.sub ? '<small>' + esc(st.sub) + '</small>' : '') + '</div>' +
+        '<div class="floor-sub"></div>' +
+        '<div class="floor-badges">' + pill('読み込み中', 'gray') + '</div></section>');
+    });
+    view.innerHTML = '<div class="floor-view">' +
+      '<div id="floor-band" class="floor-band" aria-live="polite"><span class="muted">読み込み中…</span></div>' +
+      '<div class="row floor-head-row"><h1>工場</h1><span class="muted" id="floor-updated"></span></div>' +
+      '<div class="floor-line-wrap"><div class="floor-line">' + line.join('') + '</div></div>' +
+      '<div class="card"><h2>制作キュー</h2><div id="floor-queue" class="loading">' + floorSkeletonHtml() + '</div></div>' +
+      '</div>';
+    Array.prototype.forEach.call(view.querySelectorAll('img[data-char]'), bindFloorChar);
+    fetchFloor();
+  }
+
+  // smoke（§N-5 (n3)）から描画の純関数を呼べるようにする。画面の動作には使わない
+  window.FactoryAdminFloor = { floorBandHtml: floorBandHtml, floorStationModel: floorStationModel, floorQueueHtml: floorQueueHtml, floorChipsHtml: floorChipsHtml };
+
   // ---- 画面: 素材一覧 ----
   function viewMaterials(view, q) {
     var work = q.work || '', publish = q.publish || '';
@@ -1421,9 +1695,11 @@
     var view = $('#view');
     var r = parseHash(), p = r.parts;
     reviewCtx = null;
+    stopFloor(); // 工場のポーリングは他の画面へ移ったら必ず止める（viewFloor が開き直す）
     document.body.classList.remove('has-foot');
     loadStatus();
-    if (!p.length) return viewMaterials(view, r.q);
+    if (!p.length) return viewFloor(view);
+    if (p[0] === 'materials') return viewMaterials(view, r.q);
     if (p[0] === 'new') return viewNew(view);
     if (p[0] === 'material' && p[1]) return viewMaterial(view, p[1]);
     if (p[0] === 'job' && p[1]) return viewJob(view, p[1]);
@@ -1431,10 +1707,11 @@
     if (p[0] === 'review') return viewReviewList(view);
     if (p[0] === 'standards') return viewStandards(view);
     if (p[0] === 'proposals') return viewProposals(view, r.q);
-    view.innerHTML = '<p class="muted">ページが見つかりません。<a href="#/">素材へ</a></p>';
+    view.innerHTML = '<p class="muted">ページが見つかりません。<a href="#/materials">素材へ</a></p>';
   }
   if (window.__FACTORY_ADMIN_NO_BOOT__) return; // smoke が純関数だけを読む時
   window.addEventListener('hashchange', route);
   document.addEventListener('keydown', onReviewKey);
+  document.addEventListener('visibilitychange', onFloorVisibility);
   route();
 })();

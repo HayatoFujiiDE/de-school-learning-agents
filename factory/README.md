@@ -19,6 +19,8 @@ npm test                              # 純関数のテスト
 npm run smoke                         # 受け入れ基準を fake で一周（SMOKE_RESULT=PASS）
 ```
 
+管理画面の入口は工場ビュー（`/admin/#/`）。素材一覧は `#/materials`
+
 ## 本番の現状（2026-11-04）
 
 - Worker: `https://de-school-factory.h-fujii.workers.dev`（管理画面 `/admin/`。Cloudflare Access でふじさんのメールだけ許可）

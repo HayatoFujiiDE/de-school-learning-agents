@@ -952,6 +952,103 @@ type Cause = 'contradicted' | 'source_not_listed' | 'maker_url_not_fetched' | 'q
 - §M-5 互換（段階 2 から戻した時のため）: requires_action で `custom_tool_use` の name が `generate_image`（または職人定義に無い custom tool）なら、`user.custom_tool_result` を `is_error: true`・本文「画像生成はまだ使えません。図は SVG で描いてください。」で返し、既存の deny 数に数える。既にこの扱いがあれば文言だけそろえる
 - §M-6 受け入れ: (m1) files の png / webp が通り版に入る・public_paths に入る (m2) variants の png / webp は `path_outside_part` で落ちる（負例）(m3) 拡張子と先頭バイトが合わない png / webp は `bad_image` (m4) 配信のヘッダが §M-3 どおり・承認前は 404 (m5) 既存の svg / html の variants を持つ fixture が今までどおり通る (m6) generate_image の custom_tool_use に is_error が 1 回だけ返る。fixture のバイナリは最小の正しい png / webp（数十バイト）をテスト内で作る
 
+## §N 工場ビュー（管理画面の入口。v3.8。2026-11-04 夜凍結。読み取り専用の集約 API 1 本 + 画面 1 枚。既存の状態機械・書き込み経路は変えない）
+
+目的: 「どこで何が動いているか」を 1 枚で一瞥できる画面。持ち場（station）を左から右へ並べ、動いている持ち場だけが動く。下に制作キュー（素材ごとの工程チップ）。人の番（回答待ち・確認待ち）を最も目立たせる。
+
+### §N-1 ルート `GET /api/floor`（§B-3 に追記。認証は §B-1 の admin と同じ。副作用なし。1 回の応答で完結し、N+1 を避けるため SQL は素材・版・job の JOIN 1〜3 文に収める）
+
+```jsonc
+{
+  "now": "<iso>", "paused": false, "paused_note": null,
+  "cost": { "today_cents": 0, "daily_cap_cents": 0 },
+  "attention": { "answer": 0, "review": 0, "failed": 0, "budget": 0 },   // 人の番の件数（queue から集計）
+  "stations": {
+    "intake":   { "proposed": 0, "scout_running": false, "meeting_pending": false, "last_scout_at": null, "last_meeting_at": null },
+    "maker":    { "queued": 0, "creating": 0, "running": 0, "needs_answer": 0, "budget_reached": 0, "max_concurrent": 0 },
+    "clerk":    { "ingesting": 0, "failed_invalid_outputs": 0 },        // ingesting = running かつ reconcile_stage != 'none'
+    "verifier": { "pending": 0, "running": 0, "failed": 0 },            // status='review' の版だけ数える
+    "reviewer": { "waiting": 0, "needs_review_total": 0 },              // waiting = review かつ verification done。needs_review_total は computeTriage の合計
+    "library":  { "available": 0, "stopped": 0 }
+  },
+  "queue": [ /* §N-2 の行。並びは attention あり → 動いている → 最近終わった（24 時間以内） */ ]
+}
+```
+
+- `stations.*` は D1 の集計（job は `factory_jobs`、版は `material_versions`、提案は `proposals.status='proposed'`、収集・会議は `/api/status` と同じ判定を再利用）
+- 既存の `/api/status` は変えない（上部帯はそのまま）
+
+### §N-2 制作キューの行と工程（純関数 `src/floor.ts` の `floorSteps(input)`。I/O を持たない。vitest で表の全行を検査する）
+
+行の対象: `work_status != 'idle'` の素材 **または** `updated_at` が 24 時間以内の素材（終わった直後も見える）。上限 100 行。
+
+```jsonc
+{
+  "material": { "id", "slug", "title", "kinds", "work_status", "publish_status", "updated_at" },
+  "job":      { "id", "status", "phase", "kind", "error", "last_error", "auto_rework": false } | null,  // active job。無ければ最後の job（24 時間以内）
+  "version":  { "id", "version", "status", "verification_status", "verify_phase", "verify_turn", "needs_review", "auto_ok" } | null, // review の版、無ければ current_version
+  "steps":    [ { "key", "label", "state", "detail" } ],   // 7 個固定・順序固定
+  "progress_pct": 0,
+  "attention": "answer" | "review" | "failed" | "budget" | null
+}
+```
+
+工程 7 個（key / label は verbatim）: `order`「注文」/ `questions`「質問」/ `making`「制作」/ `ingest`「取り込み」/ `verify`「検証」/ `review`「確認」/ `publish`「公開」。
+state は `done` / `active` / `waiting` (人の番) / `failed` / `pending` / `skipped` の 6 値。detail は短い日本語（例「回答待ち」「ターン 2」「要確認 3」）か null。
+
+判定表（上から最初に当たった行。job = active job、v = review の版）:
+
+| 条件 | steps（order, questions, making, ingest, verify, review, publish） | progress | attention |
+|---|---|---|---|
+| job.status = queued | done, pending, pending, pending, pending, pending, pending | 5 | null |
+| job.status = creating | done, active「作業場を準備中」, pending… | 10 | null |
+| job.status = needs_answer | done, waiting「回答待ち」, pending… | 15 | answer |
+| job.status = running, phase = questions | done, active「職人が質問を考え中」, pending… | 15 | null |
+| job.status = running, phase = making, reconcile_stage = none | done, done, active「制作中」, pending… | 40 | null |
+| job.status = running, phase = making, reconcile_stage != none | done, done, done, active「取り込み中」, pending… | 60 | null |
+| job.status = budget_reached | done, done, waiting「予算の上限」, pending… | 40 | budget |
+| job.status = failed かつ error = invalid_outputs | done, done, done, failed「取り込み失敗」, pending… | 60 | failed |
+| job.status = failed（その他） | done, done, failed「失敗」, pending… | 40 | failed |
+| job.status = cancelled | done, skipped, skipped, skipped, skipped, skipped, skipped | 0 | null |
+| v.status = review, verification_status = pending | done, done, done, done, active「検証の順番待ち」, pending, pending | 65 | null |
+| v.status = review, verification_status = running | done×4, active「検証中」+ verify_phase/turn の detail（例「Batch 結果待ち・ターン 2」）, pending, pending | 70 + min(verify_turn, 7) × 2 | null |
+| v.status = review, verification_status = failed | done×4, failed「検証失敗」, pending, pending | 70 | failed |
+| v.status = review, verification_status = done, needs_review > 0 | done×5, waiting「要確認 N」, pending | 90 | review |
+| v.status = review, verification_status = done, needs_review = 0 | done×5, waiting「確認待ち」, pending | 90 | review |
+| publish_status = available | done×6, done「利用できる」 | 100 | null |
+| publish_status = stopped | done×6, failed「止めている」 | 100 | null |
+| それ以外（idle・版 rejected 等） | done, skipped…（最後に承認/却下があれば review を done/failed） | 0 | null |
+
+- questions 工程: job.kind = rework で questions を飛ばしている場合（phase が最初から making）は `skipped`
+- `auto_rework` = `isAutoDerived(job)`。true なら order の label を「作り直し（自動）」、false かつ kind = rework なら「作り直し」
+- `needs_review` / `auto_ok` は `listReview` と同じ `computeTriage` の結果（review の版だけ。他は null）
+
+### §N-3 画面（`#/` を工場ビューにする。素材一覧は `#/materials` へ移す。`<nav>` は 工場 / 素材 / 新しい素材 / 提案箱 / 確認待ち / 編集基準 の順）
+
+1. **人の番の帯**（最上段、`aria-live="polite"`）: `attention` の件数ごとに「回答待ち N」「確認待ち N」「失敗 N」「予算の上限 N」のピル。0 のものは出さない。全部 0 なら「あなたの番の作業はありません」。各ピルは該当する最初の行へスクロール＆ハイライト（`.flash`）
+2. **持ち場の列**（横スクロール可。1100px で 6 つが並ぶ）: 入口（収集部隊・会議）→ 職人 → 受付（取り込み・機械照合）→ 検証係 → 確認する人 → 倉庫（利用できる）。各持ち場 = キャラクター画像 `<img src="/admin/img/char-<station>.png" alt="">`（station = scout / maker / clerk / verifier / reviewer / library。**画像が無ければ `onerror` で同じ大きさの inline SVG の丸いキャラ（薄い灰色の楕円 + 目 2 つ）に差し替える** — 画像は後から置く）+ 名札 + 状態バッジ。バッジの語彙: 動いている時は `pill` に回転リング（CSS `conic-gradient` + `@keyframes`）を前置して「収集中」「制作中 2 / 3」「検証中 1」「取り込み中」、人の番は黄色で「回答待ち 1」「確認待ち 2」、失敗は赤で「失敗 1」、何も無ければ灰色で「待機」
+3. **流れの矢印**: 持ち場の間に SVG の破線矢印。右隣の持ち場に動いている物（active / waiting）が 1 つでもあれば `stroke-dashoffset` を動かす（流れている）。無ければ静止・薄い色
+4. **動き**: 動いている持ち場のキャラは上下に小さく揺れる（`@keyframes bob` 1.6s）。人の番の持ち場はバッジが脈打つ（`@keyframes pulse`）。`@media (prefers-reduced-motion: reduce)` ではすべての animation を止める（状態は色と文言で分かる）
+5. **制作キュー**（表。列: 題名 / 工程チップ 7 個 / 進捗バー + % / 状態 / 操作）: チップは `done`（緑・✓）/ `active`（オレンジ枠・回転リング）/ `waiting`（黄・!）/ `failed`（赤・×）/ `pending`（灰・薄い）/ `skipped`（灰・取り消し線）。チップ間の矢印は active の直前だけ流れる。行の状態列は attention なら黄・赤のピル、active なら緑の「稼働中」、終わっていれば灰。操作列: attention = answer → 「回答する」（`#/job/<id>`）、review → 「確認する」（`#/review/<version id>`）、failed かつ invalid_outputs → 「取り込みをやり直す」（`#/job/<id>` へ。ここでは実行しない）、それ以外 → 「詳細」（`#/material/<id>`）。**書き込み操作はこの画面に置かない**（既存の画面へ送る）
+6. **更新**: 15 秒ごとに `/api/floor` を再取得（`document.hidden` の間は止め、戻ったら即 1 回）。差分でチップの state が変わった行に `.flash`。失敗したら前回の表示を残し、帯に「更新できませんでした（HH:MM）」を小さく出し、次の周期で再試行
+7. **状態の網羅**: 0 件（「動いている素材はありません。新しい素材を注文するか、提案箱から採択してください」+ リンク 2 つ）/ loading（骨組み）/ error（上記）/ 通常
+8. トンマナ: 既存 `admin.css` の変数のみ（暖色ライト・オレンジ CTA）。外部フォント・外部スクリプト・CDN は読み込まない。ES2017・ビルド無し（§G）
+
+### §N-4 UI acceptance criteria（ui-interaction-completeness）
+
+- CRUD 対称: この画面は読み取り専用（意図的。書き込みは各画面へ送る）。すべての行から詳細・回答・確認へ遷移できる
+- フィードバック: 自動更新の失敗が見える。人の番の件数の変化が `aria-live` で伝わる
+- フォーム: なし（対象外）
+- 状態: 0 件 / loading / error / 通常 の 4 状態を用意する
+- 実機: wrangler dev（fake）で smoke の素材を流し、チップが 注文→制作→取り込み→検証→確認→公開 と進むのを目視で確認する（司令塔が Chrome で確認）
+
+### §N-5 受け入れ（fake・vitest・smoke）
+
+- (n1) `test/floor.test.ts`: §N-2 の判定表の全行を 1 ケースずつ（入力 → steps の state 列・progress・attention）
+- (n2) smoke: `/api/floor` が 200・`stations` 6 キー・`queue` が配列。smoke の素材が ingest 後に `verify` 工程 active（または review の版が出た後に `review` 工程 waiting）になっている行が 1 つある
+- (n3) smoke: `/admin/` の HTML に `#/materials` のリンクがあり、`admin.js` を `__FACTORY_ADMIN_NO_BOOT__` で読んでも例外が出ない（既存の純関数読みと同じ）
+- (n4) 既存の vitest / smoke が green のまま
+
 ## §R 裁定記録（2026-11-04。Astra medium + 3 視点レビューの指摘への裁定）
 
 1. **`tool_choice: any` は Opus 5.5 で 400** → `auto` + `strict: true` + 再送ループ（§F-3）。採用

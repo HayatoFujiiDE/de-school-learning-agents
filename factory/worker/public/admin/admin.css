@@ -153,3 +153,85 @@ body.has-foot .toast { bottom: 96px; }
   .aq-body { padding-left: 0; }
   .aq-card { padding: 14px 14px 14px 12px; }
 }
+
+/* ---- 工場ビュー（§N-3）。動いている物だけが動く。prefers-reduced-motion では全部止める ---- */
+.floor-band { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; background: var(--white); border: 1px solid var(--line); border-left: 6px solid var(--ai); border-radius: var(--radius); padding: 12px 14px; margin: 0 0 12px; min-height: 52px; }
+.floor-band-title { font-weight: 700; margin-right: 4px; }
+.floor-band-calm { color: var(--green); font-weight: 600; }
+.floor-att { font: inherit; font-size: 14px; font-weight: 700; padding: 6px 14px; border-radius: 999px; border: 1px solid transparent; cursor: pointer; }
+.floor-att.yellow { background: var(--ai-soft); color: #8a5a00; border-color: var(--ai); }
+.floor-att.red { background: var(--red-soft); color: var(--red); border-color: var(--red); }
+.floor-att:hover { filter: brightness(.97); }
+.floor-band-err { margin-left: auto; font-size: 12px; color: var(--red); }
+.floor-head-row { justify-content: space-between; margin: 0 0 8px; }
+.floor-head-row h1 { margin: 0; }
+
+.floor-line-wrap { overflow-x: auto; margin: 0 0 16px; padding: 2px 0 6px; -webkit-overflow-scrolling: touch; }
+.floor-line { display: flex; align-items: stretch; min-width: 1040px; }
+.floor-st { flex: 1 1 0; min-width: 140px; display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; background: var(--white); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 8px; }
+.floor-st.moving { border-color: var(--orange); }
+.floor-st.waiting { border-color: var(--ai); background: var(--ai-soft); }
+.floor-desk { position: relative; width: 112px; height: 104px; display: flex; align-items: flex-end; justify-content: center; }
+.floor-desk::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 10px; border-radius: 6px; background: var(--orange-soft); border: 1px solid var(--line); }
+.floor-char-body { fill: var(--line); }
+.floor-char-eye { fill: var(--muted); }
+.floor-char { display: block; width: 96px; height: 96px; margin-bottom: 6px; object-fit: contain; }
+.floor-st.moving .floor-char { animation: floor-bob 1.6s ease-in-out infinite; }
+.floor-name { font-weight: 700; line-height: 1.3; }
+.floor-name small { display: block; font-weight: 400; font-size: 12px; color: var(--muted); }
+.floor-sub { font-size: 12px; color: var(--muted); min-height: 16px; }
+.floor-badges { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
+.floor-badges .pill { font-weight: 600; }
+.floor-pulse { animation: floor-pulse 1.4s ease-in-out infinite; }
+.floor-arrow-wrap { flex: 0 0 36px; display: flex; align-items: center; justify-content: center; }
+.floor-arrow line, .floor-carrow line { stroke: var(--line); stroke-width: 2.5; stroke-dasharray: 5 3; stroke-linecap: round; }
+.floor-arrow path, .floor-carrow path { fill: none; stroke: var(--line); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.floor-arrow.flowing line, .floor-arrow.flowing path, .floor-carrow.flowing line, .floor-carrow.flowing path { stroke: var(--orange); }
+.floor-arrow.flowing line, .floor-carrow.flowing line { animation: floor-flow .8s linear infinite; }
+
+/* 回転リング（動いている物の印） */
+.floor-ring { display: inline-block; width: 10px; height: 10px; margin-right: 4px; vertical-align: -1px; border-radius: 50%;
+  background: conic-gradient(var(--orange) 0 75%, var(--orange-soft) 75% 100%);
+  -webkit-mask: radial-gradient(circle, transparent 2px, #000 2.5px); mask: radial-gradient(circle, transparent 2px, #000 2.5px);
+  animation: floor-spin .9s linear infinite; }
+
+/* 制作キュー */
+.floor-table td { vertical-align: middle; }
+.floor-table td:nth-child(3), .floor-table td:nth-child(4), .floor-table td:nth-child(5), .floor-table th:nth-child(3), .floor-table th:nth-child(4), .floor-table th:nth-child(5) { white-space: nowrap; width: 1%; }
+.floor-title { min-width: 160px; }
+.floor-meta { font-size: 12px; }
+.floor-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; row-gap: 4px; }
+.floor-chip { display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px; border-radius: 999px; font-size: 12px; white-space: nowrap; border: 1px solid transparent; }
+.floor-chip small { font-size: 11px; margin-left: 2px; }
+.floor-chip.done { background: var(--green-soft); color: var(--green); }
+.floor-chip.active { background: var(--white); border-color: var(--orange); color: #8a5000; font-weight: 600; }
+.floor-chip.waiting { background: var(--ai-soft); border-color: var(--ai); color: #8a5a00; font-weight: 600; }
+.floor-chip.failed { background: var(--red-soft); border-color: var(--red); color: var(--red); font-weight: 600; }
+.floor-chip.pending { background: var(--gray-soft); color: var(--muted); opacity: .55; }
+.floor-chip.skipped { background: var(--gray-soft); color: var(--muted); text-decoration: line-through; }
+.floor-icon { font-weight: 700; }
+.floor-carrow { flex: 0 0 auto; }
+.floor-prog { white-space: nowrap; }
+.floor-prog span { font-size: 12px; color: var(--muted); margin-left: 6px; }
+.floor-bar { -webkit-appearance: none; appearance: none; width: 90px; height: 8px; border: 0; border-radius: 999px; background: var(--gray-soft); vertical-align: middle; overflow: hidden; }
+.floor-bar::-webkit-progress-bar { background: var(--gray-soft); border-radius: 999px; }
+.floor-bar::-webkit-progress-value { background: var(--green); border-radius: 999px; }
+.floor-bar::-moz-progress-bar { background: var(--green); border-radius: 999px; }
+.floor-empty { margin: 0 0 10px; }
+.floor-skel { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.floor-skel i { display: block; height: 14px; border-radius: 6px; background: var(--gray-soft); }
+.floor-skel i:nth-child(1) { width: 22%; }
+.floor-skel i:nth-child(2) { width: 48%; }
+.floor-skel i:nth-child(3) { width: 12%; }
+
+@keyframes floor-spin { to { transform: rotate(360deg); } }
+@keyframes floor-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+@keyframes floor-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.1); } }
+@keyframes floor-flow { to { stroke-dashoffset: -16; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .floor-view, .floor-view * { animation: none !important; transition: none !important; }
+}
+@media (max-width: 640px) {
+  .floor-band-err { margin-left: 0; width: 100%; }
+}
