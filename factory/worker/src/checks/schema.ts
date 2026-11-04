@@ -34,6 +34,60 @@ export interface Variant {
 export interface PartFile {
   path: string;
   role: string;
+  /** §O-7（旧 §M-2-7 1）: 生成した画像の参照。取り込みは raw/ でなく image_requests と R2 から採る */
+  image_id?: string;
+  /** 絵の説明（120 字まで。型違い・長すぎは null。§R-46 と同じく安全側の既定） */
+  alt?: string | null;
+}
+
+/** image_requests.id の形（§O-6 b） */
+export const IMAGE_ID_RE = /^img_[0-9a-f]{32}$/;
+export const IMAGE_ALT_MAX_CHARS = 120;
+
+export interface ImageRef {
+  path: string;
+  image_id: string;
+  alt: string | null;
+}
+
+const isPlainObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * §O-7（旧 §M-2-7 1）: parts[].files[] の image_id の検査。image_id のキーがあれば、path の拡張子は .png / .webp、
+ * image_id は /^img_[0-9a-f]{32}$/ の文字列。違えば bad_image_ref:<path>。alt は文字列 120 字（code point）までなら採り、それ以外は null
+ */
+export function checkImageRef(f: Record<string, unknown>): { ok: true; ref: ImageRef | null } | { ok: false; detail: string } {
+  if (!('image_id' in f)) return { ok: true, ref: null };
+  const path = typeof f.path === 'string' ? f.path : '';
+  if (typeof f.image_id !== 'string' || !IMAGE_ID_RE.test(f.image_id) || !PART_IMAGE_EXTENSIONS.some((ext) => path.endsWith(ext)))
+    return { ok: false, detail: `bad_image_ref:${path}` };
+  const alt = typeof f.alt === 'string' && [...f.alt].length <= IMAGE_ALT_MAX_CHARS ? f.alt : null;
+  return { ok: true, ref: { path, image_id: f.image_id, alt } };
+}
+
+/**
+ * material.json の本文から image_id を持つ files[] を出現順に集める（取り込み・検証係の入力が使う。I/O なし）。
+ * JSON が読めない・parts の形が違うものは黙って飛ばし（validateOutputs に落とさせる）、image_id の形が違えば bad_image_ref
+ */
+export function imageRefsOf(materialJsonText: string): { ok: true; refs: ImageRef[] } | { ok: false; detail: string } {
+  let m: unknown;
+  try {
+    m = JSON.parse(materialJsonText);
+  } catch {
+    return { ok: true, refs: [] };
+  }
+  if (!isPlainObj(m) || !Array.isArray(m.parts)) return { ok: true, refs: [] };
+  const refs: ImageRef[] = [];
+  for (const part of m.parts) {
+    if (!isPlainObj(part) || !Array.isArray(part.files)) continue;
+    for (const f of part.files) {
+      if (!isPlainObj(f) || typeof f.path !== 'string') continue;
+      const r = checkImageRef(f);
+      if (!r.ok) return r;
+      if (r.ref) refs.push(r.ref);
+    }
+  }
+  return { ok: true, refs };
 }
 export interface Part {
   id: string;
@@ -228,9 +282,15 @@ export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
         const f = fr as Record<string, unknown>;
         if (!f || !isStr(f.path)) return fail(`bad_type:parts[${i}].files[${j}]`);
         if (!isPartFilePath(f.path, p.id)) return fail(`path_outside_part:${f.path}`);
+        const ref = checkImageRef(f);
+        if (!ref.ok) return fail(ref.detail);
         if (!files.has(f.path)) return fail(`missing_ref:${f.path}`);
         if (!imageBytesMatch(f.path, files.get(f.path)!)) return fail(`bad_image:${f.path}`);
-        pfiles.push({ path: f.path, role: isStr(f.role) ? f.role : 'file' });
+        pfiles.push({
+          path: f.path,
+          role: isStr(f.role) ? f.role : 'file',
+          ...(ref.ref ? { image_id: ref.ref.image_id, alt: ref.ref.alt } : {}),
+        });
       }
     }
     const td = isStrArr(p.tech_dependencies) ? p.tech_dependencies : [];

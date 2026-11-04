@@ -6,6 +6,7 @@ import { getJob, startJob } from '../jobs';
 import { buildReject, buildReturn, buildReworkBrief, publishSwitch } from '../publish';
 import { AUTO_ITEMS, type AutoItem } from '../checks/triage';
 import { computeTriage, latestVerificationOf } from '../triage-step';
+import { generatedImagesOf } from './images';
 import { serveVersionFile } from './library';
 
 export const CHECKLIST_KEYS = [
@@ -132,6 +133,9 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
     else if ((w?.inflight ?? 0) >= cf.verifyInflight) verifyWaitReason = 'inflight';
     else if ((w?.today ?? 0) + cf.verifyTurnReserveCents * ((w?.inflight ?? 0) + 1) > cf.dailyCapCents) verifyWaitReason = 'daily_cap';
   }
+  const material = parseJsonField<unknown>(v.material_json, null);
+  // 生成した画像の情報（§O-7 6。prompt は認証済みの運営にだけ返す）
+  const generatedImages = await generatedImagesOf(db, v.job_id, material);
   return json(200, {
     version: {
       id: v.id,
@@ -149,7 +153,7 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
       grader_explanation: v.grader_explanation,
       list_cost_cents: v.list_cost_cents,
       created_at: v.created_at,
-      material: parseJsonField(v.material_json, null),
+      material,
       checks: parseJsonField(v.checks_json, null),
       public_paths: parseJsonField(v.public_paths_json, []),
       tech_dependencies: parseJsonField(v.tech_dependencies_json, []),
@@ -182,6 +186,7 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
     verification_history: history,
     verify_cost_cents: Number(verifyCost?.c ?? 0),
     triage,
+    generated_images: generatedImages,
   });
 }
 

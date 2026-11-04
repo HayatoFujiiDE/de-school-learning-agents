@@ -8,7 +8,16 @@ import { PortError, type CallOpts, type FactoryPort, type FileMeta } from './ant
 import { accumulateCitations, finishCitations, isCitationAcc, newCitationAcc, type CitationAcc } from './checks/citations';
 import { checkForbidden } from './checks/forbidden';
 import { basenameOf, duplicateBasename, resolveOutputLayout } from './checks/layout';
-import { MAX_FILE_BYTES, MAX_FILES, REQUIRED_FILES, contentDigestInput, normalizeOutputPath, validateOutputs } from './checks/schema';
+import {
+  MAX_FILE_BYTES,
+  MAX_FILES,
+  REQUIRED_FILES,
+  contentDigestInput,
+  imageRefsOf,
+  isSafeRelativePath,
+  normalizeOutputPath,
+  validateOutputs,
+} from './checks/schema';
 import {
   ACTIVE_JOB_SQL,
   all,
@@ -26,6 +35,19 @@ import {
 } from './db';
 import { JOB_MODEL, cfg, consoleUrl, type Env } from './env';
 import { EDITORIAL_STANDARDS, RUBRIC_COMMON, RUBRIC_KINDS } from './generated/claude-assets';
+import {
+  IMAGE_JOB_LIMIT,
+  IMAGE_TOOL_NAME,
+  enqueueImage,
+  getImage,
+  getImageByToolUse,
+  imageDenies,
+  imageResultEvent,
+  imageToolUseIdsIn,
+  isTerminalImage,
+  keptImageInput,
+  registerImage,
+} from './images';
 import { OutOfTime, SAVE_FAILURES_MAX, ScanLimit, ScanStalled, runScan, stateJsonForSave, type ScanIO, type ScanState } from './scan';
 import { isActiveJob, isReingestable, isTerminalJob } from './state';
 
@@ -86,12 +108,13 @@ const ok = (status: number, body: Record<string, unknown>): ApiResult => ({ stat
 const err = (status: number, error: string, message?: string): ApiResult => ({ status, body: message ? { error, message } : { error } });
 
 export const DENY_MESSAGE = '無人運用のためこの操作は許可できません。別の方法で進めてください。';
-/** §M-5: generate_image（または職人定義に無い custom tool）への custom_tool_result の本文 */
+/** §M-5: 職人定義に無い custom tool への custom_tool_result の本文（generate_image は §O の画像生成で扱う） */
 export const CUSTOM_TOOL_UNAVAILABLE_MESSAGE = '画像生成はまだ使えません。図は SVG で描いてください。';
-/** 職人（factory/claude/agents/material-maker.md）が定義する custom tool の名前。現在は agent_toolset だけで custom tool は無い */
-const MAKER_CUSTOM_TOOLS: readonly string[] = [];
-/** §M-5: この custom tool 呼び出しは is_error の結果で返すか */
-export const rejectsCustomTool = (name: string): boolean => name === 'generate_image' || !MAKER_CUSTOM_TOOLS.includes(name);
+/** 職人（factory/claude/agents/material-maker.md）が定義する custom tool の名前（§O-2 = 旧 §M-2-2 b） */
+// 文字列で持つ（images.ts からの import は index → cron → images → jobs の循環で初期化前に評価され undefined になる）
+export const MAKER_CUSTOM_TOOLS: readonly string[] = ['generate_image'];
+/** §M-5: この custom tool 呼び出しは is_error の結果で返すか（generate_image 以外の custom tool は従来どおり is_error） */
+export const rejectsCustomTool = (name: string): boolean => !MAKER_CUSTOM_TOOLS.includes(name);
 /**
  * §M-5b: requires_action の event_ids のうち、events を最後のページまで辿っても種別が分からないものには何も送らない
  * （custom tool に tool_confirmation を送ると API が 400 を返し回復できない）。同じ idle event について BLOCKED_RECOUNT_MS 以上の間隔で
@@ -969,8 +992,9 @@ class Reconciler {
     const session = await this.port.retrieveSession(job.session_id, this.call);
     job = await this.recordCost(job, session.listCostCents);
 
-    // 0-a. deny 数の上限超え（件数は保存したが interrupt / archive / failed の前に落ちた）は、session の状態に関わらずここで止める
-    const overLimit = await this.stopIfTooManyDenies(job, job.deny_count);
+    // 0-a. deny 数の上限超え（件数は保存したが interrupt / archive / failed の前に落ちた）は、session の状態に関わらずここで止める。
+    // 数 = deny_count + 画像の断り・失敗（§O-3 b の imageDenies）
+    const overLimit = await this.stopIfTooManyDenies(job, job.deny_count + (await imageDenies(this.db, job.id)));
     if (overLimit !== null) return overLimit;
 
     // 0-b. needs_answer は terminated 判定だけ（fail は読んだ status/phase を述語に含めるので、途中で answer が進んでいれば何もしない）
@@ -1113,9 +1137,9 @@ class Reconciler {
     // 新しい順に辿り、最新の status_idle・最新の outcome_evaluation_end・define_outcome の有無を集める。
     // end_turn の時は define_outcome が見つかるまで（無ければ最後のページまで）辿ってから「既送なし」を確定する。
     // 途中集計（id と種別だけ。本文は持たない）は scan.idle に保存し、時間切れの後は続きから（先頭 event が変わっていたら先頭から）
-    // requires_action の時は、まだ返していない event_ids の event 種別（custom_tool_use なら name も。input は持たない）を
+    // requires_action の時は、まだ返していない event_ids の event 種別（custom_tool_use なら name も。generate_image だけは input も §O-3 b 1）を
     // 全部見つかるか最後のページに達するまで探す（§M-5。件数で打ち切らない。時間切れは保存した続き位置から、ページ数の上限は scan_too_many_pages）
-    type Blocked = { type: string; name?: string };
+    type Blocked = { type: string; name?: string; input?: unknown };
     type IdleAgg = {
       /** id は §M-5b の待ちの識別（古い保存形式には無い → null） */
       idle: { id?: string | null; type: string; event_ids: string[] } | null;
@@ -1132,10 +1156,17 @@ class Reconciler {
     const { agg: seen, head } = await this.scan<unknown, IdleAgg>(job, 'idle', {
       base: { purpose: 'idle', job_status: job.status, job_phase: job.phase, session_status: sessionStatus },
       init: () => ({ idle: null, evalEnd: null, hasOutcome: false, blocked: {}, answered: [] }),
-      // answered を持たない古い保存形式の集計は、idle より新しい返答を集めていない。続きから使うと返答を見落として送り直すので捨てる
+      // answered を持たない古い保存形式の集計は、idle より新しい返答を集めていない。続きから使うと返答を見落として送り直すので捨てる。
+      // generate_image なのに input を持たない項目（§O の前の保存形式）がある集計も捨てる（§O-3 b 1）
       keepSaved: (saved) => {
         const agg = (saved as { agg?: unknown } | null)?.agg;
-        return !(agg && typeof agg === 'object') || Array.isArray((agg as { answered?: unknown }).answered);
+        if (!(agg && typeof agg === 'object')) return true;
+        if (!Array.isArray((agg as { answered?: unknown }).answered)) return false;
+        const blocked = (agg as { blocked?: unknown }).blocked;
+        if (!blocked || typeof blocked !== 'object') return true;
+        return Object.values(blocked as Record<string, Blocked>).every(
+          (b) => !(b && b.type === 'agent.custom_tool_use' && b.name === IMAGE_TOOL_NAME && !('input' in b)),
+        );
       },
       fetch: (cursor) => this.port.listEventsPage(job.session_id!, { order: 'desc', page: cursor }, this.call),
       idOf: eventId,
@@ -1145,6 +1176,7 @@ class Reconciler {
             id?: unknown;
             type?: unknown;
             name?: unknown;
+            input?: unknown;
             result?: unknown;
             tool_use_id?: unknown;
             custom_tool_use_id?: unknown;
@@ -1171,7 +1203,13 @@ class Reconciler {
           if (agg.idle.type === 'requires_action') {
             const blocked = (agg.blocked ??= {});
             if (typeof e.id === 'string' && agg.idle.event_ids.includes(e.id) && !blocked[e.id]) {
-              blocked[e.id] = e.type === 'agent.custom_tool_use' ? { type: String(e.type), name: String(e.name ?? '') } : { type: String(e.type ?? '') };
+              const name = String(e.name ?? '');
+              blocked[e.id] =
+                e.type === 'agent.custom_tool_use'
+                  ? name === IMAGE_TOOL_NAME
+                    ? { type: String(e.type), name, input: keptImageInput(e.input) }
+                    : { type: String(e.type), name }
+                  : { type: String(e.type ?? '') };
             }
             if (agg.idle.event_ids.every((id) => alreadyDenied.has(id) || blocked[id] || agg.answered?.includes(id))) return true;
             continue;
@@ -1194,8 +1232,16 @@ class Reconciler {
       const denied = new Set(alreadyDenied);
       // idle より新しい返答が既にある id は送らない。denied に無ければ（前回送ったが保存できなかった分）送らずに denied へ足し deny 数にも数える
       const answered = new Set(seen.answered ?? []);
-      const recovered = idleEv.event_ids.filter((id) => !denied.has(id) && answered.has(id));
-      const pending = idleEv.event_ids.filter((id) => !denied.has(id) && !answered.has(id));
+      // §O-3 b 2: 画像の id（走査で見つけた generate_image ∪ D1 に行がある id）は recovered にも pending の deny にも入れない。
+      // 走査は answered にあれば元の tool_use を読まずに終わることがあるので、返し済みの画像は D1 で引く（返すのは登録済みの行だけ）
+      const imageIds = await imageToolUseIdsIn(this.db, job.id, idleEv.event_ids);
+      for (const id of idleEv.event_ids) {
+        const b = seen.blocked?.[id];
+        if (b && b.type === 'agent.custom_tool_use' && b.name === IMAGE_TOOL_NAME) imageIds.add(id);
+      }
+      const recovered = idleEv.event_ids.filter((id) => !imageIds.has(id) && !denied.has(id) && answered.has(id));
+      const pending = idleEv.event_ids.filter((id) => !imageIds.has(id) && !denied.has(id) && !answered.has(id));
+      const imagePending = idleEv.event_ids.filter((id) => imageIds.has(id) && !denied.has(id) && !answered.has(id));
       // 送るものがあってもなくても（§M-5b の早期 return より前に）先に保存し、上限も判定する（入口の判定は保存済みの件数だけを見る）
       let count = job.deny_count;
       if (recovered.length > 0) {
@@ -1203,11 +1249,16 @@ class Reconciler {
         count += recovered.length;
         const saved = await this.casJob('denied_event_ids_json = ?, deny_count = ?', '', JSON.stringify([...denied]), count);
         if (!saved) throw new LostLease();
-        const over = await this.stopIfTooManyDenies(job, count);
+        const over = await this.stopIfTooManyDenies(job, count + (await imageDenies(this.db, job.id)));
         if (over !== null) return over;
       }
+      // §O-3 b 3: 画像の依頼（無ければ登録 → queued なら queue へ / 終端なら 1 件ずつ返す / queued・dispatched なら待つ）
+      const img = imagePending.length > 0 ? await this.advanceImages(job, imagePending, seen.blocked ?? {}) : { sent: 0, waiting: 0 };
       if (pending.length === 0) {
         await this.clearBlockedWait(job);
+        if (img.sent > 0) return `image_results:${img.sent}`;
+        // §O-3 b 5: 送るものが無く、待っている generate_image だけ（§M-5b の「種別が分からない待ち」には数えない）
+        if (img.waiting > 0) return `awaiting_image:${img.waiting}`;
         return recovered.length > 0 ? `already_answered:${recovered.length}` : 'already_denied';
       }
       // §M-5b: 最後のページまで辿っても種別の分からない id には何も送らず、deny にも数えない（誤った種別の応答は API が 400 で拒み、回復を塞ぐ）。
@@ -1251,7 +1302,7 @@ class Reconciler {
       const newCount = count + ids.length;
       const saved = await this.casJob('denied_event_ids_json = ?, deny_count = ?', '', JSON.stringify([...denied]), newCount);
       if (!saved) throw new LostLease();
-      const over = await this.stopIfTooManyDenies(job, newCount);
+      const over = await this.stopIfTooManyDenies(job, newCount + (await imageDenies(this.db, job.id)));
       if (over !== null) return over;
       return `denied:${ids.length}`;
     }
@@ -1335,6 +1386,37 @@ class Reconciler {
     return 'needs_answer';
   }
 
+  /**
+   * §O-3 b 3: requires_action の generate_image（answered にも denied にも無い id）を進める。
+   * 行が無い → 登録（I。lease を延長してから）→ 読み直して queued なら IMAGE_GEN.send（失敗は無視。cron が C1 で拾う）、refused なら下で返す。
+   * 行が終端 → 職人へ返す（1 件ずつ sendEvents。送信の例外は従来の送信失敗と同じ扱い: 次の reconcile でもう一度。二重は p4a で無害）。
+   * queued / dispatched → 何も送らない（待つ）。deny 数には数えない（画像の deny は imageDenies だけ）
+   */
+  private async advanceImages(job: JobRow, ids: string[], blocked: Record<string, { type: string; name?: string; input?: unknown }>): Promise<{ sent: number; waiting: number }> {
+    let sent = 0;
+    let waiting = 0;
+    for (const id of ids) {
+      let row = await getImageByToolUse(this.db, id);
+      if (!row) {
+        const b = blocked[id];
+        if (!b || !('input' in b)) continue; // 走査で input を持たない（D1 に行も無い）: 画像の id ではない
+        await this.extend();
+        const r = await registerImage(this.env, this.port, job, id, b.input);
+        row = await getImageByToolUse(this.db, id);
+        console.log(JSON.stringify({ at: 'image_register', job_id: job.id, request_id: row?.id ?? null, result: r.split(':')[0], error: row?.error ?? null }));
+        if (!row) continue;
+        if (row.state === 'queued') await enqueueImage(this.env, row.id);
+      }
+      if (isTerminalImage(row.state)) {
+        const ev = await imageResultEvent(this.env, row);
+        await this.extend();
+        await this.port.sendEvents(job.session_id!, [ev], this.call);
+        sent++;
+      } else waiting++;
+    }
+    return { sent, waiting };
+  }
+
   /** §M-5b の待ちの状態があれば消す（無ければ書かない） */
   private async clearBlockedWait(job: JobRow): Promise<void> {
     if (this.state.blocked_unresolved === undefined) return;
@@ -1361,6 +1443,23 @@ class Reconciler {
     }
     if (!r.ok) throw new LostLease();
     this.state = r.state;
+  }
+
+  /**
+   * §O-7（旧 §M-2-7 2）: image_id の画像を D1 と R2 から採る。条件（すべて）: 依頼の job_id がこの job・state = 'done'・
+   * R2 の r2_key の物体があり SHA-256 が sha256 と一致・大きさ ≤ MAX_FILE_BYTES。違えば null（bad_image_ref）。
+   * format が拡張子と同じかは呼び出し側が path ごとに見る。先頭バイトの検査は従来どおり validateOutputs が掛ける
+   */
+  private async generatedImage(job: JobRow, imageId: string): Promise<{ format: string; bytes: Uint8Array } | null> {
+    const row = await getImage(this.db, imageId);
+    if (!row || row.job_id !== job.id || row.state !== 'done' || !row.r2_key || !row.sha256 || !row.format) return null;
+    const obj = await this.env.R2.get(row.r2_key);
+    if (!obj) return null;
+    const bytes = new Uint8Array(await obj.arrayBuffer());
+    if (bytes.byteLength > MAX_FILE_BYTES) return null;
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    const sha = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    return sha === row.sha256 ? { format: row.format, bytes } : null;
   }
 
   /** §B-4-d 手順 6: inspected → listed → ingested → versioned。各段階の途中経過は reconcile_state_json に置き、ページ / ファイル単位で再開する */
@@ -1450,13 +1549,58 @@ class Reconciler {
     }
     const dec = new TextDecoder();
     const materialRaw = raw.get('material.json');
-    const layout = resolveOutputLayout(rawNames, materialRaw ? dec.decode(materialRaw) : '');
+    const materialText = materialRaw ? dec.decode(materialRaw) : '';
+    // §O-7（旧 §M-2-7 1〜3）: image_id を持つ files は raw/ でなく image_requests と R2 から採る。論理パスは basename の一意の判定に入れる
+    const imageRefs = imageRefsOf(materialText);
+    if (!imageRefs.ok) {
+      await this.casJob('last_error = ?', '', imageRefs.detail.slice(0, 200));
+      return this.fail(job, 'invalid_outputs');
+    }
+    const refs = imageRefs.refs.filter((r) => isSafeRelativePath(r.path)); // 安全でない path は R2 のキーにしない（§E の path_outside_part に落ちる）
+    // R2 を読む前に数で落とす（material.json が image_id の files を大量に並べても、読む回数は 1 job の上限 8 回まで）:
+    // raw のファイル数 + 異なる参照 path の数 > MAX_FILES は too_many_files、異なる image_id が 8 を超えたら bad_image_ref
+    const refPaths = new Set(refs.map((r) => r.path));
+    const rawCount = new Set(rawNames).size;
+    if (rawCount + refPaths.size > MAX_FILES) {
+      await this.casJob('last_error = ?', '', `too_many_files:${rawCount + refPaths.size}`);
+      return this.fail(job, 'invalid_outputs');
+    }
+    const imageIdsSeen = new Set<string>();
+    for (const ref of refs) {
+      imageIdsSeen.add(ref.image_id);
+      if (imageIdsSeen.size > IMAGE_JOB_LIMIT) {
+        await this.casJob('last_error = ?', '', `bad_image_ref:${ref.path}`.slice(0, 200));
+        return this.fail(job, 'invalid_outputs');
+      }
+    }
+    const layout = resolveOutputLayout(rawNames, materialText, [...refPaths]);
     if (!layout.ok) {
       await this.casJob('last_error = ?', '', layout.detail.slice(0, 200));
       return this.fail(job, 'invalid_outputs');
     }
     const files = new Map<string, Uint8Array>();
     for (const [logical, base] of layout.files) files.set(logical, raw.get(base)!);
+    // 同じ image_id は 1 回だけ読む（契約は 2 つの path からの参照を禁じていないので許し、同じバイト列を両方の path に置く）
+    const loaded = new Map<string, { format: string; bytes: Uint8Array } | null>();
+    const pathImage = new Map<string, string>();
+    for (const ref of refs) {
+      // 同じ path の重複した参照: 同じ image_id なら 1 回だけ置く。別の image_id なら後の参照を検査せずに通さない（取り違え・別 job の画像の混入を防ぐ）
+      const prev = pathImage.get(ref.path);
+      if (prev !== undefined) {
+        if (prev === ref.image_id) continue;
+        await this.casJob('last_error = ?', '', `bad_image_ref:${ref.path}`.slice(0, 200));
+        return this.fail(job, 'invalid_outputs');
+      }
+      pathImage.set(ref.path, ref.image_id);
+      if (!loaded.has(ref.image_id)) loaded.set(ref.image_id, await this.generatedImage(job, ref.image_id));
+      const img = loaded.get(ref.image_id) ?? null;
+      const ext = ref.path.endsWith('.webp') ? 'webp' : ref.path.endsWith('.png') ? 'png' : null;
+      if (!img || ext === null || img.format !== ext) {
+        await this.casJob('last_error = ?', '', `bad_image_ref:${ref.path}`.slice(0, 200));
+        return this.fail(job, 'invalid_outputs');
+      }
+      files.set(ref.path, img.bytes);
+    }
     const schema = validateOutputs(files);
     if (!schema.ok) {
       await this.casJob('last_error = ?', '', schema.detail.slice(0, 200));

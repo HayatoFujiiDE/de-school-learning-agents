@@ -5,6 +5,7 @@ import { isNonEmptyString, json, readBody, type RouteCtx } from '../http';
 import { todayCostCents } from '../jobs';
 import { monthCostCents } from '../ledger';
 import { scoutRunning } from '../scout';
+import { imageStatusSummary } from './images';
 
 export async function getStatus(c: RouteCtx): Promise<Response> {
   const db = c.env.DB;
@@ -52,6 +53,8 @@ export async function getStatus(c: RouteCtx): Promise<Response> {
       month_cap_cents: k.meetingMonthlyCapCents,
       pending_batch: !!pending,
     },
+    // 画像生成（§O-5 e）。金額は U で数えた記帳（読み取り専用の表示）
+    images: await imageStatusSummary(c.env),
   });
 }
 

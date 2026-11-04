@@ -342,29 +342,38 @@ describe('§M 画像の読み取り対応（段階 1）', () => {
     expect(checks.missing_claim_refs.filter((f) => f.path.endsWith('.png'))).toEqual([]);
   });
 
-  it('(m6) generate_image の custom_tool_use に is_error の結果が 1 回だけ返り、deny 数に数える', async () => {
+  // §O-8 t12（旧 t23）: (m6) の置き換え。generate_image 以外の custom tool は従来どおり is_error 1 回、generate_image は §O の登録へ
+  it('(m6→t12) generate_image 以外の custom tool に is_error の結果が 1 回だけ返り deny 数に数える。generate_image は登録される（is_error を返さない）', async () => {
     seedRunningJob();
     const events = [
       { id: 'sevt_1', type: 'user.define_outcome' },
-      { id: 'sevt_ct_1', type: 'agent.custom_tool_use', name: 'generate_image', input: { prompt: 'redstone' } },
+      { id: 'sevt_ct_1', type: 'agent.custom_tool_use', name: 'draw_chart', input: { prompt: 'redstone' } },
+      { id: 'sevt_gi_1', type: 'agent.custom_tool_use', name: 'generate_image', input: { prompt: 'redstone' } },
       { id: 'sevt_tu_1', type: 'agent.tool_use', name: 'bash', input: { command: 'curl https://example.com' }, evaluated_permission: 'ask' },
-      { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_ct_1', 'sevt_tu_1'] } },
+      { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_ct_1', 'sevt_gi_1', 'sevt_tu_1'] } },
     ];
     const sent: unknown[] = [];
     const port = makePort({ events, sent });
+    // generate_image は入力が不正（alt 等が無い）なので refused bad_input → 同じ reconcile で is_error の結果を 1 回返す（deny_count には数えない）
     expect(await reconcileJob(env, port, 'j1', { deadline: Date.now() + 25_000 })).toBe('denied:2');
-    // 2 回目の reconcile では送り直さない
-    expect(await reconcileJob(env, port, 'j1', { deadline: Date.now() + 25_000 })).toBe('already_denied');
+    // 2 回目の reconcile では送り直さない（generate_image の結果は fake の一覧に載らないので、行が終端のまま → 返し直す。p4a で無害）
+    const before = sent.length;
+    await reconcileJob(env, port, 'j1', { deadline: Date.now() + 25_000 });
+    expect(sent.slice(before).filter((e) => (e as { type: string }).type === 'user.tool_confirmation')).toEqual([]);
 
-    const customResults = sent.filter((e) => (e as { type: string }).type === 'user.custom_tool_result');
-    expect(customResults).toEqual([
+    const customResults = sent.filter((e) => (e as { type: string }).type === 'user.custom_tool_result') as Array<{ custom_tool_use_id: string; is_error: boolean; content: unknown }>;
+    expect(customResults.filter((e) => e.custom_tool_use_id === 'sevt_ct_1')).toEqual([
       { type: 'user.custom_tool_result', custom_tool_use_id: 'sevt_ct_1', content: [{ type: 'text', text: CUSTOM_TOOL_UNAVAILABLE_MESSAGE }], is_error: true },
     ]);
     expect(CUSTOM_TOOL_UNAVAILABLE_MESSAGE).toBe('画像生成はまだ使えません。図は SVG で描いてください。');
+    // generate_image は CUSTOM_TOOL_UNAVAILABLE_MESSAGE を受けず、登録の結果（ここでは bad_input の断り）
+    const gi = customResults.filter((e) => e.custom_tool_use_id === 'sevt_gi_1');
+    expect(gi.length).toBeGreaterThanOrEqual(1);
+    expect(gi[0].content).not.toEqual([{ type: 'text', text: CUSTOM_TOOL_UNAVAILABLE_MESSAGE }]);
+    expect(one(db, "SELECT state, error FROM image_requests WHERE custom_tool_use_id = 'sevt_gi_1'")).toEqual({ state: 'refused', error: 'bad_input:accuracy' });
     // 通常の tool_use は従来どおり tool_confirmation の deny（custom tool に tool_confirmation は送らない）
     const confirmations = sent.filter((e) => (e as { type: string }).type === 'user.tool_confirmation') as Array<{ tool_use_id: string; result: string }>;
     expect(confirmations.map((c) => [c.tool_use_id, c.result])).toEqual([['sevt_tu_1', 'deny']]);
-    expect(sent).toHaveLength(2);
     const j = one(db, "SELECT status, deny_count, denied_event_ids_json FROM factory_jobs WHERE id = 'j1'");
     expect(j.status).toBe('running');
     expect(j.deny_count).toBe(2);
@@ -374,7 +383,7 @@ describe('§M 画像の読み取り対応（段階 1）', () => {
   /** custom_tool_use と idle の間に filler 件の event を挟む */
   const blockedEvents = (filler: number, blockedIds = ['sevt_ct_1'], idleId = 'sevt_idle') => [
     { id: 'sevt_1', type: 'user.define_outcome' },
-    { id: 'sevt_ct_1', type: 'agent.custom_tool_use', name: 'generate_image', input: { prompt: 'x' } },
+    { id: 'sevt_ct_1', type: 'agent.custom_tool_use', name: 'draw_chart', input: { prompt: 'x' } },
     ...Array.from({ length: filler }, (_, i) => ({ id: `sevt_f_${i}`, type: 'agent.message' })),
     { id: idleId, type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: blockedIds } },
   ];
@@ -531,7 +540,7 @@ describe('§M 画像の読み取り対応（段階 1）', () => {
     expect(one(db, "SELECT deny_count FROM factory_jobs WHERE id = 'j1'").deny_count).toBe(1);
 
     // 先頭 event（idle）は同じまま、custom_tool_use が一覧に現れる → 保存済み集計を再利用せず探し直して返す
-    events.splice(1, 0, { id: 'sevt_ct_1', type: 'agent.custom_tool_use', name: 'generate_image', input: {} });
+    events.splice(1, 0, { id: 'sevt_ct_1', type: 'agent.custom_tool_use', name: 'draw_chart', input: {} });
     expect(await reconcileJob(env, port, 'j1', { deadline: Date.now() + 25_000 })).toBe('denied:1');
     expect(sent.slice(1)).toEqual([
       { type: 'user.custom_tool_result', custom_tool_use_id: 'sevt_ct_1', content: [{ type: 'text', text: CUSTOM_TOOL_UNAVAILABLE_MESSAGE }], is_error: true },
@@ -596,7 +605,7 @@ describe('Issue #1 requires_action: 送信後・保存前に落ちても送り�
     seedRunningJob();
     const events: unknown[] = [
       { id: 'sevt_1', type: 'user.define_outcome' },
-      { id: 'sevt_ct_1', type: 'agent.custom_tool_use', name: 'generate_image', input: {} },
+      { id: 'sevt_ct_1', type: 'agent.custom_tool_use', name: 'draw_chart', input: {} },
       { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_ct_1'] } },
     ];
     const sent: unknown[] = [];
@@ -620,7 +629,7 @@ describe('Issue #1 requires_action: 送信後・保存前に落ちても送り�
     seedRunningJob();
     const events: unknown[] = [
       { id: 'sevt_1', type: 'user.define_outcome' },
-      { id: 'sevt_ct_1', type: 'agent.custom_tool_use', name: 'generate_image', input: {} },
+      { id: 'sevt_ct_1', type: 'agent.custom_tool_use', name: 'draw_chart', input: {} },
       { id: 'sevt_tu_1', type: 'agent.tool_use', name: 'bash', input: {}, evaluated_permission: 'ask' },
       { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_ct_1', 'sevt_tu_1'] } },
       { id: 'sevt_ans_0', type: 'user.custom_tool_result', custom_tool_use_id: 'sevt_ct_1', is_error: true },

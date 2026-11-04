@@ -63,7 +63,9 @@
     raise_failed: '予算を増やせませんでした。予算は変わっていません',
     raise_unknown: 'Anthropic から返事がなく、予算が増えたか分かりません（増えている可能性があります）。「状態を取り込む」で確かめてから押し直してください',
     invalid_add_cents: '増やす額は $5 / $10 / $20 のどれかです',
-    invalid_note: 'メモは 200 字までです'
+    invalid_note: 'メモは 200 字までです',
+    dispatched_remain: '生成中の画像が残っているため、まだ再開できません。生成が終わってから（10 分ごとの定期処理で進みます）押し直してください',
+    not_halted: '画像の生成は止まっていません'
   };
 
   var $ = function (sel, root) { return (root || document).querySelector(sel); };
@@ -221,7 +223,7 @@
         '<span class="item">職人 ' + (s.agent_configured ? pill('設定済み', 'green') : pill('未設定', 'red')) + '</span>' +
         '<span class="item muted">cron 最終 ' + esc(fmtTime(s.last_cron_at)) + '</span>' +
         '<button type="button" class="btn small" id="pause-btn">' + (s.paused ? '再開' : '止める') + '</button>' +
-        intakeStatusHtml(s);
+        intakeStatusHtml(s) + imagesBandHtml(s.images);
       bindIntakeButtons(s);
       var btn = $('#pause-btn');
       btn.addEventListener('click', function () {
@@ -280,6 +282,116 @@
           route();
         }
       });
+    });
+  }
+
+  // ---- 画像の生成（§O-5 e）。金額・停止の理由・一覧は読むだけ。書き込みは「止める」「再開する」だけ ----
+  var HALT_TEXT = {
+    manual: '手で止めました',
+    over_reserve: '1 枚の実額が予約額を超えました',
+    usage_missing: '1 枚の費用が分かりませんでした',
+    result_unknown: '結果が分からない生成があります',
+    quota: 'OpenAI の残高か上限に達しました',
+    auth: 'OpenAI の鍵が使えません'
+  };
+  var IMAGE_STATE = {
+    queued: ['順番待ち', ''], dispatched: ['生成中', 'orange'], done: ['完成', 'green'], refused: ['断った', 'gray'], failed: ['失敗', 'red']
+  };
+  var GEN_PROMPT_MAX = 80;
+  /** 停止の理由コード（over_reserve:<id> 等）→ 画面の文（§O-5 d）。表に無いコードはそのまま */
+  function haltText(code) {
+    if (!code) return '';
+    var k = String(code).split(':')[0];
+    return Object.prototype.hasOwnProperty.call(HALT_TEXT, k) ? HALT_TEXT[k] : String(code);
+  }
+  function cents(c) { return c === null || c === undefined ? '—' : esc(c) + '¢'; }
+  /** 状況帯の 1 行（§O-5 e）。images が無い応答（古い Worker）では何も出さない */
+  function imagesBandHtml(im) {
+    if (!im || typeof im !== 'object') return '';
+    return '<span class="item" data-img-band="1">画像: 今月 <b>' + cents(im.month_cents) + '</b> / ' + cents(im.month_cap_cents) + '<span class="muted">（U で数えた記帳）</span></span>' +
+      (im.halted ? '<span class="item" data-img-halted="1">' + pill('画像の生成を止めています（' + haltText(im.halted) + '）', 'red') + '</span>' : '') +
+      '<a class="item" href="#/images">' + (im.halted ? '画像の停止を見る' : '画像の生成') + '</a>';
+  }
+  /** 確認画面のサムネイルの下の 1 行（§O-7 6）: 「生成: {accuracy}・{prompt の先頭 80 字}」 */
+  function genCaption(g) {
+    var chars = Array.from(String((g && g.prompt) || ''));
+    var head = chars.slice(0, GEN_PROMPT_MAX).join('') + (chars.length > GEN_PROMPT_MAX ? '…' : '');
+    return '生成: ' + String((g && g.accuracy) || '—') + '・' + head;
+  }
+  function imagesLoadingHtml() { return '<h1>画像の生成</h1><p class="loading" data-img-loading="1">読み込み中…</p>'; }
+  function imagesErrorHtml(msg) {
+    return '<h1>画像の生成</h1><div class="card" data-img-error="1"><p class="err">読み込めませんでした: ' + esc(msg) + '</p><p><button type="button" class="btn" id="img-retry">もう一度読み込む</button></p></div>';
+  }
+  function imageRowHtml(r) {
+    var over = typeof r.actual_cents === 'number' && typeof r.u_cents === 'number' && r.actual_cents > r.u_cents;
+    var st = IMAGE_STATE[r.state] || [r.state, ''];
+    return '<tr data-img-row="1"' + (over ? ' class="img-over-row" data-img-over="1"' : '') + '>' +
+      '<td>' + esc(fmtTime(r.created_at)) + '</td>' +
+      '<td>' + pill(st[0], st[1]) + (r.error ? ' <code class="muted">' + esc(r.error) + '</code>' : '') + '</td>' +
+      '<td><a href="#/job/' + esc(r.job_id) + '">作業</a></td>' +
+      '<td>' + esc(r.model || '—') + '<br><span class="muted">' + esc(r.size || '—') + '・' + esc(r.quality || '—') + '</span></td>' +
+      '<td>' + cents(r.u_cents) + '</td>' +
+      '<td' + (over ? ' class="img-over"' : '') + '>' + cents(r.actual_cents) + (over ? ' ' + pill('予約額を超えています', 'red') : '') + '</td>' +
+      '<td>' + (r.state === 'done' ? '<a href="/api/images/requests/' + encodeURIComponent(r.request_id) + '/file" target="_blank" rel="noopener noreferrer">見る</a>' : '<span class="muted">—</span>') + '</td></tr>';
+  }
+  /** #/images の本体（GET /api/images/status の応答から描く純関数） */
+  function imagesHtml(d) {
+    var halted = d.halted || null;
+    var recent = Array.isArray(d.recent) ? d.recent : [];
+    var disp = Number(d.dispatched || 0);
+    var stateHtml = halted
+      ? '<p>' + pill('止めています', 'red') + ' <b data-img-reason="1">' + esc(haltText(halted)) + '</b> <code class="muted">' + esc(halted) + '</code></p>' +
+        '<p class="muted">新しい画像は断り、職人には「今は画像を作れません」と返しています。再開は「再開する」を押すまで自動ではされません。</p>' +
+        (disp > 0 ? '<p class="err" data-img-disp="1">生成中の画像が ' + esc(disp) + ' 枚あります。終わるまで再開できません（10 分ごとの定期処理で進みます）。</p>' : '')
+      : '<p>' + pill('生成できます', 'green') + '</p>';
+    return '<h1>画像の生成</h1>' +
+      '<div class="card" data-img-state="' + (halted ? 'halted' : 'running') + '"><h2>停止の状態</h2>' + stateHtml +
+        '<div class="row">' +
+          '<button type="button" class="btn danger" id="img-halt-btn"' + (halted ? ' disabled' : '') + '>止める</button>' +
+          '<button type="button" class="btn primary" id="img-unhalt-btn"' + (halted ? '' : ' disabled') + '>再開する</button>' +
+        '</div></div>' +
+      '<div class="card"><h2>今月の画像の記帳</h2>' +
+        '<p><b>' + cents(d.month_cents) + '</b> / ' + cents(d.month_cap_cents) + ' <span class="muted">（U で数えた記帳。U = 1 枚の予約額。OpenAI の実際の請求とは違うことがあります）</span></p>' +
+        '<p class="muted">取り置き中の作業 ' + esc(Number(d.holds_open || 0)) + ' 件・生成中 ' + esc(disp) + ' 枚</p></div>' +
+      '<div class="card"><h2>最近の 20 件</h2>' +
+        (recent.length
+          ? '<div class="table-wrap"><table class="img-table"><thead><tr><th>時刻</th><th>状態</th><th>作業</th><th>モデル</th><th>U</th><th>実額</th><th>画像</th></tr></thead><tbody>' +
+            recent.map(imageRowHtml).join('') + '</tbody></table></div><p class="muted">記帳と監査の記録なので、ここからは消せません。</p>'
+          : '<p class="muted" data-img-empty="1">まだありません</p>') +
+      '</div>';
+  }
+  function viewImages(view) {
+    view.innerHTML = imagesLoadingHtml();
+    var here = location.hash;
+    api('GET', '/api/images/status').then(function (d) {
+      if (location.hash !== here) return; // 読み込み中に別の画面へ移った
+      view.innerHTML = imagesHtml(d);
+      var hb = $('#img-halt-btn'), ub = $('#img-unhalt-btn');
+      hb.addEventListener('click', function () {
+        action(hb, {
+          title: '新しい画像の生成を止めます',
+          body: '順番待ちの画像は断り、職人には「今は画像を作れません」と返します。生成中の画像（最大 2 枚）は最後まで進みます。止めた後は「再開する」を押すまで止まったままです。',
+          okText: '止める', busyText: '処理中…',
+          run: function () { return api('POST', '/api/images/halt'); },
+          success: '画像の生成を止めました',
+          fail: function () { route(); }
+        });
+      });
+      ub.addEventListener('click', function () {
+        action(ub, {
+          title: '画像の生成を再開します',
+          body: 'OpenAI の利用画面で実額を確かめてから押してください',
+          okText: '再開する', busyText: '処理中…',
+          run: function () { return api('POST', '/api/images/unhalt'); },
+          success: '画像の生成を再開しました',
+          fail: function () { route(); }
+        });
+      });
+    }, function (e) {
+      if (location.hash !== here) return;
+      view.innerHTML = imagesErrorHtml(e.message);
+      var b = $('#img-retry');
+      if (b) b.addEventListener('click', route);
     });
   }
 
@@ -1732,9 +1844,14 @@
     if (k === 'explanation_and_expression') {
       var base = '/api/review/' + encodeURIComponent(d.version.id) + '/files/';
       var imgs = imageFiles(d.version.material);
+      var gen = {};
+      (Array.isArray(d.generated_images) ? d.generated_images : []).forEach(function (g) { if (g && typeof g.path === 'string') gen[g.path] = g; });
       extra = '<div class="rv-figs"><span class="muted">図・画像 ' + imgs.length + ' 枚（検証係は図を見ません。すべて見てください）</span>' +
         (imgs.length ? '<div class="thumbs">' + imgs.map(function (p) {
-          return '<a href="' + esc(base + p) + '" target="_blank" rel="noopener noreferrer" title="' + esc(p) + '"><img class="thumb" alt="' + esc(p) + '" src="' + esc(base + p) + '"></a>';
+          var a = '<a href="' + esc(base + p) + '" target="_blank" rel="noopener noreferrer" title="' + esc(p) + '"><img class="thumb" alt="' + esc(p) + '" src="' + esc(base + p) + '"></a>';
+          var g = Object.prototype.hasOwnProperty.call(gen, p) ? gen[p] : null;
+          // 生成した絵はサムネイルの下に「生成: 正確さ・prompt の先頭 80 字」（§O-7 6）
+          return g ? '<div class="thumb-gen" data-gen="1">' + a + '<p class="thumb-cap">' + esc(genCaption(g)) + '</p></div>' : a;
         }).join('') + '</div>' : '') + '</div>';
     }
     if (tri.present && AUTO_KEYS.indexOf(k) >= 0 && AUTO_HINT[k]) extra += '<p class="muted">' + esc(AUTO_HINT[k]) + '</p>';
@@ -2167,8 +2284,13 @@
     if (p[0] === 'review') return viewReviewList(view);
     if (p[0] === 'standards') return viewStandards(view);
     if (p[0] === 'proposals') return viewProposals(view, r.q);
+    if (p[0] === 'images') return viewImages(view);
     view.innerHTML = '<p class="muted">ページが見つかりません。<a href="#/materials">素材へ</a></p>';
   }
+  window.FactoryAdminImages = {
+    HALT_TEXT: HALT_TEXT, haltText: haltText, imagesBandHtml: imagesBandHtml, imagesHtml: imagesHtml,
+    imagesLoadingHtml: imagesLoadingHtml, imagesErrorHtml: imagesErrorHtml, genCaption: genCaption
+  };
   if (window.__FACTORY_ADMIN_NO_BOOT__) return; // smoke が純関数だけを読む時
   window.addEventListener('hashchange', route);
   document.addEventListener('keydown', onReviewKey);

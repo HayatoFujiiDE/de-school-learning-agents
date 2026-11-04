@@ -9,6 +9,7 @@ import type { BetaManagedAgentsEventParams } from '@anthropic-ai/sdk/resources/b
 import type { BatchCreateParams, MessageBatchIndividualResponse } from '@anthropic-ai/sdk/resources/messages/batches';
 import { MAX_FILE_BYTES } from './checks/schema';
 import { isLocalHostname, type Env } from './env';
+import { openAiPort, type ImagePort } from './openai';
 import { XaiError, xaiResponses, type XaiRequest, type XaiResult } from './xai';
 
 export const MANAGED_AGENTS_BETA = 'managed-agents-2026-04-01';
@@ -387,6 +388,12 @@ async function loadFake(env: Env, ctx: PortContext) {
 export async function getPort(env: Env, ctx: PortContext): Promise<FactoryPort> {
   const fake = await loadFake(env, ctx);
   return fake ? fake.createFakePort(env) : realPort(env);
+}
+
+/** 画像生成の port（§O-4 b）。fake が許可される時だけ fake の OpenAI（src/fake/openai.ts を src/fake/anthropic.ts 経由で。動的 import は loadFake の 1 箇所） */
+export async function getImagePort(env: Env, ctx: PortContext): Promise<ImagePort> {
+  const fake = await loadFake(env, ctx);
+  return fake ? fake.createFakeImagePort(env) : openAiPort(env);
 }
 
 /** 収集部隊の RSS 取得に使う fetch（§K-8: FactoryPort でなく fetch を差し替える）。fake が許可される時だけ fixture を返す fetch */

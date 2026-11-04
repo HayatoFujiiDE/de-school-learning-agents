@@ -4,6 +4,8 @@ export interface Env {
   DB: D1Database;
   R2: R2Bucket;
   ASSETS: Fetcher;
+  /** 画像生成の queue（§O-4 a）。consumer は src/index.ts の queue handler */
+  IMAGE_GEN?: Queue<{ request_id: string }>;
 
   FACTORY_AGENT_ID: string;
   FACTORY_ENV_ID: string;
@@ -33,12 +35,18 @@ export interface Env {
   SCOUT_XAI_UNCONFIRMED_CENTS?: string;
   /** 応答不明の batches.create 1 回を台帳に載せる保守的見積り（セント） */
   MEETING_UNCONFIRMED_CENTS?: string;
+  // 画像生成（§O-4 a）。wrangler.jsonc に既定値がある。無い時は cfg() の既定を使う
+  IMAGE_MODEL_STANDARD?: string;
+  IMAGE_MODEL_SCIENTIFIC?: string;
+  IMAGE_MONTHLY_CAP_CENTS?: string;
 
   // secrets
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_WEBHOOK_SIGNING_KEY?: string;
   /** 収集部隊の X 検索のみ（§K-0）。無ければ X 検索を飛ばす */
   XAI_API_KEY?: string;
+  /** 画像生成（§O-0）。読むのは src/openai.ts だけ。D1・R2・ログ・作業場・custom_tool_result に出さない */
+  OPENAI_API_KEY?: string;
 
   // .dev.vars のみ（hostname が localhost / 127.0.0.1 の時だけ効く）
   ACCESS_DEV_BYPASS_EMAIL?: string;
@@ -75,6 +83,10 @@ export const cfg = (env: Env) => ({
   meetingDays: parseDays(env.MEETING_DAYS ?? '1,15'),
   scoutXaiUnconfirmedCents: intVar(env.SCOUT_XAI_UNCONFIRMED_CENTS, 100),
   meetingUnconfirmedCents: intVar(env.MEETING_UNCONFIRMED_CENTS, 20),
+  // §O-4 a / §M-2-2 b
+  imageModelStandard: (env.IMAGE_MODEL_STANDARD || 'gpt-image-2.5-flare').trim(),
+  imageModelScientific: (env.IMAGE_MODEL_SCIENTIFIC || 'gpt-image-2.5-sunburst').trim(),
+  imageMonthlyCapCents: intVar(env.IMAGE_MONTHLY_CAP_CENTS, 3000),
 });
 
 /** SCOUT_MAX_TURNS を var で大きくしても 1 run の X 検索がこれ以上の turn を使わない（外部コストの有限化） */

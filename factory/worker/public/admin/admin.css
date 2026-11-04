@@ -90,6 +90,13 @@ pre { white-space: pre-wrap; word-break: break-word; background: var(--paper); p
 .rv-figs { margin: 6px 0 0; }
 .thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 0; }
 .thumb { width: 120px; height: 90px; object-fit: contain; border: 1px solid var(--line); border-radius: 8px; background: var(--white); }
+.thumb-gen { display: flex; flex-direction: column; gap: 4px; width: 160px; }
+.thumb-gen .thumb { width: 160px; }
+.thumb-cap { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); word-break: break-word; }
+/* ---- 画像の生成（§O-5 e）---- */
+.img-table td { vertical-align: middle; }
+.img-over { color: var(--red); font-weight: 700; }
+.img-over-row td { background: var(--red-soft); }
 .kbd { display: inline-block; min-width: 20px; padding: 0 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; font-size: 12px; text-align: center; background: var(--paper); color: var(--ink); font-weight: 600; }
 .kbd.blank { visibility: hidden; }
 .btn .kbd { margin-left: 4px; background: transparent; color: inherit; border-color: currentColor; opacity: .7; }
