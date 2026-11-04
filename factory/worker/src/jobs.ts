@@ -93,10 +93,31 @@ const MAKER_CUSTOM_TOOLS: readonly string[] = [];
 /** §M-5: この custom tool 呼び出しは is_error の結果で返すか */
 export const rejectsCustomTool = (name: string): boolean => name === 'generate_image' || !MAKER_CUSTOM_TOOLS.includes(name);
 /**
- * requires_action の event_ids のうち、events を最後のページまで辿っても種別が分からなかったものがある reconcile がこの回数続いたら
- * job を failed（error='blocked_event_unresolved'）。種別が分からない id には何も送らない（custom tool に tool_confirmation を送ると API が 400 を返し回復できない）
+ * §M-5b: requires_action の event_ids のうち、events を最後のページまで辿っても種別が分からないものには何も送らない
+ * （custom tool に tool_confirmation を送ると API が 400 を返し回復できない）。同じ idle event について BLOCKED_RECOUNT_MS 以上の間隔で
+ * 数え、BLOCKED_UNRESOLVED_MAX 回（約 10 分以上）になったら job を failed（error='blocked_event_unresolved'）。idle event が変わったら 0 から
  */
 export const BLOCKED_UNRESOLVED_MAX = 3;
+export const BLOCKED_RECOUNT_MS = 5 * 60_000;
+/** §M-5b の状態（reconcile_state_json.blocked_unresolved） */
+export interface BlockedWait {
+  idle_event_id: string | null;
+  first_seen_at: string;
+  count: number;
+  next_at: string;
+}
+const isBlockedWait = (x: unknown): x is BlockedWait => {
+  const w = x as BlockedWait | null;
+  return (
+    !!w &&
+    typeof w === 'object' &&
+    (w.idle_event_id === null || typeof w.idle_event_id === 'string') &&
+    typeof w.first_seen_at === 'string' &&
+    Number.isInteger(w.count) &&
+    typeof w.next_at === 'string' &&
+    Number.isFinite(Date.parse(w.next_at))
+  );
+};
 export const OUTCOME_DESCRIPTION = '注文票の素材を /mnt/session/outputs/ に §E の構成で作る。調査→構成→制作→自分で動作確認→selfcheck の順';
 const KIND_LABEL: Record<number, string> = { 3: '説明と図解', 4: '動かせるもの' };
 export const SUPPORTED_KINDS = [3, 4];
@@ -387,7 +408,7 @@ export async function recoverCreating(env: Env, port: FactoryPort, job: JobRow):
 // 共通: events / files をページで辿る（§B-4-d「最後のページまで」）。続き位置と途中集計は src/scan.ts の runScan が
 // reconcile_state_json.scan.<目的> に保存し、時間切れの後は続きから再開する
 
-const MAX_PAGES = 500; // ページ数の上限（runScan の走査は呼び出しをまたいだ合計、ingest の古い順の読みは 1 回の呼び出しごと。1 ページ 20 件でも 1 万件）
+export const MAX_PAGES = 500; // ページ数の上限（runScan の走査は呼び出しをまたいだ合計、ingest の古い順の読みは 1 回の呼び出しごと。1 ページ 20 件でも 1 万件）
 
 /** event の id（SDK の BetaManagedAgents*Event は全 type が id: string を持つ） */
 const eventId = (e: unknown): string | null => {
@@ -810,8 +831,8 @@ interface ReconcileState {
   scan?: { answer?: unknown; idle?: unknown; files?: unknown };
   /** 保存（D1 書き込み）の例外が続いた回数。成功した保存で消える */
   save_failures?: number;
-  /** requires_action で種別の分からない event_id が残った reconcile の連続回数（§M-5。BLOCKED_UNRESOLVED_MAX で failed） */
-  blocked_unresolved?: number;
+  /** requires_action で種別の分からない event_id が残っている待ち（§M-5b。idle event ごと。別の待ち・進行で消える） */
+  blocked_unresolved?: BlockedWait;
   /** inspected: files.list の途中経過（ページの続き位置）。complete になってから必須ファイルを判定する */
   list?: { cursor: string | null; items: ListedFile[]; round: number; complete: boolean };
   /** listed / ingested: 取り込むファイルと、R2 に置き終えた file_id */
@@ -953,6 +974,7 @@ class Reconciler {
     switch (session.status) {
       case 'running':
       case 'rescheduling':
+        await this.clearBlockedWait(job); // 待ちから進んだ（§M-5b）
         if (job.status === 'budget_reached') {
           await this.casJob("status = 'running'", "status = 'budget_reached'");
           return 'resumed';
@@ -1056,7 +1078,8 @@ class Reconciler {
     // 全部見つかるか最後のページに達するまで探す（§M-5。件数で打ち切らない。時間切れは保存した続き位置から、ページ数の上限は scan_too_many_pages）
     type Blocked = { type: string; name?: string };
     type IdleAgg = {
-      idle: { type: string; event_ids: string[] } | null;
+      /** id は §M-5b の待ちの識別（古い保存形式には無い → null） */
+      idle: { id?: string | null; type: string; event_ids: string[] } | null;
       evalEnd: { result: string } | null;
       hasOutcome: boolean;
       blocked?: Record<string, Blocked>;
@@ -1073,6 +1096,7 @@ class Reconciler {
           if (!agg.idle && e.type === 'session.status_idle') {
             const ids = e.stop_reason?.event_ids;
             agg.idle = {
+              id: typeof e.id === 'string' ? e.id : null,
               type: String(e.stop_reason?.type ?? ''),
               event_ids: Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : [],
             };
@@ -1100,24 +1124,34 @@ class Reconciler {
     const hasOutcome = seen.hasOutcome;
     if (!idleEv) return 'no_idle_event';
     const stop = idleEv.type;
+    if (stop !== 'requires_action') await this.clearBlockedWait(job); // 別の待ち・終わりに進んだ（§M-5b）
 
     if (stop === 'requires_action') {
       const denied = new Set(alreadyDenied);
       const pending = idleEv.event_ids.filter((id) => !denied.has(id));
-      if (pending.length === 0) return 'already_denied';
-      // 最後のページまで辿っても種別の分からない id には何も送らず、deny にも数えない（§M-5。誤った種別の応答は API が 400 で拒み、回復を塞ぐ）。
-      // 次の reconcile で先頭から探し直す（scan.idle を捨てる）。連続 BLOCKED_UNRESOLVED_MAX 回で failed
+      if (pending.length === 0) {
+        await this.clearBlockedWait(job);
+        return 'already_denied';
+      }
+      // §M-5b: 最後のページまで辿っても種別の分からない id には何も送らず、deny にも数えない（誤った種別の応答は API が 400 で拒み、回復を塞ぐ）。
+      // 次の reconcile で先頭から探し直す（scan.idle を捨てる）。同じ idle event について 5 分以上の間隔でだけ数え、3 回で failed
       const ids = pending.filter((id) => seen.blocked?.[id]);
       const unresolved = pending.length - ids.length;
       if (unresolved > 0) {
-        const rounds = (this.state.blocked_unresolved ?? 0) + 1;
-        if (rounds >= BLOCKED_UNRESOLVED_MAX) return this.fail(job, 'blocked_event_unresolved');
+        const now = Date.now();
+        const idleId = idleEv.id ?? null;
+        const prev = isBlockedWait(this.state.blocked_unresolved) ? this.state.blocked_unresolved : null;
+        const iso = (ms: number) => new Date(ms).toISOString();
+        let wait: BlockedWait;
+        if (!prev || prev.idle_event_id !== idleId) wait = { idle_event_id: idleId, first_seen_at: iso(now), count: 1, next_at: iso(now + BLOCKED_RECOUNT_MS) };
+        else if (now >= Date.parse(prev.next_at)) wait = { ...prev, count: prev.count + 1, next_at: iso(now + BLOCKED_RECOUNT_MS) };
+        else wait = prev;
+        if (wait.count >= BLOCKED_UNRESOLVED_MAX) return this.fail(job, 'blocked_event_unresolved');
         const { idle: _drop, ...scanRest } = this.state.scan ?? {};
-        await this.writeState(job, null, { ...this.state, scan: scanRest, blocked_unresolved: rounds }, 'blocked_event_unresolved');
-        if (ids.length === 0) return `blocked_unresolved:${rounds}`;
-      } else if (this.state.blocked_unresolved) {
-        const { blocked_unresolved: _reset, ...rest } = this.state;
-        await this.writeState(job, null, rest);
+        await this.writeState(job, null, { ...this.state, scan: scanRest, blocked_unresolved: wait }, 'blocked_event_unresolved');
+        if (ids.length === 0) return `blocked_unresolved:${wait.count}`;
+      } else {
+        await this.clearBlockedWait(job);
       }
       await this.extend();
       // custom tool（generate_image 等。§M-5）は tool_confirmation ではなく is_error の custom_tool_result で返す。どちらも deny 数に数える
@@ -1226,6 +1260,13 @@ class Reconciler {
     const asked = await this.casJob("status = 'needs_answer', questions_json = ?", "status = 'running' AND phase = 'questions'", JSON.stringify(questions));
     if (!asked) throw new LostLease();
     return 'needs_answer';
+  }
+
+  /** §M-5b の待ちの状態があれば消す（無ければ書かない） */
+  private async clearBlockedWait(job: JobRow): Promise<void> {
+    if (this.state.blocked_unresolved === undefined) return;
+    const { blocked_unresolved: _reset, ...rest } = this.state;
+    await this.writeState(job, null, rest);
   }
 
   /**

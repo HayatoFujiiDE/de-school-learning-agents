@@ -3,11 +3,11 @@
 // fixture のバイナリは最小の正しい png / webp をテスト内で作る（§M-6）。
 import type { DatabaseSync } from 'node:sqlite';
 import { deflateSync } from 'node:zlib';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FactoryPort, FileMeta, Page } from '../src/anthropic';
 import { validateOutputs } from '../src/checks/schema';
 import type { Env } from '../src/env';
-import { BLOCKED_UNRESOLVED_MAX, CUSTOM_TOOL_UNAVAILABLE_MESSAGE, reconcileJob } from '../src/jobs';
+import { BLOCKED_RECOUNT_MS, BLOCKED_UNRESOLVED_MAX, CUSTOM_TOOL_UNAVAILABLE_MESSAGE, MAX_PAGES, reconcileJob } from '../src/jobs';
 import { libraryFile, serveVersionFile } from '../src/routes/library';
 import { d1, migratedDb, one } from './d1-shim';
 import { goodFiles, goodMaterial } from './helpers';
@@ -111,7 +111,17 @@ function seedRunningJob(phase: 'making' | 'questions' = 'making') {
   ).run(phase, T, T);
 }
 
-function makePort(o: { outputs?: Map<string, Uint8Array>; events: unknown[]; sent?: unknown[]; pageSize?: number }): FactoryPort {
+function makePort(o: {
+  outputs?: Map<string, Uint8Array>;
+  events: unknown[];
+  sent?: unknown[];
+  pageSize?: number;
+  /** session の status（既定 idle。テストの途中で書き換えられる） */
+  status?: { value: string };
+  /** events.list が呼ばれるたびに呼ぶ（呼ばれた回数を渡す） */
+  onEventsPage?: (n: number) => void;
+}): FactoryPort {
+  let eventCalls = 0;
   const outputs = o.outputs ?? new Map<string, Uint8Array>();
   const metas: FileMeta[] = [...outputs.keys()].map((p, i) => ({
     id: `file_${i}`,
@@ -124,10 +134,11 @@ function makePort(o: { outputs?: Map<string, Uint8Array>; events: unknown[]; sen
     isFake: true,
     createSession: no,
     async retrieveSession(id) {
-      return { id, status: 'idle', listCostCents: null, metadata: {}, created_at: T };
+      return { id, status: o.status?.value ?? 'idle', listCostCents: null, metadata: {}, created_at: T };
     },
     listSessionsPage: no,
     async listEventsPage(_id, q): Promise<Page<unknown>> {
+      o.onEventsPage?.(++eventCalls);
       const all = q.order === 'desc' ? [...o.events].reverse() : o.events;
       if (!o.pageSize) return { data: all, next: null };
       const off = q.page ? Number(q.page) : 0;
@@ -360,11 +371,11 @@ describe('§M 画像の読み取り対応（段階 1）', () => {
   });
 
   /** custom_tool_use と idle の間に filler 件の event を挟む */
-  const blockedEvents = (filler: number, blockedIds = ['sevt_ct_1']) => [
+  const blockedEvents = (filler: number, blockedIds = ['sevt_ct_1'], idleId = 'sevt_idle') => [
     { id: 'sevt_1', type: 'user.define_outcome' },
     { id: 'sevt_ct_1', type: 'agent.custom_tool_use', name: 'generate_image', input: { prompt: 'x' } },
     ...Array.from({ length: filler }, (_, i) => ({ id: `sevt_f_${i}`, type: 'agent.message' })),
-    { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: blockedIds } },
+    { id: idleId, type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: blockedIds } },
   ];
 
   for (const filler of [199, 200, 250])
@@ -378,19 +389,132 @@ describe('§M 画像の読み取り対応（段階 1）', () => {
       expect(one(db, "SELECT deny_count FROM factory_jobs WHERE id = 'j1'").deny_count).toBe(1);
     });
 
-  it('(m6) 最後のページまで辿っても種別の分からない id には何も送らず deny に数えない。連続で残れば blocked_event_unresolved で failed', async () => {
+  describe('§M-5b 種別が分からない待ち', () => {
+    const T0 = Date.parse('2026-11-04T09:00:00.000Z');
+    const MIN = 60_000;
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(T0);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+    const at = (ms: number) => vi.setSystemTime(T0 + ms);
+    const rec = (port: FactoryPort) => reconcileJob(env, port, 'j1', { deadline: Date.now() + 25_000 });
+    const waitState = () => JSON.parse(String(one(db, "SELECT reconcile_state_json FROM factory_jobs WHERE id = 'j1'").reconcile_state_json)).blocked_unresolved;
+
+    it('何も送らず deny に数えない。同じ idle event で 5 分未満の連続 reconcile は数えず、5 分以上の間隔で 3 回目に failed', async () => {
+      seedRunningJob();
+      const sent: unknown[] = [];
+      const port = makePort({ events: blockedEvents(3, ['sevt_missing']), sent, pageSize: 2 });
+      // 同じ cron の中で何度呼ばれても 1 回目のまま
+      for (let k = 0; k < 5; k++) expect(await rec(port)).toBe('blocked_unresolved:1');
+      expect(waitState()).toEqual({ idle_event_id: 'sevt_idle', first_seen_at: new Date(T0).toISOString(), count: 1, next_at: new Date(T0 + BLOCKED_RECOUNT_MS).toISOString() });
+      expect(one(db, "SELECT status, deny_count, last_error FROM factory_jobs WHERE id = 'j1'")).toEqual({ status: 'running', deny_count: 0, last_error: 'blocked_event_unresolved' });
+      at(5 * MIN - 1);
+      expect(await rec(port)).toBe('blocked_unresolved:1');
+      at(5 * MIN);
+      expect(await rec(port)).toBe('blocked_unresolved:2');
+      at(9 * MIN);
+      expect(await rec(port)).toBe('blocked_unresolved:2');
+      expect(waitState()).toMatchObject({ count: 2, first_seen_at: new Date(T0).toISOString(), next_at: new Date(T0 + 10 * MIN).toISOString() });
+      at(10 * MIN);
+      expect(BLOCKED_UNRESOLVED_MAX).toBe(3);
+      expect(await rec(port)).toBe('failed:blocked_event_unresolved');
+      expect(sent).toEqual([]);
+      expect(one(db, "SELECT status, error, deny_count FROM factory_jobs WHERE id = 'j1'")).toEqual({ status: 'failed', error: 'blocked_event_unresolved', deny_count: 0 });
+      expect(one(db, "SELECT work_status FROM materials WHERE id = 'm1'").work_status).toBe('idle');
+    });
+
+    it('2 回数えた後に session が進んだら消え、新しい idle event の一時的に分からない id は 0 から（idle event が直接変わっても 0 から）', async () => {
+      seedRunningJob();
+      const sent: unknown[] = [];
+      const status = { value: 'idle' };
+      const events: unknown[] = blockedEvents(1, ['sevt_missing_a'], 'sevt_idle_a');
+      const port = makePort({ events, sent, status });
+      expect(await rec(port)).toBe('blocked_unresolved:1');
+      at(5 * MIN);
+      expect(await rec(port)).toBe('blocked_unresolved:2');
+      // 進行（session running）で待ちの状態は消える
+      status.value = 'running';
+      at(6 * MIN);
+      expect(await rec(port)).toBe('running');
+      expect(waitState()).toBeUndefined();
+      // 次の待ち（別の idle event）。前の待ちの回数を引き継がない
+      status.value = 'idle';
+      events.splice(0, events.length, ...blockedEvents(2, ['sevt_missing_b'], 'sevt_idle_b'));
+      at(7 * MIN);
+      expect(await rec(port)).toBe('blocked_unresolved:1');
+      expect(waitState()).toMatchObject({ idle_event_id: 'sevt_idle_b', count: 1, first_seen_at: new Date(T0 + 7 * MIN).toISOString() });
+      at(12 * MIN);
+      expect(await rec(port)).toBe('blocked_unresolved:2');
+      // 進行を挟まずに idle event が変わっても 0 から
+      events.splice(0, events.length, ...blockedEvents(3, ['sevt_missing_c'], 'sevt_idle_c'));
+      at(17 * MIN);
+      expect(await rec(port)).toBe('blocked_unresolved:1');
+      expect(waitState()).toMatchObject({ idle_event_id: 'sevt_idle_c', count: 1 });
+      expect(one(db, "SELECT status, deny_count FROM factory_jobs WHERE id = 'j1'")).toEqual({ status: 'running', deny_count: 0 });
+      expect(sent).toEqual([]);
+    });
+
+    it('end_turn 等の別の止まり方に進んだら待ちの状態は消える', async () => {
+      seedRunningJob('questions');
+      const events: unknown[] = blockedEvents(1, ['sevt_missing'], 'sevt_idle_a');
+      const port = makePort({ events, sent: [] });
+      expect(await rec(port)).toBe('blocked_unresolved:1');
+      events.push({ id: 'sevt_q', type: 'user.define_outcome' }, { id: 'sevt_idle_end', type: 'session.status_idle', stop_reason: { type: 'end_turn' } });
+      at(1 * MIN);
+      await rec(port);
+      expect(waitState()).toBeUndefined();
+    });
+
+    it('走査が時間切れで途中になっても、次の reconcile は保存した続き位置から読み、custom_tool_result を返す', async () => {
+      seedRunningJob();
+      const sent: unknown[] = [];
+      let run = 1;
+      const calls: Record<number, number> = { 1: 0, 2: 0 };
+      // desc で 1 ページ 1 件: idle, filler×4, custom_tool_use → 6 ページ。1 回目は 3 ページ目を返した直後に締め切りを過ぎる
+      const port = makePort({
+        events: blockedEvents(4),
+        sent,
+        pageSize: 1,
+        onEventsPage: () => {
+          calls[run] += 1;
+          if (run === 1 && calls[1] === 3) at(21_000);
+        },
+      });
+      expect(await rec(port)).toBe('deferred');
+      expect(sent).toEqual([]);
+      const saved = JSON.parse(String(one(db, "SELECT reconcile_state_json FROM factory_jobs WHERE id = 'j1'").reconcile_state_json)).scan.idle;
+      expect(saved).toMatchObject({ pages: 3, done: false, cursor: '3' });
+      run = 2;
+      at(60_000);
+      expect(await rec(port)).toBe('denied:1');
+      // 先頭の確認 1 ページ + 続きの 3 ページ（先頭から読み直すなら 6 ページ）
+      expect(calls[2]).toBe(4);
+      expect(sent).toEqual([
+        { type: 'user.custom_tool_result', custom_tool_use_id: 'sevt_ct_1', content: [{ type: 'text', text: CUSTOM_TOOL_UNAVAILABLE_MESSAGE }], is_error: true },
+      ]);
+    });
+  });
+
+  it('(m6) 走査のページ上限の境目: MAX_PAGES ページ目で見つかれば返し、その先なら scan_too_many_pages で failed（誤った種別は送らない）', async () => {
+    expect(MAX_PAGES).toBe(500);
+    // desc で 1 ページ 1 件。idle が 1 ページ目、custom_tool_use は filler + 2 ページ目
     seedRunningJob();
     const sent: unknown[] = [];
-    const port = makePort({ events: blockedEvents(3, ['sevt_missing']), sent, pageSize: 2 });
-    for (let round = 1; round < BLOCKED_UNRESOLVED_MAX; round++) {
-      expect(await reconcileJob(env, port, 'j1', { deadline: Date.now() + 25_000 })).toBe(`blocked_unresolved:${round}`);
-      expect(one(db, "SELECT status, deny_count, last_error FROM factory_jobs WHERE id = 'j1'")).toEqual({ status: 'running', deny_count: 0, last_error: 'blocked_event_unresolved' });
-    }
-    expect(await reconcileJob(env, port, 'j1', { deadline: Date.now() + 25_000 })).toBe('failed:blocked_event_unresolved');
-    expect(sent).toEqual([]);
-    expect(one(db, "SELECT status, error, deny_count FROM factory_jobs WHERE id = 'j1'")).toEqual({ status: 'failed', error: 'blocked_event_unresolved', deny_count: 0 });
-    expect(one(db, "SELECT work_status FROM materials WHERE id = 'm1'").work_status).toBe('idle');
-  });
+    expect(await reconcileJob(env, makePort({ events: blockedEvents(MAX_PAGES - 2), sent, pageSize: 1 }), 'j1', { deadline: Date.now() + 60_000 })).toBe('denied:1');
+    expect(sent).toEqual([
+      { type: 'user.custom_tool_result', custom_tool_use_id: 'sevt_ct_1', content: [{ type: 'text', text: CUSTOM_TOOL_UNAVAILABLE_MESSAGE }], is_error: true },
+    ]);
+
+    db = migratedDb();
+    env = { ...env, DB: d1(db) } as Env;
+    seedRunningJob();
+    const sent2: unknown[] = [];
+    expect(await reconcileJob(env, makePort({ events: blockedEvents(MAX_PAGES - 1), sent: sent2, pageSize: 1 }), 'j1', { deadline: Date.now() + 60_000 })).toBe('failed:scan_too_many_pages');
+    expect(sent2).toEqual([]);
+  }, 60_000);
 
   it('(m6) 分かった id だけ返し、分からなかった id は次の reconcile で先頭から探し直す（見えたら custom_tool_result）', async () => {
     seedRunningJob();
