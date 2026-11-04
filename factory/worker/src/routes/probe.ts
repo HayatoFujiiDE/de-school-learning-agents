@@ -4,6 +4,8 @@
 // Access の内側だけ（index.ts の ROUTES）。返すのは id・種別・状態コード・エラー種別だけ（本文・鍵は返さない）。
 import { APIError } from '@anthropic-ai/sdk';
 import { makeClient } from '../anthropic';
+import { getSetting, setSetting } from '../db';
+import { todayCostCents } from '../jobs';
 import { json, type RouteCtx } from '../http';
 
 const TOOL = {
@@ -26,8 +28,14 @@ export async function probeImageTool(c: RouteCtx): Promise<Response> {
   const step = String(body.step ?? '');
   const client = makeClient(c.env, { timeoutMs: 60_000 });
   const sid = typeof body.session_id === 'string' ? body.session_id : '';
+  // 触ってよいのは、create で作って settings に記録した 1 組（session と agent）だけ。本番の職人（FACTORY_AGENT_ID）は決して触らない
+  const saved = JSON.parse((await getSetting(c.env.DB, 'probe_image_tool')) ?? 'null') as { session_id: string; agent_id: string; done?: boolean } | null;
   try {
     if (step === 'create') {
+      if ((await getSetting(c.env.DB, 'paused')) === '1') return json(409, { error: 'paused' });
+      if (saved && !saved.done) return json(409, { error: 'probe_in_progress', session_id: saved.session_id });
+      const dailyCap = Number(c.env.DAILY_CAP_CENTS ?? '0');
+      if (!(dailyCap > 0) || (await todayCostCents(c.env.DB)) + 50 > dailyCap) return json(409, { error: 'daily_cap' });
       const agent = await client.beta.agents.create({
         name: 'probe-generate-image',
         model: 'claude-haiku-5-5',
@@ -43,9 +51,10 @@ export async function probeImageTool(c: RouteCtx): Promise<Response> {
         budget: { type: 'limit', max_list_cost: { amount: '50', currency: 'USD' } },
         initial_events: [{ type: 'user.message', content: [{ type: 'text', text: 'Start.' }] }],
       } as never);
+      await setSetting(c.env.DB, 'probe_image_tool', JSON.stringify({ session_id: s.id, agent_id: agent.id }));
       return json(200, { ok: true, agent_id: agent.id, agent_tools: (agent.tools ?? []).map((t) => (t as { type?: string; name?: string }).name ?? (t as { type?: string }).type), session_id: s.id });
     }
-    if (!sid) return json(400, { error: 'session_id_required' });
+    if (!saved || !sid || sid !== saved.session_id) return json(403, { error: 'not_the_probe_session' });
     if (step === 'events') {
       const p = await client.beta.sessions.events.list(sid, { order: 'asc' } as never);
       const s = await client.beta.sessions.retrieve(sid);
@@ -69,8 +78,9 @@ export async function probeImageTool(c: RouteCtx): Promise<Response> {
     if (step === 'archive') {
       const out: Record<string, unknown> = {};
       try { await client.beta.sessions.archive(sid); out.session = 'archived'; } catch (e) { out.session = errView(e); }
-      const aid = typeof body.agent_id === 'string' ? body.agent_id : '';
-      if (aid) { try { await client.beta.agents.archive(aid); out.agent = 'archived'; } catch (e) { out.agent = errView(e); } }
+      const aid = saved.agent_id;
+      if (aid && aid !== c.env.FACTORY_AGENT_ID) { try { await client.beta.agents.archive(aid); out.agent = 'archived'; } catch (e) { out.agent = errView(e); } }
+      await setSetting(c.env.DB, 'probe_image_tool', JSON.stringify({ ...saved, done: true }));
       return json(200, { ok: true, ...out });
     }
     return json(400, { error: 'unknown_step' });
