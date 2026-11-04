@@ -136,12 +136,12 @@
     });
   }
 
-  /** 書き込み操作の共通ループ: 予告 → 実行（ボタン無効化）→ トースト → 再取得 */
+  /** 書き込み操作の共通ループ: 予告 → 実行（ボタン無効化）→ トースト → 再取得。opts.busyText（実行中のボタン文言）・opts.fail（失敗トーストの後）は任意 */
   function action(btn, opts) {
     return confirmDialog(opts).then(function (d) {
       if (!d.ok) return null;
       var label = btn ? btn.textContent : '';
-      if (btn) { btn.disabled = true; btn.textContent = '実行中…'; }
+      if (btn) { btn.disabled = true; btn.textContent = opts.busyText || '実行中…'; }
       return Promise.resolve(opts.run(d.note)).then(function (res) {
         toast(opts.success || '完了しました');
         if (opts.after) opts.after(res);
@@ -149,6 +149,7 @@
         return res;
       }, function (e) {
         toast(e.message || '失敗しました', true);
+        if (opts.fail) opts.fail(e);
         return null;
       }).then(function (r) {
         if (btn) { btn.disabled = false; btn.textContent = label; }
@@ -439,7 +440,7 @@
   // ---- 画面: 素材一覧 ----
   function viewMaterials(view, q) {
     var work = q.work || '', publish = q.publish || '';
-    view.innerHTML = '<h1>素材</h1><div class="card"><div class="row">' +
+    view.innerHTML = '<h1>素材</h1><div id="your-turn"></div><div class="card"><div class="row">' +
       '<label>配信 <select id="f-publish"><option value="">すべて</option><option value="none">なし</option><option value="available">利用できる</option><option value="stopped">止めている</option></select></label>' +
       '<label>制作 <select id="f-work"><option value="">すべて</option><option value="idle">待機</option><option value="queued">順番待ち</option><option value="making">制作中</option><option value="review">確認待ち</option></select></label>' +
       '<a class="btn primary" href="#/new">新しい素材</a></div></div><div id="list" class="card loading">読み込み中…</div>';
@@ -449,7 +450,7 @@
       var p = [];
       if ($('#f-publish').value) p.push('publish=' + encodeURIComponent($('#f-publish').value));
       if ($('#f-work').value) p.push('work=' + encodeURIComponent($('#f-work').value));
-      location.hash = '#/' + (p.length ? '?' + p.join('&') : '');
+      location.hash = '#/materials' + (p.length ? '?' + p.join('&') : '');
     }
     $('#f-publish').addEventListener('change', apply);
     $('#f-work').addEventListener('change', apply);
@@ -459,6 +460,8 @@
     api('GET', '/api/materials' + (qs.length ? '?' + qs.join('&') : '')).then(function (d) {
       var list = $('#list');
       list.classList.remove('loading');
+      var yt = $('#your-turn');
+      if (yt && !work && !publish) yt.innerHTML = yourTurnHtml(d.materials);
       if (!d.materials.length) { list.innerHTML = '<p class="muted">素材はまだありません。「新しい素材」から注文できます。</p>'; return; }
       list.innerHTML = '<div class="table-wrap"><table><thead><tr><th>タイトル</th><th>slug</th><th>型</th><th>配信</th><th>制作</th><th>現在版</th><th>job</th></tr></thead><tbody>' +
         d.materials.map(function (m) {
@@ -470,6 +473,19 @@
         }).join('') + '</tbody></table></div>';
       markAutoRework(d.materials);
     }, function (e) { $('#list').innerHTML = '<p class="err">読み込めませんでした: ' + esc(e.message) + '</p>'; });
+  }
+
+  /** 素材一覧の先頭「あなたの番」: 質問への回答待ち・確認待ちの素材。0 件なら空（カードを出さない） */
+  function yourTurnHtml(materials) {
+    var rows = [];
+    (materials || []).forEach(function (m) {
+      if (m.active_job && m.active_job.status === 'needs_answer') {
+        rows.push('<li class="yt-item"><span class="yt-title">' + esc(m.title) + '</span><a class="btn primary small" href="#/job/' + esc(m.active_job.id) + '">職人の質問に答える</a></li>');
+      }
+      // 一覧の応答には確認待ちの版 id が無いので、確認待ち一覧（#/review）へ案内する
+      if (m.work_status === 'review') rows.push('<li class="yt-item"><span class="yt-title">' + esc(m.title) + '</span><a class="btn small" href="#/review">確認する</a></li>');
+    });
+    return rows.length ? '<div class="card yt"><h2>あなたの番</h2><ul class="yt-list">' + rows.join('') + '</ul></div>' : '';
   }
 
   // ---- 画面: 新しい素材 ----
@@ -580,85 +596,244 @@
     }, function (e) { view.innerHTML = '<p class="err">読み込めませんでした: ' + esc(e.message) + '</p>'; });
   }
 
-  // ---- 画面: job ----
+  // ---- 画面: job（職人の質問に答える）----
+  // 状態: input（needs_answer かつ answer_state=none）/ resend（needs_answer のまま saved・sending）/ readonly（それ以外で質問あり）/ none（質問なし）
+  var KIND_TEXT = { draft: '新しく作る', rework: '作り直し' };
+  var ANSWER_NOTICE = '回答は編集基準のログにも残ります。子どもや家庭の個人情報を含めないでください。';
+  var ACTIVE_JOB_STATUSES = ['queued', 'creating', 'running', 'needs_answer', 'budget_reached'];
+  var DRAFT_PREFIX = 'fa-answer-draft:';
+
+  /** 下書き（{ [question_id]: { mode: 'default'|'own', text } }）。読み書きの失敗は無視して画面は動かす */
+  function loadAnswerDraft(jobId, qs) {
+    var raw = null;
+    try { raw = JSON.parse(window.localStorage.getItem(DRAFT_PREFIX + jobId) || 'null'); } catch (e) { raw = null; }
+    var out = {};
+    if (!raw || typeof raw !== 'object') return out;
+    qs.forEach(function (q) {
+      var e = raw[q.id];
+      if (!e || typeof e !== 'object') return;
+      var mode = e.mode === 'default' || e.mode === 'own' ? e.mode : null;
+      out[q.id] = { mode: mode, text: typeof e.text === 'string' ? e.text : '' };
+    });
+    return out;
+  }
+  function saveAnswerDraft(jobId, draft) { try { window.localStorage.setItem(DRAFT_PREFIX + jobId, JSON.stringify(draft)); } catch (e) { /* 保存できなくても入力は続けられる */ } }
+  function clearAnswerDraft(jobId) { try { window.localStorage.removeItem(DRAFT_PREFIX + jobId); } catch (e) { /* 無視 */ } }
+
+  function defaultText(q) { return q && q['default'] !== null && q['default'] !== undefined ? String(q['default']) : ''; }
+  /** 1 問の下書き → 送る答え。案を選んだ問は default の全文、自分で答えた問は trim 後の値。未回答は null */
+  function draftAnswer(q, e) {
+    if (!e) return null;
+    if (e.mode === 'default') return defaultText(q).trim() ? defaultText(q) : null;
+    if (e.mode === 'own') { var t = String(e.text || '').trim(); return t ? t : null; }
+    return null;
+  }
+  function answerProgress(qs, draft) {
+    var answers = [], done = 0;
+    qs.forEach(function (q) {
+      var a = draftAnswer(q, draft[q.id]);
+      if (a !== null) done++;
+      answers.push({ question_id: q.id, answer: a });
+    });
+    return { total: qs.length, done: done, complete: qs.length > 0 && done === qs.length, answers: answers };
+  }
+  function answerMode(j) {
+    if (!(j.questions || []).length) return 'none';
+    if (j.status !== 'needs_answer') return 'readonly';
+    if (!j.answer_state || j.answer_state === 'none') return 'input';
+    if (j.answer_state === 'saved' || j.answer_state === 'sending') return 'resend';
+    return 'readonly';
+  }
+  function savedAnswerOf(j, qid) {
+    var a = (j.answers || []).filter(function (x) { return x && x.question_id === qid; })[0];
+    return a && typeof a.answer === 'string' ? a.answer : null;
+  }
+
+  function questionCardHtml(q, i, mode, j, entry) {
+    var answered = mode === 'input' ? draftAnswer(q, entry) !== null : savedAnswerOf(j, q.id) !== null;
+    var html = '<section class="card aq-card' + (answered ? ' is-done' : '') + '" data-aq-i="' + i + '" aria-labelledby="aq-q-' + i + '">' +
+      '<div class="aq-head"><span class="aq-num" aria-hidden="true">' + (i + 1) + '</span>' +
+      '<p class="aq-q" id="aq-q-' + i + '"><span class="sr-only">質問 ' + (i + 1) + ': </span>' + esc(q.question) + '</p>' +
+      '<span class="pill green aq-done' + (answered ? '' : ' hidden') + '">回答済み</span></div><div class="aq-body">' +
+      (q.why ? '<div class="aq-why"><span class="aq-label">聞く理由</span><p>' + esc(q.why) + '</p></div>' : '');
+    if (mode === 'input') {
+      var mine = entry && entry.mode, hasDefault = !!defaultText(q).trim();
+      html += '<div class="aq-opts" role="radiogroup" aria-labelledby="aq-q-' + i + '">' +
+        '<label class="aq-opt' + (mine === 'default' ? ' is-on' : '') + '"><input type="radio" name="aq-' + i + '" value="default"' + (mine === 'default' ? ' checked' : '') + (hasDefault ? '' : ' disabled') + '>' +
+        '<span class="aq-opt-body"><span class="aq-opt-title">職人の案でいい</span><span class="aq-opt-text">' + (hasDefault ? esc(defaultText(q)) : '（案はありません）') + '</span></span></label>' +
+        '<label class="aq-opt' + (mine === 'own' ? ' is-on' : '') + '"><input type="radio" name="aq-' + i + '" value="own"' + (mine === 'own' ? ' checked' : '') + '>' +
+        '<span class="aq-opt-body"><span class="aq-opt-title">自分で答える</span></span></label>' +
+        '<div class="aq-own' + (mine === 'own' ? '' : ' hidden') + '"><textarea rows="4" placeholder="答えを書いてください" aria-label="質問 ' + (i + 1) + ' への答え">' + esc(entry && entry.text ? entry.text : '') + '</textarea></div>' +
+        '</div>';
+    } else {
+      var saved = savedAnswerOf(j, q.id);
+      html += '<div class="aq-answer"><span class="aq-label">あなたの回答</span>' + (saved !== null ? '<p>' + esc(saved) + '</p>' : '<p class="muted">回答はありません</p>') + '</div>';
+    }
+    return html + '</div></section>';
+  }
+
+  function jobAlertHtml(j) {
+    var lines = [];
+    if (j.status === 'budget_reached') lines.push('上限に達しました（Worker からは増額しません）');
+    if (j.error) lines.push('エラー: ' + j.error);
+    if (j.last_error) lines.push('最後のエラー: ' + j.last_error);
+    return lines.length ? '<div class="aq-alert" role="alert">' + lines.map(function (l) { return '<p>' + esc(l) + '</p>'; }).join('') + '</div>' : '';
+  }
+
+  function jobDetailHtml(j, open) {
+    var active = ACTIVE_JOB_STATUSES.indexOf(j.status) >= 0;
+    var canReingest = j.status === 'failed' && j.error === 'invalid_outputs';
+    return '<details class="card rv-sec" id="job-detail"' + (open ? ' open' : '') + '><summary><h2>作業の詳細</h2></summary>' +
+      '<div class="row">' + pill(JOB_LABEL[j.status] || j.status, j.status === 'failed' ? 'red' : j.status === 'done' ? 'green' : 'orange') +
+      '<span class="muted">' + esc(j.kind) + ' / ' + esc(j.model) + ' / 段階 ' + esc(j.phase) + '</span>' +
+      (j.console_url ? '<a href="' + esc(j.console_url) + '" target="_blank" rel="noopener noreferrer">Console</a>' : '') + '</div>' +
+      '<p>費用 ' + fmtCents(j.list_cost_cents) + ' / 拒否した操作 ' + esc(j.deny_count) + ' 件 / 最終確認 ' + esc(fmtTime(j.last_checked_at)) + '</p>' +
+      '<div class="row">' +
+      (j.status === 'queued' ? '<button type="button" class="btn primary" id="start-btn">起動する</button>' : '') +
+      (active && j.session_id ? '<button type="button" class="btn" id="rec-btn">状態を取り込む</button>' : '') +
+      (active ? '<button type="button" class="btn danger" id="cancel-btn">取り消す</button>' : '') +
+      (canReingest ? '<button type="button" class="btn primary" id="reingest-btn">取り込みをやり直す</button>' : '') +
+      '<button type="button" class="btn" id="reload-btn">再読み込み</button></div></details>';
+  }
+
+  function jobHtml(j, mode, draft) {
+    var qs = j.questions || [];
+    var kind = KIND_TEXT[j.kind] || j.kind || '—';
+    var state = JOB_LABEL[j.status] || j.status;
+    var head;
+    if (mode === 'input') head = '<h1>職人からの質問（' + qs.length + ' 問）</h1><p class="aq-lead">答えると、職人が制作を始めます。<span class="muted">注文の種類: ' + esc(kind) + '</span></p>';
+    else if (mode === 'resend') head = '<h1>職人からの質問（' + qs.length + ' 問）</h1><p class="aq-lead"><span class="muted">注文の種類: ' + esc(kind) + '</span></p>';
+    else if (mode === 'readonly') head = '<h1>職人からの質問（' + qs.length + ' 問）</h1><p class="aq-lead">状態: ' + esc(state) + '<span class="muted">注文の種類: ' + esc(kind) + '</span></p>';
+    else head = '<h1>注文の状況</h1><p class="aq-lead">状態: ' + esc(state) + '<span class="muted">注文の種類: ' + esc(kind) + '</span></p>';
+    var foot = '';
+    if (mode === 'input') {
+      foot = '<div class="rv-foot" id="aq-foot"><div class="row rv-foot-row"><span id="aq-progress" aria-live="polite"></span>' +
+        '<div class="rv-btns aq-btns"><span class="muted" id="aq-left"></span><button type="button" class="btn primary" id="ans-btn" disabled>回答を送って制作を始める</button></div></div></div>';
+    } else if (mode === 'resend') {
+      foot = '<div class="rv-foot" id="aq-foot"><div class="row rv-foot-row"><span>回答は保存済みです</span>' +
+        '<div class="rv-btns aq-btns"><button type="button" class="btn primary" id="ans-btn">もう一度送る</button></div></div></div>';
+    }
+    return '<p class="aq-crumb"><a href="#/material/' + esc(j.material_id) + '" id="job-crumb">素材へ</a></p>' + head + jobAlertHtml(j) +
+      (mode === 'resend' ? '<div class="aq-note">回答は保存済みです。送信が終わっていません</div>' : '') +
+      (qs.length ? '<form id="ans-form" class="aq-list" novalidate>' + qs.map(function (q, i) { return questionCardHtml(q, i, mode, j, draft[q.id]); }).join('') + '</form>' : '') +
+      '<details class="card rv-sec" id="job-brief"><summary><h2>注文票を見る</h2></summary>' + renderMd(j.brief_md) + '</details>' +
+      jobDetailHtml(j, mode === 'none') + foot;
+  }
+
+  function bindJobActions(id) {
+    $('#reload-btn').addEventListener('click', function () { route(); });
+    var start = $('#start-btn');
+    if (start) start.addEventListener('click', function () {
+      action(start, { title: '職人の作業場を起動します', run: function () { return api('POST', '/api/jobs/' + encodeURIComponent(id) + '/start'); }, success: '起動しました' });
+    });
+    var rec = $('#rec-btn');
+    if (rec) rec.addEventListener('click', function () {
+      action(rec, { title: '状態を取り込みます', body: '職人の作業場の状態を読み、必要なら成果物を取り込みます。', run: function () { return api('POST', '/api/jobs/' + encodeURIComponent(id) + '/reconcile'); }, success: '取り込みました' });
+    });
+    var reingest = $('#reingest-btn');
+    if (reingest) reingest.addEventListener('click', function () {
+      action(reingest, {
+        title: '取り込みをやり直します', body: '職人の成果物をそのまま取り込み直します（session は作りません）', okText: '取り込み直す',
+        run: function () { return api('POST', '/api/jobs/' + encodeURIComponent(id) + '/reingest'); },
+        success: '取り込みをやり直しました',
+        after: function (res) {
+          if (res && res.status === 'done') toast('取り込み直しました。確認待ちに出ています');
+          else if (res && res.status === 'failed') toast('取り込み直しましたが、また失敗しました（エラーを確認してください）', true);
+          else if (res) toast('取り込み直しを始めました（続きは自動で進みます: ' + (JOB_LABEL[res.status] || res.status || '') + '）');
+          route();
+        }
+      });
+    });
+    var cancel = $('#cancel-btn');
+    if (cancel) cancel.addEventListener('click', function () {
+      action(cancel, { title: 'この job を取り消します', body: '作業場は止まり、元に戻せません。', okText: '取り消す', run: function () { return api('POST', '/api/jobs/' + encodeURIComponent(id) + '/cancel'); }, success: '取り消しました' });
+    });
+  }
+
+  function sendAnswers(id, btn, title, answers) {
+    action(btn, {
+      title: title, body: ANSWER_NOTICE, busyText: '送信中…',
+      run: function () { return api('POST', '/api/jobs/' + encodeURIComponent(id) + '/answer', { answers: answers }); },
+      success: '回答を送りました。職人が制作を始めます',
+      after: function () { clearAnswerDraft(id); route(); },
+      fail: function () { route(); } // 409 answer_in_flight / not_waiting 等は toast の後に読み直す（下書きは残す）
+    });
+  }
+
+  function bindAnswerInputs(view, id, qs, draft) {
+    var btn = $('#ans-btn');
+    function refresh() {
+      var p = answerProgress(qs, draft);
+      $('#aq-progress').textContent = p.total + ' 問中 ' + p.done + ' 問に答えました';
+      $('#aq-left').textContent = p.complete ? '' : 'あと ' + (p.total - p.done) + ' 問';
+      btn.disabled = !p.complete;
+      qs.forEach(function (q, i) {
+        var card = view.querySelector('[data-aq-i="' + i + '"]');
+        var done = draftAnswer(q, draft[q.id]) !== null;
+        card.classList.toggle('is-done', done);
+        card.querySelector('.aq-done').classList.toggle('hidden', !done);
+      });
+      return p;
+    }
+    qs.forEach(function (q, i) {
+      var card = view.querySelector('[data-aq-i="' + i + '"]');
+      var radios = card.querySelectorAll('input[type=radio]');
+      var own = card.querySelector('.aq-own'), ta = own.querySelector('textarea');
+      var byArrow = false;
+      function entry() { return draft[q.id] || (draft[q.id] = { mode: null, text: '' }); }
+      Array.prototype.forEach.call(radios, function (r) {
+        // 矢印キーで選んだ時は textarea へ移らない（radio の間を矢印で行き来できるように）
+        r.addEventListener('keydown', function (e) { if (/^Arrow/.test(e.key)) { byArrow = true; setTimeout(function () { byArrow = false; }, 0); } });
+        r.addEventListener('change', function () {
+          if (!r.checked) return;
+          entry().mode = r.value;
+          Array.prototype.forEach.call(radios, function (x) { x.parentNode.classList.toggle('is-on', x.checked); });
+          own.classList.toggle('hidden', r.value !== 'own');
+          saveAnswerDraft(id, draft);
+          refresh();
+          if (r.value === 'own' && !byArrow) ta.focus();
+        });
+      });
+      ta.addEventListener('input', function () { entry().text = ta.value; saveAnswerDraft(id, draft); refresh(); });
+    });
+    $('#ans-form').addEventListener('submit', function (ev) { ev.preventDefault(); });
+    btn.addEventListener('click', function () {
+      var p = refresh();
+      if (!p.complete) return;
+      sendAnswers(id, btn, '回答を送って制作を始めます', p.answers);
+    });
+    refresh();
+  }
+
   function viewJob(view, id) {
     view.innerHTML = '<p class="loading">読み込み中…</p>';
     api('GET', '/api/jobs/' + encodeURIComponent(id)).then(function (d) {
       var j = d.job;
       var qs = j.questions || [];
-      var canAnswer = j.status === 'needs_answer';
-      var active = ['queued', 'creating', 'running', 'needs_answer', 'budget_reached'].indexOf(j.status) >= 0;
-      var canReingest = j.status === 'failed' && j.error === 'invalid_outputs';
-      view.innerHTML = '<h1>job</h1><div class="card"><div class="row">' + pill(JOB_LABEL[j.status] || j.status, j.status === 'failed' ? 'red' : j.status === 'done' ? 'green' : 'orange') +
-        '<span class="muted">' + esc(j.kind) + ' / ' + esc(j.model) + ' / 段階 ' + esc(j.phase) + '</span>' +
-        '<a href="#/material/' + esc(j.material_id) + '">素材へ</a>' +
-        (j.console_url ? '<a href="' + esc(j.console_url) + '" target="_blank" rel="noopener noreferrer">Console</a>' : '') + '</div>' +
-        '<p>費用 ' + fmtCents(j.list_cost_cents) + ' / 拒否した操作 ' + esc(j.deny_count) + ' 件 / 最終確認 ' + esc(fmtTime(j.last_checked_at)) + '</p>' +
-        (j.status === 'budget_reached' ? '<p class="err">上限に達しました（Worker からは増額しません）</p>' : '') +
-        (j.error ? '<p class="err">エラー: ' + esc(j.error) + '</p>' : '') +
-        (j.last_error ? '<p class="err">最後のエラー: ' + esc(j.last_error) + '</p>' : '') +
-        '<div class="row">' +
-        (j.status === 'queued' ? '<button type="button" class="btn primary" id="start-btn">起動する</button>' : '') +
-        (active && j.session_id ? '<button type="button" class="btn" id="rec-btn">状態を取り込む</button>' : '') +
-        (active ? '<button type="button" class="btn danger" id="cancel-btn">取り消す</button>' : '') +
-        (canReingest ? '<button type="button" class="btn primary" id="reingest-btn">取り込みをやり直す</button>' : '') +
-        '<button type="button" class="btn" id="reload-btn">再読み込み</button></div></div>' +
-        (qs.length ? '<form id="ans-form" class="card"><h2>職人からの質問</h2>' + qs.map(function (q) {
-          var saved = (j.answers || []).filter(function (a) { return a.question_id === q.id; })[0];
-          return '<div class="field"><span>' + esc(q.question) + '</span><span class="muted">理由: ' + esc(q.why) + ' / 既定: ' + esc(q["default"]) + '</span>' +
-            '<textarea data-qid="' + esc(q.id) + '" rows="3"' + (canAnswer && j.answer_state === 'none' ? '' : ' disabled') + '>' + esc(saved ? saved.answer : '') + '</textarea>' +
-            (canAnswer && j.answer_state === 'none' ? '<button type="button" class="btn small" data-default="' + esc(q.id) + '">default を使う</button>' : '') + '</div>';
-        }).join('') + (canAnswer ? '<p class="muted">' + (j.answer_state === 'none' ? '' : '回答は保存済みです（' + esc(j.answer_state) + '）。送信だけをやり直します。') + '</p><div class="row end"><button type="submit" class="btn primary" id="ans-btn">回答を送る</button></div>' : '') + '</form>' : '') +
-        '<div class="card"><h2>注文票</h2>' + renderMd(j.brief_md) + '</div>';
-      $('#reload-btn').addEventListener('click', function () { route(); });
-      var start = $('#start-btn');
-      if (start) start.addEventListener('click', function () {
-        action(start, { title: '職人の作業場を起動します', run: function () { return api('POST', '/api/jobs/' + encodeURIComponent(id) + '/start'); }, success: '起動しました' });
-      });
-      var rec = $('#rec-btn');
-      if (rec) rec.addEventListener('click', function () {
-        action(rec, { title: '状態を取り込みます', body: '職人の作業場の状態を読み、必要なら成果物を取り込みます。', run: function () { return api('POST', '/api/jobs/' + encodeURIComponent(id) + '/reconcile'); }, success: '取り込みました' });
-      });
-      var reingest = $('#reingest-btn');
-      if (reingest) reingest.addEventListener('click', function () {
-        action(reingest, {
-          title: '取り込みをやり直します', body: '職人の成果物をそのまま取り込み直します（session は作りません）', okText: '取り込み直す',
-          run: function () { return api('POST', '/api/jobs/' + encodeURIComponent(id) + '/reingest'); },
-          success: '取り込みをやり直しました',
-          after: function (res) {
-            if (res && res.status === 'done') toast('取り込み直しました。確認待ちに出ています');
-            else if (res && res.status === 'failed') toast('取り込み直しましたが、また失敗しました（エラーを確認してください）', true);
-            else if (res) toast('取り込み直しを始めました（続きは自動で進みます: ' + (JOB_LABEL[res.status] || res.status || '') + '）');
-            route();
-          }
-        });
-      });
-      var cancel = $('#cancel-btn');
-      if (cancel) cancel.addEventListener('click', function () {
-        action(cancel, { title: 'この job を取り消します', body: '作業場は止まり、元に戻せません。', okText: '取り消す', run: function () { return api('POST', '/api/jobs/' + encodeURIComponent(id) + '/cancel'); }, success: '取り消しました' });
-      });
-      var form = $('#ans-form');
-      if (form) {
-        Array.prototype.forEach.call(form.querySelectorAll('[data-default]'), function (b) {
-          b.addEventListener('click', function () {
-            var qid = b.getAttribute('data-default');
-            var q = qs.filter(function (x) { return x.id === qid; })[0];
-            var ta = form.querySelector('textarea[data-qid="' + qid + '"]');
-            if (q && ta) ta.value = q["default"];
-          });
-        });
-        form.addEventListener('submit', function (ev) {
-          ev.preventDefault();
-          var answers = Array.prototype.map.call(form.querySelectorAll('textarea[data-qid]'), function (ta) { return { question_id: ta.getAttribute('data-qid'), answer: ta.value }; });
-          if (j.answer_state === 'none' && answers.some(function (a) { return !a.answer.trim(); })) { toast('すべての質問に回答してください', true); return; }
-          action($('#ans-btn'), {
-            title: '回答を送ります', body: '回答は編集基準のログにも残ります。子どもや家庭の個人情報を含めないでください。',
-            run: function () { return api('POST', '/api/jobs/' + encodeURIComponent(id) + '/answer', { answers: answers }); },
-            success: '回答を送りました'
-          });
+      var mode = answerMode(j);
+      // 素材のタイトルはパンくずに後から入れる（失敗したら「素材へ」のまま）
+      var mid = String(j.material_id || '');
+      if (mid) api('GET', '/api/materials/' + encodeURIComponent(mid)).then(function (md) {
+        var a = $('#job-crumb');
+        if (a && a.getAttribute('href') === '#/material/' + mid && md && md.material && md.material.title) a.textContent = '← 素材: ' + md.material.title;
+      }, function () { /* 補助の表示 */ });
+      var draft = mode === 'input' ? loadAnswerDraft(id, qs) : {};
+      if (qs.length && mode !== 'input') clearAnswerDraft(id); // 回答は保存済み（answer_state は none に戻らない）
+      view.innerHTML = jobHtml(j, mode, draft);
+      document.body.classList.toggle('has-foot', mode === 'input' || mode === 'resend');
+      bindJobActions(id);
+      if (mode === 'input') bindAnswerInputs(view, id, qs, draft);
+      else if (mode === 'resend') {
+        var rb = $('#ans-btn');
+        rb.addEventListener('click', function () {
+          sendAnswers(id, rb, '保存済みの回答を送り直します', (j.answers || []).map(function (a) { return { question_id: a.question_id, answer: a.answer }; }));
         });
       }
-    }, function (e) { view.innerHTML = '<p class="err">読み込めませんでした: ' + esc(e.message) + '</p>'; });
+    }, function (e) {
+      view.innerHTML = '<p class="err">読み込めませんでした: ' + esc(e.message) + '</p><p><button type="button" class="btn" id="job-retry">もう一度読み込む</button></p>';
+      var b = $('#job-retry');
+      if (b) b.addEventListener('click', route);
+    });
   }
 
   // ---- 確認画面（§L-6。§G-2 を置き換え）----
