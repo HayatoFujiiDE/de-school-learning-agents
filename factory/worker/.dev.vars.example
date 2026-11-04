@@ -2,6 +2,8 @@
 # 本物の値はここに書かない。本番は `wrangler secret put` をふじさんの通常ターミナルで実行する
 ANTHROPIC_API_KEY=sk-ant-xxxx
 ANTHROPIC_WEBHOOK_SIGNING_KEY=whsec_xxxx
+# 収集部隊の X 検索（任意。無ければ RSS だけで走る）
+XAI_API_KEY=xai-xxxx
 # 以下 2 つはローカル専用。hostname が localhost / 127.0.0.1 の時だけ効く
 ACCESS_DEV_BYPASS_EMAIL=dev@example.invalid
 ANTHROPIC_FAKE=1

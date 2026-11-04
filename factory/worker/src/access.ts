@@ -50,7 +50,13 @@ async function getJwks(teamDomain: string): Promise<Array<Record<string, unknown
   return Array.isArray(data.keys) ? data.keys : [];
 }
 
-export async function verifyAccessJwt(token: string, env: Env, nowSec = Math.floor(Date.now() / 1000)): Promise<string | null> {
+/** opts.allowCommonName: email が無い時に service token の common_name を受ける（/api/intake だけ。§K-3） */
+export async function verifyAccessJwt(
+  token: string,
+  env: Env,
+  nowSec = Math.floor(Date.now() / 1000),
+  opts: { allowCommonName?: boolean } = {},
+): Promise<string | null> {
   const team = (env.ACCESS_TEAM_DOMAIN || '').replace(/\/+$/, '');
   const aud = env.ACCESS_AUD || '';
   if (!team || !aud) return null;
@@ -73,12 +79,13 @@ export async function verifyAccessJwt(token: string, env: Env, nowSec = Math.flo
   if (!auds.includes(aud)) return null;
   if (typeof payload.exp !== 'number' || payload.exp <= nowSec) return null;
   if (typeof payload.nbf === 'number' && payload.nbf > nowSec + 60) return null;
-  if (typeof payload.email !== 'string' || payload.email.length === 0) return null;
-  return payload.email;
+  if (typeof payload.email === 'string' && payload.email.length > 0) return payload.email;
+  if (opts.allowCommonName && typeof payload.common_name === 'string' && payload.common_name.length > 0) return `service:${payload.common_name}`;
+  return null;
 }
 
-/** Access の検証。GET 以外は Origin も検証する */
-export async function requireAccess(request: Request, env: Env): Promise<AccessResult> {
+/** Access の検証。GET 以外は Origin も検証する。opts.allowCommonName は /api/intake だけが付ける（他ルートは email 必須のまま） */
+export async function requireAccess(request: Request, env: Env, opts: { allowCommonName?: boolean } = {}): Promise<AccessResult> {
   const url = new URL(request.url);
   let email: string | null = null;
   if (env.ACCESS_DEV_BYPASS_EMAIL && isLocalHostname(url.hostname)) {
@@ -87,7 +94,7 @@ export async function requireAccess(request: Request, env: Env): Promise<AccessR
     const token = request.headers.get('Cf-Access-Jwt-Assertion');
     if (!token) return denied();
     try {
-      email = await verifyAccessJwt(token, env);
+      email = await verifyAccessJwt(token, env, undefined, { allowCommonName: opts.allowCommonName === true });
     } catch {
       email = null;
     }

@@ -1,0 +1,34 @@
+{
+  "id": "resp_fake_scout_1",
+  "object": "response",
+  "status": "completed",
+  "model": "grok-4.3",
+  "output": [
+    { "type": "custom_tool_call", "name": "x_keyword_search", "id": "ctc_fake_1", "status": "completed" },
+    {
+      "type": "message",
+      "id": "msg_fake_x_1",
+      "role": "assistant",
+      "status": "completed",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "- 公式アカウントが新しい回路の作例を紹介 https://x.com/example/status/1000000000000000001\n- 宇宙機関が月の観察ガイドを公開 https://x.com/example/status/1000000000000000002",
+          "logprobs": [],
+          "annotations": [{ "type": "url_citation", "url": "https://x.com/example/status/1000000000000000001", "title": "1" }]
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 4000,
+    "input_tokens_details": { "cached_tokens": 1000 },
+    "output_tokens": 600,
+    "output_tokens_details": { "reasoning_tokens": 200 },
+    "total_tokens": 4600,
+    "num_sources_used": 12,
+    "num_server_side_tools_used": 2,
+    "server_side_tool_usage_details": { "x_search_calls": 2, "x_posts_fetched": 12, "x_users_fetched": 0 },
+    "cost_in_usd_ticks": null
+  }
+}

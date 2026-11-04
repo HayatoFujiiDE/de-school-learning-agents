@@ -1,4 +1,4 @@
-// smoke（契約 §H (a)〜(e),(g)〜(i),(k)〜(n)）。scripts/smoke.sh が wrangler dev（fake）を起動してから呼ぶ。
+// smoke（契約 §H (a)〜(e),(g)〜(i),(k)〜(n)、§K-8 (o)〜(s)）。scripts/smoke.sh が wrangler dev（fake）を起動してから呼ぶ。
 // 出力: 1 行ずつ `PASS <名前>` / `FAIL <名前> <理由>`。最後に SMOKE_RESULT=PASS|FAIL。応答本文は必要な field だけを見る。
 import crypto from 'node:crypto';
 import http from 'node:http';
@@ -409,8 +409,137 @@ async function main() {
     check('no_personal_data !== true → 400', r2.status === 400 && r2.json?.error === 'personal_data_confirmation_required', `status=${r2.status}`);
   }
 
+  // ---- 入口（§K-8）----
+  await intakeSmoke();
+
   console.log(`SMOKE_RESULT=${failed === 0 ? 'PASS' : 'FAIL'}`);
   process.exit(failed === 0 ? 0 : 1);
+}
+
+async function status() {
+  return (await api('GET', '/api/status')).json ?? {};
+}
+
+async function intakeSmoke() {
+  // (o) 手で足す → 一覧に出る → adopt で materials に行 → 2 回目は 409
+  {
+    const bad = await api('POST', '/api/proposals', { title: '順位をつける', body: 'b' });
+    check('(o) 禁止語を含む提案は 400 invalid_proposal', bad.status === 400 && bad.json?.error === 'invalid_proposal' && bad.json?.field === 'title', `status=${bad.status} error=${bad.json?.error}`);
+    const c = await api('POST', '/api/proposals', {
+      title: `smoke 提案 ${RUN}`,
+      body: '温度を測ってグラフにする',
+      concept_codes: ['SCI01'],
+      kinds: [3],
+      age_band: 'both',
+      evidence: [{ url: 'https://example.org/a', title: 'a' }],
+    });
+    check('(o) POST /api/proposals → 201', c.status === 201 && !!c.json?.id, `status=${c.status}`);
+    const pid = c.json?.id;
+    const list = await api('GET', '/api/proposals');
+    const row = (list.json?.proposals ?? []).find((x) => x.id === pid);
+    check('(o) 一覧（提案中）に出る（source_kind=manual・evidence・concept_codes）', !!row && row.source_kind === 'manual' && row.concept_codes?.[0] === 'SCI01' && row.evidence?.[0]?.url === 'https://example.org/a', `found=${!!row}`);
+    await setScenario('questions-empty-then-done');
+    const body = { title: `smoke 採択 ${RUN}`, slug: `smoke-adopt-${RUN}`, kinds: [3], catalog_item_id: null, brief_md: '提案から作る注文票（個人情報なし）', no_personal_data: true };
+    const a1 = await api('POST', `/api/proposals/${pid}/adopt`, body);
+    check('(o) adopt → 201（POST /api/materials と同じ応答: material_id・job_id）', a1.status === 201 && !!a1.json?.material_id && !!a1.json?.job_id, `status=${a1.status} error=${a1.json?.error}`);
+    const m = await api('GET', `/api/materials/${a1.json?.material_id}`);
+    check('(o) materials に行ができ proposal_id が付く', m.status === 200 && m.json?.material?.proposal_id === pid, `status=${m.status}`);
+    const a2 = await api('POST', `/api/proposals/${pid}/adopt`, { ...body, slug: `smoke-adopt2-${RUN}` });
+    check('(o) 同じ提案の 2 回目の adopt は 409 not_proposed', a2.status === 409 && a2.json?.error === 'not_proposed', `status=${a2.status}`);
+    const adopted = await api('GET', '/api/proposals?status=adopted');
+    check('(o) 採択済みの一覧に material_id 付きで出る', (adopted.json?.proposals ?? []).some((x) => x.id === pid && x.material_id === a1.json?.material_id), 'not found');
+    const d = await api('POST', '/api/proposals', { title: `smoke 見送り ${RUN}`, body: '見送る提案' });
+    const dn = await api('POST', `/api/proposals/${d.json?.id}/dismiss`, {});
+    const d1 = await api('POST', `/api/proposals/${d.json?.id}/dismiss`, { note: '今は作らない' });
+    const d2 = await api('POST', `/api/proposals/${d.json?.id}/dismiss`, { note: 'もう一度' });
+    check('(o) dismiss: 理由なし 400 → 200 → 2 回目 409', dn.status === 400 && d1.status === 200 && d2.status === 409, `${dn.status}/${d1.status}/${d2.status}`);
+  }
+
+  // (p) intake
+  {
+    const okBody = {
+      title: `smoke 子ども由来 ${RUN}`,
+      body: '棒の影の長さが時間で変わる理由を知りたかった',
+      concept_codes: ['SCI02'],
+      age_band: 'elementary',
+      missing: '影と太陽の高さの図',
+      supporter_checked: true,
+      supporter_email: 'staff@example.invalid',
+    };
+    const noCheck = { ...okBody };
+    delete noCheck.supporter_checked;
+    const r1 = await api('POST', '/api/intake', noCheck);
+    check('(p) supporter_checked 無しで 400 supporter_check_required', r1.status === 400 && r1.json?.error === 'supporter_check_required', `status=${r1.status} error=${r1.json?.error}`);
+    const marker = `VALUE-${RUN}`;
+    const r2 = await api('POST', '/api/intake', { ...okBody, child_name: marker });
+    check('(p) child_name キー付きで 400 forbidden_field（キー名だけ返し値は返さない）', r2.status === 400 && r2.json?.error === 'forbidden_field' && r2.json?.field === 'child_name' && !r2.text.includes(marker), `status=${r2.status} error=${r2.json?.error}`);
+    const r3 = await api('POST', '/api/intake', okBody);
+    check('(p) 正しい body で 201', r3.status === 201 && !!r3.json?.id, `status=${r3.status} error=${r3.json?.error}`);
+    const list = await api('GET', '/api/proposals');
+    const row = (list.json?.proposals ?? []).find((x) => x.id === r3.json?.id);
+    check('(p) 一覧に source_kind=child・supporter_checked で出て、supporter_email は一覧に出ない', !!row && row.source_kind === 'child' && row.supporter_checked === true && !list.text.includes('staff@example.invalid'), `found=${!!row}`);
+    const u = new URL(BASE);
+    const nonLocal = await new Promise((resolve) => {
+      const req = http.request({ host: u.hostname, port: u.port, path: '/api/intake', method: 'POST', headers: { host: 'factory.example.com', 'content-type': 'application/json' } }, (res) => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode));
+      });
+      req.on('error', () => resolve(-1));
+      req.write(JSON.stringify(okBody));
+      req.end();
+    });
+    check('(p) 非 localhost・JWT なしの /api/intake は 401', nonLocal === 401, `status=${nonLocal}`);
+  }
+
+  // (q) 収集（fake: RSS 2 本 + xAI + Haiku）
+  {
+    const r = await api('POST', '/api/scout/run');
+    check('(q) POST /api/scout/run → done・提案 2 件', r.status === 200 && r.json?.status === 'done' && r.json?.proposed === 2 && r.json?.rss_items === 3 && r.json?.x_posts === 12, `status=${r.status} run=${r.json?.status} proposed=${r.json?.proposed} error=${r.json?.error}`);
+    const list = await api('GET', '/api/proposals');
+    const scoutRows = (list.json?.proposals ?? []).filter((x) => x.source_kind === 'scout');
+    check('(q) proposals に source_kind=scout が入る', scoutRows.length >= 2, `scout=${scoutRows.length}`);
+    const st = await status();
+    check('(q) scout_runs は done、cost_ledger(scout) の当月合計 > 0', st.scout?.last_status === 'done' && st.scout?.month_cents > 0 && st.scout?.running === false, `last=${st.scout?.last_status} cents=${st.scout?.month_cents}`);
+    const allCalls = (await api('GET', '/__fake/calls')).json?.calls ?? [];
+    const x = allCalls.filter((c) => c.op === 'xai.responses');
+    const h = allCalls.filter((c) => c.op === 'messages.create' && c.params?.model === 'claude-haiku-5-5');
+    check('(q) xAI 1 回（x_search・store=false）・Haiku 1 回（json_schema）', x.length === 1 && x[0].params?.store === false && h.length === 1 && h[0].params?.output_format === 'json_schema', `xai=${x.length} haiku=${h.length}`);
+  }
+
+  // (r) 会議（fake: Batch 1 件 → 次の tick で ended）
+  {
+    const r = await api('POST', '/api/meeting/run');
+    check('(r) POST /api/meeting/run → 201 submitted', r.status === 201 && r.json?.status === 'submitted' && !!r.json?.batch_id, `status=${r.status} error=${r.json?.error}`);
+    const again = await api('POST', '/api/meeting/run');
+    check('(r) submitted が残っていれば 409 already_submitted', again.status === 409 && again.json?.error === 'already_submitted', `status=${again.status}`);
+    const st1 = await status();
+    check('(r) status: meeting.pending_batch=true・submitted', st1.meeting?.pending_batch === true && st1.meeting?.last_status === 'submitted', `pending=${st1.meeting?.pending_batch}`);
+    const code = await cron();
+    const st2 = await status();
+    check('(r) 次の tick で ended・費用行あり・pending なし', code === 200 && st2.meeting?.last_status === 'ended' && st2.meeting?.pending_batch === false && st2.meeting?.month_cents > 0, `cron=${code} last=${st2.meeting?.last_status} cents=${st2.meeting?.month_cents}`);
+    const latest = await api('GET', '/api/meeting/latest');
+    const mins = latest.json?.meeting?.minutes;
+    check('(r) meeting_minutes.minutes_json に views 4 つと ranked', !!mins && ['research', 'pedagogy', 'expression', 'verification'].every((k) => typeof mins.views?.[k] === 'string') && Array.isArray(mins.ranked), 'minutes missing');
+    const list = await api('GET', '/api/proposals');
+    const meetRows = (list.json?.proposals ?? []).filter((x) => x.source_kind === 'meeting');
+    const prioritized = (list.json?.proposals ?? []).filter((x) => x.source_kind !== 'meeting' && x.priority === 5 && x.meeting_reason);
+    check('(r) source_kind=meeting の提案が入り、既存提案に優先度と会議の理由が付く', meetRows.length >= 1 && meetRows[0].priority === 3 && prioritized.length === 1, `meeting=${meetRows.length} prioritized=${prioritized.length}`);
+    const calls = (await api('GET', '/__fake/calls')).json?.calls ?? [];
+    const bc = calls.filter((c) => c.op === 'batches.create');
+    check('(r) Batch は 1 件（sonnet・adaptive・json_schema）', bc.length === 1 && bc[0].params?.requests === 1 && bc[0].params?.model === 'claude-sonnet-5-5' && bc[0].params?.thinking?.type === 'adaptive' && bc[0].params?.output_format === 'json_schema', `create=${bc.length}`);
+  }
+
+  // (s) 月次上限（smoke の上限は 1 セント。上の (q)(r) の費用で当月合計が上限以上になっている）
+  {
+    const sc = await api('POST', '/api/scout/run');
+    const st = await status();
+    check('(s) 当月合計が上限以上なら scout は skipped（200 {skipped:"cap"}）', sc.status === 200 && sc.json?.skipped === 'cap' && st.scout?.last_status === 'skipped', `status=${sc.status} last=${st.scout?.last_status}`);
+    const before = ((await api('GET', '/__fake/calls')).json?.calls ?? []).filter((c) => c.op === 'batches.create').length;
+    const mt = await api('POST', '/api/meeting/run');
+    const after = ((await api('GET', '/__fake/calls')).json?.calls ?? []).filter((c) => c.op === 'batches.create').length;
+    const st2 = await status();
+    check('(s) 当月合計が上限以上なら会議は起きない（Batch を呼ばない）', mt.status === 200 && mt.json?.skipped === 'cap' && after === before && st2.meeting?.last_status === 'ended', `status=${mt.status} batches=${before}->${after}`);
+  }
 }
 
 main().catch((e) => {

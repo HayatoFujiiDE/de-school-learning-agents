@@ -16,10 +16,19 @@ export interface Env {
   SESSION_BUDGET_REWORK_CENTS: string;
   VERIFY_MAX_FETCHES: string;
   VERIFY_MAX_ATTEMPTS: string;
+  // 入口（§K-0）。wrangler.jsonc に既定値がある。無い時は cfg() の既定を使う
+  SCOUT_XAI_MODEL?: string;
+  SCOUT_MAX_TURNS?: string;
+  SCOUT_MONTHLY_CAP_CENTS?: string;
+  MEETING_MONTHLY_CAP_CENTS?: string;
+  SCOUT_DAY?: string;
+  MEETING_DAYS?: string;
 
   // secrets
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_WEBHOOK_SIGNING_KEY?: string;
+  /** 収集部隊の X 検索のみ（§K-0）。無ければ X 検索を飛ばす */
+  XAI_API_KEY?: string;
 
   // .dev.vars のみ（hostname が localhost / 127.0.0.1 の時だけ効く）
   ACCESS_DEV_BYPASS_EMAIL?: string;
@@ -39,7 +48,31 @@ export const cfg = (env: Env) => ({
   verifyMaxFetches: intVar(env.VERIFY_MAX_FETCHES, 25),
   verifyMaxAttempts: intVar(env.VERIFY_MAX_ATTEMPTS, 3),
   workspace: env.ANTHROPIC_WORKSPACE || 'default',
+  // §K-0
+  scoutModel: (env.SCOUT_XAI_MODEL || 'grok-4.3').trim(),
+  /** xAI の max_turns。費用の天井としてコード側でも 1..SCOUT_MAX_TURNS_CEILING に収める */
+  scoutMaxTurns: Math.min(Math.max(intVar(env.SCOUT_MAX_TURNS, 2), 1), SCOUT_MAX_TURNS_CEILING),
+  scoutMonthlyCapCents: intVar(env.SCOUT_MONTHLY_CAP_CENTS, 500),
+  meetingMonthlyCapCents: intVar(env.MEETING_MONTHLY_CAP_CENTS, 200),
+  /** 0=日〜6=土（Asia/Tokyo）。範囲外なら週次の自動実行はしない */
+  scoutDay: intVar(env.SCOUT_DAY, 1),
+  meetingDays: parseDays(env.MEETING_DAYS ?? '1,15'),
 });
+
+/** SCOUT_MAX_TURNS を var で大きくしても 1 run の X 検索がこれ以上の turn を使わない（外部コストの有限化） */
+export const SCOUT_MAX_TURNS_CEILING = 4;
+
+/** "1,15" → [1, 15]（1..31 の整数だけ。空や不正は除く） */
+export function parseDays(v: string): number[] {
+  const out = new Set<number>();
+  for (const part of String(v).split(',')) {
+    const t = part.trim();
+    if (!/^\d{1,2}$/.test(t)) continue;
+    const n = Number(t);
+    if (n >= 1 && n <= 31) out.add(n);
+  }
+  return [...out].sort((a, b) => a - b);
+}
 
 export function isLocalHostname(hostname: string | null | undefined): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1';

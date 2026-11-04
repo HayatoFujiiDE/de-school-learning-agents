@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- fake 用 Atom。{{DAYS_AGO_ISO:n}} は fake の fetch が「n 日前」に置き換える -->
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example Releases</title>
+  <entry>
+    <title type="html">v3.0 リリース: 新しいタートル描画</title>
+    <link rel="alternate" type="text/html" href="https://example.org/releases/v3.0"/>
+    <updated>{{DAYS_AGO_ISO:3}}</updated>
+    <content type="html">&lt;ul&gt;&lt;li&gt;図形を描く命令が増えました&lt;/li&gt;&lt;/ul&gt;</content>
+  </entry>
+  <entry>
+    <title>v1.0</title>
+    <link href="https://example.org/releases/v1.0"/>
+    <updated>2019-05-01T00:00:00Z</updated>
+    <summary>古い版（残らない）</summary>
+  </entry>
+</feed>

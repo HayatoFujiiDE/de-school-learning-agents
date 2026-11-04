@@ -1,17 +1,25 @@
 // 10 分ごとの照合・起動・検証（契約 §B-5）。scheduled handler は最長 15 分。
 
-import { getPort } from './anthropic';
-import { all, getSetting, isoPlus, nowIso, setSetting, stmt } from './db';
-import type { Env } from './env';
+import { getFeedFetch, getPort } from './anthropic';
+import { all, getSetting, isoPlus, nowIso, setSetting, stmt, tokyoDay } from './db';
+import { cfg, type Env } from './env';
+import { meetingTick } from './meeting';
+import { runScout, scoutDueOn } from './scout';
 import { getJob, markWebhookProcessed, reconcileJob, recoverCreating, startJob, type JobRow } from './jobs';
 import { runVerificationStep } from './verify';
 
 // cron 経由の reconcile は開始から 10 分を締め切りにする（scheduled handler は最長 15 分。検証の時間を残す）
 const CRON_RECONCILE_BUDGET_MS = 10 * 60_000;
+/** scheduled handler の上限（15 分）。入口は残りが 3 分未満なら飛ばす（§K-4）。外部呼び出しは終了 1 分前までに収める */
+const CRON_LIMIT_MS = 15 * 60_000;
+const INTAKE_MIN_REMAINING_MS = 3 * 60_000;
+const INTAKE_END_MARGIN_MS = 60_000;
 
 export async function runCron(env: Env): Promise<Record<string, unknown>> {
   const db = env.DB;
-  const port = await getPort(env, { hostname: null, fakeEnabledSetting: await getSetting(db, 'fake_enabled') });
+  const cronStart = Date.now();
+  const portCtx = { hostname: null, fakeEnabledSetting: await getSetting(db, 'fake_enabled') };
+  const port = await getPort(env, portCtx);
   const out: Record<string, unknown> = {};
   const reconcileDeadline = Date.now() + CRON_RECONCILE_BUDGET_MS;
 
@@ -59,6 +67,31 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
     out.verify = await runVerificationStep(env, port);
   } catch (e) {
     out.verify_error = e instanceof Error ? e.name : 'error';
+  }
+
+  // 入口（§K-4, §K-5）。pause 中は新しい外部呼び出しをしない（収集は runScout が、会議の起動は startMeeting が見る。会議の回収は行う）
+  const intakeDeadline = cronStart + CRON_LIMIT_MS - INTAKE_END_MARGIN_MS;
+  const enough = () => cronStart + CRON_LIMIT_MS - Date.now() >= INTAKE_MIN_REMAINING_MS;
+  try {
+    if (!enough()) out.meeting = 'skipped_time';
+    else out.meeting = await meetingTick(env, port, { deadline: intakeDeadline });
+  } catch (e) {
+    out.meeting_error = e instanceof Error ? e.name : 'error';
+  }
+  try {
+    const now = new Date();
+    const paused = (await getSetting(db, 'paused')) === '1';
+    if (!paused && scoutDueOn(cfg(env).scoutDay, await getSetting(db, 'scout_last_day'), now)) {
+      if (!enough()) out.scout = 'skipped_time';
+      else {
+        // 週 1 回: 結果（失敗を含む）に関係なく今日の分は使ったことにする（自動再試行しない）
+        await setSetting(db, 'scout_last_day', tokyoDay(now));
+        const r = await runScout(env, port, { trigger: 'cron', deadline: intakeDeadline, fetchImpl: await getFeedFetch(env, portCtx), now });
+        out.scout = r.status;
+      }
+    }
+  } catch (e) {
+    out.scout_error = e instanceof Error ? e.name : 'error';
   }
 
   // 4.

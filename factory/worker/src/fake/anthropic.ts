@@ -8,10 +8,17 @@
 // 送った events と messages.create の引数は settings.fake_calls_json に追記する（smoke が (g)(h) を確認する）。
 
 import type { Message, MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk/resources/messages/messages';
-import { PortError, type FactoryPort, type FileMeta, type SessionView } from '../anthropic';
+import type { MessageBatchIndividualResponse } from '@anthropic-ai/sdk/resources/messages/batches';
+import { PortError, type BatchView, type FactoryPort, type FileMeta, type SessionView } from '../anthropic';
 import { getSetting, nowIso, setSetting } from '../db';
 import type { Env } from '../env';
+import { SCOUT_FEEDS } from '../generated/scout-sources';
+import { SCOUT_MODEL } from '../scout';
+import { parseXaiResponse } from '../xai';
 import { FIXTURE_FILES } from './fixtures.generated';
+
+/** 入口（§K-8）の fixture。job の scenario ではない */
+const INTAKE_FIXTURE_DIRS = ['scout', 'meeting'];
 
 interface Call {
   op: string;
@@ -21,6 +28,8 @@ interface Call {
   metadata?: Record<string, string>;
   events?: Array<Record<string, unknown>>;
   params?: Record<string, unknown>;
+  batch_id?: string;
+  custom_id?: string;
 }
 
 interface Staged<T> {
@@ -32,7 +41,7 @@ export const SCENARIOS = [
   ...new Set(
     Object.keys(FIXTURE_FILES)
       .map((k) => k.split('/')[0])
-      .filter((s) => !s.startsWith('_')),
+      .filter((s) => !s.startsWith('_') && !INTAKE_FIXTURE_DIRS.includes(s)),
   ),
 ];
 
@@ -198,6 +207,7 @@ export function createFakePort(env: Env): FactoryPort {
       return enc.encode(text);
     },
     async createMessage(params: MessageCreateParamsNonStreaming): Promise<Message> {
+      if (params.model === SCOUT_MODEL) return scoutMessage(db, params);
       const content = typeof params.messages[0]?.content === 'string' ? params.messages[0].content : '';
       await appendCall(db, {
         op: 'messages.create',
@@ -262,8 +272,119 @@ export function createFakePort(env: Env): FactoryPort {
         usage: { input_tokens: 12000, output_tokens: 800, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
       } as unknown as Message;
     },
+    // ---- 入口（§K-8）----
+    async xaiResponses(req) {
+      await appendCall(db, {
+        op: 'xai.responses',
+        at: nowIso(),
+        params: { model: req.model, max_turns: req.max_turns, store: req.store, handles: req.tools[0]?.allowed_x_handles.length ?? 0, from_date: req.tools[0]?.from_date, to_date: req.tools[0]?.to_date },
+      });
+      return parseXaiResponse(JSON.parse(FIXTURE_FILES['scout/xai.json'] ?? '{}'));
+    },
+    async createBatch(params) {
+      const id = `msgbatch_fake_${crypto.randomUUID().replace(/-/g, '')}`;
+      const r = params.requests[0];
+      await appendCall(db, {
+        op: 'batches.create',
+        at: nowIso(),
+        batch_id: id,
+        custom_id: r?.custom_id,
+        params: {
+          requests: params.requests.length,
+          model: r?.params.model,
+          max_tokens: r?.params.max_tokens,
+          thinking: r?.params.thinking,
+          output_format: r?.params.output_config?.format?.type ?? null,
+        },
+      });
+      const now = new Date();
+      return { id, processing_status: 'in_progress', created_at: now.toISOString(), expires_at: new Date(now.getTime() + 86_400_000).toISOString() };
+    },
+    async retrieveBatch(id): Promise<BatchView> {
+      const c = (await readCalls(db)).find((x) => x.op === 'batches.create' && x.batch_id === id);
+      if (!c) throw notFound();
+      const fx = JSON.parse(FIXTURE_FILES['meeting/batch.json'] ?? '{}') as { processing_status?: BatchView['processing_status'] };
+      return { id, processing_status: fx.processing_status ?? 'ended', created_at: c.at, expires_at: new Date(Date.parse(c.at) + 86_400_000).toISOString() };
+    },
+    async batchResults(id): Promise<MessageBatchIndividualResponse[]> {
+      const c = (await readCalls(db)).find((x) => x.op === 'batches.create' && x.batch_id === id);
+      if (!c) throw notFound();
+      await appendCall(db, { op: 'batches.results', at: nowIso(), batch_id: id });
+      const fx = JSON.parse(FIXTURE_FILES['meeting/results.json'] ?? '{}') as {
+        result_type?: string;
+        stop_reason?: string;
+        usage?: Record<string, number>;
+        output?: { ranked?: Array<Record<string, unknown>> };
+      };
+      const first = await db.prepare("SELECT id FROM proposals WHERE status = 'proposed' ORDER BY created_at ASC LIMIT 1").first<{ id: string }>();
+      const output = JSON.parse(JSON.stringify(fx.output ?? {})) as { ranked?: Array<Record<string, unknown>> };
+      for (const r of output.ranked ?? []) {
+        if (r.proposal_id === '{{FIRST_PROPOSED}}') {
+          if (first) r.proposal_id = first.id;
+          else delete r.proposal_id;
+        }
+      }
+      if (fx.result_type && fx.result_type !== 'succeeded') return [{ custom_id: c.custom_id ?? '', result: { type: fx.result_type } } as unknown as MessageBatchIndividualResponse];
+      const message = {
+        id: `msg_fake_${crypto.randomUUID().slice(0, 8)}`,
+        type: 'message',
+        role: 'assistant',
+        model: 'claude-sonnet-5-5',
+        container: null,
+        content: [
+          { type: 'thinking', thinking: '', signature: 'fake' },
+          { type: 'text', text: JSON.stringify(output), citations: null },
+        ],
+        stop_reason: fx.stop_reason ?? 'end_turn',
+        stop_sequence: null,
+        usage: { cache_creation_input_tokens: 0, cache_read_input_tokens: 0, ...(fx.usage ?? {}) },
+      };
+      return [{ custom_id: c.custom_id ?? '', result: { type: 'succeeded', message } } as unknown as MessageBatchIndividualResponse];
+    },
   };
 }
+
+/** 収集部隊の Haiku 仕分け（fixture: scout/haiku.json） */
+async function scoutMessage(db: D1Database, params: MessageCreateParamsNonStreaming): Promise<Message> {
+  await appendCall(db, {
+    op: 'messages.create',
+    at: nowIso(),
+    params: { model: params.model, max_tokens: params.max_tokens, output_format: params.output_config?.format?.type ?? null, effort: params.output_config?.effort ?? null },
+  });
+  const fx = JSON.parse(FIXTURE_FILES['scout/haiku.json'] ?? '{}') as { stop_reason?: string; usage?: Record<string, number>; output?: unknown };
+  return {
+    id: `msg_fake_${crypto.randomUUID().slice(0, 8)}`,
+    type: 'message',
+    role: 'assistant',
+    model: params.model,
+    container: null,
+    content: [{ type: 'text', text: JSON.stringify(fx.output ?? {}), citations: null }],
+    stop_reason: fx.stop_reason ?? 'end_turn',
+    stop_sequence: null,
+    usage: { cache_creation_input_tokens: 0, cache_read_input_tokens: 0, ...(fx.usage ?? {}) },
+  } as unknown as Message;
+}
+
+const rfc822 = (d: Date) => d.toUTCString();
+/** fixture の {{DAYS_AGO_RFC822:n}} / {{DAYS_AGO_ISO:n}} を今からの日付に置き換える（日付で絞る処理を毎回通すため） */
+export function fillFeedDates(xml: string, now: Date = new Date()): string {
+  return xml.replace(/\{\{DAYS_AGO_(RFC822|ISO):(\d+)\}\}/g, (_m, fmt: string, n: string) => {
+    const d = new Date(now.getTime() - Number(n) * 86_400_000);
+    return fmt === 'ISO' ? d.toISOString() : rfc822(d);
+  });
+}
+
+/**
+ * 収集部隊の RSS 取得の fake（§K-8: FactoryPort でなく fetch を差し替える）。
+ * scout-sources の 1 本目に RSS fixture、2 本目に Atom fixture、3 本目以降は text/html（対象外の種類なので捨てられる）を返す。外部へは出ない
+ */
+export const feedFetch: typeof fetch = async (input) => {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url;
+  const i = SCOUT_FEEDS.indexOf(url);
+  if (i === 0) return new Response(fillFeedDates(FIXTURE_FILES['scout/feed-rss.xml'] ?? ''), { status: 200, headers: { 'content-type': 'application/rss+xml; charset=utf-8' } });
+  if (i === 1) return new Response(fillFeedDates(FIXTURE_FILES['scout/feed-atom.xml'] ?? ''), { status: 200, headers: { 'content-type': 'application/atom+xml' } });
+  return new Response('<html><body>not a feed</body></html>', { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
+};
 
 /** /__fake/settings（POST {scenario}）と /__fake/calls（GET ?session_id=）。呼び出し元で Access を通過済み */
 export async function handleFakeControl(request: Request, env: Env): Promise<Response> {

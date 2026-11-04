@@ -12,6 +12,7 @@
     <nav class="nav">
       <a href="#/">素材</a>
       <a href="#/new">新しい素材</a>
+      <a href="#/proposals">提案箱</a>
       <a href="#/review">確認待ち</a>
       <a href="#/standards">編集基準</a>
     </nav>
@@ -31,6 +32,23 @@
       <div class="row end">
         <button type="button" id="dlg-cancel" class="btn">やめる</button>
         <button type="button" id="dlg-ok" class="btn primary">実行する</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="adopt-dlg" class="dlg">
+    <form method="dialog" id="adopt-form">
+      <h2>この提案を素材にして職人に注文します</h2>
+      <p id="adopt-src" class="muted"></p>
+      <label class="field"><span>題名</span><input type="text" id="a-title" maxlength="200"></label>
+      <label class="field"><span>slug（英小文字・数字・ハイフン）</span><input type="text" id="a-slug" maxlength="80" placeholder="mc-redstone-basics"></label>
+      <label class="field"><span>カタログ id（任意）</span><input type="text" id="a-catalog" maxlength="80"></label>
+      <div class="field"><span>型</span><label class="check"><input type="checkbox" id="a-k3"> 型 3（説明と図解）</label><label class="check"><input type="checkbox" id="a-k4"> 型 4（動かせるもの）</label></div>
+      <label class="field"><span>注文票（brief。提案本文から作っています。編集できます）</span><textarea id="a-brief" rows="8"></textarea></label>
+      <label class="check"><input type="checkbox" id="a-pii"> 子どもや家庭の個人情報を含んでいません</label>
+      <p id="a-err" class="err hidden"></p>
+      <div class="row end">
+        <button type="button" id="a-cancel" class="btn">やめる</button>
+        <button type="button" id="a-ok" class="btn primary">素材にする</button>
       </div>
     </form>
   </dialog>

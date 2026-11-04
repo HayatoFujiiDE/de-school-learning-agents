@@ -1,0 +1,36 @@
+{
+  "_note": "fake の batches.results の 1 行。custom_id は create の値。output を JSON 文字列にして text block で返す。{{FIRST_PROPOSED}} は fake が提案中の提案 id に置き換える（無ければ proposal_id を消す）",
+  "result_type": "succeeded",
+  "stop_reason": "end_turn",
+  "usage": { "input_tokens": 20000, "output_tokens": 3000, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0 },
+  "output": {
+    "views": {
+      "research": "一次資料に辿れる題材が多い。測定の題材は公式の作例があり確かめやすい。",
+      "pedagogy": "小学生には観察、中学生には記録と比較を入口にする。",
+      "expression": "図と短い文で、手を動かす順に並べる。",
+      "verification": "測定値の例は出典の値と照合する。"
+    },
+    "ranked": [
+      {
+        "proposal_id": "{{FIRST_PROPOSED}}",
+        "title": "既存の提案を推す",
+        "body": "既存の提案",
+        "concept_codes": [],
+        "kinds": [3],
+        "age_band": "both",
+        "priority": 5,
+        "reason": "子ども由来で、足りなかったことがはっきりしている"
+      },
+      {
+        "title": "影の長さで時刻を知る",
+        "body": "棒の影の長さと向きを 1 日記録し、太陽の動きとつなげる。",
+        "concept_codes": ["SCI02"],
+        "kinds": [3],
+        "age_band": "elementary",
+        "priority": 3,
+        "reason": "観察の題材が手薄"
+      }
+    ],
+    "standards_suggestions": ["測定の素材には単位と測った条件を必ず書く"]
+  }
+}

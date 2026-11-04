@@ -31,6 +31,13 @@
     "SESSION_BUDGET_DRAFT_CENTS": "300",
     "SESSION_BUDGET_REWORK_CENTS": "500",
     "VERIFY_MAX_FETCHES": "25",
-    "VERIFY_MAX_ATTEMPTS": "3"
+    "VERIFY_MAX_ATTEMPTS": "3",
+    // 入口（契約 §K-0）。XAI_API_KEY は secret（wrangler secret put。ここには書かない）
+    "SCOUT_XAI_MODEL": "grok-4.3",
+    "SCOUT_MAX_TURNS": "2",
+    "SCOUT_MONTHLY_CAP_CENTS": "500",
+    "MEETING_MONTHLY_CAP_CENTS": "200",
+    "SCOUT_DAY": "1",
+    "MEETING_DAYS": "1,15"
   }
 }

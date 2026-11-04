@@ -6,7 +6,9 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { Message, MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { SessionCreateParams } from '@anthropic-ai/sdk/resources/beta/sessions/sessions';
 import type { BetaManagedAgentsEventParams } from '@anthropic-ai/sdk/resources/beta/sessions/events';
+import type { BatchCreateParams, MessageBatchIndividualResponse } from '@anthropic-ai/sdk/resources/messages/batches';
 import { isLocalHostname, type Env } from './env';
+import { XaiError, xaiResponses, type XaiRequest, type XaiResult } from './xai';
 
 export const MANAGED_AGENTS_BETA = 'managed-agents-2026-04-01';
 
@@ -37,6 +39,17 @@ export interface Page<T> {
   next: string | null;
 }
 
+/** messages.batches の必要な field だけ */
+export interface BatchView {
+  id: string;
+  processing_status: 'in_progress' | 'canceling' | 'ended';
+  created_at: string;
+  expires_at: string;
+}
+
+/** batches.results から読む行数の上限（会議は 1 件しか送らない） */
+export const BATCH_RESULTS_MAX = 10;
+
 export interface FactoryPort {
   readonly isFake: boolean;
   createSession(params: SessionCreateParams, o?: CallOpts): Promise<{ id: string }>;
@@ -50,6 +63,12 @@ export interface FactoryPort {
   listFilesPage(sessionId: string, page: string | null, o?: CallOpts): Promise<Page<FileMeta>>;
   downloadFile(fileId: string, o?: CallOpts): Promise<Uint8Array>;
   createMessage(params: MessageCreateParamsNonStreaming, o?: CallOpts): Promise<Message>;
+  /** 入口（§K-5）: Message Batches */
+  createBatch(params: BatchCreateParams, o?: CallOpts): Promise<BatchView>;
+  retrieveBatch(batchId: string, o?: CallOpts): Promise<BatchView>;
+  batchResults(batchId: string, o?: CallOpts): Promise<MessageBatchIndividualResponse[]>;
+  /** 入口（§K-4-3）: xAI Responses API（x_search）。XAI_API_KEY が無ければ XaiError('no_key')。失敗は XaiError */
+  xaiResponses(req: XaiRequest, o?: CallOpts): Promise<XaiResult>;
 }
 
 /** 外部呼び出しの失敗。responded=true は API が応答した（status あり）。false は応答不明（接続断・タイムアウト等） */
@@ -153,7 +172,27 @@ function realPort(env: Env): FactoryPort {
         return new Uint8Array(await res.arrayBuffer());
       }),
     createMessage: (params, o) => call(() => longClient.messages.create(params, requestOptions(o))),
+    createBatch: (params, o) => call(async () => toBatchView(await client.messages.batches.create(params, requestOptions(o)))),
+    retrieveBatch: (id, o) => call(async () => toBatchView(await client.messages.batches.retrieve(id, {}, requestOptions(o)))),
+    batchResults: (id, o) =>
+      call(async () => {
+        const out: MessageBatchIndividualResponse[] = [];
+        for await (const r of await client.messages.batches.results(id, {}, requestOptions(o))) {
+          out.push(r);
+          if (out.length >= BATCH_RESULTS_MAX) break;
+        }
+        return out;
+      }),
+    xaiResponses: async (req, o) => {
+      if (!env.XAI_API_KEY) throw new XaiError(false, undefined, 'no_key');
+      const remaining = o?.deadline ? o.deadline - Date.now() : undefined;
+      return xaiResponses(env.XAI_API_KEY, req, { timeoutMs: remaining });
+    },
   };
+}
+
+function toBatchView(b: { id: string; processing_status: BatchView['processing_status']; created_at: string; expires_at: string }): BatchView {
+  return { id: b.id, processing_status: b.processing_status, created_at: b.created_at, expires_at: b.expires_at };
 }
 
 export interface PortContext {
@@ -178,6 +217,12 @@ async function loadFake(env: Env, ctx: PortContext) {
 export async function getPort(env: Env, ctx: PortContext): Promise<FactoryPort> {
   const fake = await loadFake(env, ctx);
   return fake ? fake.createFakePort(env) : realPort(env);
+}
+
+/** 収集部隊の RSS 取得に使う fetch（§K-8: FactoryPort でなく fetch を差し替える）。fake が許可される時だけ fixture を返す fetch */
+export async function getFeedFetch(env: Env, ctx: PortContext): Promise<typeof fetch> {
+  const fake = await loadFake(env, ctx);
+  return fake ? fake.feedFetch : (input, init) => fetch(input, init);
 }
 
 /** /__fake/* の制御（scenario 切替・呼び出し記録の読み出し）。fake が許可されない時は null（呼び出し側が 404） */

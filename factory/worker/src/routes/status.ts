@@ -3,6 +3,8 @@ import { first, getSetting, nowIso, prepare, stmt } from '../db';
 import { cfg } from '../env';
 import { isNonEmptyString, json, readBody, type RouteCtx } from '../http';
 import { todayCostCents } from '../jobs';
+import { monthCostCents } from '../ledger';
+import { scoutRunning } from '../scout';
 
 export async function getStatus(c: RouteCtx): Promise<Response> {
   const db = c.env.DB;
@@ -13,6 +15,15 @@ export async function getStatus(c: RouteCtx): Promise<Response> {
     ),
   );
   const k = cfg(c.env);
+  const lastScout = await first<{ started_at: string; status: string; last_error: string | null }>(
+    db,
+    stmt('SELECT started_at, status, last_error FROM scout_runs ORDER BY started_at DESC LIMIT 1'),
+  );
+  const lastMeeting = await first<{ created_at: string; status: string; last_error: string | null }>(
+    db,
+    stmt('SELECT created_at, status, last_error FROM meeting_minutes ORDER BY created_at DESC LIMIT 1'),
+  );
+  const pending = await first(db, stmt("SELECT 1 AS x FROM meeting_minutes WHERE status = 'submitted' LIMIT 1"));
   return json(200, {
     paused: (await getSetting(db, 'paused')) === '1',
     paused_note: await getSetting(db, 'paused_note'),
@@ -23,6 +34,24 @@ export async function getStatus(c: RouteCtx): Promise<Response> {
     max_concurrent: k.maxConcurrent,
     agent_configured: !!(c.env.FACTORY_AGENT_ID && c.env.FACTORY_ENV_ID),
     last_cron_at: await getSetting(db, 'last_cron_at'),
+    // 入口（§K-3）
+    scout: {
+      last_run_at: lastScout?.started_at ?? null,
+      last_status: lastScout?.status ?? null,
+      last_error: lastScout?.last_error ?? null,
+      month_cents: await monthCostCents(db, 'scout'),
+      month_cap_cents: k.scoutMonthlyCapCents,
+      running: await scoutRunning(db),
+      x_search_configured: !!c.env.XAI_API_KEY,
+    },
+    meeting: {
+      last_at: lastMeeting?.created_at ?? null,
+      last_status: lastMeeting?.status ?? null,
+      last_error: lastMeeting?.last_error ?? null,
+      month_cents: await monthCostCents(db, 'meeting'),
+      month_cap_cents: k.meetingMonthlyCapCents,
+      pending_batch: !!pending,
+    },
   });
 }
 

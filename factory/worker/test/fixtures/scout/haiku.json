@@ -1,0 +1,52 @@
+{
+  "_note": "fake の Haiku 仕分けの応答。output を JSON 文字列にして text block で返す",
+  "stop_reason": "end_turn",
+  "usage": { "input_tokens": 5000, "output_tokens": 900, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0 },
+  "output": {
+    "items": [
+      {
+        "verdict": "new",
+        "title": "マイコンで温度を測ってグラフにする",
+        "body": "内蔵センサーの値を読み、時間ごとの変化をグラフで見る。測る・記録する・比べるの入口。",
+        "concept_codes": ["SCI01", "bad code"],
+        "age_band": "both",
+        "kinds": [3, 4],
+        "evidence": [
+          { "url": "https://example.org/news/pico-temperature", "title": "作例", "note": "一次資料" },
+          { "url": "http://example.org/insecure", "title": "http は落とす", "note": "" }
+        ],
+        "reason": "身近な量を測る題材"
+      },
+      {
+        "verdict": "new",
+        "title": "月の満ち欠けを観察する",
+        "body": "公式の観察ガイドを入口に、毎日同じ時刻に月の形を記録する。",
+        "concept_codes": [],
+        "age_band": "elementary",
+        "kinds": [3],
+        "evidence": [{ "url": "https://x.com/example/status/1000000000000000002", "title": "観察ガイドの紹介", "note": "投稿から公式ページへ辿る" }],
+        "reason": "観察の題材"
+      },
+      {
+        "verdict": "new",
+        "title": "点数で比べるクイズ",
+        "body": "禁止語を含むので形式検査で入らない",
+        "concept_codes": [],
+        "age_band": "both",
+        "kinds": [3],
+        "evidence": [],
+        "reason": "形式検査で落ちる例"
+      },
+      {
+        "verdict": "drop",
+        "title": "新製品の広告",
+        "body": "広告",
+        "concept_codes": [],
+        "age_band": "both",
+        "kinds": [],
+        "evidence": [],
+        "reason": "広告"
+      }
+    ]
+  }
+}

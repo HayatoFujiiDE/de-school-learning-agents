@@ -1,0 +1,6 @@
+{
+  "_note": "fake の batches.create / retrieve の形。id と custom_id は fake が付ける。retrieve は processing_status をこの値で返す（create の次の tick で ended）",
+  "type": "message_batch",
+  "processing_status": "ended",
+  "request_counts": { "processing": 0, "succeeded": 1, "errored": 0, "canceled": 0, "expired": 0 }
+}

@@ -10,6 +10,10 @@
     queued: '順番待ち', creating: '作業場を準備中', running: '制作中', needs_answer: '質問への回答待ち',
     budget_reached: '上限に達しました', done: '完了', failed: '失敗', cancelled: '取り消し'
   };
+  var SOURCE_LABEL = { child: '子ども由来', scout: '収集', meeting: '会議', manual: '手入力' };
+  var AGE_LABEL = { elementary: '小学生', secondary: '中学生', both: '小中' };
+  var PROPOSAL_TABS = [['proposed', '提案中'], ['adopted', '採択済み'], ['dismissed', '見送り']];
+  var RUN_LABEL = { running: '実行中', done: '完了', failed: '失敗', skipped: '上限で飛ばした', submitted: '結果待ち', ended: '完了', expired: '失効' };
   var VERDICT_CLASS = { confirmed: 'green', hypothesis: 'yellow', unverified: 'gray', contradicted: 'red' };
   var CHECKLIST = [
     ['content_and_evidence', '内容と根拠'],
@@ -44,6 +48,11 @@
     verification_running: '検証の実行中です',
     not_available: '配信中ではありません',
     conflict: '他の操作と競合しました。読み込み直してください',
+    not_proposed: 'この提案は既に採択または見送り済みです',
+    invalid_proposal: '提案の内容を確認してください',
+    already_running: '収集は実行中です',
+    already_submitted: '会議の結果を待っています（回収は 10 分ごと）',
+    not_found: '見つかりません',
     access_denied: 'ログインが必要です',
     bad_origin: '送信元が正しくありません'
   };
@@ -182,7 +191,9 @@
         '<span class="item">今日の費用 <b>' + fmtCents(s.today_cents) + '</b> / 上限 ' + fmtCents(s.daily_cap_cents) + '</span>' +
         '<span class="item">職人 ' + (s.agent_configured ? pill('設定済み', 'green') : pill('未設定', 'red')) + '</span>' +
         '<span class="item muted">cron 最終 ' + esc(fmtTime(s.last_cron_at)) + '</span>' +
-        '<button type="button" class="btn small" id="pause-btn">' + (s.paused ? '再開' : '止める') + '</button>';
+        '<button type="button" class="btn small" id="pause-btn">' + (s.paused ? '再開' : '止める') + '</button>' +
+        intakeStatusHtml(s);
+      bindIntakeButtons(s);
       var btn = $('#pause-btn');
       btn.addEventListener('click', function () {
         action(btn, {
@@ -197,6 +208,211 @@
     }, function (e) {
       el.innerHTML = '<span class="err">状況を読み込めませんでした: ' + esc(e.message) + '</span>';
     });
+  }
+
+  // ---- 状況欄: 収集・会議（§K-7）----
+  function intakeStatusHtml(s) {
+    var sc = s.scout || {}, mt = s.meeting || {};
+    var scoutBusy = !!sc.running, meetBusy = !!mt.pending_batch;
+    return '<span class="item">収集 ' + (sc.last_status ? pill(RUN_LABEL[sc.last_status] || sc.last_status, sc.last_status === 'failed' ? 'red' : '') : '<span class="muted">未実行</span>') +
+        ' <span class="muted">今月 ' + fmtCents(sc.month_cents) + ' / 上限 ' + fmtCents(sc.month_cap_cents) + '</span>' +
+        ' <button type="button" class="btn small" id="scout-btn"' + (scoutBusy || s.paused ? ' disabled' : '') + '>' + (scoutBusy ? '収集中…' : '収集を今すぐ') + '</button></span>' +
+      '<span class="item">会議 ' + (mt.last_status ? pill(RUN_LABEL[mt.last_status] || mt.last_status, mt.last_status === 'failed' || mt.last_status === 'expired' ? 'red' : '') : '<span class="muted">未実行</span>') +
+        ' <span class="muted">今月 ' + fmtCents(mt.month_cents) + ' / 上限 ' + fmtCents(mt.month_cap_cents) + '</span>' +
+        ' <button type="button" class="btn small" id="meeting-btn"' + (meetBusy || s.paused ? ' disabled' : '') + '>' + (meetBusy ? '結果待ち' : '会議を今すぐ') + '</button></span>';
+  }
+  function bindIntakeButtons(s) {
+    var sb = $('#scout-btn');
+    if (sb) sb.addEventListener('click', function () {
+      action(sb, {
+        title: '収集を今すぐ実行します',
+        body: 'RSS と X（設定されていれば）を読み、Haiku で仕分けて提案箱に入れます。費用は今月の収集の上限（' + fmtCents((s.scout || {}).month_cap_cents) + '）の範囲で記録します。25 秒で打ち切ります。',
+        okText: '実行する',
+        run: function () { return api('POST', '/api/scout/run'); },
+        success: '収集を実行しました',
+        after: function (res) {
+          if (res && res.skipped) toast('上限に達しているため飛ばしました（' + (res.reason || '') + '）', true);
+          else if (res && res.status === 'failed') toast('収集は失敗しました: ' + (res.error || ''), true);
+          else if (res) toast('収集: 提案 ' + res.proposed + ' 件 / 捨てた ' + res.dropped + ' 件');
+          route();
+        }
+      });
+    });
+    var mb = $('#meeting-btn');
+    if (mb) mb.addEventListener('click', function () {
+      action(mb, {
+        title: '会議を今すぐ起こします',
+        body: '提案箱と素材を Batch API（1 件）で検討します。結果は 10 分ごとの回収で入ります（最長 24 時間）。費用は今月の会議の上限（' + fmtCents((s.meeting || {}).month_cap_cents) + '）の範囲で記録します。',
+        okText: '起こす',
+        run: function () { return api('POST', '/api/meeting/run'); },
+        success: '会議を起こしました。結果は回収後に提案箱に出ます',
+        after: function (res) {
+          if (res && res.skipped) toast('上限に達しているため起こしませんでした（' + (res.reason || '') + '）', true);
+          route();
+        }
+      });
+    });
+  }
+
+  // ---- 画面: 提案箱（§K-7）----
+  function viewProposals(view, q) {
+    var status = q.status || 'proposed';
+    view.innerHTML = '<h1>提案箱</h1><div class="card"><div class="tabs">' +
+      PROPOSAL_TABS.map(function (t) { return '<a class="btn small' + (t[0] === status ? ' on' : '') + '" href="#/proposals?status=' + t[0] + '">' + esc(t[1]) + '</a>'; }).join('') +
+      '</div><div id="plist" class="loading">読み込み中…</div></div>' +
+      '<div id="pdetail"></div>' +
+      '<form id="p-form" class="card"><h2>手で足す</h2>' +
+      '<label class="field"><span>題名（120 文字まで）</span><input type="text" id="p-title" maxlength="120"></label>' +
+      '<label class="field"><span>本文（題材・つながる概念・足りなかったこと。2000 文字まで）</span><textarea id="p-body" rows="5" maxlength="2000"></textarea></label>' +
+      '<label class="field"><span>つながる概念のコード（任意。英大文字と数字、カンマ区切り）</span><input type="text" id="p-concepts"></label>' +
+      '<label class="field"><span>年齢帯（任意）</span><select id="p-age"><option value="">指定なし</option><option value="elementary">小学生</option><option value="secondary">中学生</option><option value="both">小中</option></select></label>' +
+      '<div class="field"><span>型（任意）</span><label class="check"><input type="checkbox" id="p-k3"> 型 3</label><label class="check"><input type="checkbox" id="p-k4"> 型 4</label></div>' +
+      '<label class="field"><span>根拠 URL（任意。https のみ、1 行に 1 つ、10 件まで。発想の入口であって根拠扱いしません）</span><textarea id="p-evidence" rows="3"></textarea></label>' +
+      '<p id="p-err" class="err hidden"></p>' +
+      '<div class="row end"><button type="submit" class="btn primary" id="p-submit">提案箱に足す</button></div></form>' +
+      '<div id="minutes"></div>';
+    bindManualForm();
+    loadMinutes();
+    api('GET', '/api/proposals?status=' + encodeURIComponent(status)).then(function (d) {
+      var list = $('#plist');
+      list.classList.remove('loading');
+      if (!d.proposals.length) { list.innerHTML = '<p class="muted">この状態の提案はありません。</p>'; return; }
+      list.innerHTML = '<div class="table-wrap"><table><thead><tr><th>入口</th><th>題名</th><th>年齢帯</th><th>優先度</th><th>似た提案</th><th>作成</th></tr></thead><tbody>' +
+        d.proposals.map(function (p, i) {
+          return '<tr><td>' + pill(SOURCE_LABEL[p.source_kind] || p.source_kind) + '</td><td><a href="#" data-pi="' + i + '">' + esc(p.title) + '</a></td><td>' + esc(AGE_LABEL[p.age_band] || '—') + '</td><td>' + (p.priority ? esc(p.priority) : '—') + '</td><td>' + esc(p.similar_count) + '</td><td>' + esc(fmtTime(p.created_at)) + '</td></tr>';
+        }).join('') + '</tbody></table></div>';
+      Array.prototype.forEach.call(list.querySelectorAll('a[data-pi]'), function (a) {
+        a.addEventListener('click', function (ev) { ev.preventDefault(); showProposal(d.proposals[Number(a.getAttribute('data-pi'))]); });
+      });
+    }, function (e) { $('#plist').innerHTML = '<p class="err">読み込めませんでした: ' + esc(e.message) + '</p>'; });
+  }
+
+  function showProposal(p) {
+    var el = $('#pdetail');
+    var ev = (p.evidence || []).map(function (e) {
+      var ok = /^https:\/\//.test(e.url || '');
+      return '<li>' + (ok ? '<a href="' + esc(e.url) + '" rel="noopener noreferrer" target="_blank">' + esc(e.title || e.url) + '</a>' : esc(e.url)) + (e.note ? ' <span class="muted">' + esc(e.note) + '</span>' : '') + '</li>';
+    }).join('');
+    el.innerHTML = '<div class="card"><h2>' + esc(p.title) + '</h2>' +
+      '<div class="row">' + pill(SOURCE_LABEL[p.source_kind] || p.source_kind) + pill('年齢帯: ' + (AGE_LABEL[p.age_band] || '指定なし')) + (p.priority ? pill('優先度 ' + p.priority, 'orange') : '') + pill('似た提案 ' + p.similar_count) +
+        (p.kinds && p.kinds.length ? pill('型 ' + p.kinds.join(', ')) : '') + (p.catalog_item_id ? '<span class="muted">カタログ ' + esc(p.catalog_item_id) + '</span>' : '') + '</div>' +
+      '<p class="pre">' + esc(p.body) + '</p>' +
+      '<p><b>つながる概念</b> ' + (p.concept_codes && p.concept_codes.length ? esc(p.concept_codes.join(', ')) : '<span class="muted">なし</span>') + '</p>' +
+      '<p><b>根拠 URL</b>（発想の入口。根拠扱いしない）</p>' + (ev ? '<ul>' + ev + '</ul>' : '<p class="muted">なし</p>') +
+      (p.meeting_reason ? '<p><b>会議の理由</b> ' + esc(p.meeting_reason) + '</p>' : '') +
+      (p.status === 'adopted' && p.material_id ? '<p><a href="#/material/' + esc(p.material_id) + '">作った素材を見る</a></p>' : '') +
+      (p.status === 'dismissed' && p.decision_note ? '<p><b>見送りの理由</b> ' + esc(p.decision_note) + '</p>' : '') +
+      (p.status === 'proposed' ? '<div class="row end"><button type="button" class="btn" id="dismiss-btn">見送る</button><button type="button" class="btn primary" id="adopt-btn">素材にする</button></div>' : '') +
+      '</div>';
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    var db = $('#dismiss-btn');
+    if (db) db.addEventListener('click', function () {
+      action(db, {
+        title: 'この提案を見送ります', body: p.title, note: true, noteLabel: '理由（必須）', okText: '見送る',
+        run: function (note) { return api('POST', '/api/proposals/' + encodeURIComponent(p.id) + '/dismiss', { note: note }); },
+        success: '見送りました'
+      });
+    });
+    var ab = $('#adopt-btn');
+    if (ab) ab.addEventListener('click', function () { openAdopt(p, ab); });
+  }
+
+  /** 「素材にする」ダイアログ（予告）→ 実行（二重送信防止）→ トースト → 再取得。失敗時は入力を残す */
+  function openAdopt(p, srcBtn) {
+    var dlg = $('#adopt-dlg');
+    $('#adopt-src').textContent = '提案: ' + p.title;
+    $('#a-title').value = p.title;
+    $('#a-slug').value = '';
+    $('#a-catalog').value = p.catalog_item_id || '';
+    var kinds = p.kinds || [];
+    $('#a-k3').checked = kinds.indexOf(3) >= 0 || kinds.indexOf(4) < 0;
+    $('#a-k4').checked = kinds.indexOf(4) >= 0;
+    var conceptLine = p.concept_codes && p.concept_codes.length ? '\n\nつながる概念: ' + p.concept_codes.join(', ') : '';
+    var ageLine = p.age_band ? '\n年齢帯: ' + (AGE_LABEL[p.age_band] || p.age_band) : '';
+    $('#a-brief').value = p.title + '\n\n' + p.body + conceptLine + ageLine;
+    $('#a-pii').checked = false;
+    var errEl = $('#a-err');
+    errEl.classList.add('hidden');
+    var ok = $('#a-ok'), cancel = $('#a-cancel');
+    function close() { ok.removeEventListener('click', onOk); cancel.removeEventListener('click', onCancel); dlg.removeEventListener('cancel', onCancel); dlg.close(); }
+    function onCancel(e) { if (e && e.preventDefault) e.preventDefault(); if (!ok.disabled) close(); }
+    function onOk() {
+      var k = [];
+      if ($('#a-k3').checked) k.push(3);
+      if ($('#a-k4').checked) k.push(4);
+      var problems = [];
+      if (!$('#a-title').value.trim()) problems.push('題名');
+      if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test($('#a-slug').value)) problems.push('slug');
+      if (!k.length) problems.push('型');
+      if (!$('#a-brief').value.trim()) problems.push('注文票');
+      if (!$('#a-pii').checked) problems.push('個人情報の確認');
+      if (problems.length) { errEl.textContent = '確認してください: ' + problems.join('、'); errEl.classList.remove('hidden'); return; }
+      errEl.classList.add('hidden');
+      var body = {
+        title: $('#a-title').value.trim(), slug: $('#a-slug').value, catalog_item_id: $('#a-catalog').value.trim() || null,
+        kinds: k, concept_codes: [], kind: 'draft', parent_version_id: null, brief_md: $('#a-brief').value, no_personal_data: true
+      };
+      ok.disabled = true; cancel.disabled = true; ok.textContent = '実行中…';
+      api('POST', '/api/proposals/' + encodeURIComponent(p.id) + '/adopt', body).then(function (res) {
+        close();
+        toast('素材にしました。職人に注文しました');
+        if (res && res.start_error) toast('注文は受け付けました。起動は後で行います: ' + (ERROR_TEXT[res.start_error] || res.start_error));
+        if (res && res.job_id) location.hash = '#/job/' + res.job_id; else route();
+      }, function (e) {
+        errEl.textContent = e.message || '失敗しました'; errEl.classList.remove('hidden');
+        toast(e.message || '失敗しました', true);
+        if (e.status === 409 && e.body && e.body.error === 'not_proposed') { close(); route(); }
+      }).then(function () { ok.disabled = false; cancel.disabled = false; ok.textContent = '素材にする'; });
+    }
+    ok.addEventListener('click', onOk);
+    cancel.addEventListener('click', onCancel);
+    dlg.addEventListener('cancel', onCancel);
+    dlg.showModal();
+    $('#a-slug').focus();
+    void srcBtn;
+  }
+
+  function bindManualForm() {
+    var form = $('#p-form');
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var errEl = $('#p-err');
+      var concepts = $('#p-concepts').value.split(/[,、\s]+/).map(function (x) { return x.trim(); }).filter(Boolean);
+      var evidence = $('#p-evidence').value.split(/\n/).map(function (x) { return x.trim(); }).filter(Boolean);
+      var k = [];
+      if ($('#p-k3').checked) k.push(3);
+      if ($('#p-k4').checked) k.push(4);
+      var problems = [];
+      if (!$('#p-title').value.trim()) problems.push('題名');
+      if (!$('#p-body').value.trim()) problems.push('本文');
+      if (concepts.some(function (c) { return !/^[A-Z0-9]{2,12}$/.test(c); })) problems.push('概念のコード（英大文字と数字 2〜12 文字）');
+      if (evidence.length > 10 || evidence.some(function (u) { return !/^https:\/\/\S+$/.test(u); })) problems.push('根拠 URL（https のみ・10 件まで）');
+      if (problems.length) { errEl.textContent = '確認してください: ' + problems.join('、'); errEl.classList.remove('hidden'); return; }
+      errEl.classList.add('hidden');
+      var body = { title: $('#p-title').value.trim(), body: $('#p-body').value.trim(), concept_codes: concepts, kinds: k, evidence: evidence.map(function (u) { return { url: u }; }) };
+      if ($('#p-age').value) body.age_band = $('#p-age').value;
+      action($('#p-submit'), {
+        title: '提案箱に足します', body: body.title, okText: '足す',
+        run: function () { return api('POST', '/api/proposals', body); },
+        success: '提案箱に足しました',
+        after: function (res) { if (!res) return; form.reset(); location.hash = '#/proposals?status=proposed'; route(); }
+      });
+    });
+  }
+
+  function loadMinutes() {
+    api('GET', '/api/meeting/latest').then(function (d) {
+      var el = $('#minutes');
+      if (!el) return;
+      if (!d.meeting || !d.meeting.minutes) { el.innerHTML = ''; return; }
+      var m = d.meeting.minutes, v = m.views || {};
+      var label = { research: '研究', pedagogy: '教え方', expression: '表現', verification: '検証' };
+      el.innerHTML = '<div class="card"><h2>最新の会議 <span class="muted">' + esc(fmtTime(d.meeting.ended_at)) + '</span></h2>' +
+        ['research', 'pedagogy', 'expression', 'verification'].map(function (k) { return '<p><b>' + label[k] + '</b> ' + esc(v[k] || '') + '</p>'; }).join('') +
+        '<h3>編集基準への提案</h3><p class="muted">採用する時は「編集基準」画面で追記してください（自動では追記しません）。</p>' +
+        ((m.standards_suggestions || []).length ? '<ul>' + m.standards_suggestions.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>' : '<p class="muted">なし</p>') +
+        '</div>';
+    }, function () { /* 会議の表示は補助。失敗しても一覧は使える */ });
   }
 
   // ---- 画面: 素材一覧 ----
@@ -581,6 +797,7 @@
     if (p[0] === 'review' && p[1]) return viewReview(view, p[1]);
     if (p[0] === 'review') return viewReviewList(view);
     if (p[0] === 'standards') return viewStandards(view);
+    if (p[0] === 'proposals') return viewProposals(view, r.q);
     view.innerHTML = '<p class="muted">ページが見つかりません。<a href="#/">素材へ</a></p>';
   }
   window.addEventListener('hashchange', route);

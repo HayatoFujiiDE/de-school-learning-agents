@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# smoke: wrangler dev（--local --port 8787、fake）をバックグラウンドで起動し、scripts/smoke.mjs で受け入れ基準を叩く（契約 §I）。
+# smoke: wrangler dev（--local --port 8787、fake）をバックグラウンドで起動し、scripts/smoke.mjs で受け入れ基準を叩く（契約 §I、§K-8）。
+# 入口: 週次・月 2 回の自動起動は SCOUT_DAY=9 / MEETING_DAYS= で止め、手動起動で確かめる。月次上限は 1 セント（1 回目の費用で上限に達し (s) を確かめる）
 # 状態は一時ディレクトリに置く（.wrangler/state や手元の .dev.vars には触らない）。終了時に必ず dev を止める。
 # 出力: PASS / FAIL 行と SMOKE_RESULT=PASS|FAIL。rc: 0=PASS / 1=FAIL / 2=起動できなかった
 set -u
@@ -41,6 +42,11 @@ FACTORY_AGENT_ID=agent_fake
 FACTORY_ENV_ID=env_fake
 MAX_CONCURRENT_JOBS=20
 DAILY_CAP_CENTS=1000000
+XAI_API_KEY=xai-fake-not-a-key
+SCOUT_MONTHLY_CAP_CENTS=1
+MEETING_MONTHLY_CAP_CENTS=1
+SCOUT_DAY=9
+MEETING_DAYS=
 ENV
 
 bash scripts/sync-claude-assets.sh > "$TMP/assets.log" 2>&1 || { echo "FAIL build_assets"; echo "SMOKE_RESULT=FAIL"; exit 2; }

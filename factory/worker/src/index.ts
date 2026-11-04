@@ -8,6 +8,16 @@ import { json, makeCtx, type RouteCtx } from './http';
 import { answerJobRoute, cancelJobRoute, createJob, getJobDetail, reconcileJobRoute, startJobRoute } from './routes/jobs';
 import { libraryAvailable, libraryFile } from './routes/library';
 import { createMaterial, getMaterialDetail, listMaterials, rollbackMaterial, stopMaterial } from './routes/materials';
+import {
+  adoptProposal,
+  createProposal,
+  dismissProposal,
+  intake,
+  latestMeeting,
+  listProposals,
+  runMeetingRoute,
+  runScoutRoute,
+} from './routes/proposals';
 import { decide, listReview, reverify, reviewDetail, reviewFile } from './routes/review';
 import { addStandard, getStandards } from './routes/standards';
 import { getStatus, setPause } from './routes/status';
@@ -37,6 +47,15 @@ const ROUTES: Array<[string, RegExp, Handler]> = [
   ['POST', /^\/api\/status\/pause$/, setPause],
   ['GET', /^\/api\/standards$/, getStandards],
   ['POST', /^\/api\/standards$/, addStandard],
+  // 入口（§K-3）
+  ['GET', /^\/api\/proposals$/, listProposals],
+  ['POST', /^\/api\/proposals$/, createProposal],
+  ['POST', new RegExp(`^/api/proposals/${ID}/adopt$`), adoptProposal],
+  ['POST', new RegExp(`^/api/proposals/${ID}/dismiss$`), dismissProposal],
+  ['POST', /^\/api\/intake$/, intake],
+  ['POST', /^\/api\/scout\/run$/, runScoutRoute],
+  ['POST', /^\/api\/meeting\/run$/, runMeetingRoute],
+  ['GET', /^\/api\/meeting\/latest$/, latestMeeting],
 ];
 
 // 管理画面に付ける CSP（同一 origin の /api/* だけを読む。確認用 iframe は sandbox 付きで同一 origin から読む）
@@ -77,8 +96,8 @@ export default {
       const isFake = path.startsWith('/__fake/');
       if (!isAdmin && !isApi && !isFake) return jsonError(404, 'not_found');
 
-      // それ以外はすべて Access
-      const access = await requireAccess(request, env);
+      // それ以外はすべて Access（/api/intake だけ service token の common_name も受ける。§K-3）
+      const access = await requireAccess(request, env, { allowCommonName: path === '/api/intake' });
       if (!access.ok) return access.response;
 
       if (isFake) {
