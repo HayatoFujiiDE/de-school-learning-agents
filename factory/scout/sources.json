@@ -1,0 +1,21 @@
+{
+  "_note": "収集部隊の情報源。ふじさんが編集する。RSS/Atom は 10 件まで、X の handle は 20 件まで（@ なし）。どれも発想の入口であって根拠ではない（契約 §K-4）",
+  "feeds": [
+    { "url": "https://github.com/python/cpython/releases.atom", "why": "Python 本体の新版（プログラミングの題材）" },
+    { "url": "https://github.com/scratchfoundation/scratch-gui/releases.atom", "why": "Scratch の新機能" },
+    { "url": "https://www.raspberrypi.com/news/feed/", "why": "Raspberry Pi 公式ニュース（電子工作の作例）" },
+    { "url": "https://blog.arduino.cc/feed/", "why": "Arduino 公式ブログ（作例）" },
+    { "url": "https://rss.arxiv.org/rss/cs.CY", "why": "arXiv Computers and Society（学びと技術の研究。要約だけ）" }
+  ],
+  "x_handles": [
+    { "handle": "Minecraft", "why": "公式。アップデート・レッドストーン等の題材" },
+    { "handle": "scratch", "why": "Scratch 公式" },
+    { "handle": "ThePSF", "why": "Python Software Foundation" },
+    { "handle": "Raspberry_Pi", "why": "公式" },
+    { "handle": "arduino", "why": "公式" },
+    { "handle": "microbit_edu", "why": "micro:bit 教育財団" },
+    { "handle": "NASA", "why": "宇宙・観察の題材" },
+    { "handle": "JAXA_jp", "why": "日本語の宇宙の題材" },
+    { "handle": "mext_japan", "why": "文部科学省（指導要領まわり）" }
+  ]
+}
