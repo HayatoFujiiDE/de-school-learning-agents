@@ -38,6 +38,14 @@ window.DES = window.DES || {};
     if (w.art && w.art.stage) return MD.art(w.art.stage);
     return '';
   }
+  // 作品の絵の部分: 線画、メモなら本文（§U-11 指摘 14）
+  function workPreview(w) {
+    if (w.art && w.art.note) {
+      return H('div', { class: 'work-preview work-note' }, [H('p', { class: 'wn-title' }, MD.pick(w.art.note.title, mode())),
+        H('ul', null, (w.art.note.lines || []).map(function (l) { return H('li', null, MD.pick(l, mode())); }))]);
+    }
+    return H('div', { class: 'work-preview' }, [DES.raw(workArt(w))]);
+  }
   function workCard(w) {
     var a = act(w.actId), info = [];
     info.push(H('h3', null, w.title));
@@ -48,11 +56,8 @@ window.DES = window.DES || {};
     }
     if (w.like) info.push(H('div', { class: 'work-like' }, [chip('own', T('like_point'), T('own_label') + ' ' + T('like_point')), H('p', null, w.like)]));
     if (w.roles) info.push(H('p', { class: 'work-roles' }, [chip('record', T('roles_h'), T('record_label') + ' ' + T('roles_h')), ' ', M.rolesText(w.roles)]));
-    info.push(H('div', { class: 'actions' }, [btn(T('resume_make'), 'wk-continue', { id: w.actId, kls: 'primary', disabled: !a })]));
-    return H('article', { class: 'work-card', 'data-fk': 'work:' + w.id, tabindex: '-1' }, [
-      H('div', { class: 'work-preview' }, [DES.raw(workArt(w))]),
-      H('div', { class: 'work-info' }, info)
-    ]);
+    info.push(H('div', { class: 'actions' }, [btn(T('resume_make'), 'wk-continue', { id: w.id, kls: 'primary', disabled: !a })]));
+    return H('article', { class: 'work-card', 'data-fk': 'work:' + w.id, tabindex: '-1' }, [workPreview(w), H('div', { class: 'work-info' }, info)]);
   }
   W.render = function (main, arg) {
     var works = S().works || [];
@@ -91,7 +96,8 @@ window.DES = window.DES || {};
   function render() {
     var d = wk().dlg, dlg = dlgEl();
     if (!d) return;
-    dlg.textContent = '';
+    // 中のトーストは描き直しで消さない（§U-11 指摘 1）
+    var putBack = M.clearDialog(dlg);
     dlg.setAttribute('aria-labelledby', 'wk-h');
     dlg.appendChild(H('div', { class: 'dialog-head' }, [H('h2', { id: 'wk-h' }, T('add_capture')),
       H('button', { class: 'icon-btn', type: 'button', 'data-action': 'dialog-close', 'aria-label': T('close') }, [icon('close')])]));
@@ -139,6 +145,7 @@ window.DES = window.DES || {};
       H('button', { class: 'btn primary', type: 'button', 'data-action': 'wk-save' }, d.failed ? T('retry_save') : T('save_work')),
       H('button', { class: 'btn', type: 'button', 'data-action': 'dialog-close' }, T('cancel'))
     ]));
+    putBack();
   }
   function rerender(sel) {
     render();
@@ -185,7 +192,13 @@ window.DES = window.DES || {};
   A['wk-save'] = function () {
     var d = wk().dlg;
     if (!d) return;
-    if (!d.saved) {
+    // 再試行はフォームの今の値で作り直す（§U-11 指摘 10）。前の試みで足した作品と活動は外してから
+    if (d.saved) {
+      S().works = S().works.filter(function (w) { return w.id !== d.saved; });
+      S().activities = S().activities.filter(function (a) { return a.id !== d.savedAct; });
+      d.saved = null;
+    }
+    {
       var line = String(d.madeLine || '').replace(/^\s+|\s+$/g, '');
       var made = d.made == null ? null : d.made;
       var res = M.addCapture(S().activities, S().works, {
@@ -197,8 +210,10 @@ window.DES = window.DES || {};
       S().activities = res.activities;
       S().works = res.works;
       d.saved = res.work.id;
+      d.savedAct = res.act.id;
     }
-    if (!DES.store.save()) {
+    // 活動を先に保存し、成功した時だけ作品を保存する（作品だけが残って活動が無い状態を作らない）
+    if (!(DES.store.save('activities') && DES.store.save('works'))) {
       S().saveFailed = true;
       d.failed = true;
       DES.app.renderSaveState();
@@ -212,7 +227,8 @@ window.DES = window.DES || {};
     DES.app.commit({ focus: 'work:' + wid });
     DES.app.toast(T('saved_work'));
   };
-  A['wk-continue'] = function (el) { var id = el.getAttribute('data-id'); if (act(id)) M.openAct(id); };
+  // 続きを作る: 残した時点を開く（§U-11 指摘 5）
+  A['wk-continue'] = function (el) { M.openWork(el.getAttribute('data-id')); };
 
   W.bind = function () {
     document.addEventListener('input', function (e) {

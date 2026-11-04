@@ -111,7 +111,8 @@ html[data-mode="es"] .studio .btn.small,html[data-mode="es"] .make-entry .btn.sm
 .title-btn:hover{background:#efeee8;filter:none}
 .sh-actions{display:flex;align-items:center;gap:4px;flex-shrink:0;margin-left:auto}
 .studio-header .icon-btn{width:44px;height:44px}
-.head-menu{position:absolute;right:0;top:100%;z-index:6;margin:4px 0 0;min-width:220px}
+.head-menu{position:absolute;right:0;top:100%;z-index:6;margin:4px 0 0;min-width:220px;display:grid;gap:2px;padding:6px;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px #20251b14}
+.head-menu .btn.small{justify-content:flex-start;border-color:transparent;width:100%}
 .studio-header .inline-edit{flex:1;min-width:0}
 .studio-tabs{margin-bottom:12px}
 .studio-tabs .segmented{display:flex;width:100%}
@@ -154,17 +155,18 @@ html[data-mode="es"] .studio .btn.small,html[data-mode="es"] .make-entry .btn.sm
 .mk-composer .hint{font-size:10px}
 
 /* 作業対象 */
-.studio-stage{display:flex;flex-direction:column}
+/* focus の輪（offset 4px）が切れないよう、作業対象の列は overflow を見せる（codex の overflow:hidden からの例外。§U-11 指摘 22） */
+.studio .studio-stage{display:flex;flex-direction:column;overflow:visible}
 .studio-stage>.step-line{padding:12px 20px;margin:0;border-bottom:1px solid var(--line);flex-wrap:wrap;row-gap:2px;font-size:12px}
 .step-line:focus{outline:none}
-.step-line:focus-visible{outline:3px solid #a9590b;outline-offset:-3px}
+.step-line:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
 .step-line strong{overflow-wrap:anywhere}
 .step-line .btn{margin-left:auto}
 .step-line.flash{background:var(--sand)}
 .step-line.editing .inline-edit{flex:1 1 220px}
 .stage-block,.ext-block,.stage-empty{border-bottom:1px solid var(--line);min-width:0}
 .stage-block:focus,.ext-block:focus,.stage-empty:focus{outline:none}
-.stage-block:focus-visible,.ext-block:focus-visible,.stage-empty:focus-visible{outline:3px solid #a9590b;outline-offset:-3px}
+.stage-block:focus-visible,.ext-block:focus-visible,.stage-empty:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
 .stage-top{gap:10px;flex-wrap:wrap}
 .st-name{display:flex;align-items:center;gap:8px;min-width:0}
 .st-name strong{font-size:13px;font-weight:600;overflow-wrap:anywhere}
@@ -209,7 +211,7 @@ html[data-mode="es"] .studio .btn.small,html[data-mode="es"] .make-entry .btn.sm
 /* 比べる */
 .compare-view{padding:14px 20px;border-bottom:1px solid var(--line);background:#fbfaf6}
 .compare-view:focus{outline:none}
-.compare-view:focus-visible{outline:3px solid #a9590b;outline-offset:-3px}
+.compare-view:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
 .cv-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;font-size:12px}
 .compare-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 .compare-item{margin:0;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px;display:grid;gap:4px;min-width:0}
@@ -225,7 +227,7 @@ html[data-mode="es"] .studio .btn.small,html[data-mode="es"] .make-entry .btn.sm
 .change-row{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:4px 10px;align-items:start;padding:10px 0;border-top:1px solid var(--line)}
 .change-row:first-child{border-top:0}
 .change-row:focus{outline:none}
-.change-row:focus-visible{outline:3px solid #a9590b;outline-offset:2px}
+.change-row:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
 .cr-time{font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;line-height:22px}
 .cr-main{display:grid;gap:3px;min-width:0}
 .cr-who{display:flex;gap:4px;flex-wrap:wrap}
@@ -246,7 +248,7 @@ html[data-mode="es"] .studio .btn.small,html[data-mode="es"] .make-entry .btn.sm
 .shelf.inline .shelf-cards{grid-template-columns:repeat(auto-fill,minmax(180px,1fr))}
 .shelf-card{background:#fff;border:1px dashed var(--ai);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;min-width:0}
 .shelf-card:focus{outline:none}
-.shelf-card:focus-visible{outline:3px solid #a9590b;outline-offset:3px}
+.shelf-card:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
 .shelf-card.is-adopted{border-style:solid;border-color:#e6d2ac}
 .shelf-card.is-passed{background:#faf9f5;border-color:var(--line)}
 .shelf-card.is-passed .card-art{opacity:.6}
@@ -274,6 +276,11 @@ html[data-mode="es"] .studio .btn.small,html[data-mode="es"] .make-entry .btn.sm
 
 /* ---------- ダイアログ（作品に残す / 今日はここまで / 写真・スクショを入れる） ---------- */
 .make-dialog .dialog-body{gap:16px}
+/* ダイアログの閉じる・フッターも操作領域 44px（es 48px）（§U-11 指摘 22） */
+.make-dialog .dialog-head .icon-btn{width:44px;height:44px}
+.make-dialog .dialog-footer .btn{min-height:44px}
+html[data-mode="es"] .make-dialog .dialog-head .icon-btn{width:48px;height:48px}
+html[data-mode="es"] .make-dialog .dialog-footer .btn,html[data-mode="es"] .studio .title-btn,html[data-mode="es"] .range-row input{min-height:48px}
 .make-dialog .field input,.make-dialog .field select{font-size:13px}
 .push-line{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;background:#fff;border:1px solid var(--line);border-radius:12px}
 .push-line p{font-size:13px;line-height:1.9}
@@ -303,13 +310,16 @@ html[data-mode="es"] .studio .btn.small,html[data-mode="es"] .make-entry .btn.sm
 /* ---------- 作品（#works） ---------- */
 .works-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px}
 .work-card:focus{outline:none}
-.work-card:focus-visible{outline:3px solid #a9590b;outline-offset:3px}
+.work-card:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
 .work-info{display:grid;gap:6px}
 .work-info h3{margin:0;line-height:1.6;overflow-wrap:anywhere}
 .work-read,.work-like{display:grid;gap:3px;justify-items:start}
 .work-read p,.work-like p{font-size:12px;line-height:1.7;overflow-wrap:anywhere}
 .work-roles{font-size:11px;line-height:1.8;color:var(--muted);display:flex;flex-wrap:wrap;align-items:center;gap:4px}
 .work-info .actions{margin-top:4px}
+.work-note{aspect-ratio:auto;min-height:150px;padding:14px 16px;display:grid;align-content:start;gap:6px;background:#f6f3ea}
+.work-note .wn-title{font-size:13px;font-weight:600;line-height:1.6}
+.work-note ul{margin:0;padding-left:18px;font-size:12px;line-height:1.8}
 .work-add{border:1px dashed #cfcabd;border-radius:14px;background:transparent;min-height:180px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;font-size:13px;font-weight:600;color:var(--ink)}
 .work-add .ico{width:24px;height:24px}
 .work-add:hover{background:#fbfaf6;filter:none}

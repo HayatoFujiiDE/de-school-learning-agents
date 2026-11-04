@@ -285,7 +285,7 @@ eq(ac.works.length, 1, 'addCapture 作品 +1');
 eq(ac.activities.length, 2, 'addCapture 活動 +1（自動）');
 eq(ac.act.origin, 'works', 'addCapture きっかけ = 作品から');
 eq(ac.act.ext.photos.length, 2, 'addCapture 写真 2 枚が外の記録に');
-eq(ac.act.changes.length, 1, 'addCapture 変化 1 つ（本人）');
+eq(ac.act.changes.length, 2, 'addCapture 写真 2 枚 = 変化 2 つ（本人。§U-11 指摘 15）');
 eq(ac.act.changes[0].who, 'own', 'addCapture 本人');
 eq(ac.work.title, '塔のある建物', 'addCapture タイトル既定はバディの読み取りから');
 eq(ac.act.thread[0].text, '石とガラスの塔。屋根はまだ無い', 'addCapture 見立ては相談列に（バディ）');
@@ -312,6 +312,133 @@ eq(M.demo('nope'), null, 'demo 無い id');
 var df = M.demo('demo-full');
 eq([df.changes.length, df.shelf.filter(function (c) { return c.state === 'new'; }).length], [3, 1], 'demo-full 変化 3 つ + 新しい案 1 枚');
 eq(MD.seedActivities()[0].id, 'act-build', 'seed 制作中 1 件');
+
+// ======================================================================
+// §U-11 の再現テスト（Astra 指摘番号 / 実機確認 (a)〜(d)）
+// ======================================================================
+function t(name, fn) { try { fn(); } catch (e) { fail += 1; console.log('NG  ' + name + '  (例外 ' + e.message + ')'); } }
+function settled(a, opt) { var r = M.leave(a, opt); return { act: M.settle(r.act, r.ids), ids: r.ids }; }
+t('U11-2 採用した案は「試す」で必ず変化 +1', function () {
+  var x = M.test(M.setParam(sample('mc'), 'size', 6)).act;
+  var l = settled(x, 'one'), ad = M.adopt(l.act, l.ids[0]).act;
+  var r = M.test(ad);
+  ok(r && r.change && r.change.kind === 'test', 'U11-2 試すで変化が積まれる');
+  eq(r.act.changes.length, ad.changes.length + 1, 'U11-2 変化数 +1');
+  eq(M.test(r.act).same, true, 'U11-2 続けて試すと積まない');
+});
+t('U11-3 写真・スクショの変化へ戻れる', function () {
+  var e = M.addPhoto(M.fromExt('photo', { id: 'e3', now: '10:20' }), 'shot').act;
+  eq(e.ext.visible.length, 2, 'U11-3 見えている写真 2 枚');
+  eq(M.canRevert(e), true, 'U11-3 前に戻すが押せる');
+  var rv = M.revert(e, null);
+  eq(rv.act.ext.visible.length, 1, 'U11-3 前に戻す → 写真 1 枚の状態');
+  eq(rv.act.ext.photos.length, 2, 'U11-3 写真の記録は消えない');
+  var e3 = M.addPhoto(e, 'photo').act;
+  var to = M.revert(e3, e3.changes[0].id);
+  eq(to.act.ext.visible, [e3.ext.photos[0].id], 'U11-3 ここに戻す → その時の写真');
+  eq(M.undoRevert(rv.act, rv.undo).ext.visible.length, 2, 'U11-3 戻すの取り消しで写真も元へ');
+});
+t('U11-5 作品の「続きを作る」は残した時点を新しい変化として開く', function () {
+  var x = M.test(M.setParam(sample('mc'), 'size', 6)).act;
+  var w = M.saveWork([], x, { id: 'w5' }).work;
+  var y = M.test(M.setParam(x, 'size', 8)).act;
+  var r = M.reopenAt(y, w.at);
+  eq(r.act.stage.values.size, 6, 'U11-5 残した時点の値');
+  eq(r.change.kind, 'revert', 'U11-5 新しい変化として積む');
+  eq(M.reopenAt(r.act, w.at).change, null, 'U11-5 もう同じ時点なら積まない');
+});
+t('U11-6 やめた活動を再開したら作業中', function () {
+  var st = M.stop(sample('mc')).act;
+  eq(M.resume(st).state, 'working', 'U11-6 resume で作業中');
+  eq(M.reopenAt(st, null).act.state, 'working', 'U11-6 作品から開いても作業中');
+});
+t('U11-7 空にした「次」は空のまま', function () {
+  var x = M.setNext(sample('mc'), '');
+  eq(M.stepNext(x), null, 'U11-7 setNext 空 → 次は無し');
+  var full = M.test(M.setParam(sample('mc'), 'size', 6)).act;
+  var cp = M.confirmPause(full, { next: '', closed: false });
+  eq(M.stepNext(M.resume(cp)), null, 'U11-7 区切りで空にしたら再開後も空');
+  eq(M.stepNext(M.setNext(x, '窓')), { text: '窓' }, 'U11-7 書けば本人の言葉');
+});
+t('U11-8 引用を直して題材が変わったら手順も新題材', function () {
+  var c = M.fromText('マイクラで家', { id: 'q8', now: '10:20' });
+  var e = M.editQuote(c, 'Python のゲーム', [], 'js').act;
+  eq(e.steps[1], MD.stepsFor('py', 'dodge')[0], 'U11-8 手順が Python に');
+  var ad = M.adopt(e, e.shelf[0].id).act;
+  eq(M.stepNow(ad), MD.stepsFor('py', 'dodge')[0], 'U11-8 採用後の今の一歩も Python');
+});
+t('U11-9 相談の返事の「違う」が対象の変更を戻す（対象の判定）', function () {
+  var x = M.test(M.setParam(sample('mc'), 'size', 6)).act;
+  var l = settled(x, 'one'), ad = M.adopt(l.act, l.ids[0]);
+  var tg = M.replyTarget(ad.act, { change: ad.change.id });
+  eq(tg.revertTo, x.changes[0].id, 'U11-9 採用の前の変化へ戻す');
+  var l2 = settled(ad.act, 'find');
+  eq(M.replyTarget(l2.act, { cards: l2.ids }).cards, l2.ids, 'U11-9 カードの返事は新しいカードを見送る');
+  eq(M.replyTarget(sample('mc'), {}).revertTo, null, 'U11-9 何も紐づかない返事は戻さない');
+});
+t('U11-11 「作っている」のまま読み込んだら完了させる', function () {
+  var l = M.leave(sample('mc'), 'find');
+  var f = M.finishMaking(l.act, '棚に置いた');
+  eq(f.shelf.filter(function (c) { return c.state === 'making'; }).length, 0, 'U11-11 作っているが残らない');
+  eq(f.thread[f.thread.length - 1].text, '棚に置いた', 'U11-11 相談列に 1 行');
+  eq(M.finishMaking(sample('mc'), 'x').thread.length, 1, 'U11-11 作っていなければ何もしない');
+});
+t('U11-13 メモのカードも作り直せる', function () {
+  var ext = M.fromExt('link', { id: 'n13', now: '10:20' });
+  var nt = settled(ext, 'calc').act;
+  var rm = M.remake(nt, nt.shelf[0].id, 'calc');
+  ok(rm.ids.length === 1, 'U11-13 作り直しのカード');
+  var made = M.settle(rm.act, rm.ids).shelf[0];
+  ok(JSON.stringify(made.lines) !== JSON.stringify(nt.shelf[0].lines), 'U11-13 作り直すと中身が変わる');
+});
+t('U11-14 メモを作品に残すと本文を持つ', function () {
+  var ext = M.fromExt('link', { id: 'n14', now: '10:20' });
+  var nt = settled(ext, 'calc').act, ad = M.adopt(nt, nt.shelf[0].id).act;
+  var w = M.saveWork([], ad, { id: 'w14' }).work;
+  eq(w.art && w.art.note && w.art.note.lines.length, 3, 'U11-14 作品にメモ 3 行');
+});
+t('U11-15 写真 1 枚 = 変化 1', function () {
+  var ac = M.addCapture([], [], { workId: 'w15', actId: 'a15', images: ['cap-mc', 'cap-py'], title: '', made: 0, madeLine: '', read: { text: 'x', edited: false, declined: false }, now: '10:20', mode: 'js' });
+  eq(ac.act.changes.length, 2, 'U11-15 写真 2 枚 = 変化 2');
+  eq(ac.work.roles.own, 2, 'U11-15 本人 2 回');
+});
+t('U11-16 返事は作った時点の文字列で持つ', function () {
+  var es = M.fromSample('mc', { id: 's16', now: '10:20', mode: 'es' });
+  eq(es.thread[0].text, MD.replies.open[1], 'U11-16 es で作った返事は es の文のまま');
+  var js = M.fromText('Python', { id: 's16b', now: '10:20', mode: 'js' });
+  eq(js.thread[0].text, MD.replies.land[0], 'U11-16 js で作った返事は js の文のまま');
+});
+t('U11-a 名詞は今の作業対象から（岩をよけるゲームに「星」を出さない）', function () {
+  var c = M.fromText('Python のゲーム', { id: 'ta', now: '10:20', mode: 'js' });
+  var ad = M.adopt(c, c.shelf[0].id).act;
+  eq(ad.stage.variant, 'dodge', 'U11-a 岩をよけるゲーム');
+  var all = JSON.stringify(ad.steps);
+  ok(all.indexOf('岩') >= 0 && all.indexOf('星') < 0, 'U11-a 手順は岩', ad.steps);
+  var rep = MD.testReply(ad.stage, 'count', 5, 'js') + MD.testReply(ad.stage, 'count', 5, 'es') + MD.testReply(ad.stage, 'speed', 1, 'js');
+  ok(rep.indexOf('岩') >= 0 && rep.indexOf('星') < 0, 'U11-a 返事も岩', rep);
+});
+t('U11-21 返事の型は §7 の語順（題材の語だけ差し替え）', function () {
+  var st = { kind: 'sample', theme: 'py', variant: 'catch', values: { speed: 3, count: 3 } };
+  eq(MD.testReply(st, 'speed', 2, 'js'), '選んだ速さに変えて、星の動きに違いが出たね。狙っていた動きに近い？', 'U11-21 js');
+  eq(MD.testReply(st, 'speed', 2, 'es'), 'はやさをかえたら、さっきよりはやく動いたね。変えたところが動きに出たね', 'U11-21 es（羽を広げたら…の語順）');
+});
+t('U11-b 3 題材 × 2 つの値: 線画が変わる', function () {
+  [['mc', 'cube', { size: 4, block: 0 }, 'size', 6], ['mc', 'cube', { size: 4, block: 0 }, 'block', 1],
+    ['py', 'catch', { speed: 2, count: 3 }, 'speed', 5], ['py', 'catch', { speed: 2, count: 3 }, 'count', 5],
+    ['circuit', 'single', { volt: 1, ohm: 2 }, 'volt', 3], ['circuit', 'single', { volt: 1, ohm: 2 }, 'ohm', 0]].forEach(function (c) {
+    var a = { kind: 'sample', theme: c[0], variant: c[1], values: c[2] }, v2 = JSON.parse(JSON.stringify(c[2]));
+    v2[c[3]] = c[4];
+    var b = { kind: 'sample', theme: c[0], variant: c[1], values: v2 };
+    ok(MD.art(a) !== MD.art(b), 'U11-b ' + c[0] + '.' + c[3] + ' で線画が変わる');
+    ok(MD.artMarks(b) !== MD.artMarks(a), 'U11-b ' + c[0] + '.' + c[3] + ' の量が図の印の数か長さに出る');
+  });
+});
+t('U11-d 棚のカード名が同名で並ばない', function () {
+  var df = M.demo('demo-full');
+  var names = M.cardNames(df.shelf, 'js');
+  var list = df.shelf.map(function (c) { return names[c.id]; });
+  eq(list.length, new Set(list).size, 'U11-d demo-full のカード名は別々', list);
+});
 
 console.log('make-test: ' + pass + ' passed, ' + fail + ' failed');
 console.log('MAKE_TEST=' + (fail === 0 ? 'PASS' : 'FAIL'));
