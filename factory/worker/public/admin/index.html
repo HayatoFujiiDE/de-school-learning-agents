@@ -52,6 +52,25 @@
       </div>
     </form>
   </dialog>
+  <dialog id="keys-dlg" class="dlg">
+    <form method="dialog">
+      <h2>確認画面のキー</h2>
+      <table class="keys">
+        <tbody>
+          <tr><td><span class="kbd">1</span> <span class="kbd">2</span> <span class="kbd">3</span></td><td>「説明と表現」「学習との関係」「使う条件」を OK</td></tr>
+          <tr><td>Shift + <span class="kbd">1</span> <span class="kbd">2</span> <span class="kbd">3</span></td><td>同じ順に NG</td></tr>
+          <tr><td><span class="kbd">A</span></td><td>承認する（確認ダイアログが出ます）</td></tr>
+          <tr><td><span class="kbd">R</span></td><td>差し戻す（1 回目で理由欄が開き、2 回目で確認）</td></tr>
+          <tr><td><span class="kbd">X</span></td><td>却下する（1 回目で理由欄が開き、2 回目で確認）</td></tr>
+          <tr><td><span class="kbd">J</span> / <span class="kbd">K</span></td><td>次 / 前の確認待ち（理由を書きかけの間は動きません）</td></tr>
+          <tr><td><span class="kbd">?</span></td><td>この一覧</td></tr>
+          <tr><td>Enter / Esc</td><td>確認ダイアログで実行 / 取消</td></tr>
+        </tbody>
+      </table>
+      <p class="muted">入力欄にカーソルがある時・ダイアログ表示中・送信中・キーを押しっぱなしの時・Ctrl / ⌘ / Alt 付きの時は効きません。</p>
+      <div class="row end"><button type="submit" class="btn primary">閉じる</button></div>
+    </form>
+  </dialog>
   <div id="toast" class="toast hidden" role="status"></div>
   <script src="/admin/admin.js"></script>
 </body>

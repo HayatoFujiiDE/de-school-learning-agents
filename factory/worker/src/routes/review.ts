@@ -1,5 +1,5 @@
 // /api/review（契約 §B-3, §B-6, §G-2）
-import { all, cas, conditionalBatch, first, isUniqueViolation, nowIso, stmt } from '../db';
+import { all, cas, conditionalBatch, first, isUniqueViolation, nowIso, stmt, tokyoDay } from '../db';
 import { JOB_MODEL, cfg, consoleUrl } from '../env';
 import { isNonEmptyString, json, parseJsonField, readBody, type RouteCtx } from '../http';
 import { getJob, startJob } from '../jobs';
@@ -113,6 +113,25 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
     stmt("SELECT SUM(cents) AS c FROM cost_ledger WHERE kind = 'verify' AND (ref_id = ? OR ref_id GLOB 'vb:' || ? || ':*')", vid, vid),
   );
   const triage = await computeTriage(db, v, ver ? { id: ver.id, result_json: ver.result_json } : null);
+  // 検証待ちの理由（§L-6 1.・§L-2 3-2）。読んだ時点の停止・飛行中・日次で決める表示用の値（判定は提出段の 1 文が正本）
+  const phaseRow = await first<{ verify_phase: string | null }>(db, stmt('SELECT verify_phase FROM material_versions WHERE id = ?', vid));
+  const verifyPhase = phaseRow?.verify_phase ?? null;
+  let verifyWaitReason: 'paused' | 'daily_cap' | 'inflight' | null = null;
+  if (v.verification_status === 'running' && verifyPhase === 'to_submit') {
+    const cf = cfg(c.env);
+    const w = await first<{ paused: string | null; inflight: number; today: number | null }>(
+      db,
+      stmt(
+        `SELECT (SELECT value FROM settings WHERE key = 'paused') AS paused,
+                (SELECT COUNT(*) FROM material_versions WHERE verify_phase IN ('submitting','submitted','collecting')) AS inflight,
+                (SELECT SUM(cents) FROM cost_ledger WHERE day = ?) AS today`,
+        tokyoDay(),
+      ),
+    );
+    if (w?.paused === '1') verifyWaitReason = 'paused';
+    else if ((w?.inflight ?? 0) >= cf.verifyInflight) verifyWaitReason = 'inflight';
+    else if ((w?.today ?? 0) + cf.verifyTurnReserveCents * ((w?.inflight ?? 0) + 1) > cf.dailyCapCents) verifyWaitReason = 'daily_cap';
+  }
   return json(200, {
     version: {
       id: v.id,
@@ -123,6 +142,8 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
       status: v.status,
       verification_status: v.verification_status,
       verification_attempts: v.verification_attempts,
+      verify_phase: verifyPhase,
+      verify_wait_reason: verifyWaitReason,
       content_sha256: v.content_sha256,
       grader_result: v.grader_result,
       grader_explanation: v.grader_explanation,

@@ -1,7 +1,8 @@
-// smoke（契約 §H (a)〜(e),(g)〜(i),(k)〜(n)、§K-8 (o)〜(s)）。scripts/smoke.sh が wrangler dev（fake）を起動してから呼ぶ。
+// smoke（契約 §H (a)〜(e),(g)〜(i),(k)〜(n)、§K-8 (o)〜(s)、§L-7 (l5)）。scripts/smoke.sh が wrangler dev（fake）を起動してから呼ぶ。
 // 出力: 1 行ずつ `PASS <名前>` / `FAIL <名前> <理由>`。最後に SMOKE_RESULT=PASS|FAIL。応答本文は必要な field だけを見る。
 import crypto from 'node:crypto';
 import http from 'node:http';
+import vm from 'node:vm';
 
 const BASE = process.env.SMOKE_BASE ?? 'http://localhost:8787';
 const KEY = process.env.SMOKE_WEBHOOK_KEY ?? '';
@@ -200,6 +201,7 @@ async function main() {
       `calls=${fakeMsgs} ${JSON.stringify(msg?.params?.tool_choice ?? null)}`,
     );
   }
+  await reviewScreenSmoke(aD);
   let r = await api('POST', `/api/review/${aVid}/decision`, { decision: 'approve', checklist: ALL_OK, note: 'smoke', verification_id: aD?.verification_id });
   check('(c) 6 項目を埋めて承認 → 200', r.status === 200, `status=${r.status} err=${r.json?.error} msg=${r.json?.message ?? ''}`);
   let lib = await api('GET', '/api/library/available');
@@ -438,6 +440,123 @@ async function main() {
 
   console.log(`SMOKE_RESULT=${failed === 0 ? 'PASS' : 'FAIL'}`);
   process.exit(failed === 0 ? 0 : 1);
+}
+
+/**
+ * (l5) 確認画面（§L-6）: 配信中の /admin/admin.js を node:vm で読み（起動はしない）、描画の純関数が返す HTML の要素数を数える。
+ * 実 API の応答（triage 付き）を土台に、要確認 0 件 / N 件の triage を差し替えて描く。キー操作は keyCommand → applyCommand で状態を変えて描き直す。
+ */
+async function reviewScreenSmoke(detail) {
+  const res = await fetch(`${BASE}/admin/admin.js`);
+  const code = await res.text();
+  const win = { __FACTORY_ADMIN_NO_BOOT__: true };
+  try {
+    vm.runInNewContext(code, { window: win, console }, { timeout: 2000 });
+  } catch (e) {
+    fail('(l5) admin.js を読める', String(e && e.message).slice(0, 120));
+    return;
+  }
+  const R = win.FactoryAdminReview;
+  check('(l5) admin.js が確認画面の関数を持つ', res.status === 200 && !!R && typeof R.reviewHtml === 'function', `status=${res.status}`);
+  if (!R || !detail?.version) return;
+  const n = (html, re) => (html.match(re) || []).length;
+  const GROUP = /data-rv-group="/g;
+  const ITEM = /data-ck="/g;
+  const approveOn = (html) => /id="approve-btn">/.test(html);
+  const t = detail.triage;
+  check(
+    '(l5) GET /api/review/:id が triage を返す（§L-5）',
+    !!t && Array.isArray(t.groups) && typeof t.needs_review === 'number' && !!t.auto && ['content_and_evidence', 'terms_of_use', 'artifact_behavior'].every((k) => ['ok', 'review'].includes(t.auto[k])),
+    `triage=${t ? Object.keys(t).join(',') : 'none'}`,
+  );
+  {
+    const html = R.reviewHtml(detail, R.newReviewState(), { queue: [detail.version.id] });
+    const expectGroups = Array.isArray(t?.groups) ? t.groups.length : 0;
+    check('(l5) 実 API の版を描画: 判定帯 1・group 数が triage と一致・フッター 1', n(html, /data-rv-band="1"/g) === 1 && n(html, GROUP) === expectGroups && n(html, /id="rv-foot"/g) === 1, `band=${n(html, /data-rv-band="1"/g)} groups=${n(html, GROUP)}/${expectGroups}`);
+  }
+  const base = JSON.parse(JSON.stringify(detail));
+  base.version.status = 'review';
+  base.version.verification_status = 'done';
+  base.verification_id = base.verification_id || 'ver_smoke';
+  base.verification = { ...(base.verification || {}), contradicted: 0 };
+  const firstClaim = base.claims?.[0]?.id ?? 'c1';
+  const zero = { ...base, triage: { verification_id: base.verification_id, auto: { content_and_evidence: 'ok', terms_of_use: 'ok', artifact_behavior: 'ok' }, groups: [], ok_counts: { claims: base.claims?.length ?? 0, sources: base.sources?.length ?? 0 }, needs_review: 0, bad: false, reasons: [], action: 'none', return_note: null } };
+  const many = {
+    ...base,
+    triage: {
+      ...zero.triage,
+      auto: { content_and_evidence: 'review', terms_of_use: 'review', artifact_behavior: 'ok' },
+      groups: [
+        { cause: 'contradicted', source_id: 's1', url: 'https://example.com/a', verifier_opened_urls: ['https://example.com/b'], claim_ids: [firstClaim] },
+        { cause: 'source_not_listed', source_id: 's9', url: null, verifier_opened_urls: [], claim_ids: [firstClaim] },
+        { cause: 'license_unknown', source_id: 's1', url: 'https://example.com/a', verifier_opened_urls: [], claim_ids: [] },
+      ],
+      needs_review: 5,
+    },
+  };
+  {
+    const html = R.reviewHtml(zero, R.newReviewState(), {});
+    check('(l5) 要確認 0 件: group 0・「要確認なし」・項目は人の 3 つ・承認は無効（未回答）', n(html, GROUP) === 0 && html.includes('要確認なし') && n(html, ITEM) === 3 && !approveOn(html), `groups=${n(html, GROUP)} items=${n(html, ITEM)} approve=${approveOn(html)}`);
+  }
+  {
+    const html = R.reviewHtml(many, R.newReviewState(), {});
+    const causes = ['出典と食い違う', '出典一覧にない出典', '利用条件が分からない'].every((x) => html.includes(`<h3>${x}</h3>`));
+    check('(l5) 要確認 N 件: group 3・原因の文・項目は 3 + review の 2・「要確認 5 件」', n(html, GROUP) === 3 && causes && n(html, ITEM) === 5 && html.includes('要確認 5 件'), `groups=${n(html, GROUP)} items=${n(html, ITEM)} causes=${causes}`);
+  }
+  const env = { inInput: false, dialogOpen: false, busy: false, draft: false };
+  const key = (k, extra = {}) => ({ key: k, code: /^[1-3]$/.test(k) ? `Digit${k}` : `Key${k.toUpperCase()}`, ...extra });
+  {
+    const st = R.newReviewState();
+    for (const k of ['1', '2', '3']) R.applyCommand(st, R.keyCommand(key(k), env));
+    let html = R.reviewHtml(zero, st, {});
+    const okOn = n(html, /data-val="ok" aria-pressed="true"/g);
+    const ready = approveOn(html);
+    R.applyCommand(st, R.keyCommand({ key: '!', code: 'Digit1', shiftKey: true }, env));
+    html = R.reviewHtml(zero, st, {});
+    const ngOn = n(html, /data-val="ng" aria-pressed="true"/g);
+    check('(l5) キー 1/2/3 で 3 項目が OK → 承認が有効、Shift+1 で NG → 承認が無効', okOn === 3 && ready && ngOn === 1 && !approveOn(html), `ok=${okOn} ready=${ready} ng=${ngOn} after=${approveOn(html)}`);
+    const payload = R.checklistPayload(zero, { ...st, ck: { ...st.ck, explanation_and_expression: { result: 'ok', note: '' } } }, true);
+    check('(l5) 承認の checklist は auto が ok の 3 項目を省く', Object.keys(payload).length === 3 && !('content_and_evidence' in payload), Object.keys(payload).join(','));
+  }
+  {
+    const blocked = [
+      ['ダイアログ表示中', R.keyCommand(key('1'), { ...env, dialogOpen: true })],
+      ['送信中', R.keyCommand(key('a'), { ...env, busy: true })],
+      ['キーリピート', R.keyCommand(key('1', { repeat: true }), env)],
+      ['入力欄', R.keyCommand(key('r'), { ...env, inInput: true })],
+      ['Ctrl', R.keyCommand(key('a', { ctrlKey: true }), env)],
+      ['Meta', R.keyCommand(key('x', { metaKey: true }), env)],
+      ['Alt', R.keyCommand(key('j', { altKey: true }), env)],
+      ['Shift+A', R.keyCommand(key('A', { shiftKey: true }), env)],
+    ].filter(([, cmd]) => cmd !== null);
+    const allowed = R.keyCommand(key('a'), env)?.cmd === 'approve' && R.keyCommand({ key: '?', code: 'Slash', shiftKey: true }, env)?.cmd === 'help';
+    check('(l5) ダイアログ表示中・送信中・キーリピート・入力欄・修飾キーではキーが効かない', blocked.length === 0 && allowed, `効いた=${blocked.map((b) => b[0]).join(',')} allowed=${allowed}`);
+  }
+  {
+    const st = R.newReviewState();
+    st.mode = 'return';
+    st.note = '書きかけ';
+    const cmd = R.keyCommand(key('j'), { ...env, draft: true });
+    R.applyCommand(st, cmd);
+    const html = R.reviewHtml(zero, st, {});
+    const visible = /<span id="rv-draft" class="err">理由を書きかけです<\/span>/.test(html);
+    const free = R.keyCommand(key('k'), env);
+    check('(l5) 理由の書きかけがあると J/K は動かず「理由を書きかけです」を出す', cmd?.cmd === 'draft_block' && visible && free?.cmd === 'nav' && free.dir === -1, `cmd=${cmd?.cmd} visible=${visible}`);
+  }
+  {
+    const st = R.newReviewState();
+    for (const k of ['explanation_and_expression', 'relation_to_learning', 'conditions_of_use']) st.ck[k] = { result: 'ok', note: '' };
+    const cases = [
+      ['全部 OK・検証 done・処置なし', zero, true],
+      ['検証中', { ...zero, version: { ...zero.version, verification_status: 'running' } }, false],
+      ['食い違いあり', { ...zero, verification: { ...zero.verification, contradicted: 1 } }, false],
+      ['自動の差し戻し待ち', { ...zero, triage: { ...zero.triage, action: 'auto_return' } }, false],
+      ['review の項目が未回答', many, false],
+    ];
+    const wrong = cases.filter(([, d, want]) => approveOn(R.reviewHtml(d, st, {})) !== want).map((c) => c[0]);
+    const busy = approveOn(R.reviewHtml(zero, st, { busy: true }));
+    check('(l5) 固定フッターの承認ボタンは条件どおりに有効化（送信中は無効）', wrong.length === 0 && !busy, `違う=${wrong.join(',')} busy=${busy}`);
+  }
 }
 
 async function status() {
