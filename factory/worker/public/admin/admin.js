@@ -866,6 +866,7 @@
     var m = r.material || {}, j = r.job, v = r.version;
     if (r.attention === 'answer' && j) return '<a class="fq-op primary" href="#/job/' + esc(j.id) + '">回答する</a>';
     if (r.attention === 'review' && v) return '<a class="fq-op primary" href="#/review/' + esc(v.id) + '">確認する</a>';
+    if (r.attention === 'budget' && j && j.status === 'budget_reached') return '<a class="fq-op primary" href="#/job/' + esc(j.id) + '">増額する</a>';
     if (r.attention === 'failed' && j && j.status === 'failed' && j.error === 'invalid_outputs') return '<a class="fq-op" href="#/job/' + esc(j.id) + '">取り込みをやり直す</a>';
     return '<a class="fq-op" href="#/material/' + esc(m.id) + '">詳細</a>';
   }
