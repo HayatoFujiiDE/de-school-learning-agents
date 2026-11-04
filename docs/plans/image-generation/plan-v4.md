@@ -1,3 +1,17 @@
+# 計画 v4: 職人が画像を生成できるようにする（v3 への Astra high 3 回目の REVISE を反映。v4 の変更が v3 以下の本文に優先する）
+
+状態（2026-11-04）: v4 は**未レビュー**。次のスレッドで Astra high に再レビューを出し、GO になってから契約 v3.6 を凍結する。レビュー依頼文は同じフォルダの review-prompt.md（計画ファイルのパスをこのファイルに読み替える）。
+
+## v4 の変更（v3 レビューの指摘 → 対応）
+- **未確定の試行に永続の枠（B1）**: D1 に `image_inflight`（settings の数値、または image_attempts の `state IN ('dispatched','unknown')` の件数）を持ち、予約の batch の条件に「未確定の試行数 < IMAGE_MAX_INFLIGHT（2）」を入れる。枠は**会計結果（usage による精算、または U のまま確定）を D1 に保存した時だけ**解放する。cron が結果不明の試行（dispatch 後に会計が保存されないまま 5 分超）を見つけたら、その試行は `unknown` のまま枠を持ち続け、`image_gen_halted` を CAS で書く（自動 retry で枠を再利用しない）。解除は人が管理画面で（OpenAI の使用量画面と照合して）行う。これで「会計の決まっていない課金」は常に 2 件以下
+- **台帳の一意制約は画像だけ（B2）**: `CREATE UNIQUE INDEX … ON cost_ledger(ref_id, cents > 0) WHERE kind = 'image'`（予約行と精算行が attempt ごとに 1 行ずつ）。session / verify の差分追記には掛けない。migration は既存行を壊さない（部分インデックスなので既存の kind には無関係）
+- **rollback で永久に待つ状態を無くす（B3）**: (a) `reserved` のまま halt / cancel / job 終端になった試行は、cron が CAS で `gen=failed`（`error='not_dispatched'`）にし、予約額を全額返金（OpenAI を呼んでいないので精算 = 0）。(b) 通知に終端 `notify=abandoned` を足す: session が terminated、または job が終端（done / failed / cancelled）で、まだ sent でない通知は abandoned（`gen=stored` は保持し、取り込みと掃除の規則はそのまま）。(c) rollback の完了条件 = `gen IN ('reserved','generating')` の行 0、かつ `notify IN ('sending','unknown')` の行 0（none / sent / abandoned は可）、かつ queue と DLQ が空、かつ `unknown` の試行 0（人が解除済み）
+- **月の上限は job の開始に掛ける（B4・ふじさん「途中で止めなくていい、やりきるまで」2026-11-04）**: 月の上限（記帳 + U ≤ 3000）は**その job の最初の予約にだけ**掛ける。2 枚目以降は job の 8 枚と日次上限と未確定枠（B1）だけを見る。保証を言い直す: (G1') 新しい job が画像を始められるのは月の記帳 + U ≤ 3000 の時だけ。(G3) 月の記帳の超過は「月の上限に届いた時点で画像を作り始めていた job」の残り分 = 最大 MAX_CONCURRENT_JOBS（2）× 7 × U に限られる（U が 25¢ なら $3.50）。(G2) U の見積もり外れによる実課金の超過は v3 のとおり（B1 の枠で 2 件まで）。この言い直しはふじさんへ報告する
+- **probe（N）**: probe は管理画面の操作で、job を作らず `request.kind='probe'`。認可は Access（運営）だけ。予約の条件は job の述語の代わりに「probe の今月の試行数 < 12」と月の上限・未確定枠を見る。生成・会計・枠は共通の経路。工程は「段階 2 の予約・会計・consumer を実装 → probe を実行 → U の表を下げる → 職人定義に tool を足す」の順（probe は職人の tool より先）
+- **U の表は model ごと（N）**: U(model, size, quality, has_edit)。flare と sunburst で出力 token 数が違いうる（公式ガイド）。表に無い組み合わせは拒否
+
+---
+
 # 計画 v3: 職人が画像を生成できるようにする（v2 の Astra high REVISE を反映。v2 の本文を下に残し、v3 の変更がそれに優先する）
 
 ## v3 の変更（v2 レビューの指摘 → 対応）

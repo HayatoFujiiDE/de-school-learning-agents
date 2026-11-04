@@ -1,5 +1,5 @@
 Review this implementation plan for: コンテンツファクトリーに画像生成（職人が custom tool で生成・確認・描き直し）を追加する。
-計画: /private/tmp/claude-501/-Users-hayatofujii-Coding-DESystem-Learning-Agents/b41991a5-c8e3-4468-9e5f-5626b6906f90/scratchpad/img-plan-final.md（前提と system map は同じ場所の img-context.md / img-map.md）。repo /Users/hayatofujii/Coding/DESystem/Learning-Agents の factory/worker と CONTRACT-factory.md を読んで根拠にしてよい（読み取りのみ）。
+計画: docs/plans/image-generation/plan-v4.md（前提と system map は同じフォルダの context.md / system-map.md）。repo /Users/hayatofujii/Coding/DESystem/Learning-Agents の factory/worker と CONTRACT-factory.md を読んで根拠にしてよい（読み取りのみ）。
 目的は出荷前の自己点検: 計画の弱いところを着手前に塞ぐ。
 Focus: correctness, coupling risk, fault isolation, rollback safety. 特に (a) 費用の上限が並列・重複配信・再起動・プロセス停止をまたいで本当に超えないか（反例の入力と順序を具体的に） (b) 失敗の行列に抜けている状態 × 失敗点 (c) 子どもに人の確認なしで画像が届く経路 (d) OPENAI_API_KEY がログ・D1・作業場・エラー文に出る経路 (e) 既存の取り込み・承認・配信への回帰
 Return: 1. BLOCKING issues 2. NON-BLOCKING recommendations 3. Coverage gaps (test / lint / observability) 4. Verdict: GO or REVISE
