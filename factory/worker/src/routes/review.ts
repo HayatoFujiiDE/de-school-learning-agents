@@ -226,17 +226,17 @@ export async function decide(c: RouteCtx, vid: string): Promise<Response> {
   const now = nowIso();
 
   if (decision === 'approve') {
-    const triage = await computeTriage(db, v, await latestVerificationOf(db, vid));
-    const autoOk = new Set<string>(AUTO_ITEMS.filter((k: AutoItem) => triage.auto[k] === 'ok'));
-    const cl = checkChecklist(b.checklist, autoOk);
-    if (!cl.ok) return json(400, { error: 'checklist_incomplete' });
-    if (cl.hasNg) return json(400, { error: 'checklist_has_ng' });
+    // 省略できる項目は最新 verification の仕分けで決まるので、検証の世代を先に確かめてから checklist を見る
     if (v.verification_status !== 'done') return json(400, { error: 'verification_pending' });
     if (typeof b.verification_id !== 'string' || !b.verification_id) return json(400, { error: 'verification_id_required' });
     const latest = await latestVerification(db, vid);
     if (!latest || latest.id !== b.verification_id) return json(409, { error: 'stale_verification' });
+    const triage = await computeTriage(db, v, { id: latest.id, result_json: latest.result_json });
+    const autoOk = new Set<string>(AUTO_ITEMS.filter((k: AutoItem) => triage.auto[k] === 'ok'));
+    const cl = checkChecklist(b.checklist, autoOk);
+    if (!cl.ok) return json(400, { error: 'checklist_incomplete' });
+    if (cl.hasNg) return json(400, { error: 'checklist_has_ng' });
     // 自動の処置（差し戻し・再検証）が決まっている版は人が承認しない（§L-4）
-    if (triage.verification_id !== latest.id) return json(409, { error: 'stale_verification' });
     if (triage.action !== 'none') return json(409, { error: 'auto_triage_pending', action: triage.action });
     if (latest.contradicted > 0) return json(400, { error: 'has_contradicted_claims' });
     // 検証係が confirmed とした claim の一次出典に url_was_fetched=0 が無い

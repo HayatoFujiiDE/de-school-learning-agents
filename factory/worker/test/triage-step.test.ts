@@ -91,6 +91,29 @@ const limited = (mid: string, vid: string): Seed => ({
   fetchErrors: { max_uses_exceeded: 2 },
 });
 
+/** done / failed の版に置ける既定でない値（verify_phase は running の間だけなので NULL のまま） */
+function dirtyVerifyColumns(vid: string) {
+  db.prepare(
+    `UPDATE material_versions SET verification_token = 'tok-old', verification_attempts = 3, verify_phase_at = '2026-11-04T00:05:00.000Z',
+       verify_batch_id = 'msgbatch_old', verify_turn = 3, verify_pauses = 2, verify_micro = 999, triaged_verification_id = 'w-old' WHERE id = ?`,
+  ).run(vid);
+}
+const VERIFY_COLS =
+  'verification_status, verification_token, verification_attempts, verify_phase, verify_phase_at, verify_batch_id, verify_turn, verify_pauses, verify_micro, triaged_verification_id';
+const RESET = {
+  verification_status: 'pending',
+  verification_token: null,
+  verification_attempts: 0,
+  verify_phase: null,
+  verify_phase_at: null,
+  verify_batch_id: null,
+  verify_turn: 0,
+  verify_pauses: 0,
+  verify_micro: 0,
+  triaged_verification_id: null,
+};
+const latestOf = (vid: string) => one(db, 'SELECT id, result_json FROM verifications WHERE material_version_id = ? ORDER BY attempt DESC LIMIT 1', vid) as { id: string; result_json: string };
+
 const versionRow = (vid: string) => one(db, 'SELECT * FROM material_versions WHERE id = ?', vid) as unknown as TriageVersionRow & Record<string, unknown>;
 const count = (sql: string, ...p: Array<string | number>) => Number(one(db, sql, ...p).n);
 
@@ -148,25 +171,14 @@ describe('triageStep (§L-7 l3)', () => {
     expect(one(db, "SELECT status FROM material_versions WHERE id = 'v4'").status).toBe('rejected');
   });
 
-  it('判定後に人の reverify がコミットされた版には auto_return が 0 行（reverify は verify_* と triaged_verification_id も戻す）', async () => {
+  it('判定後に人の reverify がコミットされた版には auto_return が 0 行（reverify は verify_* と triaged_verification_id をすべて戻す）', async () => {
     seed(bad('m1', 'v1'));
-    db.prepare("UPDATE material_versions SET triaged_verification_id = 'old', verify_micro = 5, verify_turn = 2, verify_pauses = 1, verify_batch_id = 'b' WHERE id = 'v1'").run();
-    const t = await computeTriage(env.DB, versionRow('v1'), { id: one(db, "SELECT id FROM verifications WHERE material_version_id = 'v1'").id as string, result_json: one(db, "SELECT result_json FROM verifications WHERE material_version_id = 'v1'").result_json as string });
+    dirtyVerifyColumns('v1');
+    const t = await computeTriage(env.DB, versionRow('v1'), latestOf('v1'));
     expect(t.action).toBe('auto_return');
     const res = await reverify(ctx('POST'), 'v1');
     expect(res.status).toBe(200);
-    expect(one(db, "SELECT verification_status, verification_token, verification_attempts, verify_phase, verify_phase_at, verify_batch_id, verify_turn, verify_pauses, verify_micro, triaged_verification_id FROM material_versions WHERE id = 'v1'")).toEqual({
-      verification_status: 'pending',
-      verification_token: null,
-      verification_attempts: 0,
-      verify_phase: null,
-      verify_phase_at: null,
-      verify_batch_id: null,
-      verify_turn: 0,
-      verify_pauses: 0,
-      verify_micro: 0,
-      triaged_verification_id: null,
-    });
+    expect(one(db, `SELECT ${VERIFY_COLS} FROM material_versions WHERE id = 'v1'`)).toEqual(RESET);
     expect(await applyTriage(env, versionRow('v1'), t)).toBe('stale');
     expect(one(db, "SELECT status FROM material_versions WHERE id = 'v1'").status).toBe('review');
     expect(count('SELECT COUNT(*) AS n FROM review_decisions')).toBe(0);
@@ -174,15 +186,59 @@ describe('triageStep (§L-7 l3)', () => {
     expect(one(db, "SELECT work_status FROM materials WHERE id = 'm1'").work_status).toBe('review');
   });
 
+  it('人の reverify は failed の版でも verify_* と triaged_verification_id をすべて戻す', async () => {
+    seed(good('m1', 'v1'));
+    dirtyVerifyColumns('v1');
+    db.prepare("UPDATE material_versions SET verification_status = 'failed' WHERE id = 'v1'").run();
+    expect((await reverify(ctx('POST'), 'v1')).status).toBe(200);
+    expect(one(db, `SELECT ${VERIFY_COLS} FROM material_versions WHERE id = 'v1'`)).toEqual(RESET);
+  });
+
+  describe('判定後に新しい verification がコミットされた（status は done のまま）→ どの処置も 0 行', () => {
+    const NEWER: V[] = ['confirmed', 'confirmed'];
+    it('none: triaged_verification_id を書かない', async () => {
+      seed(good('m1', 'v1'));
+      const t = await computeTriage(env.DB, versionRow('v1'), latestOf('v1'));
+      expect(t.action).toBe('none');
+      addVerification('v1', NEWER);
+      expect(await applyTriage(env, versionRow('v1'), t)).toBe('stale');
+      expect(one(db, "SELECT status, verification_status, triaged_verification_id FROM material_versions WHERE id = 'v1'")).toEqual({
+        status: 'review',
+        verification_status: 'done',
+        triaged_verification_id: null,
+      });
+    });
+    it('reverify: pending に戻さず auto_reverified も 0 のまま', async () => {
+      seed(limited('m1', 'v1'));
+      const t = await computeTriage(env.DB, versionRow('v1'), latestOf('v1'));
+      expect(t.action).toBe('reverify');
+      addVerification('v1', [...Array(10).fill('confirmed')] as V[]);
+      expect(await applyTriage(env, versionRow('v1'), t)).toBe('stale');
+      expect(one(db, "SELECT status, verification_status, verification_attempts, auto_reverified FROM material_versions WHERE id = 'v1'")).toEqual({
+        status: 'review',
+        verification_status: 'done',
+        verification_attempts: 1,
+        auto_reverified: 0,
+      });
+    });
+    it('auto_return: 版は review のまま・決定も rework job も作らない', async () => {
+      seed(bad('m1', 'v1'));
+      const t = await computeTriage(env.DB, versionRow('v1'), latestOf('v1'));
+      expect(t.action).toBe('auto_return');
+      addVerification('v1', [...Array(25).fill('confirmed')] as V[]);
+      expect(await applyTriage(env, versionRow('v1'), t)).toBe('stale');
+      expect(one(db, "SELECT status, verification_status FROM material_versions WHERE id = 'v1'")).toEqual({ status: 'review', verification_status: 'done' });
+      expect(count('SELECT COUNT(*) AS n FROM review_decisions')).toBe(0);
+      expect(count("SELECT COUNT(*) AS n FROM factory_jobs WHERE kind = 'rework'")).toBe(0);
+      expect(one(db, "SELECT work_status FROM materials WHERE id = 'm1'").work_status).toBe('review');
+    });
+  });
+
   it('reverify: few_confirmed だけ + 取得上限 → 1 回だけ自動で再検証し、再び同じなら auto_return', async () => {
     seed(limited('m1', 'v1'));
+    dirtyVerifyColumns('v1');
     expect(await triageStep(env, { deadline: FAR() })).toEqual(['reverify']);
-    expect(one(db, "SELECT verification_status, verification_attempts, auto_reverified, triaged_verification_id FROM material_versions WHERE id = 'v1'")).toEqual({
-      verification_status: 'pending',
-      verification_attempts: 0,
-      auto_reverified: 1,
-      triaged_verification_id: null,
-    });
+    expect(one(db, `SELECT ${VERIFY_COLS}, auto_reverified FROM material_versions WHERE id = 'v1'`)).toEqual({ ...RESET, auto_reverified: 1 });
     expect(await triageStep(env, { deadline: FAR() })).toEqual([]); // pending の間は対象外
     // 検証係がもう一度同じ結果を出した
     addVerification('v1', [...Array(4).fill('confirmed'), ...Array(6).fill('unverified')] as V[], { max_uses_exceeded: 2 });
@@ -223,6 +279,15 @@ describe('approve (§L-7 l4)', () => {
     // review の項目を回答すれば承認できる
     const res3 = await decide(ctx('POST', { decision: 'approve', checklist: { ...humanOk, terms_of_use: { result: 'ok', note: '見た' } }, verification_id: wid }), 'v1');
     expect(res3.status).toBe(200);
+  });
+
+  it('古い verification_id は checklist の省略より先に 409 stale_verification（省略できる項目は最新の仕分けで決まる）', async () => {
+    const { wid } = seed(good('m1', 'v1'));
+    // 新しい試行では c2 が unverified → 最新の仕分けでは content_and_evidence が review（古い画面は省略して送ってくる）
+    addVerification('v1', ['confirmed', 'unverified']);
+    const res = await decide(ctx('POST', { decision: 'approve', checklist: humanOk, verification_id: wid }), 'v1');
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'stale_verification' });
   });
 
   it('action が none 以外なら 409 auto_triage_pending（6 項目を全部回答していても）', async () => {

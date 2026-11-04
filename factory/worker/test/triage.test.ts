@@ -1,6 +1,20 @@
 // triageVersion（契約 §L-3）の単体。§L-7 (l1) の各項目を 1 テストずつ。
 import { describe, expect, it } from 'vitest';
-import { CAUSE_TEXT, RETURN_FIXED_TEXT, triageVersion, type TriageInput, type TriageSource } from '../src/checks/triage';
+import { CAUSE_TEXT, triageVersion, type TriageInput, type TriageSource } from '../src/checks/triage';
+
+// 契約から一字ずつ写した文（実装の定数と突き合わせる。§L-3 の固定文・§L-6 の表）
+const CONTRACT_FIXED_TEXT =
+  '出典の URL は web_fetch で本文が返った URL を一字も変えずに書く。引用は本文の一続きをそのまま写す。開けなかったページは出典に使わない。主張には必ず出典 id を付け、その id を sources.json に入れる。';
+const CONTRACT_CAUSE_TEXT = {
+  contradicted: '出典と食い違う',
+  maker_url_not_fetched: '職人がこの URL を開けていない',
+  quote_mismatch: '引用が出典の本文と一致しない',
+  verifier_limit: '検証係が開ききれなかった（取得の上限）',
+  not_confirmed: '出典で確かめられなかった',
+  no_source: '出典が付いていない',
+  source_not_listed: '出典一覧にない出典',
+  license_unknown: '利用条件が分からない',
+};
 import { goodMaterial } from './helpers';
 
 const GREEN_CHECKS = { schema: 'ok', forbidden: [], app_html: [], kakunin_zumi: [], missing_source_refs: [], missing_claim_refs: [], unreferenced_files: [] };
@@ -181,8 +195,8 @@ describe('triageVersion (§L-7 l1)', () => {
     expect(t.action).toBe('auto_return');
     const lines = t.return_note!.split('\n');
     expect(lines[0]).toBe('自動の差し戻し（検証の結果: 出典と食い違う主張がありました）。');
-    expect(lines[1]).toBe(RETURN_FIXED_TEXT);
-    expect(lines.slice(2)).toEqual([`- 出典 s2（https://minecraft.wiki/w/s2）: ${CAUSE_TEXT.contradicted}。主張 c5。検証係が開いた URL: https://verifier.example/5`]);
+    expect(lines[1]).toBe(CONTRACT_FIXED_TEXT);
+    expect(lines.slice(2)).toEqual(['- 出典 s2（https://minecraft.wiki/w/s2）: 出典と食い違う。主張 c5。検証係が開いた URL: https://verifier.example/5']);
   });
 
   it('license unknown → terms_of_use review + license_unknown の group / .html を含む parts → artifact_behavior review', () => {
@@ -193,5 +207,76 @@ describe('triageVersion (§L-7 l1)', () => {
     expect(t.groups.map(keyOf)).toEqual(['s1|license_unknown']);
     expect(t.needs_review).toBe(3);
     expect(triageVersion(build({ claims: [['confirmed', ['s1']]], sources: { s1: {} }, checks: { ...GREEN_CHECKS, forbidden: [{ path: 'p', word: 'w', count: 1 }] } })).auto.artifact_behavior).toBe('review');
+  });
+  it('原因の文は §L-6 の表と一字も違わない', () => {
+    expect(CAUSE_TEXT).toEqual(CONTRACT_CAUSE_TEXT);
+  });
+
+  it('return_note: 出典なし・開いた URL なし・出典だけの group の行も契約の形（few_confirmed の文も逐語）', () => {
+    const claims: Array<[V, string[]]> = [['confirmed', ['s1']], ['unverified', []], ['unverified', ['s2']], ['unverified', ['s2']], ['unverified', ['s2']]];
+    const inp = build({ claims, sources: { s1: { license: 'unknown' }, s2: {} } });
+    const r = inp.report!.result as { verdicts: Array<{ opened_urls: string[] }> };
+    for (const v of r.verdicts) v.opened_urls = [];
+    const t = triageVersion(inp);
+    expect(t.action).toBe('auto_return');
+    expect(t.return_note!.split('\n')).toEqual([
+      '自動の差し戻し（検証の結果: 確かめられた主張が 5 件中 1 件で、半分に届きませんでした）。',
+      '出典の URL は web_fetch で本文が返った URL を一字も変えずに書く。引用は本文の一続きをそのまま写す。開けなかったページは出典に使わない。主張には必ず出典 id を付け、その id を sources.json に入れる。',
+      '- 出典 なし: 出典が付いていない。主張 c2。検証係が開いた URL: なし',
+      '- 出典 s2（https://minecraft.wiki/w/s2）: 出典で確かめられなかった。主張 c3、c4、c5。検証係が開いた URL: なし',
+      '- 出典 s1（https://minecraft.wiki/w/s1）: 利用条件が分からない。主張 なし。検証係が開いた URL: なし',
+    ]);
+  });
+
+  describe('原因の優先順（contradicted → source_not_listed → maker_url_not_fetched → quote_mismatch → verifier_limit → not_confirmed）', () => {
+    const LIMIT = { too_many_requests: 1 };
+    const causeOf = (verdict: V, sid: string, src: Partial<TriageSource> | null) => {
+      const t = triageVersion(build({ claims: [[verdict, [sid]]], sources: src ? { [sid]: src } : { other: {} }, fetchErrors: LIMIT }));
+      return t.groups.filter((g) => g.claim_ids.includes('c1')).map(keyOf);
+    };
+    it('contradicted はほかのすべてに勝つ（一覧に無い id・未取得・引用不一致・取得上限があっても）', () => {
+      expect(causeOf('contradicted', 's1', { url_was_fetched: 0, quote_found: 0, license: 'unknown' })).toEqual(['s1|contradicted']);
+      expect(causeOf('contradicted', 's9', null)).toEqual(['s9|contradicted']);
+    });
+    it('source_not_listed は未取得・取得上限に勝つ', () => {
+      expect(causeOf('unverified', 's9', null)).toEqual(['s9|source_not_listed']);
+    });
+    it('url_was_fetched=0 かつ quote_found=0 → maker_url_not_fetched（引用不一致は出典だけの group に別に出る）', () => {
+      const t = triageVersion(build({ claims: [['unverified', ['s1']]], sources: { s1: { url_was_fetched: 0, quote_found: 0 } }, fetchErrors: LIMIT }));
+      expect(t.groups.map((g) => [keyOf(g), g.claim_ids])).toEqual([
+        ['s1|maker_url_not_fetched', ['c1']],
+        ['s1|quote_mismatch', []],
+      ]);
+    });
+    it('quote_mismatch は verifier_limit に勝つ', () => {
+      expect(causeOf('hypothesis', 's1', { quote_found: 0 })).toEqual(['s1|quote_mismatch']);
+    });
+    it('verifier_limit は not_confirmed に勝ち、fetch_errors が無ければ not_confirmed', () => {
+      expect(causeOf('unverified', 's1', {})).toEqual(['s1|verifier_limit']);
+      const t = triageVersion(build({ claims: [['unverified', ['s1']]], sources: { s1: {} }, fetchErrors: { url_not_accessible: 3 } }));
+      expect(t.groups.map(keyOf)).toEqual(['s1|not_confirmed']);
+    });
+  });
+
+  describe('境界', () => {
+    const mix = (n: number, confirmed: number): Array<[V, string[]]> =>
+      Array.from({ length: n }, (_, i) => [i < confirmed ? 'confirmed' : 'unverified', ['s1']] as [V, string[]]);
+    it('confirmed がちょうど半分（× 2 == n）は few_confirmed にならない', () => {
+      const t = triageVersion(build({ claims: mix(10, 5), sources: { s1: {} } }));
+      expect(t.reasons).toEqual([]);
+      expect(t.bad).toBe(false);
+      expect(triageVersion(build({ claims: mix(10, 4), sources: { s1: {} } })).reasons).toEqual(['few_confirmed']);
+    });
+    it('claims がちょうど 5 件なら数える', () => {
+      expect(triageVersion(build({ claims: mix(5, 2), sources: { s1: {} } })).reasons).toEqual(['few_confirmed']);
+    });
+    it('quote_found=0 の出典がちょうど半分（× 2 == 出典数）は quote_mismatch_many にならない', () => {
+      const sources: Record<string, Partial<TriageSource>> = {};
+      for (const id of srcIds(8)) sources[id] = { quote_found: Number(id.slice(1)) <= 4 ? 0 : 1 };
+      const claims = srcIds(8).map((id) => ['confirmed', [id]] as [V, string[]]);
+      expect(triageVersion(build({ claims, sources })).reasons).toEqual([]);
+      sources.s5 = { quote_found: 0 };
+      expect(triageVersion(build({ claims, sources })).reasons).toEqual(['quote_mismatch_many']);
+    });
   });
 });
