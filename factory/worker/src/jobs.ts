@@ -805,7 +805,8 @@ interface ReconcileState {
   files?: Array<{ file_id: string; filename: string; size: number }>;
   done?: string[];
   /** ingested（versioned の途中）: 論理 Map の全ファイルを論理キーへ置き終えた。再入時は置き直さない（raw/ を取り直す時は消える） */
-  placed?: boolean;
+  /** 論理キーへの配置と parts/ の古いキーの掃除が両方済んだ印（§R-47。旧名 placed は掃除を含まないので読まない） */
+  placed_clean?: boolean;
   /** ingested: events（古い順）の途中経過。本文は持たず、出典照合の集計と採点結果だけ */
   ev?: { cursor: string | null; acc: CitationAcc; grader: { result: string; explanation: string } | null; complete: boolean };
 }
@@ -1291,7 +1292,7 @@ class Reconciler {
       return this.fail(job, 'invalid_outputs');
     }
     // 論理 Map の全ファイルを論理キーへ（検証係・配信・確認画面はこのキーだけを読む。raw/ は読まない）
-    if (!state.placed) {
+    if (!state.placed_clean) {
       // 論理 Map に無い parts/ の古いキー（旧形式の取り込み・前回の取り込みの残り）を先に消す。
       // 検証係（§F-3）は R2 の parts/ を列挙するので、残すと参照されないファイルが検証に混ざる（§R-47）
       const partsPrefix = prefix + 'parts/';
@@ -1313,7 +1314,7 @@ class Reconciler {
         await this.extend(); // R2 に書く直前に所有権を確かめる
         await this.env.R2.put(prefix + logical, bytes);
       }
-      state = { ...state, placed: true };
+      state = { ...state, placed_clean: true };
       await this.writeState(job, 'ingested', state);
     }
     const citeSources = schema.sources.map((s) => ({ id: s.id, url: s.url, quoted_excerpt: s.quoted_excerpt, is_primary: s.is_primary }));
