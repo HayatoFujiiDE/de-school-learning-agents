@@ -220,7 +220,8 @@ export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
       files: pfiles,
       adjustable: isStrArr(p.adjustable) ? p.adjustable : [],
       tech_dependencies: td,
-      runtime_check: p.runtime_check ?? null,
+      // 型違い（オブジェクト以外）は null に落とす（§R-46）
+      runtime_check: p.runtime_check && typeof p.runtime_check === 'object' && !Array.isArray(p.runtime_check) ? p.runtime_check : null,
       needs_supporter_check: p.needs_supporter_check === true,
     });
   }

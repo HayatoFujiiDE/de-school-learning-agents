@@ -219,7 +219,7 @@ async function main() {
     const enc = await rawGet(`/api/library/files/${aVid}/parts/p1/%2e%2e/%2e%2e/sources.json`);
     const dbl = await rawGet(`/api/library/files/${aVid}//claims.json`);
     check('(k) `../`・`%`・空セグメントを含むパスは 404', dot === 404 && enc === 404 && dbl === 404, `dot=${dot} enc=${enc} dbl=${dbl}`);
-    const md = await fetch(`${BASE}/api/library/files/${aVid}/parts/p1/elementary-short.md`);
+    const md = await fetch(`${BASE}/api/library/files/${aVid}/parts/p1/p1-elementary-short.md`);
     check('(k) manifest 内の md は 200 text/markdown', md.status === 200 && /text\/markdown/.test(md.headers.get('content-type') ?? ''), `status=${md.status}`);
     await md.text();
   }
@@ -228,13 +228,13 @@ async function main() {
   {
     const head = async (key) => (await api('GET', `/__fake/r2-head?key=${encodeURIComponent(key)}`)).json;
     const base = `materials/${aMid}/${aJob}/`;
-    const logical = await head(`${base}parts/p1/elementary-short.md`);
-    const raw = await head(`${base}raw/elementary-short.md`);
+    const logical = await head(`${base}parts/p1/p1-elementary-short.md`);
+    const raw = await head(`${base}raw/p1-elementary-short.md`);
     const p2 = await head(`${base}parts/p2/p2-elementary-short.md`);
-    check('(j-layout) R2 に論理キー parts/p1/elementary-short.md と raw/elementary-short.md の両方がある', logical?.exists === true && raw?.exists === true && p2?.exists === true, `logical=${logical?.exists} raw=${raw?.exists} p2=${p2?.exists}`);
-    const md = await fetch(`${BASE}/api/library/files/${aVid}/parts/p1/elementary-short.md`);
-    const rawRes = await fetch(`${BASE}/api/library/files/${aVid}/raw/elementary-short.md`);
-    check('(j-layout) GET /api/library/files/<version>/parts/p1/elementary-short.md → 200、raw/ は配信しない（404）', md.status === 200 && rawRes.status === 404, `md=${md.status} raw=${rawRes.status}`);
+    check('(j-layout) R2 に論理キー parts/p1/p1-elementary-short.md と raw/p1-elementary-short.md の両方がある', logical?.exists === true && raw?.exists === true && p2?.exists === true, `logical=${logical?.exists} raw=${raw?.exists} p2=${p2?.exists}`);
+    const md = await fetch(`${BASE}/api/library/files/${aVid}/parts/p1/p1-elementary-short.md`);
+    const rawRes = await fetch(`${BASE}/api/library/files/${aVid}/raw/p1-elementary-short.md`);
+    check('(j-layout) GET /api/library/files/<version>/parts/p1/p1-elementary-short.md → 200、raw/ は配信しない（404）', md.status === 200 && rawRes.status === 404, `md=${md.status} raw=${rawRes.status}`);
     await md.text();
     await rawRes.text();
     const det = (await api('GET', `/api/review/${aVid}`)).json;

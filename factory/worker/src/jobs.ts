@@ -1292,6 +1292,23 @@ class Reconciler {
     }
     // 論理 Map の全ファイルを論理キーへ（検証係・配信・確認画面はこのキーだけを読む。raw/ は読まない）
     if (!state.placed) {
+      // 論理 Map に無い parts/ の古いキー（旧形式の取り込み・前回の取り込みの残り）を先に消す。
+      // 検証係（§F-3）は R2 の parts/ を列挙するので、残すと参照されないファイルが検証に混ざる（§R-47）
+      const partsPrefix = prefix + 'parts/';
+      const stale: string[] = [];
+      let cursor: string | undefined;
+      for (let i = 0; ; i++) {
+        if (i >= MAX_PAGES) throw new Error('too_many_pages');
+        await this.extend();
+        const page = await this.env.R2.list({ prefix: partsPrefix, ...(cursor ? { cursor } : {}) });
+        for (const o of page.objects) if (!files.has(o.key.slice(prefix.length))) stale.push(o.key);
+        if (!page.truncated) break;
+        cursor = page.cursor;
+      }
+      for (let i = 0; i < stale.length; i += 1000) {
+        await this.extend();
+        await this.env.R2.delete(stale.slice(i, i + 1000));
+      }
       for (const [logical, bytes] of files) {
         await this.extend(); // R2 に書く直前に所有権を確かめる
         await this.env.R2.put(prefix + logical, bytes);

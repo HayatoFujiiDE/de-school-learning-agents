@@ -97,11 +97,31 @@ beforeEach(() => {
         const b = r2.get(k);
         return b ? { arrayBuffer: async () => b.slice().buffer } : null;
       },
+      async list(o: { prefix?: string }) {
+        const keys = [...r2.keys()].filter((k) => k.startsWith(o.prefix ?? '')).sort();
+        return { objects: keys.map((key) => ({ key })), truncated: false };
+      },
+      async delete(keys: string | string[]) {
+        for (const k of Array.isArray(keys) ? keys : [keys]) r2.delete(k);
+      },
     },
   } as unknown as Env;
 });
 
 describe('POST /api/jobs/:id/reingest', () => {
+  it('前回の取り込みが残した parts/ の古いキー（論理 Map に無いもの）は消してから置く（検証係に混ざらない §R-47）', async () => {
+    seed({ error: 'invalid_outputs' });
+    const prefix = 'materials/m1/j1/';
+    r2.set(`${prefix}parts/p1/obsolete.md`, new TextEncoder().encode('古い本文'));
+    r2.set(`${prefix}raw/keep-me.md`, new TextEncoder().encode('raw は消さない'));
+    const res = await reingestJobRoute(ctx(makePort(goodFiles())), 'j1');
+    expect(res.status).toBe(200);
+    expect(r2.has(`${prefix}parts/p1/obsolete.md`)).toBe(false);
+    expect(r2.has(`${prefix}parts/p1/elementary-short.md`)).toBe(true);
+    expect(r2.has(`${prefix}raw/keep-me.md`)).toBe(true);
+  });
+
+
   it('invalid_outputs の job を session を作らずに取り込み直し、版が review に出る（raw/ と論理キーの両方・未参照は checks_json に）', async () => {
     seed({ error: 'invalid_outputs' });
     const outputs = goodFiles();

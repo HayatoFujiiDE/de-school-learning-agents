@@ -6,5 +6,5 @@
 ## 未確認
 - なし
 ## 動作確認
-- `xmllint --noout parts/p1/figure-1.svg` → エラーなし
+- `xmllint --noout parts/p1/p1-figure-1.svg` → エラーなし
 - app.html をブラウザで開き、スライダー 16 でランプが消えることを確かめた

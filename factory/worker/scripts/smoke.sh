@@ -6,7 +6,7 @@
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$HERE" || exit 2
-PORT=8787
+PORT="${SMOKE_PORT:-8787}"
 BASE="http://localhost:${PORT}"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/factory-smoke.XXXXXX")" || exit 2
 DEV_PID=""
