@@ -101,6 +101,7 @@ Access アプリケーション（ふじさんが Zero Trust で作る。§R-5�
 | POST | `/api/jobs/:id/answer` | Access | 段階 1 の質問に答える §B-4-c |
 | POST | `/api/jobs/:id/cancel` | Access | `queued/creating/running/needs_answer/budget_reached` から `cancelled`。session があれば `user.interrupt` → `sessions.archive`。他は 409 `not_cancellable` |
 | POST | `/api/jobs/:id/reconcile` | Access | `reconcileJob` を即時実行 §B-4-d |
+| POST | `/api/jobs/:id/reingest` | Access | 取り込みで失敗した job（`status='failed'` かつ `error='invalid_outputs'` かつ `session_id` あり）を取り込み直す §B-4-e。他は 409 `not_reingestable`、同じ素材に進行中の job があれば 409 `material_busy` |
 | GET | `/api/review` | Access | `status = 'review'` の版の一覧 |
 | GET | `/api/review/:version_id` | Access | 確認画面の全情報 §G-2 |
 | GET | `/api/review/:version_id/files/*` | Access | 未承認版のファイルを確認画面用に返す。§B-7 と同じ manifest・同じ応答ヘッダ |
@@ -190,10 +191,19 @@ body `{answers: [{question_id, answer}]}`。4 状態 `answer_state: none | saved
 5. （段階）ここまでで `reconcile_stage='inspected'`
 6. 取り込み（`reconcile_stage` が `inspected` → `listed` → `ingested` → `versioned` と進む。各段階の終わりで D1 に stage と `reconcile_state_json` を書く。再入時は stage から再開。時間切れ（waitUntil の残りが 5 秒を切る、または lease 延長に失敗）はその時点で抜け、cron が続きをやる）:
    - `listed`: `files.list({scope_id: session_id, betas:["managed-agents-2026-04-01"]})` を**最後のページまで**辿り、`[{file_id, filename, size}]` を `reconcile_state_json.files` に保存。§E の必須ファイル（`material.json, claims.json, sources.json, adapt-rules.md, selfcheck.md`）が揃わなければ 3 秒待って 2 回まで再取得。それでも欠けるなら job `failed`（`error='invalid_outputs'`）、material `work_status='idle'`
-   - `ingested`: `files` の各項目を `files.download` → R2 `materials/{material_id}/{job_id}/{path}` に put し、済んだ `file_id` を `reconcile_state_json.done` に追記（1 ファイルごと D1 更新。再入時は `done` に無いものだけ）。job 固有 prefix なので他 job と衝突しない。同じ job の再実行は同じ内容を同じキーに書くだけで無害
-   - `versioned`: R2 から `material.json` 等を読み §E の schema 検証（不正なら `invalid_outputs`）。`events.list` を全ページ読み §F-1、R2 の本文で §F-2 を実行し `checks_json`・`sources` 行・`public_paths_json`（§E-4）・`content_sha256` を作る。batch（§B-2 のパターン、述語 = `job.status IN ('running','budget_reached') AND job.reconcile_token=?`）: `material_versions` INSERT（`version = (SELECT COALESCE(MAX(version),0)+1 FROM material_versions WHERE material_id=?)`、`job_id UNIQUE`）+ `sources` INSERT + material `work_status='review'`（`publish_status` は触らない）+ job `done`（最後の UPDATE）。version は `verification_status='pending'`
+   - `ingested`: `files` の各項目を `files.download` → R2 `materials/{material_id}/{job_id}/raw/{basename}` に put し（Files API の `filename` はディレクトリを含まない basename。§E-0 / §R-41）、済んだ `file_id` を `reconcile_state_json.done` に追記（1 ファイルごと D1 更新。再入時は `done` に無いものだけ）。job 固有 prefix なので他 job と衝突しない。同じ job の再実行は同じ内容を同じキーに書くだけで無害
+   - `versioned`: R2 の `raw/` を読み、まず **論理パスへの復元**（§E-0。純関数 `resolveOutputLayout(rawNames, materialJsonText)` → `{files: Map<logicalPath, basename>} | {detail}`）: 最上位ファイル（`material.json, claims.json, sources.json, adapt-rules.md, selfcheck.md, questions.json`）は同名で対応、`material.json` の `parts[].variants[].path` と `parts[].files[].path` は basename で `raw/` から引く。basename が `raw/` に 2 つ以上ある（`duplicate_basename:<name>`）、`material.json` が JSON として読めない（`json_invalid:material.json`）なら `invalid_outputs`。参照先が無いものは論理 Map に入れず §E の `missing_ref` に任せる。どこからも参照されない raw ファイルは論理 Map に入れず、名前だけ `checks_json.unreferenced_files`（昇順）に残す。復元した論理 Map で §E の schema 検証（不正なら `invalid_outputs`）、**論理 Map の全ファイルを R2 `materials/{material_id}/{job_id}/{logicalPath}` に put**（検証係 §F-3・配信 §B-7・確認画面はこの論理キーだけを読む。`raw/` は読まない）。`content_sha256`（§E-3）も論理 Map で計算。`events.list` を全ページ読み §F-1、R2 の本文で §F-2 を実行し `checks_json`・`sources` 行・`public_paths_json`（§E-4）・`content_sha256` を作る。batch（§B-2 のパターン、述語 = `job.status IN ('running','budget_reached') AND job.reconcile_token=?`）: `material_versions` INSERT（`version = (SELECT COALESCE(MAX(version),0)+1 FROM material_versions WHERE material_id=?)`、`job_id UNIQUE`）+ `sources` INSERT + material `work_status='review'`（`publish_status` は触らない）+ job `done`（最後の UPDATE）。version は `verification_status='pending'`
    - job が途中で `cancelled` になっていたら（CAS 失敗）取り込みを捨てる
 7. 検証係は **cron だけ**が動かす（§B-5-2。waitUntil では走らせない）
+
+#### e. 取り込み直し（`POST /api/jobs/:id/reingest`）
+
+取り込み側（Worker / 契約）の修正後に、職人の成果物をそのまま取り込み直すための運営操作。session を作らず費用もかからない。
+1. 述語: `status='failed' AND error='invalid_outputs' AND session_id IS NOT NULL`。違えば 409 `not_reingestable`
+2. CAS UPDATE（述語を WHERE に含める）: `status='running', reconcile_stage='none', reconcile_state_json='{}', error=NULL, last_error=NULL, last_checked_at=NULL, reconcile_token=NULL, reconcile_until=NULL`。`idx_jobs_one_active_per_material` に当たって失敗したら 409 `material_busy`。あわせて material `work_status='making'`（`publish_status` は触らない）
+3. 続けて `reconcileJob(jobId)`（`POST /api/jobs/:id/reconcile` と同じ deadline）。応答は reconcile と同じ形
+4. 監査: `console.log` に `{at:'reingest', job_id}`。`review_decisions` には書かない（版の判断ではない）
+5. 再取り込みは `raw/` を取り直す（`files.list` から）。職人が同じ session で書き直したファイルは `created_at` の新しい方を採る（§B-4-d `listed` の既存規則）
 
 ### §B-5 cron（`*/10 * * * *`。scheduled handler は最長 15 分）
 
@@ -395,7 +405,7 @@ materials.publish_status（配信。`publishSwitch` だけが変える）:
 | available | available | rollback（別の approved 版へ付け替え） |
 | available | stopped | stop |
 
-factory_jobs: `queued → creating → running → (needs_answer → running) → done | failed | cancelled`。`running ↔ budget_reached`。`creating → queued`（応答ありの作成失敗）。`creating → failed`（`create_attempts >= 3`、`error='create_unconfirmed'`）。`cancelled` は `queued/creating/running/needs_answer/budget_reached` から。
+factory_jobs: `queued → creating → running → (needs_answer → running) → done | failed | cancelled`。`running ↔ budget_reached`。`creating → queued`（応答ありの作成失敗）。`failed → running`（`error='invalid_outputs'` の job に対する reingest §B-4-e だけ。他の failed は戻らない）。`creating → failed`（`create_attempts >= 3`、`error='create_unconfirmed'`）。`cancelled` は `queued/creating/running/needs_answer/budget_reached` から。
 
 material_versions: `review → approved | rejected`。`approved` と `rejected` は終端（`approved` は何度でも rollback の対象になれる）。
 
@@ -477,6 +487,8 @@ parts/<part_id>/app.html              （型 4）
 ```
 必須ファイル（取り込み条件）: `material.json, claims.json, sources.json, adapt-rules.md, selfcheck.md`。1 ファイル 2 MB 以下、合計 40 ファイル以下（超えたら `invalid_outputs`）。
 
+**§E-0 パスの扱い（2026-11-04 実測・§R-41）**: Files API（`files.list`）の `filename` は**ディレクトリを含まない basename だけ**を返す（`parts/p1/figure-1.svg` → `figure-1.svg`。SDK の型注釈「Only the final path component of the part's filename is kept」と一致）。したがって (a) 上の木構造は**論理パス**で、`material.json` の `path` と R2 の論理キー・配信 URL ではこの形を使う (b) 職人は **basename を素材全体で一意**にする（複数パーツなら `parts/p2/p2-figure-1.svg` のように part id を頭に付ける。同名が 2 つあると `invalid_outputs`） (c) Worker は basename と `material.json` の参照から論理パスを復元する（§B-4-d `versioned`）。参照されないファイルは配信・検証の対象にならない。
+
 ### §E-1 `material.json`（必須キー 9: `schema_version, slug, title, kinds, catalog_item_id, concept_codes, summary_elementary, summary_secondary, parts`）
 
 ```json
@@ -499,6 +511,7 @@ parts/<part_id>/app.html              （型 4）
   }]
 }
 ```
+**型は字面どおり**: `schema_version` は数値 `1`（文字列 `"1.0"` は不可）、`kinds` と `parts[].kind` は 1〜8 の整数（`"explain_figure"` のような名前は不可）、`parts[].variants` と `parts[].files` は上の形のオブジェクト配列（文字列の配列は不可）、`entry_point.type` は 4 値のどれか。上の例の形と違えば `invalid_outputs`。追加のキーは無視される（置いてよい）。**この例は職人の system prompt（§D-7）と採点表（§D-3）にそのまま載せる**（§R-42）。
 `variants` は `audience ∈ {elementary, secondary}` × `length ∈ {short, long}` の 4 つが最低限。`interest` は `app-v3/js/data.js` のカテゴリ id か null。`path` は outputs 相対で、**参照先ファイルが実在しなければ schema 検証失敗**。
 
 ### §E-2 `claims.json` / `sources.json` / `questions.json`
@@ -562,7 +575,7 @@ client.messages.create({
 1. **状況**（上部帯）: paused / running / queued / 今日の費用 / 上限 / agent 設定済み / cron 最終時刻。「止める」「再開」（note 必須）
 2. **素材一覧**: 配信（なし / 利用できる / 止めている）と制作（待機 / 制作中 / 確認待ち）の 2 軸でフィルタ。行: title, slug, 型, 現在版, active job
 3. **新しい素材**: フォーム + チェックボックス「子どもや家庭の個人情報を含んでいません」（必須）→ 確認ダイアログ「この内容で職人に注文します」→ 送信中は無効化 → トースト
-4. **job**: 質問待ちなら質問ごとに回答欄 + 「default を使う」。start / cancel / reconcile。Console へのリンク。`last_error` の表示
+4. **job**: 質問待ちなら質問ごとに回答欄 + 「default を使う」。start / cancel / reconcile。Console へのリンク。`last_error` の表示。`status='failed'` かつ `error='invalid_outputs'` なら「取り込みをやり直す」ボタン（§B-4-e。確認ダイアログ「職人の成果物をそのまま取り込み直します（session は作りません）」→ 送信中は無効化 → 結果を job 表示に反映）。`checks_json.unreferenced_files` があれば確認画面に「参照されていないファイル」として名前を表示
 5. **確認**（§G-2）
 6. **編集基準**: 静的本文 + ログ。追記フォーム
 
@@ -813,3 +826,8 @@ v3.4（2026-11-04 Astra medium 確認レビュー + 3 視点反証の裁定。�
 39. §K の食い違い 9 件（D-2 実装担当の指摘）を本文に反映: 形式検査の節番号、月次上限超過は RSS も含めて skipped、adopt の body は §B-3 と同一、手動 scout の 25 秒超は failed、Batch 結果は最初の text ブロック、`to_date` 当日は範囲外、プロフィール課金、intake の本文合計 2000、提案段階の kinds 1..8。追加ルート `GET /api/meeting/latest` と status の追加 field は許容
 40. fix4 / D-2 レビュー（Astra medium・high、3 視点反証）の裁定: (a) `needs_answer` へ遷移する直前に events の先頭 id を 1 ページ取り直して再確認し、違えば遷移しない（§R-36 の補強） (b) 会議の `ranked` は全要素を更新前に検査し、1 つでも schema 外なら会議を `failed`（§K-5-4 の字面どおり） (c) 定期実行日（`scout_last_day` / `meeting_last_day`）は settings の CAS で実行権を取る。scout は lock → 日付の順 (d) Batch `results()` と `files.download` の本文受信に絶対期限の AbortSignal と受信量上限 (e) 結果不明の外部呼び出し（xAI の timeout / Batch create の応答不明）は保守的見積り（`SCOUT_XAI_UNCONFIRMED_CENTS` 既定 100 / `MEETING_UNCONFIRMED_CENTS` 既定 20）を `cost_ledger` に記録し、Batch は次の tick で `batches.list` 1 ページ（新しい順 20 件）から 1 回だけ復旧する。SDK の `MessageBatch` に `custom_id` は無いので、候補は「created_at が行の作成〜失敗時刻 ±2 分、request 数 1、他の行が未使用」で、ちょうど 1 件の時だけ `batch_id` を補って `submitted` に戻す（0 件 `recover_not_found` / 2 件以上 `recover_ambiguous`）。`custom_id` の照合は回収時（results の `custom_id === 行 id`）が担う。`create_incomplete`（batch_id を書く前に止まった行）も同じ扱い (f) RSS の `<item>`/`<entry>` 抽出は線形パース。変更なし: 禁止語は正規化なし部分一致（§F-2）、0002 は wrangler の追跡で冪等
 
+v3.5（2026-11-04 段階 0 の実測。最初の本物の session sesn_01Jfui3apjV7eE2o8TiQN8YC、$6.17）:
+41. **Files API はディレクトリを落とす**: 職人は `parts/p1-redstone-basics/…` に 16 ファイルを書いた（selfcheck と material.json が一致）が、`files.list` の `filename` は basename だけだった。契約の `parts/<part_id>/` は論理パスとして維持し、Worker が `material.json` の参照 + basename で復元する（§E-0、§B-4-d）。basename は素材全体で一意（職人の定義と採点表に明記）。§R-31 / §R-38 の「`parts/` 配下を全部検証する」は論理キー（= 参照されたファイル全部）に対して成り立つ。参照されないファイルは配信もされないので子どもに届かない。fake（§I）も basename だけを返す（本物と同じ）— 修正前の smoke はこの違いで false-green だった
+42. **職人に「形」を渡していなかった**: 職人の定義・採点表・注文票のどこにも §E-1 の JSON の形が無く（キー名の列挙だけ）、職人は `schema_version: "1.0"`、`kinds: ["explain_figure","interactive"]`、`variants` を文字列配列で書いた（内容は rubric 3 周目で satisfied）。§E-1 の例と型の注意を §D-7 と §D-3（採点表 1 番）に逐語で載せる。rubric 採点は形式の「型」まで見る
+43. 取り込み側の修正後に職人の成果物を再利用する運営操作 `POST /api/jobs/:id/reingest`（§B-4-e）を追加。session を作らないので費用ゼロ。`failed` から `running` へ戻す唯一の経路で、述語は `error='invalid_outputs'` に限る（`terminated_*` / `too_many_denies` 等は対象外）。既存の §C-2 状態機械に「failed → running（reingest のみ）」の辺を追加
+44. 段階 0 の費用実測: 型 3 + 型 4 + 変奏（小中 × 短長 + ゲーム）+ 図 4 枚 + app.html の注文で `list_cost` $6.17（$3 で budget_reached → $8 に増額して完走）。`SESSION_BUDGET_DRAFT_CENTS` の既定は実測を踏まえて別途決める

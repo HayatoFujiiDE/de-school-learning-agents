@@ -1,6 +1,6 @@
 # 採点表（共通）— 形式と完全性だけを採点する。内容の正しさは検証係と人が見る
 
-1. `/mnt/session/outputs/material.json` が JSON として妥当で、必須キー schema_version, slug, title, kinds, catalog_item_id, concept_codes, summary_elementary, summary_secondary, parts をすべて持つ
+1. `/mnt/session/outputs/material.json` が JSON として妥当で、必須キー schema_version, slug, title, kinds, catalog_item_id, concept_codes, summary_elementary, summary_secondary, parts をすべて持つ。**型も見る**: schema_version は数値の 1、kinds と parts[].kind は 1〜8 の整数、parts[].variants と parts[].files はオブジェクトの配列で各要素に path がある（文字列の配列は不可）、entry_point は {type, text} で type は look / touch / try / make のどれか。ファイル名（最後の / より後ろ）が素材全体で一意
 2. `claims.json` の各 claim に status（confirmed / hypothesis / unverified）と source_ids があり、source_ids の各 id が sources.json に存在する。status が confirmed の claim は is_primary: true の出典を 1 つ以上持つ
 3. `sources.json` の各出典に url, title, accessed_at, quoted_excerpt（取得したページ本文からの逐語引用、20〜300 文字）, license（不明なら unknown）がある
 4. 子ども向け本文（parts/ 配下の .md）の、事実を述べる段落に claim id が `[c3]` の形で付いている

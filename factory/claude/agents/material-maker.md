@@ -39,7 +39,38 @@ tools:
 
 # 成果物の構成（`/mnt/session/outputs/`）
 
-- `material.json`（必須キー: schema_version, slug, title, kinds, catalog_item_id, concept_codes, summary_elementary, summary_secondary, parts。任意: conditions, license_summary）
+- `material.json`（必須キー: schema_version, slug, title, kinds, catalog_item_id, concept_codes, summary_elementary, summary_secondary, parts。任意: conditions, license_summary）。**形は次のとおり（キー名・型・入れ子をこのまま使う。追加のキーは置いてよい）**:
+
+```json
+{
+  "schema_version": 1,
+  "slug": "mc-redstone-basics", "title": "…",
+  "kinds": [3, 4],
+  "catalog_item_id": "mc-redstone", "concept_codes": [],
+  "summary_elementary": "…60 字以内…", "summary_secondary": "…",
+  "conditions": {"tools": ["Minecraft Java 1.21"], "place": "教室", "age_band": ["elementary", "secondary"], "supporter_check": false},
+  "license_summary": "…",
+  "parts": [{
+    "id": "p1", "kind": 3, "title": "…",
+    "entry_point": {"type": "touch", "text": "最初にやること 1 文"},
+    "variants": [
+      {"audience": "elementary", "length": "short", "interest": null, "game": false, "path": "parts/p1/elementary-short.md"},
+      {"audience": "elementary", "length": "long",  "interest": null, "game": false, "path": "parts/p1/elementary-long.md"},
+      {"audience": "secondary",  "length": "short", "interest": null, "game": false, "path": "parts/p1/secondary-short.md"},
+      {"audience": "secondary",  "length": "long",  "interest": null, "game": false, "path": "parts/p1/secondary-long.md"},
+      {"audience": "elementary", "length": "short", "interest": null, "game": true,  "path": "parts/p1/game.md"}
+    ],
+    "files": [{"path": "parts/p1/figure-1.svg", "role": "figure"}, {"path": "parts/p1/app.html", "role": "app"}],
+    "adjustable": ["例に出すブロックの種類", "説明の長さ"],
+    "tech_dependencies": ["svg", "html"],
+    "runtime_check": {"how": "…", "expected": "…"},
+    "needs_supporter_check": false
+  }]
+}
+```
+  - `schema_version` は数値の `1`（`"1.0"` のような文字列は不可）。`kinds` と `parts[].kind` は型の番号（1〜8 の整数。`"explain_figure"` のような名前は不可）。`entry_point.type` は `look` / `touch` / `try` / `make` のどれか
+  - `variants` は上のとおりオブジェクトの配列。小学生 × 短い / 詳しい、中学生 × 短い / 詳しい の 4 つは必ず `game: false` で載せ、ゲームの変奏は `game: true` で足す。`path` はそのファイルの実際の場所（`parts/<part_id>/` 配下、拡張子は .md / .svg / .html）
+  - **ファイル名（最後の `/` より後ろ）は素材全体で一意にする。** 取り込み側はディレクトリ名を受け取れないため、同じファイル名が 2 つあると取り込めない。パーツが 2 つ以上あるなら `parts/p2/p2-figure-1.svg` のようにパーツ id を頭に付ける
 - `claims.json`（`{"claims":[{"id","text","status","source_ids","used_in"}]}`）
 - `sources.json`（`{"sources":[{"id","url","title","accessed_at","quoted_excerpt","license","is_primary"}]}`）
 - `adapt-rules.md`（見出し「変えてよいこと」「変えてはいけないこと」）
