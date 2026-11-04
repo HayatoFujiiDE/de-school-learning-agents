@@ -9,6 +9,7 @@ import { validateOutputs } from '../src/checks/schema';
 import type { Env } from '../src/env';
 import { BLOCKED_RECOUNT_MS, BLOCKED_UNRESOLVED_MAX, CUSTOM_TOOL_UNAVAILABLE_MESSAGE, MAX_PAGES, reconcileJob } from '../src/jobs';
 import { libraryFile, serveVersionFile } from '../src/routes/library';
+import { SCAN_MAX_STALLS } from '../src/scan';
 import { d1, migratedDb, one } from './d1-shim';
 import { goodFiles, goodMaterial } from './helpers';
 
@@ -540,5 +541,378 @@ describe('§M 画像の読み取り対応（段階 1）', () => {
     expect(JSON.parse(String(j.reconcile_state_json)).blocked_unresolved).toBeUndefined();
     expect(await reconcileJob(env, port, 'j1', { deadline: Date.now() + 25_000 })).toBe('already_denied');
     expect(sent).toHaveLength(2);
+  });
+});
+
+describe('Issue #1 requires_action: 送信後・保存前に落ちても送り直さない', () => {
+  const rec = (port: FactoryPort) => reconcileJob(env, port, 'j1', { deadline: Date.now() + 25_000 });
+  /** 落ちた reconcile の lease が切れた状態にする（次の reconcile が lease を取れるように） */
+  const expireLease = () => db.prepare("UPDATE factory_jobs SET reconcile_token = NULL, reconcile_until = NULL WHERE id = 'j1'").run();
+
+  /**
+   * sendEvents は成功し（API は返答 event を一覧に記録する）、その直後に lease を奪われて denied_event_ids_json の CAS が失敗する port。
+   * record: 送った event から一覧に載る返答 event を作る
+   */
+  function stealAfterSendPort(events: unknown[], sent: unknown[], record: (e: Record<string, unknown>, i: number) => unknown) {
+    const port = makePort({ events, sent });
+    let stealNext = true;
+    const send = port.sendEvents.bind(port);
+    port.sendEvents = async (id, evs, call) => {
+      await send(id, evs, call);
+      (evs as unknown as Array<Record<string, unknown>>).forEach((e, i) => events.push(record(e, i)));
+      if (stealNext) {
+        stealNext = false;
+        db.prepare("UPDATE factory_jobs SET reconcile_token = 'other' WHERE id = 'j1'").run();
+      }
+    };
+    return port;
+  }
+
+  it('(t1) tool_confirmation の deny を送った後に保存の CAS が失敗 → 次の reconcile は送らずに denied に入れ、deny 数に数える', async () => {
+    seedRunningJob();
+    const events: unknown[] = [
+      { id: 'sevt_1', type: 'user.define_outcome' },
+      { id: 'sevt_tu_1', type: 'agent.tool_use', name: 'bash', input: {}, evaluated_permission: 'ask' },
+      { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_tu_1'] } },
+    ];
+    const sent: unknown[] = [];
+    const port = stealAfterSendPort(events, sent, (e, i) => ({ id: `sevt_ans_${i}`, type: e.type, tool_use_id: e.tool_use_id, result: e.result }));
+    expect(await rec(port)).toBe('lost_lease');
+    expect(sent).toEqual([{ type: 'user.tool_confirmation', tool_use_id: 'sevt_tu_1', result: 'deny', deny_message: expect.any(String) }]);
+    expect(one(db, "SELECT deny_count, denied_event_ids_json FROM factory_jobs WHERE id = 'j1'")).toEqual({ deny_count: 0, denied_event_ids_json: '[]' });
+
+    expireLease();
+    expect(await rec(port)).toBe('already_answered:1');
+    expect(sent).toHaveLength(1);
+    const j = one(db, "SELECT status, deny_count, denied_event_ids_json FROM factory_jobs WHERE id = 'j1'");
+    expect(j).toEqual({ status: 'running', deny_count: 1, denied_event_ids_json: JSON.stringify(['sevt_tu_1']) });
+    // 以降は従来どおり already_denied（数え直さない）
+    expect(await rec(port)).toBe('already_denied');
+    expect(sent).toHaveLength(1);
+    expect(one(db, "SELECT deny_count FROM factory_jobs WHERE id = 'j1'").deny_count).toBe(1);
+  });
+
+  it('(t2) custom_tool_result の is_error を送った後に保存の CAS が失敗 → 次の reconcile は送らずに denied に入れ、deny 数に数える', async () => {
+    seedRunningJob();
+    const events: unknown[] = [
+      { id: 'sevt_1', type: 'user.define_outcome' },
+      { id: 'sevt_ct_1', type: 'agent.custom_tool_use', name: 'generate_image', input: {} },
+      { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_ct_1'] } },
+    ];
+    const sent: unknown[] = [];
+    const port = stealAfterSendPort(events, sent, (e, i) => ({ id: `sevt_ans_${i}`, type: e.type, custom_tool_use_id: e.custom_tool_use_id, is_error: e.is_error }));
+    expect(await rec(port)).toBe('lost_lease');
+    expect(sent).toEqual([
+      { type: 'user.custom_tool_result', custom_tool_use_id: 'sevt_ct_1', content: [{ type: 'text', text: CUSTOM_TOOL_UNAVAILABLE_MESSAGE }], is_error: true },
+    ]);
+    expect(one(db, "SELECT deny_count FROM factory_jobs WHERE id = 'j1'").deny_count).toBe(0);
+
+    expireLease();
+    expect(await rec(port)).toBe('already_answered:1');
+    expect(sent).toHaveLength(1);
+    expect(one(db, "SELECT deny_count, denied_event_ids_json FROM factory_jobs WHERE id = 'j1'")).toEqual({
+      deny_count: 1,
+      denied_event_ids_json: JSON.stringify(['sevt_ct_1']),
+    });
+  });
+
+  it('(t2b) 2 件の待ちで 1 件だけ返答が記録済みなら、残りの 1 件だけ送り、両方を denied に入れて 2 と数える', async () => {
+    seedRunningJob();
+    const events: unknown[] = [
+      { id: 'sevt_1', type: 'user.define_outcome' },
+      { id: 'sevt_ct_1', type: 'agent.custom_tool_use', name: 'generate_image', input: {} },
+      { id: 'sevt_tu_1', type: 'agent.tool_use', name: 'bash', input: {}, evaluated_permission: 'ask' },
+      { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_ct_1', 'sevt_tu_1'] } },
+      { id: 'sevt_ans_0', type: 'user.custom_tool_result', custom_tool_use_id: 'sevt_ct_1', is_error: true },
+    ];
+    const sent: unknown[] = [];
+    expect(await rec(makePort({ events, sent }))).toBe('denied:1');
+    expect(sent).toEqual([{ type: 'user.tool_confirmation', tool_use_id: 'sevt_tu_1', result: 'deny', deny_message: expect.any(String) }]);
+    const j = one(db, "SELECT deny_count, denied_event_ids_json FROM factory_jobs WHERE id = 'j1'");
+    expect(j.deny_count).toBe(2);
+    expect(JSON.parse(String(j.denied_event_ids_json)).sort()).toEqual(['sevt_ct_1', 'sevt_tu_1']);
+  });
+
+  it('(t3) idle より古い返答（前の待ちへの返答）は数えない: 新しい待ちには通常どおり送る', async () => {
+    seedRunningJob();
+    const events: unknown[] = [
+      { id: 'sevt_1', type: 'user.define_outcome' },
+      { id: 'sevt_tu_old', type: 'agent.tool_use', name: 'bash', input: {}, evaluated_permission: 'ask' },
+      { id: 'sevt_idle_old', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_tu_old'] } },
+      { id: 'sevt_ans_old', type: 'user.tool_confirmation', tool_use_id: 'sevt_tu_old', result: 'deny' },
+      { id: 'sevt_run', type: 'session.status_running' },
+      { id: 'sevt_tu_new', type: 'agent.tool_use', name: 'bash', input: {}, evaluated_permission: 'ask' },
+      { id: 'sevt_idle_new', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_tu_new'] } },
+    ];
+    const sent: unknown[] = [];
+    expect(await rec(makePort({ events, sent }))).toBe('denied:1');
+    expect(sent).toEqual([{ type: 'user.tool_confirmation', tool_use_id: 'sevt_tu_new', result: 'deny', deny_message: expect.any(String) }]);
+    expect(one(db, "SELECT deny_count, denied_event_ids_json FROM factory_jobs WHERE id = 'j1'")).toEqual({
+      deny_count: 1,
+      denied_event_ids_json: JSON.stringify(['sevt_tu_new']),
+    });
+  });
+
+  it('(t3b) idle より古い返答が新しい待ちと同じ id を指していても（人工的な境界）、古い返答では潰さず送る', async () => {
+    seedRunningJob();
+    const events: unknown[] = [
+      { id: 'sevt_1', type: 'user.define_outcome' },
+      { id: 'sevt_tu_1', type: 'agent.tool_use', name: 'bash', input: {}, evaluated_permission: 'ask' },
+      { id: 'sevt_ans_old', type: 'user.tool_confirmation', tool_use_id: 'sevt_tu_1', result: 'deny' },
+      { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_tu_1'] } },
+    ];
+    const sent: unknown[] = [];
+    expect(await rec(makePort({ events, sent }))).toBe('denied:1');
+    expect(sent).toEqual([{ type: 'user.tool_confirmation', tool_use_id: 'sevt_tu_1', result: 'deny', deny_message: expect.any(String) }]);
+  });
+});
+
+describe('Issue #1 requires_action: 返答済みの保存と deny 上限（レビュー指摘）', () => {
+  const T0 = Date.parse('2026-11-04T09:00:00.000Z');
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const at = (ms: number) => vi.setSystemTime(T0 + ms);
+  const rec = (port: FactoryPort) => reconcileJob(env, port, 'j1', { deadline: Date.now() + 25_000 });
+  const setDenyCount = (n: number) => db.prepare("UPDATE factory_jobs SET deny_count = ? WHERE id = 'j1'").run(n);
+  const row = () => one(db, "SELECT status, error, deny_count, denied_event_ids_json, reconcile_state_json FROM factory_jobs WHERE id = 'j1'");
+  /** A（tool_use）は idle より新しい返答が記録済み・B は一覧に見つからない（種別不明） */
+  const mixedEvents = () => [
+    { id: 'sevt_1', type: 'user.define_outcome' },
+    { id: 'sevt_tu_a', type: 'agent.tool_use', name: 'bash', input: {}, evaluated_permission: 'ask' },
+    { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_tu_a', 'sevt_missing_b'] } },
+    { id: 'sevt_ans_a', type: 'user.tool_confirmation', tool_use_id: 'sevt_tu_a', result: 'deny' },
+  ];
+
+  it('(r1) 混在: A は返答済み・B は種別不明で deny_count 8 → A を送らずに 9 と保存し too_many_denies', async () => {
+    seedRunningJob();
+    setDenyCount(8);
+    const sent: unknown[] = [];
+    expect(await rec(makePort({ events: mixedEvents(), sent }))).toBe('failed:too_many_denies');
+    expect(sent).toEqual([{ type: 'user.interrupt' }]);
+    const j = row();
+    expect([j.status, j.error, j.deny_count, j.denied_event_ids_json]).toEqual(['failed', 'too_many_denies', 9, JSON.stringify(['sevt_tu_a'])]);
+  });
+
+  it('(r1) 混在で上限未満: A は保存して数え、B は §M-5b の待ちのまま（何も送らない）', async () => {
+    seedRunningJob();
+    const sent: unknown[] = [];
+    expect(await rec(makePort({ events: mixedEvents(), sent }))).toBe('blocked_unresolved:1');
+    expect(sent).toEqual([]);
+    const j = row();
+    expect([j.status, j.deny_count, j.denied_event_ids_json]).toEqual(['running', 1, JSON.stringify(['sevt_tu_a'])]);
+    expect(JSON.parse(String(j.reconcile_state_json)).blocked_unresolved).toMatchObject({ idle_event_id: 'sevt_idle', count: 1 });
+  });
+
+  it('(r2) answered を持たない古い形式の scan.idle からは再開せず、先頭から走査し直して返答を見つける（送り直さない）', async () => {
+    seedRunningJob();
+    const events = [
+      { id: 'sevt_1', type: 'user.define_outcome' },
+      { id: 'sevt_tu_1', type: 'agent.tool_use', name: 'bash', input: {}, evaluated_permission: 'ask' },
+      { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_tu_1'] } },
+      { id: 'sevt_ans_1', type: 'user.tool_confirmation', tool_use_id: 'sevt_tu_1', result: 'deny' },
+    ];
+    const sent: unknown[] = [];
+    let run = 1;
+    // desc で 1 ページ 1 件。1 回目は 1 ページ目（返答）を読んだ直後に締め切りを過ぎる
+    const port = makePort({
+      events,
+      sent,
+      pageSize: 1,
+      onEventsPage: (n) => {
+        if (run === 1 && n === 1) at(21_000);
+      },
+    });
+    expect(await rec(port)).toBe('deferred');
+    // 古い形式（answered を持たない集計）に書き換える
+    const state = JSON.parse(String(row().reconcile_state_json));
+    expect(state.scan.idle).toMatchObject({ pages: 1, done: false, cursor: '1', agg: { idle: null, answered: ['sevt_tu_1'] } });
+    delete state.scan.idle.agg.answered;
+    db.prepare("UPDATE factory_jobs SET reconcile_state_json = ? WHERE id = 'j1'").run(JSON.stringify(state));
+
+    run = 2;
+    at(60_000);
+    expect(await rec(port)).toBe('already_answered:1');
+    expect(sent).toEqual([]);
+    const j = row();
+    expect([j.deny_count, j.denied_event_ids_json]).toEqual([1, JSON.stringify(['sevt_tu_1'])]);
+  });
+
+  it('(r3) deny_count 9 を保存した直後に落ちても、次の reconcile で interrupt / archive / failed を行う（already_denied で戻らない）', async () => {
+    seedRunningJob();
+    setDenyCount(8);
+    const events: unknown[] = [
+      { id: 'sevt_1', type: 'user.define_outcome' },
+      { id: 'sevt_tu_1', type: 'agent.tool_use', name: 'bash', input: {}, evaluated_permission: 'ask' },
+      { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_tu_1'] } },
+    ];
+    const sent: unknown[] = [];
+    let archived = 0;
+    const port = makePort({ events, sent });
+    const send = port.sendEvents.bind(port);
+    let first = true;
+    port.sendEvents = async (id, evs, call) => {
+      await send(id, evs, call);
+      if (!first) return;
+      first = false;
+      events.push({ id: 'sevt_ans_1', type: 'user.tool_confirmation', tool_use_id: 'sevt_tu_1', result: 'deny' });
+      // deny の送信後に締め切りを過ぎる: 件数 9 の保存（時間を見ない CAS）は通り、上限処理の extend で時間切れになる
+      at(21_000);
+    };
+    port.archiveSession = async () => {
+      archived += 1;
+    };
+    expect(await rec(port)).toBe('deferred');
+    expect(sent).toEqual([{ type: 'user.tool_confirmation', tool_use_id: 'sevt_tu_1', result: 'deny', deny_message: expect.any(String) }]);
+    expect([row().status, row().deny_count]).toEqual(['running', 9]);
+
+    at(60_000);
+    expect(await rec(port)).toBe('failed:too_many_denies');
+    expect(sent.slice(1)).toEqual([{ type: 'user.interrupt' }]);
+    expect(archived).toBe(1);
+    const j = row();
+    expect([j.status, j.error, j.deny_count]).toEqual(['failed', 'too_many_denies', 9]);
+  });
+});
+
+describe('Issue #1 requires_action: 上限超えは入口で止める・旧形式の集計を捨てても stalls は残す', () => {
+  const T0 = Date.parse('2026-11-04T09:00:00.000Z');
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const at = (ms: number) => vi.setSystemTime(T0 + ms);
+  const rec = (port: FactoryPort) => reconcileJob(env, port, 'j1', { deadline: Date.now() + 25_000 });
+  const row = () => one(db, "SELECT status, error, deny_count, denied_event_ids_json, reconcile_state_json FROM factory_jobs WHERE id = 'j1'");
+
+  it('(s1) 返答済み A + 種別不明 B で 8 → 9 を保存した直後に落ちる → 次の回（pending=[B]）は入口で too_many_denies', async () => {
+    seedRunningJob();
+    db.prepare("UPDATE factory_jobs SET deny_count = 8 WHERE id = 'j1'").run();
+    const events = [
+      { id: 'sevt_1', type: 'user.define_outcome' },
+      { id: 'sevt_tu_a', type: 'agent.tool_use', name: 'bash', input: {}, evaluated_permission: 'ask' },
+      { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_tu_a', 'sevt_missing_b'] } },
+      { id: 'sevt_ans_a', type: 'user.tool_confirmation', tool_use_id: 'sevt_tu_a', result: 'deny' },
+    ];
+    const sent: unknown[] = [];
+    let run = 1;
+    let archived = 0;
+    // 1 回目: 走査（1 ページ）を読んだ直後に締め切りを過ぎる → 件数 9 の保存（時間を見ない CAS）は通り、上限処理の extend で時間切れ
+    const port = makePort({
+      events,
+      sent,
+      onEventsPage: () => {
+        if (run === 1) at(21_000);
+      },
+    });
+    port.archiveSession = async () => {
+      archived += 1;
+    };
+    expect(await rec(port)).toBe('deferred');
+    expect(sent).toEqual([]);
+    expect([row().status, row().deny_count, row().denied_event_ids_json]).toEqual(['running', 9, JSON.stringify(['sevt_tu_a'])]);
+
+    run = 2;
+    at(60_000);
+    expect(await rec(port)).toBe('failed:too_many_denies');
+    expect(sent).toEqual([{ type: 'user.interrupt' }]);
+    expect(archived).toBe(1);
+    expect([row().status, row().error, row().deny_count]).toEqual(['failed', 'too_many_denies', 9]);
+  });
+
+  it('(s2) 件数 9 を保存した後に session が running に進んでいても、入口で too_many_denies（running で戻らない）', async () => {
+    seedRunningJob();
+    db.prepare("UPDATE factory_jobs SET deny_count = 8 WHERE id = 'j1'").run();
+    const status = { value: 'idle' };
+    const events: unknown[] = [
+      { id: 'sevt_1', type: 'user.define_outcome' },
+      { id: 'sevt_tu_1', type: 'agent.tool_use', name: 'bash', input: {}, evaluated_permission: 'ask' },
+      { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_tu_1'] } },
+    ];
+    const sent: unknown[] = [];
+    const port = makePort({ events, sent, status });
+    const send = port.sendEvents.bind(port);
+    let first = true;
+    port.sendEvents = async (id, evs, call) => {
+      await send(id, evs, call);
+      if (!first) return;
+      first = false;
+      // deny の送信後に締め切りを過ぎる: 件数 9 の保存は通り、上限処理の extend で時間切れ。session は deny を受けて running に進む
+      events.push({ id: 'sevt_ans_1', type: 'user.tool_confirmation', tool_use_id: 'sevt_tu_1', result: 'deny' });
+      status.value = 'running';
+      at(21_000);
+    };
+    expect(await rec(port)).toBe('deferred');
+    expect([row().status, row().deny_count]).toEqual(['running', 9]);
+
+    at(60_000);
+    expect(await rec(port)).toBe('failed:too_many_denies');
+    expect(sent.slice(1)).toEqual([{ type: 'user.interrupt' }]);
+    expect([row().status, row().error]).toEqual(['failed', 'too_many_denies']);
+  });
+
+  it('(s3) answered を持たない旧形式の scan.idle（stalls=7）を捨てても stalls は引き継ぎ、取得に失敗すると 8 回目で scan_stalled', async () => {
+    expect(SCAN_MAX_STALLS).toBe(8);
+    seedRunningJob();
+    const legacy = {
+      ctx: { purpose: 'idle', job_status: 'running', job_phase: 'making', session_status: 'idle', head: 'sevt_ans_1' },
+      cursor: '1',
+      pages: 1,
+      seen: 1,
+      agg: { idle: null, evalEnd: null, hasOutcome: false, blocked: {} },
+      done: false,
+      stalls: 7,
+    };
+    db.prepare("UPDATE factory_jobs SET reconcile_state_json = ? WHERE id = 'j1'").run(JSON.stringify({ scan: { idle: legacy } }));
+    const port = makePort({ events: [], sent: [] });
+    port.listEventsPage = async () => {
+      throw new Error('events_unavailable');
+    };
+    expect(await rec(port)).toBe('failed:scan_stalled');
+    expect([row().status, row().error]).toEqual(['failed', 'scan_stalled']);
+  });
+
+  it('(s3) 旧形式を捨てて先頭から読み直す時も、時間切れの回数は保存値 + 1 で残り、集計は新しい形式になる', async () => {
+    seedRunningJob();
+    const events = [
+      { id: 'sevt_1', type: 'user.define_outcome' },
+      { id: 'sevt_tu_1', type: 'agent.tool_use', name: 'bash', input: {}, evaluated_permission: 'ask' },
+      { id: 'sevt_idle', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['sevt_tu_1'] } },
+      { id: 'sevt_ans_1', type: 'user.tool_confirmation', tool_use_id: 'sevt_tu_1', result: 'deny' },
+    ];
+    const legacy = {
+      ctx: { purpose: 'idle', job_status: 'running', job_phase: 'making', session_status: 'idle', head: 'sevt_ans_1' },
+      cursor: '1',
+      pages: 1,
+      seen: 1,
+      agg: { idle: null, evalEnd: null, hasOutcome: false, blocked: {} },
+      done: false,
+      stalls: 3,
+    };
+    db.prepare("UPDATE factory_jobs SET reconcile_state_json = ? WHERE id = 'j1'").run(JSON.stringify({ scan: { idle: legacy } }));
+    const sent: unknown[] = [];
+    let run = 1;
+    const port = makePort({
+      events,
+      sent,
+      pageSize: 1,
+      onEventsPage: (n) => {
+        if (run === 1 && n === 1) at(21_000);
+      },
+    });
+    expect(await rec(port)).toBe('deferred');
+    const saved = JSON.parse(String(row().reconcile_state_json)).scan.idle;
+    expect(saved).toMatchObject({ stalls: 4, pages: 1, cursor: '1', agg: { idle: null, answered: ['sevt_tu_1'] } });
+    run = 2;
+    at(60_000);
+    expect(await rec(port)).toBe('already_answered:1');
+    expect(sent).toEqual([]);
   });
 });

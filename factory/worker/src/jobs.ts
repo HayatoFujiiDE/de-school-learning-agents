@@ -810,6 +810,16 @@ export async function answerJob(env: Env, port: FactoryPort, jobId: string, body
 
 const LEASE_MS = 120_000;
 const MIN_REMAINING_MS = 5_000;
+/**
+ * 保存済みの走査から集計（agg / 続き位置）だけを捨て、連続時間切れの回数（stalls・ctx）は残す。
+ * pages=0 の state は decideResume が必ず restart にし、carriedStalls は stalls を引き継ぐ（scan.ts の契約）
+ */
+function restartScanKeepingStalls<A>(saved: unknown, agg: A): unknown {
+  if (!saved || typeof saved !== 'object') return saved;
+  return { ...(saved as Record<string, unknown>), cursor: null, pages: 0, seen: 0, done: false, agg };
+}
+/** deny（tool_confirmation の deny / custom tool の is_error）の数がこれを超えたら too_many_denies で止める */
+const DENY_MAX = 8;
 const LIST_ITEMS_MAX = 1_000;
 
 class LostLease extends Error {
@@ -959,6 +969,10 @@ class Reconciler {
     const session = await this.port.retrieveSession(job.session_id, this.call);
     job = await this.recordCost(job, session.listCostCents);
 
+    // 0-a. deny 数の上限超え（件数は保存したが interrupt / archive / failed の前に落ちた）は、session の状態に関わらずここで止める
+    const overLimit = await this.stopIfTooManyDenies(job, job.deny_count);
+    if (overLimit !== null) return overLimit;
+
     // 0-b. needs_answer は terminated 判定だけ（fail は読んだ status/phase を述語に含めるので、途中で answer が進んでいれば何もしない）
     if (job.status === 'needs_answer') {
       if (session.status === 'terminated') return this.fail(job, 'terminated_waiting_answer');
@@ -1054,11 +1068,20 @@ class Reconciler {
    * 走査（idle / files）を reconcile_state_json.scan.<key> に所有権付きで保存しながら進め、時間切れの後は続きから再開する。
    * 終端の失敗（連続時間切れ / ページ・件数の上限 / state を保存できない）は job を failed にして Stopped を投げる
    */
-  private async scan<T, A>(job: JobRow, key: 'idle' | 'files', io: Omit<ScanIO<T, A>, 'saved' | 'before' | 'save' | 'maxPages'>): Promise<{ agg: A; head: string | null }> {
+  private async scan<T, A>(
+    job: JobRow,
+    key: 'idle' | 'files',
+    opts: Omit<ScanIO<T, A>, 'saved' | 'before' | 'save' | 'maxPages'> & {
+      /** false を返した保存済み途中集計は再利用も再開もせず、先頭から走査し直す（古い保存形式の集計に足りない項目がある時） */
+      keepSaved?: (saved: unknown) => boolean;
+    },
+  ): Promise<{ agg: A; head: string | null }> {
+    const { keepSaved, ...io } = opts;
+    const saved = this.state.scan?.[key];
     try {
       return await runScan<T, A>({
         ...io,
-        saved: this.state.scan?.[key],
+        saved: saved !== undefined && keepSaved && !keepSaved(saved) ? restartScanKeepingStalls(saved, io.init()) : saved,
         before: this.extend,
         save: (st, lastError) => this.writeState(job, null, { ...this.state, scan: { ...this.state.scan, [key]: st } }, lastError),
         maxPages: MAX_PAGES,
@@ -1068,6 +1091,22 @@ class Reconciler {
       if (e instanceof ScanLimit) throw new Stopped(await this.fail(job, e.code, true));
       throw e;
     }
+  }
+
+  /**
+   * deny 数の上限判定の唯一の場所。count（保存済みの deny_count）が上限を超えていたら止めて片付け、failed にした結果を返す。超えていなければ null。
+   * reconcile の入口（保存済みの値）と、requires_action で件数を保存した直後に呼ぶ
+   */
+  private async stopIfTooManyDenies(job: JobRow, count: number): Promise<string | null> {
+    return count > DENY_MAX ? this.tooManyDenies(job) : null;
+  }
+
+  /** deny 数が上限を超えた: 止めて片付け、failed にする */
+  private async tooManyDenies(job: JobRow): Promise<string> {
+    await this.extend();
+    await this.port.sendEvents(job.session_id!, [{ type: 'user.interrupt' }], this.call).catch(() => undefined);
+    await this.port.archiveSession(job.session_id!, this.call).catch(() => undefined);
+    return this.fail(job, 'too_many_denies');
   }
 
   private async onIdle(job: JobRow, sessionStatus: string): Promise<string> {
@@ -1083,16 +1122,40 @@ class Reconciler {
       evalEnd: { result: string } | null;
       hasOutcome: boolean;
       blocked?: Record<string, Blocked>;
+      /**
+       * 最新の status_idle より新しい user.tool_confirmation / user.custom_tool_result が返した id（重複なし）。
+       * 送信は成功したが denied_event_ids_json の保存前に落ちた分を、次の reconcile で送り直さないために使う（古い保存形式には無い → []）
+       */
+      answered?: string[];
     };
     const alreadyDenied = new Set(parseJson<string[]>(job.denied_event_ids_json, []));
     const { agg: seen, head } = await this.scan<unknown, IdleAgg>(job, 'idle', {
       base: { purpose: 'idle', job_status: job.status, job_phase: job.phase, session_status: sessionStatus },
-      init: () => ({ idle: null, evalEnd: null, hasOutcome: false, blocked: {} }),
+      init: () => ({ idle: null, evalEnd: null, hasOutcome: false, blocked: {}, answered: [] }),
+      // answered を持たない古い保存形式の集計は、idle より新しい返答を集めていない。続きから使うと返答を見落として送り直すので捨てる
+      keepSaved: (saved) => {
+        const agg = (saved as { agg?: unknown } | null)?.agg;
+        return !(agg && typeof agg === 'object') || Array.isArray((agg as { answered?: unknown }).answered);
+      },
       fetch: (cursor) => this.port.listEventsPage(job.session_id!, { order: 'desc', page: cursor }, this.call),
       idOf: eventId,
       fold: (agg, items) => {
         for (const raw of items) {
-          const e = (raw ?? {}) as { id?: unknown; type?: unknown; name?: unknown; result?: unknown; stop_reason?: { type?: unknown; event_ids?: unknown } };
+          const e = (raw ?? {}) as {
+            id?: unknown;
+            type?: unknown;
+            name?: unknown;
+            result?: unknown;
+            tool_use_id?: unknown;
+            custom_tool_use_id?: unknown;
+            stop_reason?: { type?: unknown; event_ids?: unknown };
+          };
+          // desc なので idle より先に来る = idle より新しい返答。idle を見つけた後の（前の待ちへの）返答は集めない
+          if (!agg.idle && (e.type === 'user.tool_confirmation' || e.type === 'user.custom_tool_result')) {
+            const id = e.type === 'user.tool_confirmation' ? e.tool_use_id : e.custom_tool_use_id;
+            const answered = (agg.answered ??= []);
+            if (typeof id === 'string' && !answered.includes(id)) answered.push(id);
+          }
           if (!agg.idle && e.type === 'session.status_idle') {
             const ids = e.stop_reason?.event_ids;
             agg.idle = {
@@ -1110,13 +1173,14 @@ class Reconciler {
             if (typeof e.id === 'string' && agg.idle.event_ids.includes(e.id) && !blocked[e.id]) {
               blocked[e.id] = e.type === 'agent.custom_tool_use' ? { type: String(e.type), name: String(e.name ?? '') } : { type: String(e.type ?? '') };
             }
-            if (agg.idle.event_ids.every((id) => alreadyDenied.has(id) || blocked[id])) return true;
+            if (agg.idle.event_ids.every((id) => alreadyDenied.has(id) || blocked[id] || agg.answered?.includes(id))) return true;
             continue;
           }
           if (agg.idle.type !== 'end_turn') return true;
           if (agg.hasOutcome) return true;
         }
-        if (agg.idle?.type === 'requires_action' && agg.idle.event_ids.every((id) => alreadyDenied.has(id) || agg.blocked?.[id])) return true;
+        if (agg.idle?.type === 'requires_action' && agg.idle.event_ids.every((id) => alreadyDenied.has(id) || agg.blocked?.[id] || agg.answered?.includes(id)))
+          return true;
         return false;
       },
     });
@@ -1128,10 +1192,23 @@ class Reconciler {
 
     if (stop === 'requires_action') {
       const denied = new Set(alreadyDenied);
-      const pending = idleEv.event_ids.filter((id) => !denied.has(id));
+      // idle より新しい返答が既にある id は送らない。denied に無ければ（前回送ったが保存できなかった分）送らずに denied へ足し deny 数にも数える
+      const answered = new Set(seen.answered ?? []);
+      const recovered = idleEv.event_ids.filter((id) => !denied.has(id) && answered.has(id));
+      const pending = idleEv.event_ids.filter((id) => !denied.has(id) && !answered.has(id));
+      // 送るものがあってもなくても（§M-5b の早期 return より前に）先に保存し、上限も判定する（入口の判定は保存済みの件数だけを見る）
+      let count = job.deny_count;
+      if (recovered.length > 0) {
+        recovered.forEach((id) => denied.add(id));
+        count += recovered.length;
+        const saved = await this.casJob('denied_event_ids_json = ?, deny_count = ?', '', JSON.stringify([...denied]), count);
+        if (!saved) throw new LostLease();
+        const over = await this.stopIfTooManyDenies(job, count);
+        if (over !== null) return over;
+      }
       if (pending.length === 0) {
         await this.clearBlockedWait(job);
-        return 'already_denied';
+        return recovered.length > 0 ? `already_answered:${recovered.length}` : 'already_denied';
       }
       // §M-5b: 最後のページまで辿っても種別の分からない id には何も送らず、deny にも数えない（誤った種別の応答は API が 400 で拒み、回復を塞ぐ）。
       // 次の reconcile で先頭から探し直す（scan.idle を捨てる）。同じ idle event について 5 分以上の間隔でだけ数え、3 回で failed
@@ -1171,15 +1248,11 @@ class Reconciler {
         this.call,
       );
       ids.forEach((id) => denied.add(id));
-      const newCount = job.deny_count + ids.length;
+      const newCount = count + ids.length;
       const saved = await this.casJob('denied_event_ids_json = ?, deny_count = ?', '', JSON.stringify([...denied]), newCount);
       if (!saved) throw new LostLease();
-      if (newCount > 8) {
-        await this.extend();
-        await this.port.sendEvents(job.session_id!, [{ type: 'user.interrupt' }], this.call).catch(() => undefined);
-        await this.port.archiveSession(job.session_id!, this.call).catch(() => undefined);
-        return this.fail(job, 'too_many_denies');
-      }
+      const over = await this.stopIfTooManyDenies(job, newCount);
+      if (over !== null) return over;
       return `denied:${ids.length}`;
     }
 
