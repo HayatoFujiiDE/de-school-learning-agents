@@ -131,6 +131,20 @@ v5 §6 のまま（#1 の契約 v3.7 に本書 §1〜§3 の SQL 全文と完了
   - 許可の削除は、使った attempt の時だけ: `DELETE FROM settings WHERE key = 'image_probe_allowed' AND value = ?att`（attempt が settled / void / unknown になった batch の中で。別の許可を消さない）
 - **二表の間の停止窓**:
   - attempt `dispatched` / request `reserved`（dispatch CAS の後、request を進める前に止まった）: halt の引き取りは **attempt が `reserved` の時だけ** void・返金する。dispatched は 5 分の規則（unknown + halted + request failed `result_unknown`）に任せる。void と unknown は state の述語で排他（両方は起きない）
-  - request `stored` で attempt がまだ `dispatched`（勝者 CAS の後・精算の前に止まった）: 勝者 CAS の batch で usage を attempt の `usage_json` に保存する。cron は「request stored かつ attempt dispatched かつ usage_json あり」を精算する（consumer と同じ精算の SQL。state の述語で 1 回）。5 分の unknown 規則は「request が `reserved`」の時だけに絞る（stored の画像を unknown にしない）
+  - request `stored` で attempt がまだ `dispatched`（勝者 CAS の後・精算の前に止まった）: 勝者 CAS の batch で usage を attempt の `usage_json` に保存する。cron は「request stored かつ attempt dispatched かつ usage_json あり」を精算する（consumer と同じ精算の SQL。state の述語で 1 回）。5 分の unknown 規則は「attempt が `dispatched` で 5 分超、かつ request が `stored` / `uploaded` でない（`reserved` / `dispatched` / `failed`。DLQ 後を含む）」に掛ける（stored の画像を unknown にしない。§8 で訂正）
 - **variants の拡張子は今のまま**: v6 §4 の「variants は `.md` だけ」は既存素材を壊しうるので撤回。variants は現行の `isPartPath` のまま、files（添付）にだけ `.png` `.webp` を足す。確認画面は files の画像だけを `<img>` で描く
 - 検証に追加: t9 probe の request が failed の後の dispatch 0 行 / t10 probe 成功後に rollback の完了条件が 0 / t11 許可の削除が別 attempt の許可を消さない / t12 attempt dispatched・request reserved で halt → void 0・返金 0・5 分で unknown / t13 stored・精算前停止 → cron が usage_json で 1 回だけ精算し、upload も進む / t14 既存の svg / html の variants を持つ fixture が段階 1 の後も取り込める
+
+## 8. §7 レビュー（Astra high・REVISE 1 件）の反映
+
+- **unknown の回収対象を戻す**: §7 で「request が reserved」に絞ったため、request `dispatched` のまま止まった試行と、DLQ が request を `failed` にした後の dispatched 試行が回収されなかった。回収の SQL:
+  ```sql
+  UPDATE image_attempts SET state = 'unknown', unknown_at = ?now
+  WHERE state = 'dispatched' AND dispatched_at < ?now_minus_5min
+    AND NOT EXISTS (SELECT 1 FROM image_requests r WHERE r.attempt_id = image_attempts.id AND r.gen IN ('stored','uploaded'));
+  -- 同じ batch で halted を書き、request が reserved / dispatched なら failed（result_unknown）。failed 済みは触らない
+  ```
+  stored / uploaded の request の attempt は、usage_json による精算（§7）だけが進める
+- **精算が先、upload が後**: upload の処理権の CAS（§3）に `AND EXISTS (SELECT 1 FROM image_attempts a WHERE a.id = image_requests.attempt_id AND a.state = 'settled')` を足す。consumer と cron のどちらの経路でも、精算前の upload は 0 行
+- **probe の許可の取り残し**: 許可を書いた後に予約が 0 行・許可の直後に停止した時のため、cron が `image_probe_allowed` を「value の attempt が無く、`updated_at` が 10 分より前」または「value の attempt が settled / void / unknown」の時に消す（`DELETE … WHERE key=… AND value=?` で、読んだ値の時だけ）。管理画面は予約 0 行を見たら、その場でも同じ削除をする
+- 検証に追加: t12 を request `reserved` / `dispatched` / DLQ 後 `failed` の 3 通りにし、どれも 5 分で unknown・返金なし・rollback の完了条件が 0 / t11 に「許可 → 予約 0 行」「許可直後の停止」から次の probe を許可できる / t13 に「精算前の upload の処理権は 0 行」/ t14 に files の png・webp は通り、migration 0004 後に `kind='image'`・`notify='skip'` が入り、既存の台帳が残る
