@@ -295,6 +295,8 @@ window.DES = window.DES || {};
   function renderSidebar(r) { fillSidebar($('#sidebar'), r); }
   function fillSidebar(sb, r) {
     var d = DES.data, cur = r === 'plan' ? 'talk' : r;
+    // 「続きをする」の中身: 最後に止めたのが作るの活動なら その名前と次にすること（§U-11 指摘 4）
+    var ri = DES.make.resumeInfo(), resumeTitle = ri ? ri.title : d.resume.title, resumeNext = ri ? ri.next : d.resume.next;
     sb.textContent = '';
     sb.appendChild(H('button', { class: 'icon-btn mobile-menu mobile-close', type: 'button', 'data-action': 'menu-close', 'aria-label': T('menu_close') }, [icon('close')]));
     sb.appendChild(H('div', { class: 'brand' }, [H('div', { class: 'brand-word' }, ['DE', H('span', null, '-'), 'SCHOOL']), H('div', { class: 'brand-sub' }, T('brand_sub'))]));
@@ -306,8 +308,8 @@ window.DES = window.DES || {};
     sb.appendChild(H('div', { class: 'sidebar-bottom' }, [
       H('button', { class: 'resume-mini', type: 'button', 'data-action': 'resume', 'data-arg': 'side' }, [
         H('small', null, [icon('chat'), ' ', T('resume')]),
-        H('strong', null, d.resume.title),
-        H('span', { class: 'resume-next' }, d.resume.next)
+        H('strong', null, resumeTitle),
+        H('span', { class: 'resume-next' }, resumeNext)
       ]),
       H('div', { class: 'profile' }, [
         H('span', { class: 'avatar', 'aria-hidden': 'true' }, d.child.name.charAt(0)),
@@ -377,6 +379,9 @@ window.DES = window.DES || {};
   };
   A['resume'] = function () {
     closeMenu(false);
+    // 最後に止めたのが作るの活動なら、その作業台へ（§U-11 指摘 4）。会話なら従来どおり #talk
+    var mk = DES.make.resumeTarget();
+    if (mk) { DES.make.openAct(mk); return; }
     DES.ui.restoreScroll = true;
     if (route() === 'talk') { window.scrollTo(0, DES.state.draft.scroll || 0); DES.ui.restoreScroll = false; }
     else window.location.hash = '#talk';
@@ -423,6 +428,7 @@ window.DES = window.DES || {};
     var u = DES.ui, st = DES.state, r = route();
     if (u.lastRoute === 'talk' && r !== 'talk') { st.draft.scroll = window.scrollY || 0; if (!DES.store.save('draft')) st.saveFailed = true; }
     if (u.lastRoute === 'paused' && r !== 'paused') DES.make.clearPaused();
+    if (r === 'paused' && !DES.make.pausedAct()) DES.make.noteTalkStop();
     closeTransient();
     u.lastRoute = r;
     APP.render();

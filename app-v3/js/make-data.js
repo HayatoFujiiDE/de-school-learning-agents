@@ -22,7 +22,7 @@
         { key: 'size', label: ['大きさ', '大きさ'], min: 2, max: 8, def: 4 },
         { key: 'block', label: ['ブロック', 'ブロック'], min: 0, max: 2, def: 0, names: [['石', '石'], ['ガラス', 'ガラス'], ['オークの板', 'オークのいた']] }
       ],
-      steps: [['大きさを変える', '大きさをかえる'], ['ブロックを選ぶ', 'ブロックをえらぶ'], ['入口をあける', '入り口をあける']],
+      stepBase: [['大きさを変える', '大きさをかえる'], ['ブロックを選ぶ', 'ブロックをえらぶ'], ['入口をあける', '入り口をあける']],
       extSteps: [['写真を入れる', '写真を入れる'], ['屋根を置く', 'やねをおく']],
       find: [{ size: 6, block: 1 }, { size: 5, block: 2 }]
     },
@@ -35,7 +35,7 @@
         { key: 'speed', label: ['速さ', 'はやさ'], min: 1, max: 5, def: 2 },
         { key: 'count', label: ['数', '数'], min: 1, max: 6, def: 3 }
       ],
-      steps: [['速さを変える', 'はやさをかえる'], ['星の数を変える', '星の数をかえる'], ['キャラの色を決める', 'キャラの色をきめる']],
+      stepBase: [['速さを変える', 'はやさをかえる'], ['星の数を変える', '星の数をかえる'], ['キャラの色を決める', 'キャラの色をきめる']],
       extSteps: [['写真を入れる', '写真を入れる'], ['星の数を変える', '星の数をかえる']],
       find: [{ speed: 3, count: 5 }, { speed: 4, count: 2 }]
     },
@@ -48,7 +48,7 @@
         { key: 'volt', label: ['電圧', 'でんあつ'], min: 0, max: 4, def: 1, names: ['1.5 V', '3 V', '4.5 V', '6 V', '9 V'], vals: [1.5, 3, 4.5, 6, 9] },
         { key: 'ohm', label: ['抵抗', 'ていこう'], min: 0, max: 4, def: 2, names: ['100 Ω', '220 Ω', '330 Ω', '470 Ω', '1000 Ω'], vals: [100, 220, 330, 470, 1000] }
       ],
-      steps: [['電圧を変える', 'でんあつをかえる'], ['抵抗を変える', 'ていこうをかえる'], ['スイッチを足す', 'スイッチをたす']],
+      stepBase: [['電圧を変える', 'でんあつをかえる'], ['抵抗を変える', 'ていこうをかえる'], ['スイッチを足す', 'スイッチをたす']],
       extSteps: [['写真を入れる', '写真を入れる'], ['スイッチを足す', 'スイッチをたす']],
       find: [{ volt: 2, ohm: 1 }, { volt: 3, ohm: 3 }]
     }
@@ -68,36 +68,49 @@
   // 案（バリアント）の名前と既定値
   var VARIANT = {
     'mc.cube': { title: ['マイクラのコマンド例', 'マイクラのコマンド例'], values: { size: 4, block: 0 } },
-    'mc.tower': { title: ['石の塔', '石のとう'], values: { size: 4, block: 0 } },
-    'mc.bridge': { title: ['ガラスの橋', 'ガラスのはし'], values: { size: 4, block: 1 } },
-    'mc.roof': { title: ['円すいの屋根', 'えんすいのやね'], values: { size: 4, block: 2 } },
-    'py.catch': { title: ['Python の小さなゲーム', 'Python の小さなゲーム'], values: { speed: 2, count: 3 } },
-    'py.dodge': { title: ['岩をよけるゲーム', '岩をよけるゲーム'], values: { speed: 3, count: 4 } },
-    'py.coin': { title: ['コインを集めるゲーム', 'コインをあつめるゲーム'], values: { speed: 2, count: 5 } },
-    'py.maze': { title: ['迷路を進むゲーム', 'めいろを進むゲーム'], values: { speed: 2, count: 3 } },
+    'mc.tower': { title: ['石の塔', '石のとう'], values: { size: 4, block: 0 }, step3: ['窓をあける', 'まどをあける'] },
+    'mc.bridge': { title: ['ガラスの橋', 'ガラスのはし'], values: { size: 4, block: 1 }, step3: ['手すりを付ける', 'てすりをつける'] },
+    'mc.roof': { title: ['円すいの屋根', 'えんすいのやね'], values: { size: 4, block: 2 }, step3: ['てっぺんを決める', 'てっぺんをきめる'] },
+    'py.catch': { title: ['Python の小さなゲーム', 'Python の小さなゲーム'], values: { speed: 2, count: 3 }, thing: ['星', '星'], mover: ['星', '星'] },
+    'py.dodge': { title: ['岩をよけるゲーム', '岩をよけるゲーム'], values: { speed: 3, count: 4 }, thing: ['岩', '岩'], mover: ['岩', '岩'] },
+    'py.coin': { title: ['コインを集めるゲーム', 'コインをあつめるゲーム'], values: { speed: 2, count: 5 }, thing: ['コイン', 'コイン'], mover: ['コイン', 'コイン'] },
+    'py.maze': { title: ['迷路を進むゲーム', 'めいろを進むゲーム'], values: { speed: 2, count: 3 }, thing: ['分かれ道', 'わかれ道'], mover: ['キャラ', 'キャラ'], step3: ['ゴールの場所を決める', 'ゴールの場所をきめる'] },
     'circuit.single': { title: ['回路の電気', '回路のでんき'], values: { volt: 1, ohm: 2 } },
     'circuit.series': { title: ['電池 2 個の回路', '電池 2 この回路'], values: { volt: 1, ohm: 2 } },
     'circuit.bulbs': { title: ['電球 2 個の回路', '電球 2 この回路'], values: { volt: 2, ohm: 2 } },
-    'circuit.switch': { title: ['スイッチ付きの回路', 'スイッチつきの回路'], values: { volt: 1, ohm: 2 } }
+    'circuit.switch': { title: ['スイッチ付きの回路', 'スイッチつきの回路'], values: { volt: 1, ohm: 2 }, step3: ['電球を 2 個にする', '電球を 2 こにする'] }
   };
   MD.variant = function (theme, v) { return VARIANT[theme + '.' + v] || VARIANT[theme + '.' + MD.theme(theme).sample]; };
   MD.variantValues = function (theme, v) { return JSON.parse(JSON.stringify(MD.variant(theme, v).values)); };
+  // 今の一歩の手順（3 つ）。名詞は今の作業対象（案）から取る（§U-11 (a): 岩をよけるゲームに「星」を出さない）
+  MD.stepsFor = function (theme, variant) {
+    var th = MD.theme(theme), v = MD.variant(theme, variant), base = th.stepBase;
+    var second = theme === 'py' ? [v.thing[0] + 'の数を変える', v.thing[1] + 'の数をかえる'] : base[1];
+    return JSON.parse(JSON.stringify([base[0], second, v.step3 || base[2]]));
+  };
+  MD.THEMES.forEach(function (t) { THEME[t].steps = MD.stepsFor(t, THEME[t].sample); });
 
   // バディが「外のもの」に引き受ける作業（design-v3 §6-2 外部・実物の記録 / §6-4）。cmd は試作（線画とコマンド）を出す
   MD.extCards = {
     mc: {
-      calc: { title: ['屋根の寸法', 'やねの大きさ'], lines: [['塔の幅 3 → 屋根の土台は 5×5', 'とうのはば 3 → やねのどだいは 5×5'], ['段は 3 段（5・3・1）', 'だんは 3 だん（5・3・1）'], ['ブロックは 35 個', 'ブロックは 35 こ']] },
-      steps: { title: ['屋根の手順', 'やねの手じゅん'], lines: [['1. 塔のてっぺんに 5×5 の板を置く', '1. とうのてっぺんに 5×5 のいたをおく'], ['2. その上に 3×3 を置く', '2. その上に 3×3 をおく'], ['3. いちばん上に 1 個置く', '3. いちばん上に 1 こおく']] },
+      calc: { title: ['屋根の寸法', 'やねの大きさ'], lines: [['塔の幅 3 → 屋根の土台は 5×5', 'とうのはば 3 → やねのどだいは 5×5'], ['段は 3 段（5・3・1）', 'だんは 3 だん（5・3・1）'], ['ブロックは 35 個', 'ブロックは 35 こ']],
+        alt: { title: ['屋根の寸法（4 段）', 'やねの大きさ（4 だん）'], lines: [['塔の幅 3 → 屋根の土台は 7×7', 'とうのはば 3 → やねのどだいは 7×7'], ['段は 4 段（7・5・3・1）', 'だんは 4 だん（7・5・3・1）'], ['ブロックは 84 個', 'ブロックは 84 こ']] } },
+      steps: { title: ['屋根の手順', 'やねの手じゅん'], lines: [['1. 塔のてっぺんに 5×5 の板を置く', '1. とうのてっぺんに 5×5 のいたをおく'], ['2. その上に 3×3 を置く', '2. その上に 3×3 をおく'], ['3. いちばん上に 1 個置く', '3. いちばん上に 1 こおく']],
+        alt: { title: ['屋根の手順（はみ出す形）', 'やねの手じゅん（はみ出す形）'], lines: [['1. 塔のまわりに 1 つはみ出す板を置く', '1. とうのまわりに 1 つはみ出すいたをおく'], ['2. 内側へ 1 つずつ小さく重ねる', '2. 内がわへ 1 つずつ小さくかさねる'], ['3. てっぺんに旗を立てる', '3. てっぺんにはたを立てる']] } },
       cmd: { variant: 'roof', values: { size: 3, block: 2 } }
     },
     py: {
-      calc: { title: ['画面の大きさ', '画面の大きさ'], lines: [['画面は 320×240', '画面は 320×240'], ['星の間は 64 ずつ', '星のあいだは 64 ずつ'], ['5 個なら横にならべて入る', '5 こなら横にならべて入る']] },
-      steps: { title: ['ゲームの手順', 'ゲームの手じゅん'], lines: [['1. キャラを左右に動かす', '1. キャラを左右に動かす'], ['2. 星を上から落とす', '2. 星を上からおとす'], ['3. ふれたら数を 1 ふやす', '3. ふれたら数を 1 ふやす']] },
+      calc: { title: ['画面の大きさ', '画面の大きさ'], lines: [['画面は 320×240', '画面は 320×240'], ['星の間は 64 ずつ', '星のあいだは 64 ずつ'], ['5 個なら横にならべて入る', '5 こなら横にならべて入る']],
+        alt: { title: ['画面の大きさ（横長）', '画面の大きさ（よこ長）'], lines: [['画面は 480×270', '画面は 480×270'], ['星の間は 96 ずつ', '星のあいだは 96 ずつ'], ['5 個なら横にならべて入る', '5 こなら横にならべて入る']] } },
+      steps: { title: ['ゲームの手順', 'ゲームの手じゅん'], lines: [['1. キャラを左右に動かす', '1. キャラを左右に動かす'], ['2. 星を上から落とす', '2. 星を上からおとす'], ['3. ふれたら数を 1 ふやす', '3. ふれたら数を 1 ふやす']],
+        alt: { title: ['ゲームの手順（よける形）', 'ゲームの手じゅん（よける形）'], lines: [['1. キャラを左右に動かす', '1. キャラを左右に動かす'], ['2. 岩を上から落とす', '2. 岩を上からおとす'], ['3. ふれたら最初から', '3. ふれたらさいしょから']] } },
       cmd: { variant: 'coin', values: { speed: 2, count: 5 } }
     },
     circuit: {
-      calc: { title: ['電流の計算', 'でんりゅうの計算'], lines: [['3 V ÷ 330 Ω = 9.1 mA', '3 V ÷ 330 Ω = 9.1 mA'], ['6 V なら 18.2 mA', '6 V なら 18.2 mA'], ['電球は 20 mA くらいまで', '電球は 20 mA くらいまで']] },
-      steps: { title: ['回路の手順', '回路の手じゅん'], lines: [['1. 電池ボックスに電池を入れる', '1. 電池ボックスに電池を入れる'], ['2. 抵抗をつなぐ', '2. ていこうをつなぐ'], ['3. 電球をつないで、スイッチを入れる', '3. 電球をつないで、スイッチを入れる']] },
+      calc: { title: ['電流の計算', 'でんりゅうの計算'], lines: [['3 V ÷ 330 Ω = 9.1 mA', '3 V ÷ 330 Ω = 9.1 mA'], ['6 V なら 18.2 mA', '6 V なら 18.2 mA'], ['電球は 20 mA くらいまで', '電球は 20 mA くらいまで']],
+        alt: { title: ['電流の計算（電池 2 個）', 'でんりゅうの計算（電池 2 こ）'], lines: [['6 V ÷ 330 Ω = 18.2 mA', '6 V ÷ 330 Ω = 18.2 mA'], ['9 V なら 27.3 mA', '9 V なら 27.3 mA'], ['電球は 20 mA くらいまで', '電球は 20 mA くらいまで']] } },
+      steps: { title: ['回路の手順', '回路の手じゅん'], lines: [['1. 電池ボックスに電池を入れる', '1. 電池ボックスに電池を入れる'], ['2. 抵抗をつなぐ', '2. ていこうをつなぐ'], ['3. 電球をつないで、スイッチを入れる', '3. 電球をつないで、スイッチを入れる']],
+        alt: { title: ['回路の手順（スイッチ）', '回路の手じゅん（スイッチ）'], lines: [['1. 電池ボックスに電池を入れる', '1. 電池ボックスに電池を入れる'], ['2. スイッチと抵抗をつなぐ', '2. スイッチとていこうをつなぐ'], ['3. 電球をつないで、スイッチを入れる', '3. 電球をつないで、スイッチを入れる']] } },
       cmd: { variant: 'switch', values: { volt: 1, ohm: 2 } }
     }
   };
@@ -115,7 +128,8 @@
   MD.replies = {
     land: ['話していたことから、仮の案を 3 つ置いたよ。近いものを選ぶか、違うところを教えて', '話していたことから、かりの案を 3 つおいたよ。近いのをえらぶか、ちがうところを教えて'],
     open: ['まず動かしてみる？ 試した感触から、作りたい方向を考えられる', 'この見本、動かしてみる？ さわってから、変えたいところを考えてもいいよ'],
-    test: ['選んだ{param}に変えて、{effect}に違いが出たね。狙っていた{aim}に近い？', '{param}をかえたら、さっきとちがう{aim}になったね。変えたところが{aim}に出たね'],
+    // 「羽を広げたら、さっきよりゆっくり落ちたね」の 羽・広げ・ゆっくり落ちた・動き だけを題材の語に差し替える（§U-11 指摘 21）
+    test: ['選んだ{param}に変えて、{effect}に違いが出たね。狙っていた{aim}に近い？', '{param}をかえたら、さっきより{how}ね。変えたところが{aim}に出たね'],
     left: ['細かな作業はこちらで進めた。残したい点と変えたい点を一緒に決めよう', '細かいところは手伝ったよ。動いたら、気になるところを教えてね'],
     photo: ['{what}んだね。前の写真と並べて見る？', '{what}んだね。前の写真とならべて見る？'],
     unknown: ['ここはまだ分からない。確かめる方法を一緒に考えよう', 'ここはまだ分からない。たしかめる方法をいっしょに考えよう']
@@ -232,12 +246,12 @@
   function poly(pts, fill) {
     return '<path d="M' + pts.map(function (p) { return r1(p[0]) + ' ' + r1(p[1]); }).join('L') + 'Z" fill="' + fill + '" stroke="' + INK + '" stroke-width="1.2" stroke-linejoin="round"/>';
   }
-  // ブロック 1 個（石 = 点 / ガラス = 斜めの光 / 板 = 木目）
+  // ブロック 1 個。種類が地の色でも分かるようにする（石 = 灰の地 + 点 / ガラス = 白 + 斜めの光 2 本 / 板 = 薄橙の地 + 木目 2 本）
   function block(x, y, b, kind) {
-    var out = rect(x, y, b, b, kind === 2 ? SAND : PAPER);
-    if (kind === 0) out += '<circle cx="' + r1(x + b * 0.35) + '" cy="' + r1(y + b * 0.4) + '" r="' + r1(Math.max(0.8, b * 0.07)) + '" fill="' + OLIVE + '"/>';
-    else if (kind === 1) out += line(x + b * 0.25, y + b * 0.65, x + b * 0.6, y + b * 0.3, OLIVE, 1);
-    else out += line(x + b * 0.15, y + b * 0.5, x + b * 0.85, y + b * 0.5, OLIVE, 0.9);
+    var out = rect(x, y, b, b, kind === 0 ? MID : (kind === 1 ? PAPER : SOFT));
+    if (kind === 0) out += '<circle cx="' + r1(x + b * 0.35) + '" cy="' + r1(y + b * 0.4) + '" r="' + r1(Math.max(0.9, b * 0.08)) + '" fill="' + OLIVE + '"/>';
+    else if (kind === 1) out += line(x + b * 0.2, y + b * 0.6, x + b * 0.55, y + b * 0.25, OLIVE, 1) + line(x + b * 0.45, y + b * 0.8, x + b * 0.8, y + b * 0.45, OLIVE, 1);
+    else out += line(x + b * 0.15, y + b * 0.38, x + b * 0.85, y + b * 0.38, OLIVE, 0.9) + line(x + b * 0.15, y + b * 0.68, x + b * 0.85, y + b * 0.68, OLIVE, 0.9);
     return out;
   }
   function mcArt(variant, v) {
@@ -289,59 +303,74 @@
   function player(x, y) {
     return rect(x, y, 24, 18, SAND, ' rx="5"') + '<circle cx="' + (x + 8) + '" cy="' + (y + 8) + '" r="1.8" fill="' + INK + '"/><circle cx="' + (x + 16) + '" cy="' + (y + 8) + '" r="1.8" fill="' + INK + '"/>';
   }
+  // 図に出す量（§U-11 (b): 数 = 個数、速さ = 動きの線の長さ、大きさ = ブロック数、電圧 = 電池の数、抵抗 = ぎざぎざの数、
+  // 電圧・抵抗の結果 = 電球の光の大きさ）。線画とテスト（artMarks）の両方がこの値を使う
+  function trailLen(sp) { return 6 + sp * 7; }
+  function pyMarks(v) { return { objects: v.count || 3, trail: trailLen(v.speed || 2) }; }
+  function circuitMarks(variant, v) {
+    var c = circuitNums(variant, v);
+    return { cells: Math.max(1, Math.min(8, Math.round(c.V / 1.5))), teeth: 2 + (v.ohm || 0), rays: Math.round(c.B / 100 * 8), glow: Math.round(13 + c.B / 5) };
+  }
   function pyArt(variant, v) {
-    var n = v.count || 3, sp = v.speed || 2, out = screen(), i;
+    var mk = pyMarks(v), n = mk.objects, L = mk.trail, out = screen(), i;
     if (variant === 'maze') {
       out += '<path d="M40 120 H110 V96 H70 V70 H150 V44 H200" stroke="' + INK + '" stroke-width="1.4" fill="none" stroke-linejoin="round"/>';
       for (i = 0; i < n; i++) {
         var bx = 60 + i * (130 / n), by = i % 2 ? 70 : 96;
-        out += line(bx, by, bx, by - 14, OLIVE, 1.2);
+        out += line(bx, by, bx, by - 14, OLIVE, 1.4) + '<circle cx="' + r1(bx) + '" cy="' + (by - 14) + '" r="2.2" fill="' + OLIVE + '"/>';
       }
-      out += '<path d="M44 114 H' + (44 + sp * 12) + '" stroke="' + ORANGE + '" stroke-width="2" stroke-dasharray="3 3" fill="none"/>';
+      out += '<path d="M56 114 H' + (56 + L * 2) + '" stroke="' + ORANGE + '" stroke-width="2.2" stroke-dasharray="4 3" fill="none"/>';
       out += player(30, 104);
       return wrap(out);
     }
     for (i = 0; i < n; i++) {
-      var x = 40 + (i + 0.5) * (160 / n), y = 46 + ((i * 29) % 46);
+      var x = 40 + (i + 0.5) * (160 / n), y = 62 + ((i * 23) % 34);
       if (variant === 'coin') {
+        // コインは右から左へ流れる。後ろに速さの長さの線
+        out += line(x + 9, y + 10, x + 9 + L, y + 10, OLIVE, 1.4, ' stroke-dasharray="3 3"');
         out += '<circle cx="' + r1(x) + '" cy="' + r1(y + 10) + '" r="7" fill="' + SOFT + '" stroke="' + INK + '" stroke-width="1.2"/>' + line(x, y + 6, x, y + 14, OLIVE, 1);
-        for (var t = 0; t < sp; t++) out += line(x - 11 - t * 5, y + 10, x - 13 - t * 5, y + 10, OLIVE, 1);
-      } else if (variant === 'dodge') {
-        out += '<path d="M' + r1(x - 8) + ' ' + r1(y + 12) + 'l3 -8 8 -3 6 5 -1 8 -8 3z" fill="' + MID + '" stroke="' + INK + '" stroke-width="1.2" stroke-linejoin="round"/>';
-        for (var u = 0; u < sp; u++) out += line(x, y - 2 - u * 5, x, y - 4 - u * 5, OLIVE, 1);
       } else {
-        out += star(x, y + 8, 7);
-        for (var q = 0; q < sp; q++) out += line(x, y - 2 - q * 5, x, y - 4 - q * 5, OLIVE, 1);
+        // 星・岩は上から落ちる。上に速さの長さの線
+        out += line(x, y - 1, x, Math.max(31, y - 1 - L), OLIVE, 1.4, ' stroke-dasharray="3 3"');
+        if (variant === 'dodge') out += '<path d="M' + r1(x - 8) + ' ' + r1(y + 12) + 'l3 -8 8 -3 6 5 -1 8 -8 3z" fill="' + MID + '" stroke="' + INK + '" stroke-width="1.2" stroke-linejoin="round"/>';
+        else out += star(x, y + 8, 7);
       }
     }
     out += player(108, 114);
     return wrap(out);
   }
-  function bulb(cx, cy, B) {
-    var out = '', rays = Math.round(B / 100 * 8);
+  function bulb(cx, cy, B, glow, rays) {
+    var out = '';
+    if (B > 0) out += '<circle cx="' + cx + '" cy="' + cy + '" r="' + glow + '" fill="' + SOFT + '" stroke="none"/>';
     for (var i = 0; i < rays; i++) {
       var a = -Math.PI / 2 + (i - (rays - 1) / 2) * 0.42;
-      out += line(cx + Math.cos(a) * 17, cy + Math.sin(a) * 17, cx + Math.cos(a) * (21 + B / 14), cy + Math.sin(a) * (21 + B / 14), ORANGE, 1.6);
+      out += line(cx + Math.cos(a) * (glow - 2), cy + Math.sin(a) * (glow - 2), cx + Math.cos(a) * (glow + 6), cy + Math.sin(a) * (glow + 6), ORANGE, 1.8);
     }
-    out += '<circle cx="' + cx + '" cy="' + cy + '" r="12" fill="' + (B > 0 ? SOFT : PAPER) + '" stroke="' + INK + '" stroke-width="1.4"/>';
+    out += '<circle cx="' + cx + '" cy="' + cy + '" r="12" fill="' + (B > 0 ? '#ffe3b8' : PAPER) + '" stroke="' + INK + '" stroke-width="1.4"/>';
     out += '<path d="M' + (cx - 5) + ' ' + (cy + 4) + ' q2.5 -9 5 0 q2.5 -9 5 0" stroke="' + OLIVE + '" stroke-width="1.1" fill="none"/>';
     return out;
   }
-  function battery(x, y) {
-    return '<rect x="' + (x - 14) + '" y="' + (y - 7) + '" width="28" height="14" fill="#fcfbf8" stroke="none"/>' +
-      line(x - 12, y - 4, x + 12, y - 4, INK, 1.6) + line(x - 6, y + 4, x + 6, y + 4, INK, 3);
+  // 電池（左の辺）: 1.5 V ごとに 1 つ。縦に並べる
+  function cells(x, n) {
+    var gap = n > 5 ? 9 : 12, top = 75 - (n - 1) * gap / 2, out = '<rect x="' + (x - 14) + '" y="' + (top - 7) + '" width="28" height="' + ((n - 1) * gap + 14) + '" fill="#fcfbf8" stroke="none"/>';
+    for (var i = 0; i < n; i++) { var y = top + i * gap; out += line(x - 11, y - 3, x + 11, y - 3, INK, 1.5) + line(x - 5, y + 2, x + 5, y + 2, INK, 2.8); }
+    return out;
+  }
+  // 抵抗（上の辺のぎざぎざ）: 大きいほどぎざぎざが多い
+  function resistor(teeth) {
+    var w = 52, step = w / teeth, d = 'M94 28';
+    for (var i = 0; i < teeth; i++) d += ' L' + r1(94 + step * (i + 0.25)) + ' 21 L' + r1(94 + step * (i + 0.75)) + ' 35';
+    d += ' L146 28';
+    return '<rect x="92" y="18" width="56" height="20" fill="#fcfbf8" stroke="none"/><path d="' + d + '" stroke="' + INK + '" stroke-width="1.4" fill="none" stroke-linejoin="round"/>';
   }
   function circuitArt(variant, v) {
-    var c = circuitNums(variant, v), out = '';
-    out += '<path d="M44 28 H200 V122 H44 Z" stroke="' + INK + '" stroke-width="1.6" fill="none" stroke-linejoin="round"/>';
-    // 抵抗（上の辺のぎざぎざ）
-    out += '<rect x="96" y="22" width="48" height="12" fill="#fcfbf8" stroke="none"/>';
-    out += '<path d="M96 28 l4 -6 8 12 8 -12 8 12 8 -12 8 12 4 -6" stroke="' + INK + '" stroke-width="1.4" fill="none" stroke-linejoin="round"/>';
-    // 電池（左の辺）。直列は 2 個
-    if (variant === 'series') { out += battery(44, 58) + battery(44, 92); } else out += battery(44, 75);
+    var c = circuitNums(variant, v), mk = circuitMarks(variant, v), out = '';
+    out += '<path d="M44 28 H196 V122 H44 Z" stroke="' + INK + '" stroke-width="1.6" fill="none" stroke-linejoin="round"/>';
+    out += resistor(mk.teeth);
+    out += cells(44, mk.cells);
     // 電球（右の辺）。2 個のときは下の辺にもう 1 つ
-    out += '<rect x="188" y="60" width="24" height="30" fill="#fcfbf8" stroke="none"/>' + bulb(200, 75, c.B);
-    if (variant === 'bulbs') out += '<rect x="108" y="110" width="30" height="24" fill="#fcfbf8" stroke="none"/>' + bulb(122, 122, c.B);
+    out += '<rect x="184" y="60" width="24" height="30" fill="#fcfbf8" stroke="none"/>' + bulb(196, 75, c.B, mk.glow, mk.rays);
+    if (variant === 'bulbs') out += '<rect x="108" y="110" width="30" height="24" fill="#fcfbf8" stroke="none"/>' + bulb(122, 122, c.B, Math.min(mk.glow, 20), Math.min(mk.rays, 4));
     if (variant === 'switch') {
       out += '<rect x="108" y="116" width="34" height="12" fill="#fcfbf8" stroke="none"/>';
       out += '<circle cx="110" cy="122" r="2.4" fill="' + INK + '"/><circle cx="140" cy="122" r="2.4" fill="' + INK + '"/>' + line(110, 122, 138, 115, INK, 1.6);
@@ -355,6 +384,31 @@
     if (stage.theme === 'py') return pyArt(stage.variant, v);
     if (stage.theme === 'circuit') return circuitArt(stage.variant, v);
     return mcArt(stage.variant, v);
+  };
+  // 図に出している量（テスト用。線画と同じ計算）
+  MD.artMarks = function (stage) {
+    if (!stage || stage.kind === 'note') return '';
+    var v = stage.values || MD.variantValues(stage.theme, stage.variant);
+    if (stage.theme === 'py') return JSON.stringify(pyMarks(v));
+    if (stage.theme === 'circuit') return JSON.stringify(circuitMarks(stage.variant, v));
+    return JSON.stringify({ blocks: mcCount(stage.variant, v.size), kind: v.block });
+  };
+  // 「本人が試して結果が出た」の返事（§7 の型。題材で変わる名詞・動詞だけ差し込む）。key = 変えた値、from = 変える前の値
+  var BLOCK_HOW = [['かたそうになった'], ['すけて見えるようになった'], ['木の感じになった']];
+  MD.testReply = function (stage, key, from, mode) {
+    var t = stage.theme, v = stage.values, to = v[key], p = param(t, key), va = MD.variant(t, stage.variant);
+    var up = to > from, vars = { param: pick(p.label, mode) };
+    if (t === 'mc' && key === 'block') { vars.effect = 'ブロックの見た目'; vars.aim = '見た目'; vars.how = BLOCK_HOW[to] ? BLOCK_HOW[to][0] : '見た目がかわった'; }
+    else if (t === 'mc') { vars.effect = 'できる形'; vars.aim = '形'; vars.how = up ? 'ブロックがふえた' : 'ブロックがへった'; }
+    else if (t === 'py' && key === 'speed') { vars.effect = pick(va.mover, 'js') + 'の動き'; vars.aim = '動き'; vars.how = up ? 'はやく動いた' : 'ゆっくり動いた'; }
+    else if (t === 'py') { vars.effect = pick(va.thing, 'js') + 'の数'; vars.aim = '数'; vars.how = pick(va.thing, 'es') + (up ? 'がふえた' : 'がへった'); }
+    else {
+      var before = JSON.parse(JSON.stringify(v));
+      before[key] = from;
+      var b0 = circuitNums(stage.variant, before).B, b1 = circuitNums(stage.variant, v).B;
+      vars.effect = '電球の明るさ'; vars.aim = '明るさ'; vars.how = b1 > b0 ? '明るくなった' : (b1 < b0 ? 'くらくなった' : '明るさがかわった');
+    }
+    return fmt(pick(MD.replies.test, mode), vars);
   };
   // 写真・スクショのダミー（四隅の枠で「写真」と分かるようにする）
   function corners() {
@@ -392,16 +446,17 @@
       ext: { link: 'Minecraft · はるとの島', photos: [
         { id: 'act-build-ph1', theme: 'mc', n: 0, kind: 'shot', time: '10:06' },
         { id: 'act-build-ph2', theme: 'mc', n: 1, kind: 'shot', time: '10:14' }
-      ] },
+      ], visible: ['act-build-ph1', 'act-build-ph2'] },
+      baseVis: [], stepsKind: 'build', candidate: false,
       steps: JSON.parse(JSON.stringify(MD.EXT_BUILD_STEPS)), stepIdx: 2, next: null,
       changes: [
-        { id: 'act-build-c1', who: 'own', kind: 'shot', time: '10:06', what: { text: '石で塔を建てた' }, snap: null, photoId: 'act-build-ph1' },
-        { id: 'act-build-c2', who: 'own', with: '田中さん', kind: 'shot', time: '10:14', what: { text: '塔を 2 倍にした' }, snap: null, photoId: 'act-build-ph2' }
+        { id: 'act-build-c1', who: 'own', kind: 'shot', time: '10:06', what: { text: '石で塔を建てた' }, snap: null, vis: ['act-build-ph1'], photoId: 'act-build-ph1' },
+        { id: 'act-build-c2', who: 'own', with: '田中さん', kind: 'shot', time: '10:14', what: { text: '塔を 2 倍にした' }, snap: null, vis: ['act-build-ph1', 'act-build-ph2'], photoId: 'act-build-ph2' }
       ],
       shelf: [],
       thread: [
         { id: 'act-build-m1', who: 'child', time: '10:14', text: '塔を 2 倍にした' },
-        { id: 'act-build-m2', who: 'buddy', time: '10:14', r: 'photo', v: { what: { text: '塔を 2 倍にした' } }, opts: [{ a: 'mk-compare-photos', label: { k: 'compare' } }] }
+        { id: 'act-build-m2', who: 'buddy', time: '10:14', r: 'photo', text: '塔を 2 倍にしたんだね。前の写真と並べて見る？', change: 'act-build-c2', opts: [{ a: 'mk-compare-photos', label: '比べる' }] }
       ],
       state: 'working', pauseCount: 0, declined: 0, offered: false, resumeNote: null,
       clock: 614, seq: 10, touched: 1, draft: ''

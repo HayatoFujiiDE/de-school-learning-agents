@@ -39,13 +39,30 @@
       id: o.id, title: o.title, origin: o.origin || 'make', theme: o.theme || 'mc', catalogId: o.catalogId || null, sampleId: o.sampleId || null,
       quote: o.quote || null, stage: o.stage || null, base: clone(o.stage || null), baseTime: toHM(clock),
       ext: o.ext || null, steps: clone(o.steps || []), stepIdx: 0, next: null,
+      // stepsKind 'theme' = 手順を今の作業対象（案）から作り直す / 'ext' 'build' = 外の記録の決まった手順
+      stepsKind: o.stepsKind || 'theme', candidate: !!o.candidate, baseVis: o.ext ? clone(o.ext.visible || []) : null,
       changes: [], shelf: [], thread: [],
       state: 'working', pauseCount: 0, declined: 0, offered: false, resumeNote: null, lastPause: null,
       clock: clock, seq: 0, draft: ''
     };
-    return a;
+    return refreshSteps(a);
+  }
+  // 手順の名詞は今の作業対象から（§U-11 (a)）。候補状態から始めた活動は先頭に「案を選ぶ」
+  function refreshSteps(A) {
+    if (A.stepsKind !== 'theme') return A;
+    var st = A.stage && A.stage.kind !== 'note' ? A.stage : null, th = MD.theme(st ? st.theme : A.theme);
+    var variant = st ? st.variant : (A.candidate ? th.ideas[0] : th.sample);
+    A.steps = (A.candidate ? [clone(MD.CANDIDATE_STEP)] : []).concat(MD.stepsFor(st ? st.theme : A.theme, variant));
+    if (A.stepIdx > A.steps.length - 1) A.stepIdx = A.steps.length - 1;
+    return A;
   }
   function pushMsg(a, m) { m.id = nid(a, 'm'); m.time = nowOf(a); a.thread.push(m); return m; }
+  // 返事は作った時点の表示の文字列で持つ（§U-11 指摘 16。表示を切り替えても書き換えない）
+  function say(a, r, mode, extra) {
+    var m = { who: 'buddy', r: r, text: MD.pick(MD.replies[r], mode) };
+    if (extra) Object.keys(extra).forEach(function (k) { m[k] = extra[k]; });
+    return pushMsg(a, m);
+  }
   function sampleDef(id) { for (var i = 0; i < MD.samples.length; i++) if (MD.samples[i].id === id) return MD.samples[i]; return null; }
   function stageOf(theme, variant, kind, values) {
     return { kind: kind || 'draft', theme: theme, variant: variant, values: values ? clone(values) : MD.variantValues(theme, variant) };
@@ -55,8 +72,8 @@
     o = o || {};
     var s = sampleDef(sampleId) || MD.samples[0], th = MD.theme(s.theme);
     var a = newAct({ id: o.id, title: MD.pick(MD.variant(s.theme, s.variant).title, o.mode), origin: o.origin || 'sample', theme: s.theme,
-      sampleId: s.id, catalogId: o.catalogId, stage: stageOf(s.theme, s.variant, 'sample'), steps: th.steps, now: o.now });
-    pushMsg(a, { who: 'buddy', r: 'open' });
+      sampleId: s.id, catalogId: o.catalogId, stage: stageOf(s.theme, s.variant, 'sample'), now: o.now });
+    say(a, 'open', o.mode);
     return a;
   }
   // 仮の案 3 つ（U-2）。作品のスクショの読み取りがあれば、題材の 1 枚に出所 1 行（design-v3 §6-10 (e)）
@@ -83,9 +100,9 @@
     o = o || {};
     var theme = pickTheme(text), th = MD.theme(theme);
     var a = newAct({ id: o.id, title: MD.pick(th.topic, o.mode), origin: o.origin || 'make', theme: theme, catalogId: o.catalogId,
-      quote: text ? { text: String(text), removed: false } : null, steps: [MD.CANDIDATE_STEP].concat(th.steps), now: o.now });
+      quote: text ? { text: String(text), removed: false } : null, candidate: true, now: o.now });
     addIdeas(a, theme, o.works);
-    pushMsg(a, { who: 'buddy', r: 'land' });
+    say(a, 'land', o.mode);
     return a;
   }
   // 入口の「写真を見せる」「リンクを貼る」: 作業対象 = 外の記録（モックの写真はダミーの線画）
@@ -93,7 +110,7 @@
     o = o || {};
     var th = MD.theme('mc');
     var a = newAct({ id: o.id, title: MD.pick(th.topic, o.mode), origin: o.origin || 'make', theme: 'mc', catalogId: o.catalogId,
-      ext: { link: kind === 'link' ? 'Minecraft（リンクの体験例）' : null, photos: [] }, steps: th.extSteps, now: o.now });
+      ext: { link: kind === 'link' ? 'Minecraft（リンクの体験例）' : null, photos: [], visible: [] }, steps: th.extSteps, stepsKind: 'ext', now: o.now });
     if (kind !== 'link') a = addPhoto(a, 'photo').act;
     return a;
   }
@@ -137,43 +154,60 @@
     ch.id = nid(A, 'c');
     ch.time = tick(A);
     ch.snap = clone(photoLike ? committed(A) : A.stage);
+    ch.vis = A.ext ? clone(visibleIds(A)) : null;
+    refreshSteps(A);
     if (ch.advance && A.stepIdx < A.steps.length - 1) A.stepIdx += 1;
     delete ch.advance;
     A.changes.push(ch);
     A.resumeNote = null;
-    if (A.state === 'paused' || A.state === 'closed') A.state = 'working';
+    if (A.state === 'paused' || A.state === 'closed' || A.state === 'stopped') A.state = 'working';
     return { act: A, change: ch };
   }
+  // 外の記録で今見えている写真（戻すと隠れる。記録は消さない）。古い保存データは全部見えている扱い
+  function visibleIds(a) {
+    if (!a.ext) return [];
+    return a.ext.visible ? a.ext.visible : a.ext.photos.map(function (p) { return p.id; });
+  }
+  function visiblePhotos(a) {
+    var ids = visibleIds(a);
+    return a.ext ? a.ext.photos.filter(function (p) { return ids.indexOf(p.id) >= 0; }) : [];
+  }
+  // 戻す先の状態 = 作業対象 + 見えている写真
+  function curState(a) { return { stage: a.stage, vis: a.ext ? visibleIds(a) : null }; }
+  function chState(a, ch) { return { stage: ch.snap, vis: ch.vis === undefined ? (a.ext ? visibleIds(a) : null) : ch.vis }; }
+  function baseState(a) { return { stage: a.base, vis: a.baseVis === undefined ? (a.ext ? visibleIds(a) : null) : a.baseVis }; }
   // 試す（本人）: 値を変えていれば「{label}を {value} にした」。変えずに 2 回目以降は積まない
   function test(a) {
     if (!a.stage || a.stage.kind === 'note') return null;
     var from = committed(a), changed = !from || !same(from.values, a.stage.values) || from.variant !== a.stage.variant;
-    var tested = a.changes.some(function (c) { return c.kind === 'test'; });
-    if (!changed && tested) return { act: a, change: null, same: true };
+    // 積まないのは「直前の変化がもう試す」で値も変えていない時だけ。採用・戻した・写真の後の試すは必ず積む（§U-11 指摘 2）
+    var last = a.changes[a.changes.length - 1];
+    if (!changed && last && last.kind === 'test') return { act: a, change: null, same: true };
     var p = changed ? firstChanged(a.stage.theme, from && from.values, a.stage.values) : null;
     var res = commitChange(a, { who: 'own', kind: 'test', what: changed ? whatDiff(a.stage.theme, from && from.values, a.stage.values) : { k: 'test_same' }, res: true, advance: changed });
-    return { act: res.act, change: res.change, param: p ? p.label : null, same: false };
+    return { act: res.act, change: res.change, param: p ? p.label : null, key: p ? p.key : null, from: p && from ? from.values[p.key] : null, same: false };
   }
   // 戻す: changeId 無し = 前に戻す（直前に積まれたものへ。試していない値があれば、最後に確かめたところへ）
   function revert(a, changeId) {
-    var chs = a.changes, snap, time;
+    var chs = a.changes, target, time;
     if (changeId === '@base') {
-      snap = a.base; time = a.baseTime;
+      target = baseState(a); time = a.baseTime;
     } else if (changeId) {
       var t = find(chs, changeId);
       if (!t) return null;
-      snap = t.snap; time = t.time;
+      target = chState(a, t); time = t.time;
     } else if (isDirty(a)) {
-      if (chs.length) { snap = chs[chs.length - 1].snap; time = chs[chs.length - 1].time; } else { snap = a.base; time = a.baseTime; }
+      if (chs.length) { target = chState(a, chs[chs.length - 1]); time = chs[chs.length - 1].time; } else { target = baseState(a); time = a.baseTime; }
     } else {
       if (!chs.length) return null;
-      if (chs.length >= 2) { snap = chs[chs.length - 2].snap; time = chs[chs.length - 2].time; } else { snap = a.base; time = a.baseTime; }
+      if (chs.length >= 2) { target = chState(a, chs[chs.length - 2]); time = chs[chs.length - 2].time; } else { target = baseState(a); time = a.baseTime; }
     }
-    if (snap === undefined || same(snap, a.stage)) return null;
-    var before = clone(a.stage), A = clone(a);
-    A.stage = clone(snap);
+    if (target.stage === undefined || same(target, curState(a))) return null;
+    var before = clone(curState(a)), A = clone(a);
+    A.stage = clone(target.stage);
+    if (A.ext && target.vis) A.ext.visible = clone(target.vis);
     var res = commitChange(A, { who: 'own', kind: 'revert', what: { k: 'reverted_rec', v: { time: time } } });
-    return { act: res.act, change: res.change, undo: { type: 'revert', changeId: res.change.id, stage: before } };
+    return { act: res.act, change: res.change, undo: { type: 'revert', changeId: res.change.id, stage: before.stage, vis: before.vis } };
   }
   function canRevert(a) { return !!revert(a, null); }
   // 前に戻す の取り消し（5 秒）: 取り消した操作は積まれていなかったことにする
@@ -182,13 +216,14 @@
     if (!last || last.id !== u.changeId) return A;
     A.changes.pop();
     A.stage = clone(u.stage);
+    if (A.ext && u.vis) A.ext.visible = clone(u.vis);
     return A;
   }
 
   // ---------- バディに任せる / 棚（design-v3 §6-4 / §6-9） ----------
   function cardStage(c) {
     if (!c) return null;
-    if (c.kind === 'note') return { kind: 'note', theme: c.theme, title: c.title, lines: c.lines };
+    if (c.kind === 'note') return { kind: 'note', theme: c.theme, title: c.title, lines: c.lines, opt: c.opt || null, alt: !!c.alt };
     return { kind: c.kind === 'value' ? (c.baseKind || 'draft') : 'draft', theme: c.theme, variant: c.variant, values: clone(c.values) };
   }
   // 任せる時の土台: 作業対象（見本・試作）→ 棚の最新の案 → 題材の最初の案
@@ -236,7 +271,10 @@
       others.forEach(function (v) { specs.push({ kind: 'draft', theme: st.theme, variant: v, values: MD.variantValues(st.theme, v) }); });
     } else if (opt === 'calc' || opt === 'steps') {
       var n = MD.extCards[a.theme] && MD.extCards[a.theme][opt];
-      if (n) specs.push({ kind: 'note', theme: a.theme, title: clone(n.title), lines: clone(n.lines), opt: opt });
+      // メモを同じ種類で作り直す時は、もう一方の版にする（§U-11 指摘 13）
+      var alt = !!(n && n.alt && st.kind === 'note' && st.opt === opt && !st.alt);
+      var src = alt ? n.alt : n;
+      if (n) specs.push({ kind: 'note', theme: a.theme, title: clone(src.title), lines: clone(src.lines), opt: opt, alt: alt });
     } else if (opt === 'cmd') {
       var c = MD.extCards[a.theme] && MD.extCards[a.theme].cmd;
       if (c) specs.push({ kind: 'draft', theme: a.theme, variant: c.variant, values: clone(c.values) });
@@ -300,10 +338,11 @@
   // ---------- 外の記録（写真・スクショ） ----------
   function addPhoto(a, kind) {
     var A = clone(a);
-    if (!A.ext) A.ext = { link: null, photos: [] };
+    if (!A.ext) A.ext = { link: null, photos: [], visible: [] };
     var last = A.ext.photos[A.ext.photos.length - 1];
     var n = last ? (last.n + 1) % MD.PHOTO_COUNT : 0;
     var ph = { id: nid(A, 'ph'), theme: last ? last.theme : A.theme, n: n, kind: kind === 'shot' ? 'shot' : 'photo', time: nowOf(A) };
+    A.ext.visible = visibleIds(A).concat([ph.id]);
     A.ext.photos.push(ph);
     var res = commitChange(A, { who: 'own', kind: ph.kind, what: { k: ph.kind === 'shot' ? 'added_shot' : 'added_photo' }, photoId: ph.id, advance: true });
     res.act.ext.photos[res.act.ext.photos.length - 1].time = res.change.time;
@@ -325,7 +364,8 @@
 
   // ---------- 今の一歩・区切り・背中押し（design-v3 §6-5 / §6-8、U-5） ----------
   function stepNow(a) { return a.steps[a.stepIdx] || null; }
-  function stepNext(a) { return a.next != null ? { text: a.next } : (a.steps[a.stepIdx + 1] || null); }
+  // 次: 本人が書いた文（空にしたら空のまま。§U-11 指摘 7）→ 無ければ手順の次の一歩
+  function stepNext(a) { if (a.next != null) return a.next ? { text: a.next } : null; return a.steps[a.stepIdx + 1] || null; }
   function lastChild(a) {
     for (var i = a.thread.length - 1; i >= 0; i--) if (a.thread[i].who === 'child') return a.thread[i].text || '';
     return '';
@@ -354,7 +394,7 @@
     A.state = o.closed ? 'closed' : 'paused';
     A.pauseCount += 1;
     if (o.push && o.push.kind === 'step') { A.declined += 1; A.offered = true; } else A.offered = false;
-    A.next = next || null;
+    A.next = next;
     A.resumeNote = next ? { k: 'resume_push', v: { step: { k: 'tokoro', v: { what: { text: next } } } } } : null;
     A.lastPause = o.push ? clone(o.push) : null;
     return A;
@@ -369,15 +409,22 @@
     A.resumeNote = null;
     return A;
   }
+  // 再開（止めた・一区切り・やめた → 作業中。§U-11 指摘 6）
   function resume(a) {
     var A = clone(a);
-    if (A.state === 'paused' || A.state === 'closed') A.state = 'working';
+    if (A.state === 'paused' || A.state === 'closed' || A.state === 'stopped') A.state = 'working';
     return A;
   }
-  function stop(a) {
+  // 作品の「続きを作る」: 残した時点（at）を新しい変化として開く（§U-11 指摘 5）。今と同じなら積まない
+  function reopenAt(a, at) {
+    var A = resume(a);
+    var r = at && find(A.changes, at) ? revert(A, at) : null;
+    return r ? { act: r.act, change: r.change } : { act: A, change: null };
+  }
+  function stop(a, o) {
     var A = clone(a), prev = A.state;
     A.state = 'stopped';
-    pushMsg(A, { who: 'record', k: 'stopped_rec' });
+    pushMsg(A, o && o.text ? { who: 'record', k: 'stopped_rec', text: o.text } : { who: 'record', k: 'stopped_rec' });
     return { act: A, undo: { type: 'stop', prev: prev, msg: A.thread[A.thread.length - 1].id } };
   }
   function undoStop(a, u) {
@@ -400,7 +447,7 @@
   }
 
   // ---------- 引用枠（直す / 外す）・見本の取り込み ----------
-  function editQuote(a, text, works) {
+  function editQuote(a, text, works, mode) {
     var A = clone(a), t = String(text || '').replace(/^\s+|\s+$/g, '');
     if (!t || !A.quote) return { act: a, changed: false };
     if (A.quote.text === t) return { act: a, changed: false };
@@ -409,7 +456,9 @@
     var theme = pickTheme(t);
     A.theme = theme;
     addIdeas(A, theme, works);
-    pushMsg(A, { who: 'buddy', r: 'land' });
+    // 題材が変わったら手順も新しい題材に（§U-11 指摘 8）。作業対象がまだ無ければ候補状態の手順から
+    if (A.stepsKind === 'theme' && !A.stage) { A.candidate = true; A.stepIdx = 0; refreshSteps(A); }
+    say(A, 'land', mode);
     return { act: A, changed: true };
   }
   function removeQuote(a) {
@@ -429,16 +478,17 @@
   function pickSample(a, sampleId, mode) {
     var s = sampleDef(sampleId);
     if (!s) return a;
-    var A = clone(a), th = MD.theme(s.theme);
+    var A = clone(a);
     A.stage = stageOf(s.theme, s.variant, 'sample');
     A.theme = s.theme; A.sampleId = s.id;
-    if (!A.changes.length) { A.base = clone(A.stage); A.steps = clone(th.steps); A.stepIdx = 0; }
-    pushMsg(A, { who: 'buddy', r: 'open' });
+    if (A.stepsKind === 'theme') { A.candidate = false; if (!A.changes.length) A.stepIdx = 0; refreshSteps(A); }
+    if (!A.changes.length) A.base = clone(A.stage);
+    say(A, 'open', mode);
     return A;
   }
   function setNext(a, text) {
     var A = clone(a), t = String(text == null ? '' : text).replace(/^\s+|\s+$/g, '');
-    A.next = t ? t : null;
+    A.next = t;
     return A;
   }
   function setTitle(a, text) {
@@ -469,7 +519,9 @@
     var ch = k >= 0 ? a.changes[k] : null, snap = ch ? ch.snap : a.stage, photo = null;
     for (var i = 0; i <= k; i++) if (a.changes[i].photoId && a.ext) photo = find(a.ext.photos, a.changes[i].photoId) || photo;
     if (!ch && a.ext && a.ext.photos.length) photo = a.ext.photos[a.ext.photos.length - 1];
-    var art = snap && snap.kind !== 'note' ? { stage: clone(snap) } : (photo ? { photo: clone(photo) } : null);
+    // メモを残した時は本文を持つ（§U-11 指摘 14）
+    var art = snap && snap.kind === 'note' ? { note: { title: clone(snap.title), lines: clone(snap.lines) } }
+      : (snap ? { stage: clone(snap) } : (photo ? { photo: clone(photo) } : null));
     var title = String(o.title || '').replace(/^\s+|\s+$/g, '') || a.title;
     var like = String(o.like || '').replace(/^\s+|\s+$/g, '');
     var work = { id: o.id, actId: a.id, at: ch ? ch.id : null, atTime: ch ? ch.time : null, title: title, like: like || null, from: 'make',
@@ -484,12 +536,17 @@
     if (!caps.length) return null;
     var theme = caps[0].theme, th = MD.theme(theme);
     var title = String(o.title || '').replace(/^\s+|\s+$/g, '') || MD.pick(caps[0].title, o.mode);
-    var a = newAct({ id: o.actId, title: title, origin: 'works', theme: theme, catalogId: o.catalogId || null, steps: th.extSteps, now: o.now });
-    a.ext = { link: null, photos: [] };
-    caps.forEach(function (c) { a.ext.photos.push({ id: nid(a, 'ph'), theme: c.theme, n: c.n, kind: 'photo', time: nowOf(a) }); });
+    var a = newAct({ id: o.actId, title: title, origin: 'works', theme: theme, catalogId: o.catalogId || null, steps: th.extSteps, stepsKind: 'ext', now: o.now });
+    a.ext = { link: null, photos: [], visible: [] };
+    a.baseVis = [];
     var line = String(o.madeLine || '').replace(/^\s+|\s+$/g, '');
-    var res = commitChange(a, { who: 'own', kind: 'photo', what: line ? { text: line } : { k: 'added_photo' }, photoId: a.ext.photos[0].id, advance: true });
-    a = res.act;
+    // 写真 1 枚 = 変化 1 つ（本人）。1 行は最初の 1 枚に付ける（§U-11 指摘 15）
+    caps.forEach(function (c, i) {
+      var ph = { id: nid(a, 'ph'), theme: c.theme, n: c.n, kind: 'photo', time: nowOf(a) };
+      a.ext.photos.push(ph);
+      a.ext.visible = a.ext.visible.concat([ph.id]);
+      a = commitChange(a, { who: 'own', kind: 'photo', what: i === 0 && line ? { text: line } : { k: 'added_photo' }, photoId: ph.id, advance: i === 0 }).act;
+    });
     var read = o.read ? clone(o.read) : { text: null, edited: false, declined: true };
     if (read.text && !read.declined) pushMsg(a, { who: 'buddy', text: read.text, src: 'read' });
     var work = { id: o.workId, actId: a.id, from: 'capture', title: title, images: caps.map(function (c) { return c.id; }), read: read,
@@ -507,20 +564,45 @@
     if (id === 'demo-full') {
       var a = fromSample('mc', base), r;
       a = setParam(a, 'size', 6); r = test(a); a = r.act;
-      pushMsg(a, { who: 'buddy', r: 'test', v: testVars(a, r.param) });
+      pushMsg(a, { who: 'buddy', r: 'test', text: MD.testReply(a.stage, r.key, r.from, o.mode), change: r.change.id });
       a = setParam(a, 'block', 1); r = test(a); a = r.act;
       pushMsg(a, { who: 'child', text: 'もう少し大きくしたい' });
       r = leave(a, 'one'); a = settle(r.act, r.ids);
-      a = adopt(a, r.ids[0]).act;
-      pushMsg(a, { who: 'buddy', r: 'left' });
+      var name = cardNames(a.shelf, o.mode)[r.ids[0]], ad = adopt(a, r.ids[0]);
+      a = ad.act;
+      // 画面の「これにする」と同じ 1 文（i18n の adopt_reply_pre と同じ形）
+      pushMsg(a, { who: 'buddy', r: 'left', text: '「' + name + '」にしたよ。' + MD.pick(MD.replies.left, o.mode), change: ad.change.id });
       r = leave(a, 'find'); a = settle(r.act, r.ids);
       return a;
     }
     return null;
   }
-  function testVars(a, param) {
-    var th = MD.theme(a.stage ? a.stage.theme : a.theme);
-    return { param: param || th.params[0].label, effect: th.effect, aim: th.aim };
+  // 相談の返事の「違う」が戻すもの（§U-11 指摘 9）: 返事に紐づく変化の 1 つ前へ / 紐づく新しいカードは見送る
+  function replyTarget(a, m) {
+    var out = { revertTo: null, cards: [] };
+    if (m && m.change) { var k = idx(a.changes, m.change); if (k >= 0) out.revertTo = k > 0 ? a.changes[k - 1].id : '@base'; }
+    if (m && m.cards) out.cards = m.cards.filter(function (id) { var c = find(a.shelf, id); return c && c.state === 'new'; });
+    return out;
+  }
+  // 「作っている」のまま読み込んだら完了させ、相談列に 1 行（§U-11 指摘 11）
+  function finishMaking(a, line) {
+    if (!a.shelf.some(function (c) { return c.state === 'making'; })) return a;
+    var A = settle(a);
+    if (line) pushMsg(A, { who: 'record', text: line });
+    return A;
+  }
+  // 棚のカードの名前。同じ名前が並ぶ時は 1 行説明を添え、それでも同じなら時刻を添える（§U-11 (d)）
+  function cardNames(shelf, mode) {
+    var base = {}, count = {}, names = {}, seen = {};
+    shelf.forEach(function (c) { if (c.state === 'making') return; base[c.id] = MD.pick(cardTitle(c), mode); count[base[c.id]] = (count[base[c.id]] || 0) + 1; });
+    shelf.forEach(function (c) {
+      if (!base[c.id]) return;
+      var d = c.kind === 'note' ? '' : MD.desc(cardStage(c), mode);
+      names[c.id] = count[base[c.id]] > 1 && d ? base[c.id] + '（' + d + '）' : base[c.id];
+      seen[names[c.id]] = (seen[names[c.id]] || 0) + 1;
+    });
+    shelf.forEach(function (c) { if (names[c.id] && seen[names[c.id]] > 1) names[c.id] += ' · ' + c.time; });
+    return names;
   }
 
   var pure = {
@@ -530,7 +612,8 @@
     addPhoto: addPhoto, describePhoto: describePhoto, stepNow: stepNow, stepNext: stepNext, pause: pause, confirmPause: confirmPause, takeStep: takeStep,
     resume: resume, stop: stop, undoStop: undoStop, replyKind: replyKind, requestOpt: requestOpt, editQuote: editQuote, removeQuote: removeQuote,
     undoRemoveQuote: undoRemoveQuote, pickSample: pickSample, setNext: setNext, setTitle: setTitle, roles: roles, saveWork: saveWork, addCapture: addCapture,
-    demo: demo, testVars: testVars, cardStage: cardStage, pushMsg: pushMsg, lastWhat: lastWhat
+    demo: demo, cardStage: cardStage, pushMsg: pushMsg, lastWhat: lastWhat, reopenAt: reopenAt, replyTarget: replyTarget,
+    finishMaking: finishMaking, cardNames: cardNames, visiblePhotos: visiblePhotos, cardTitle: cardTitle
   };
   Object.keys(pure).forEach(function (k) { M[k] = pure[k]; });
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
@@ -548,14 +631,15 @@
     return isObj(a) && typeof a.id === 'string' && typeof a.title === 'string' && Array.isArray(a.changes) && Array.isArray(a.shelf) &&
       Array.isArray(a.thread) && Array.isArray(a.steps) && typeof a.stepIdx === 'number' && STATES.indexOf(a.state) >= 0;
   }
-  function sideDefaults() { return { chatHidden: false, shelfFolded: false, tab: 'stage', paused: null }; }
+  function sideDefaults() { return { chatHidden: false, shelfFolded: false, tab: 'stage', paused: null, lastStop: null }; }
   var CLEAN = {
     activities: function (v) { return Array.isArray(v) ? v.filter(validAct) : null; },
     works: function (v) { return Array.isArray(v) ? v.filter(function (w) { return isObj(w) && typeof w.id === 'string' && typeof w.title === 'string'; }) : null; },
     makeSide: function (v) {
       if (!isObj(v)) return null;
       var d = sideDefaults();
-      return { chatHidden: v.chatHidden === true, shelfFolded: v.shelfFolded === true, tab: v.tab === 'consult' ? 'consult' : 'stage', paused: typeof v.paused === 'string' ? v.paused : d.paused };
+      return { chatHidden: v.chatHidden === true, shelfFolded: v.shelfFolded === true, tab: v.tab === 'consult' ? 'consult' : 'stage',
+        paused: typeof v.paused === 'string' ? v.paused : d.paused, lastStop: typeof v.lastStop === 'string' ? v.lastStop : d.lastStop };
     }
   };
   if (DES.store && !DES.store._make) {
@@ -573,6 +657,11 @@
         } catch (e) { failed = true; }
       });
       if (failed) s.saveFailed = true;
+      // 「作っている」の途中で閉じた・読み込んだ活動は、ここで完了させる（§U-11 指摘 11）
+      s.activities = s.activities.map(function (a) {
+        var ids = a.shelf.filter(function (c) { return c.state === 'making'; }).map(function (c) { return c.id; });
+        return ids.length ? finishMaking(a, readyLine(settle(a, ids), ids)) : a;
+      });
       return s;
     };
     DES.store.save = function (only) {
@@ -619,6 +708,19 @@
   M.tx = tx;
   function optLabels(key) { return T(key).split(' / '); }
   function optLabel(opt) { var k = OPT_KEY[opt]; return k ? optLabels(k[0])[k[1]] : T('leave_free'); }
+  // 相談列に足す 1 件は、作った時点の表示の文字列で持つ（§U-11 指摘 16）。ボタンの名前も同じ
+  function sayText(x, m) {
+    m.text = tx(m);
+    if (m.opts) m.opts = m.opts.map(function (o) { return { a: o.a, arg: o.arg, label: tx(o.label) }; });
+    if (!m.who) m.who = 'buddy';
+    return pushMsg(x, m);
+  }
+  function cardName(a, id) { return cardNames(a.shelf, mode())[id] || ''; }
+  // 棚に新しいカードが置かれた時の相談列の 1 行（記録）
+  function readyLine(x, ids) {
+    var names = cardNames(x.shelf, mode());
+    return T('shelf_new_rec', { title: ids.map(function (id) { return names[id]; }).filter(Boolean).join('」「') });
+  }
   function motionOK() {
     if (document.documentElement.classList.contains('reduced-motion')) return false;
     return !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -657,11 +759,37 @@
     var a = act(id);
     if (!a) return;
     if (a.state === 'paused' || a.state === 'closed' || a.state === 'stopped') {
-      DES.app.change(function () { setAct(a.state === 'stopped' ? a : resume(a), true); });
+      DES.app.change(function () { setAct(resume(a), true); });
     }
     go('#make/' + id);
   }
   M.openAct = openAct;
+
+  // ---------- 共通の「続きをする」（§U-11 指摘 4）: 最後に止めたのが作るなら その作業台、会話なら #talk ----------
+  M.resumeTarget = function () {
+    var ls = S().makeSide && S().makeSide.lastStop, id = ls && ls.indexOf('make:') === 0 ? ls.slice(5) : null, a = id ? act(id) : null;
+    return a && a.state !== 'stopped' ? a.id : null;
+  };
+  M.resumeInfo = function () {
+    var id = M.resumeTarget(), a = id ? act(id) : null;
+    if (!a) return null;
+    var nx = stepNext(a) || stepNow(a);
+    return { title: a.title, next: nx ? tx(nx) : '' };
+  };
+  M.noteTalkStop = function () {
+    if (!S().makeSide || S().makeSide.lastStop === 'talk') return;
+    S().makeSide.lastStop = 'talk';
+    if (!DES.store.save('makeSide')) S().saveFailed = true;
+  };
+  // 作品の「続きを作る」（§U-11 指摘 5 / 6）: 残した時点を新しい変化として開く。やめた活動も作業中へ
+  M.openWork = function (workId) {
+    var w = find(S().works, workId), a = w ? act(w.actId) : null;
+    if (!a) return;
+    var r = reopenAt(a, w.at);
+    change(function () { setAct(r.act, true); });
+    go('#make/' + a.id);
+    if (r.change) DES.app.toast(tx(r.change.what));
+  };
 
   // ---------- #paused（作る から来た時） ----------
   M.pausedAct = function () {
@@ -695,7 +823,8 @@
   function stageArt(st) { return st && st.kind !== 'note' ? MD.art(st) : ''; }
   function actArt(a) {
     if (a.stage && a.stage.kind !== 'note') return MD.art(a.stage);
-    if (a.ext && a.ext.photos.length) return MD.photoArt(a.ext.photos[a.ext.photos.length - 1]);
+    var vp = visiblePhotos(a);
+    if (vp.length) return MD.photoArt(vp[vp.length - 1]);
     var th = MD.theme(a.theme), c = a.shelf.filter(function (x) { return x.kind !== 'note'; })[0];
     return MD.art(c ? cardStage(c) : stageOf(a.theme, th.sample, 'sample'));
   }
@@ -811,7 +940,7 @@
       H('div', { class: 'sh-actions' }, acts)
     ]);
     if (u.headMenu) {
-      head.appendChild(H('div', { class: 'row-menu head-menu', role: 'menu', 'aria-label': T('row_ops', { title: a.title }) }, [
+      head.appendChild(H('div', { class: 'head-menu', role: 'menu', 'aria-label': T('row_ops', { title: a.title }) }, [
         btn(T('edit_title'), 'mk-title-edit', { id: a.id, attrs: { role: 'menuitem' } }),
         btn(T('stop_activity'), 'mk-stop', { id: a.id, attrs: { role: 'menuitem' } })
       ]));
@@ -846,7 +975,7 @@
     if (ops.length) body.appendChild(H('div', { class: 'msg-opts' }, ops));
     if (!m.diff && !m.ask) body.appendChild(H('div', { class: 'msg-foot' }, [
       H('span', { class: 'msg-time' }, m.time),
-      btn(T('decline'), 'mk-msg-decline', { id: a.id, kls: 'ghost', attrs: { 'data-msg': m.id, 'aria-label': T('decline') + ': ' + tx(m).slice(0, 24) } })
+      m.declined ? null : btn(T('decline'), 'mk-msg-decline', { id: a.id, kls: 'ghost', attrs: { 'data-msg': m.id, 'aria-label': T('decline') + ': ' + tx(m).slice(0, 24) } })
     ]));
     else body.appendChild(H('span', { class: 'msg-time' }, m.time));
     return H('div', { class: 'message buddy', 'data-id': m.id }, [DES.raw(DES.buddy(30, 'neutral')), body]);
@@ -856,7 +985,7 @@
     var ta = keptComposer && keptComposer.getAttribute('data-act') === a.id ? keptComposer : null;
     if (!ta) {
       ta = H('textarea', { id: 'mk-composer', rows: '2', placeholder: T('composer_ph'), 'data-ui': 'mk-composer', 'data-act': a.id, value: a.draft || '' });
-    }
+    } else ta.placeholder = T('composer_ph');
     var dis = mk().sending || !String(ta.value || '').replace(/\s/g, '');
     return H('div', { class: 'composer mk-composer' }, [
       H('label', { class: 'sr-only', for: 'mk-composer' }, T('composer_label')),
@@ -950,7 +1079,7 @@
     return H('div', { class: 'stage-empty', 'data-fk': 'stage:' + a.id, tabindex: '-1' }, kids);
   }
   function extBlock(a) {
-    var e = a.ext, u = mk(), photos = e.photos, latest = photos[photos.length - 1], kids = [];
+    var e = a.ext, u = mk(), photos = visiblePhotos(a), latest = photos[photos.length - 1], kids = [];
     kids.push(H('div', { class: 'stage-top' }, [H('div', { class: 'st-name' }, [H('span', { class: 'pill' }, T('ext_label')), H('strong', null, e.link || a.title)])]));
     if (latest) {
       kids.push(H('figure', { class: 'photo-main' }, [DES.raw(MD.photoArt(latest)), H('figcaption', null, (latest.kind === 'shot' ? T('add_shot') : T('add_photo')).replace(/を.+$/, '') + ' · ' + latest.time)]));
@@ -983,7 +1112,7 @@
   // 比べる（棚の 2 枚 / 変化の 2 つ / 写真の 2 枚を作業対象の上に並べる）
   function compareItems(a, c) {
     return c.picks.map(function (pid) {
-      if (c.src === 'shelf') { var k = find(a.shelf, pid); return k ? { art: k.kind === 'note' ? '' : MD.art(cardStage(k)), lines: k.kind === 'note' ? k.lines : null, label: k.time + ' · ' + tx(cardTitle(k)) + ' · ' + (k.kind === 'value' ? tx(k.what) : MD.desc(cardStage(k), mode())) } : null; }
+      if (c.src === 'shelf') { var k = find(a.shelf, pid); return k ? { art: k.kind === 'note' ? '' : MD.art(cardStage(k)), lines: k.kind === 'note' ? k.lines : null, label: k.time + ' · ' + (cardName(a, k.id) || tx(cardTitle(k))) + (k.kind === 'value' ? ' · ' + tx(k.what) : '') } : null; }
       if (c.src === 'photos') { var p = find(a.ext && a.ext.photos, pid); return p ? { art: MD.photoArt(p), label: p.time } : null; }
       var ch = find(a.changes, pid);
       if (!ch) return null;
@@ -1046,7 +1175,7 @@
         btn(T('stop_making'), 'mk-cancel-making', { id: a.id, arg: c.id, kls: 'ghost' })
       ]);
     }
-    var title = tx(cardTitle(c));
+    var title = cardName(a, c.id) || tx(cardTitle(c));
     kids.push(c.kind === 'note' ? H('ul', { class: 'card-note' }, c.lines.map(function (l) { return H('li', null, tx(l)); })) : H('div', { class: 'card-art' }, [DES.raw(MD.art(st))]));
     var body = [H('h3', { class: 'card-title' }, title), H('p', { class: 'card-desc' }, c.kind === 'value' ? tx(c.what) : (c.kind === 'note' ? '' : MD.desc(st, mode()))),
       H('div', { class: 'card-chips' }, [chip('ai', T('who_ai') + ' ' + c.time, T('ai_proposal') + ' ' + T('who_ai') + ' ' + c.time), c.state === 'adopted' ? H('span', { class: 'chip k-adopted' }, T('adopted')) : null])];
@@ -1057,12 +1186,13 @@
     else if (c.state === 'passed') ops.push(btn(T('readopt'), 'mk-adopt', { id: a.id, arg: c.id }));
     else {
       if (c.state !== 'adopted') ops.push(btn(T('adopt'), 'mk-adopt', { id: a.id, arg: c.id, kls: 'primary' }));
-      if (c.kind !== 'note') ops.push(btn(T('remake'), 'mk-remake-open', { id: a.id, arg: c.id, attrs: { 'aria-expanded': u.remakeFor === c.id ? 'true' : 'false' } }));
+      ops.push(btn(T('remake'), 'mk-remake-open', { id: a.id, arg: c.id, attrs: { 'aria-expanded': u.remakeFor === c.id ? 'true' : 'false' } }));
       if (c.state !== 'adopted') ops.push(btn(T('decline'), 'mk-card-decline', { id: a.id, arg: c.id, kls: 'ghost' }));
     }
     kids.push(H('div', { class: 'card-ops' }, ops));
     if (u.remakeFor === c.id && !pt) {
-      kids.push(H('div', { class: 'remake-opts', role: 'group', 'aria-label': T('remake') }, ['redo', 'two', 'fix'].map(function (o) {
+      // メモ（計算・手順）は外の記録の候補で作り直す（§U-11 指摘 13）
+      kids.push(H('div', { class: 'remake-opts', role: 'group', 'aria-label': T('remake') }, (c.kind === 'note' ? ['calc', 'steps', 'cmd'] : ['redo', 'two', 'fix']).map(function (o) {
         return btn(optLabel(o), 'mk-remake', { id: a.id, arg: c.id + '|' + o });
       })));
     }
@@ -1097,12 +1227,13 @@
     if (a.stage) kids.push(stageBlock(a));
     else if (!a.ext) kids.push(emptyStage(a));
     if (a.ext) kids.push(extBlock(a));
+    // 狭い幅は棚を作業対象の直下に（§U-11 指摘 19）
+    if (b !== 'xl' && a.shelf.length) kids.push(shelfEl(a, true));
     var revOK = canRevert(a);
     kids.push(H('div', { class: 'work-ops' }, [
       btn(T('revert'), 'mk-revert', { id: a.id, disabled: !revOK, title: T('revert_none') }),
       btn(T('leave_step'), 'mk-leave', { id: a.id, icon: 'spark' })
     ]));
-    if (b !== 'xl' && a.shelf.length) kids.push(shelfEl(a, true));
     var ch = changesEl(a);
     if (ch) kids.push(ch);
     kids.push(H('div', { class: 'checkpoint-ops' }, [
@@ -1175,19 +1306,19 @@
         x = settle(x, ids);
         if (after) x = after(x);
         setAct(x, true);
+        S().makeSide.shelfFolded = false;
         if (bp() === 's' && S().makeSide.tab === 'consult') mk().dot.stage = true;
         mk().flashCard = ids[0];
       }, { focusFn: function () { return document.activeElement && document.activeElement !== document.body ? null : 'card:' + ids[0]; } });
     }
     if (!motionOK()) run(); else setTimeout(run, 150);
   }
-  function replyLeft(x) { pushMsg(x, { who: 'buddy', r: 'left' }); return x; }
-  // 任せる → 作っている → カード（150ms）→ 相談列に 1 行
+  // 任せる → 作っている → カード（150ms）→ 相談列に 1 行（記録「棚に「…」を置いた」）。棚は畳んでいても開く（§U-11 指摘 12）
   function runLeave(a, opt, o) {
     var res = o && o.card ? remake(a, o.card, opt) : leave(a, opt, o);
     if (!res.ids.length) return;
-    change(function () { setAct(res.act, true); });
-    settleLater(a.id, res.ids, replyLeft);
+    change(function () { setAct(res.act, true); S().makeSide.shelfFolded = false; });
+    settleLater(a.id, res.ids, function (x) { pushMsg(x, { who: 'record', text: readyLine(x, res.ids) }); return x; });
   }
   function ensureChatVisible() {
     var b = bp(), side = S().makeSide;
@@ -1203,7 +1334,8 @@
 
   A['mk-sample'] = function (el) { createAndOpen(fromSample(el.getAttribute('data-arg'), { id: newId('a'), now: DES.data.now, mode: mode() })); };
   A['mk-open'] = function (el) { openAct(el.getAttribute('data-id')); };
-  A['mk-more-samples'] = function () { DES.app.toast(T('no_samples')); };
+  // 見本は 3 つだけ（U-1）。見本が 0 件の時の文（no_samples）は使わない（§U-11 指摘 18）
+  A['mk-more-samples'] = function () { DES.app.toast(MD.samples.length ? T('only_samples') : T('no_samples')); };
   A['mk-start'] = function () {
     var text = mk().ideaText.replace(/^\s+|\s+$/g, '');
     if (!text) return;
@@ -1228,10 +1360,10 @@
     if (r.same) { DES.app.toast(T('result_label') + ': ' + MD.result(a.stage, mode())); return; }
     change(function () {
       var x = r.act;
-      if (r.param) pushMsg(x, { who: 'buddy', r: 'test', v: testVars(x, r.param) });
+      if (r.key) pushMsg(x, { who: 'buddy', r: 'test', text: MD.testReply(x.stage, r.key, r.from, mode()), change: r.change.id });
       setAct(x, true);
     });
-    if (r.param) afterChatPush();
+    if (r.key) afterChatPush();
   };
   function revertWith(a, changeId, then) {
     var r = revert(a, changeId);
@@ -1255,7 +1387,7 @@
     var mid = null;
     change(function () {
       var x = clone(a);
-      mid = pushMsg(x, { who: 'buddy', k: 'leave_ask', opts: opts, ask: true }).id;
+      mid = sayText(x, { k: 'leave_ask', opts: opts, ask: true }).id;
       ensureChatVisible();
       setAct(x, true);
     });
@@ -1287,7 +1419,14 @@
     var r = adopt(a, cid);
     if (!r) return;
     if (mk().compare && mk().compare.act === a.id) mk().compare = null;
-    change(function () { setAct(r.act, true); }, { focus: 'stage:' + a.id });
+    var name = cardName(a, cid);
+    // これにした後の 1 文（§U-11 (c)）: 「{案}にしたよ。」+ §7 の「任せた後」の返事。違う でこの採用を戻せる
+    change(function () {
+      var x = r.act;
+      pushMsg(x, { who: 'buddy', r: 'left', text: T('adopt_reply_pre', { title: name }) + MD.pick(MD.replies.left, mode()), change: r.change.id });
+      setAct(x, true);
+    }, { focus: 'stage:' + a.id });
+    afterChatPush();
     DES.app.toast(tx(r.change.what));
   };
   A['mk-remake-open'] = function (el) {
@@ -1303,7 +1442,7 @@
     mk().remakeFor = null;
     runLeave(a, p[1], { card: p[0] });
   };
-  function diffPrompt(x) { pushMsg(x, { who: 'buddy', k: 'ask_what_diff', diff: true }); return x; }
+  function diffPrompt(x) { sayText(x, { k: 'ask_what_diff', diff: true }); return x; }
   A['mk-card-decline'] = function (el) {
     var a = cur(el), cid = el.getAttribute('data-arg');
     if (!a) return;
@@ -1326,10 +1465,27 @@
     } });
   };
   A['mk-cancel-making'] = function (el) { var a = cur(el), cid = el.getAttribute('data-arg'); if (a) update(a, function (x) { return cancelMaking(x, cid); }, { focus: 'shelf:' + a.id }); };
+  // 相談の返事の「違う」（§U-11 指摘 9）: 返事に紐づく変更を戻し（変化として積む）、紐づく新しいカードは見送って、どこが違う？
   A['mk-msg-decline'] = function (el) {
     var a = cur(el);
     if (!a) return;
-    update(a, function (x) { x = clone(x); return diffPrompt(x); });
+    var m = find(a.thread, el.getAttribute('data-msg')) || {}, tg = replyTarget(a, m), x = clone(a), passed = [];
+    tg.cards.forEach(function (id) { var d = decline(x, id); if (d) { x = d.act; passed.push(id); } });
+    var r = tg.revertTo ? revert(x, tg.revertTo) : null;
+    if (r) x = r.act;
+    var mm = find(x.thread, m.id);
+    if (mm) mm.declined = true;
+    x = diffPrompt(x);
+    change(function () { setAct(x, true); }, { focus: r ? 'stage:' + a.id : null });
+    afterChatPush();
+    if (!r && !passed.length) return;
+    DES.app.toast(r ? tx(r.change.what) : T('declined'), { label: T('undo'), fn: function () {
+      var y = act(a.id);
+      if (!y) return;
+      if (r) y = undoRevert(y, r.undo);
+      passed.forEach(function (id) { y = undoDecline(y, { cardId: id, prev: 'new' }); });
+      change(function () { setAct(y, true); });
+    } });
   };
   A['mk-diff-pick'] = function (el) {
     var a = cur(el), i = +el.getAttribute('data-arg'), mid = el.getAttribute('data-msg');
@@ -1368,8 +1524,8 @@
   A['mk-compare-close'] = function (el) { var id = el.getAttribute('data-id'); mk().compare = null; DES.app.render(); DES.app.focusFk('stage:' + id) ; };
   A['mk-compare-photos'] = function (el) {
     var a = cur(el);
-    if (!a || !a.ext || a.ext.photos.length < 2) return;
-    var ps = a.ext.photos;
+    var ps = a ? visiblePhotos(a) : [];
+    if (ps.length < 2) return;
     mk().compare = { act: a.id, src: 'photos', picks: [ps[ps.length - 2].id, ps[ps.length - 1].id], open: true };
     if (bp() === 's') S().makeSide.tab = 'stage';
     DES.app.commit({});
@@ -1426,7 +1582,7 @@
     if (e.type === 'title') update(a, function (x) { return setTitle(x, e.value); }, { focus: 'title:' + a.id });
     else if (e.type === 'next') update(a, function (x) { return setNext(x, e.value); }, { focus: 'step:' + a.id });
     else if (e.type === 'quote') {
-      var r = editQuote(a, e.value, S().works);
+      var r = editQuote(a, e.value, S().works, mode());
       change(function () { if (r.changed) setAct(r.act, true); }, { focus: 'quote:' + a.id });
       if (r.changed) { afterChatPush(); DES.app.toast(T('remake_ideas')); }
     } else if (e.type === 'photo') {
@@ -1434,10 +1590,10 @@
       change(function () {
         var x = d.act;
         if (d.what) {
-          var opts = x.ext && x.ext.photos.length >= 2 ? [{ a: 'mk-compare-photos', label: { k: 'compare' } }] : null;
+          var opts = visiblePhotos(x).length >= 2 ? [{ a: 'mk-compare-photos', label: { k: 'compare' } }] : null;
           var line = String(e.value || '').replace(/^\s+|\s+$/g, '');
           if (line) pushMsg(x, { who: 'child', text: line });
-          pushMsg(x, { who: 'buddy', r: 'photo', v: { what: d.what }, opts: opts });
+          sayText(x, { r: 'photo', v: { what: d.what }, opts: opts, change: e.change });
         }
         setAct(x, true);
       }, { focus: 'ext:' + a.id });
@@ -1471,7 +1627,7 @@
     var a = cur(el);
     if (!a) return;
     mk().headMenu = false;
-    var r = stop(a);
+    var r = stop(a, { text: T('stopped_rec') });
     change(function () { setAct(r.act, false); });
     go('#make');
     DES.app.toast(T('stop_accept'), { label: T('undo'), fn: function () {
@@ -1525,8 +1681,8 @@
       var x = clone(act(a.id)), kind = replyKind(x, text, free);
       if (kind === 'request') { runLeave(x, requestOpt(x)); syncSend(); return; }
       change(function () {
-        if (kind === 'accept') pushMsg(x, { who: 'buddy', k: 'accept_msg', v: { last: { k: 'tokoro', v: { what: lastWhat(x) } } } });
-        else pushMsg(x, { who: 'buddy', r: 'unknown' });
+        if (kind === 'accept') sayText(x, { k: 'accept_msg', v: { last: { k: 'tokoro', v: { what: lastWhat(x) } } } });
+        else sayText(x, { r: 'unknown' });
         setAct(x, true);
       });
       afterChatPush();
@@ -1569,9 +1725,17 @@
     var t = document.getElementById('mk-save-title');
     if (t) t.focus();
   }
+  // ダイアログの中身を描き直す時、中にあるトーストは外して戻す（§U-11 指摘 1）
+  function clearDialog(dlg) {
+    var t = document.getElementById('toast');
+    if (t && t.parentNode === dlg) dlg.removeChild(t); else t = null;
+    dlg.textContent = '';
+    return function () { if (t) dlg.appendChild(t); };
+  }
+  M.clearDialog = clearDialog;
   function renderSave() {
     var d = mk().dlg, a = act(d.act), dlg = dlgEl();
-    dlg.textContent = '';
+    var putBack = clearDialog(dlg);
     dlg.setAttribute('aria-labelledby', 'mk-dlg-h');
     var opts = [H('option', { value: '', selected: !d.at }, T('step_now'))];
     a.changes.slice().reverse().forEach(function (c, i) {
@@ -1591,17 +1755,18 @@
       H('button', { class: 'btn primary', type: 'button', 'data-action': 'mk-save-ok' }, d.failed ? T('retry_save') : T('save_work')),
       H('button', { class: 'btn', type: 'button', 'data-action': 'dialog-close' }, T('cancel'))
     ]));
+    putBack();
   }
   A['mk-save-open'] = function (el) { openSave(el.getAttribute('data-id'), el); };
   A['mk-save-ok'] = function () {
     var d = mk().dlg, a = d && act(d.act);
     if (!a) return;
-    if (!d.saved) {
-      var r = saveWork(S().works, a, { id: newId('w'), at: d.at || null, title: d.title, like: d.like, date: today() });
-      S().works = r.works;
-      d.saved = r.work.id;
-    }
-    var ok = DES.store.save();
+    // 再試行はフォームの今の値で作り直す（§U-11 指摘 10）。前の試みで足した 1 件は外してから
+    if (d.saved) S().works = S().works.filter(function (w) { return w.id !== d.saved; });
+    var r = saveWork(S().works, a, { id: newId('w'), at: d.at || null, title: d.title, like: d.like, date: today() });
+    S().works = r.works;
+    d.saved = r.work.id;
+    var ok = DES.store.save('works');
     if (!ok) { S().saveFailed = true; d.failed = true; DES.app.renderSaveState(); renderSave(); var b = dlgEl().querySelector('[data-action="mk-save-ok"]'); if (b) b.focus(); return; }
     S().saveFailed = false;
     DES.app.closeDialog(dlgEl());
@@ -1623,7 +1788,7 @@
   }
   function renderPause() {
     var d = mk().dlg, dlg = dlgEl(), p = d.push;
-    dlg.textContent = '';
+    var putBack = clearDialog(dlg);
     dlg.setAttribute('aria-labelledby', 'mk-dlg-h');
     dlg.appendChild(H('div', { class: 'dialog-head' }, [H('h2', { id: 'mk-dlg-h' }, T('done_today')), H('button', { class: 'icon-btn', type: 'button', 'data-action': 'dialog-close', 'aria-label': T('close') }, [icon('close')])]));
     var push = H('div', { class: 'push-line' }, [DES.raw(DES.buddy(30, 'neutral')), H('p', null, T(p.key, varsOf(p.vars)))]);
@@ -1639,6 +1804,7 @@
       H('button', { class: 'btn primary', type: 'button', 'data-action': 'mk-pause-ok' }, T('done_today')),
       H('button', { class: 'btn', type: 'button', 'data-action': 'dialog-close' }, T('cancel'))
     ]));
+    putBack();
   }
   A['mk-pause-open'] = function (el) { openPause(el.getAttribute('data-id'), el); };
   A['mk-take-step'] = function (el) {
@@ -1658,6 +1824,7 @@
     change(function () {
       setAct(confirmPause(a, { next: d.next, closed: d.closed, push: d.push }), true);
       S().makeSide.paused = a.id;
+      S().makeSide.lastStop = 'make:' + a.id;
     });
     go('#paused');
   };
