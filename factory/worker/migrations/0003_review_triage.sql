@@ -7,4 +7,5 @@ ALTER TABLE material_versions ADD COLUMN verify_pauses INTEGER NOT NULL DEFAULT 
 ALTER TABLE material_versions ADD COLUMN verify_micro INTEGER NOT NULL DEFAULT 0;      -- この試行で記帳済みの費用（micro-dollars）
 ALTER TABLE material_versions ADD COLUMN auto_reverified INTEGER NOT NULL DEFAULT 0;   -- 自動の再検証を使ったら 1（版ごとに 1 回）
 ALTER TABLE material_versions ADD COLUMN triaged_verification_id TEXT;                 -- triageStep が「処置なし」と記録した verification の id
+ALTER TABLE material_versions ADD COLUMN verify_collect_errors INTEGER NOT NULL DEFAULT 0;  -- このターンの結果取得の一時エラーの回数（ターンが進むと 0）
 CREATE UNIQUE INDEX idx_cost_ledger_vb ON cost_ledger(ref_id) WHERE ref_id GLOB 'vb:*'; -- Batch のターンごとの記帳は 1 回だけ
