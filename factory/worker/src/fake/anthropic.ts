@@ -196,7 +196,9 @@ export function createFakePort(env: Env): FactoryPort {
       for (const [filename, fixture] of v.files) {
         const text = FIXTURE_FILES[fixture];
         if (text === undefined) continue;
-        out.push({ id: `file_fake_${b64url(fixture)}`, filename, size_bytes: enc.encode(text).byteLength, created_at: new Date(Date.parse(v.created_at) + i++).toISOString() });
+        // 本物の Files API は filename にディレクトリを含めず basename だけを返す（契約 §E-0 / §R-41）。fixture の filename は論理パスのまま置く
+        const basename = filename.slice(filename.lastIndexOf('/') + 1);
+        out.push({ id: `file_fake_${b64url(fixture)}`, filename: basename, size_bytes: enc.encode(text).byteLength, created_at: new Date(Date.parse(v.created_at) + i++).toISOString() });
       }
       return paginate(out, page, 'files:');
     },
@@ -414,6 +416,14 @@ export async function handleFakeControl(request: Request, env: Env): Promise<Res
     await setSetting(env.DB, 'fake_scenario', b.scenario);
     await setSetting(env.DB, 'fake_enabled', '1');
     return j(200, { scenario: b.scenario, fake_enabled: true });
+  }
+  // smoke (j) 用: ローカル R2 のキーの有無と大きさだけを返す（本文は返さない。materials/ 配下だけ）。
+  // wrangler dev が開いているローカル状態に外部ツールを当てずに、Worker 自身の binding で確かめるため
+  if (url.pathname === '/__fake/r2-head' && request.method === 'GET') {
+    const key = url.searchParams.get('key') ?? '';
+    if (!key.startsWith('materials/') || key.includes('..')) return j(400, { error: 'bad_key' });
+    const obj = await env.R2.head(key);
+    return j(200, { exists: obj !== null, size: obj?.size ?? null });
   }
   if (url.pathname === '/__fake/calls' && request.method === 'GET') {
     const sid = url.searchParams.get('session_id');

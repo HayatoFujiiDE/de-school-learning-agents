@@ -34,10 +34,10 @@
       "title": "信号を動かしてみる",
       "entry_point": { "type": "try", "text": "スライダーを動かして、明かりがつく距離を探そう" },
       "variants": [
-        { "audience": "elementary", "length": "short", "interest": null, "game": false, "path": "parts/p2/elementary-short.md" },
-        { "audience": "elementary", "length": "long", "interest": null, "game": false, "path": "parts/p2/elementary-long.md" },
-        { "audience": "secondary", "length": "short", "interest": null, "game": false, "path": "parts/p2/secondary-short.md" },
-        { "audience": "secondary", "length": "long", "interest": null, "game": false, "path": "parts/p2/secondary-long.md" }
+        { "audience": "elementary", "length": "short", "interest": null, "game": false, "path": "parts/p2/p2-elementary-short.md" },
+        { "audience": "elementary", "length": "long", "interest": null, "game": false, "path": "parts/p2/p2-elementary-long.md" },
+        { "audience": "secondary", "length": "short", "interest": null, "game": false, "path": "parts/p2/p2-secondary-short.md" },
+        { "audience": "secondary", "length": "long", "interest": null, "game": false, "path": "parts/p2/p2-secondary-long.md" }
       ],
       "files": [{ "path": "parts/p2/app.html", "role": "app" }],
       "adjustable": ["スライダーの最大値"],

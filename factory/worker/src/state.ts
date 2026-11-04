@@ -37,7 +37,8 @@ export type WorkEvent =
   | 'job_ended' // making → idle（job failed / cancelled）
   | 'approved' // review → idle
   | 'rejected' // review → idle
-  | 'returned'; // review → queued
+  | 'returned' // review → queued
+  | 'reingested'; // idle → making（error='invalid_outputs' の job の取り込み直し §B-4-e だけ）
 
 export const WORK_TRANSITIONS: Table<WorkStatus, WorkEvent> = [
   { from: ['idle'], event: 'job_queued', to: 'queued' },
@@ -49,6 +50,7 @@ export const WORK_TRANSITIONS: Table<WorkStatus, WorkEvent> = [
   { from: ['review'], event: 'approved', to: 'idle' },
   { from: ['review'], event: 'rejected', to: 'idle' },
   { from: ['review'], event: 'returned', to: 'queued' },
+  { from: ['idle'], event: 'reingested', to: 'making' },
 ];
 
 // materials.publish_status（publishSwitch だけが変える。自動遷移は無い）
@@ -71,7 +73,8 @@ export type JobEvent =
   | 'resumed' // budget_reached → running
   | 'ingested' // running / budget_reached → done
   | 'fail' // running / needs_answer / budget_reached → failed
-  | 'cancel'; // queued / creating / running / needs_answer / budget_reached → cancelled
+  | 'cancel' // queued / creating / running / needs_answer / budget_reached → cancelled
+  | 'reingest'; // failed → running（error='invalid_outputs' の job の取り込み直し §B-4-e だけ。他の failed は戻らない）
 
 export const ACTIVE_JOB_STATUSES: readonly JobStatus[] = ['queued', 'creating', 'running', 'needs_answer', 'budget_reached'];
 export const TERMINAL_JOB_STATUSES: readonly JobStatus[] = ['done', 'failed', 'cancelled'];
@@ -88,7 +91,16 @@ export const JOB_TRANSITIONS: Table<JobStatus, JobEvent> = [
   { from: ['running', 'budget_reached'], event: 'ingested', to: 'done' },
   { from: ['running', 'needs_answer', 'budget_reached'], event: 'fail', to: 'failed' },
   { from: ['queued', 'creating', 'running', 'needs_answer', 'budget_reached'], event: 'cancel', to: 'cancelled' },
+  { from: ['failed'], event: 'reingest', to: 'running' },
 ];
+
+/**
+ * reingest（§B-4-e 1）の述語。failed → running の辺はこの述語が真の job にだけ使う
+ * （`terminated_*` / `too_many_denies` / `create_unconfirmed` 等の failed、session の無い job は対象外 §R-43）
+ */
+export function isReingestable(job: { status: string; error: string | null; session_id: string | null }): boolean {
+  return job.status === 'failed' && job.error === 'invalid_outputs' && typeof job.session_id === 'string' && job.session_id.length > 0;
+}
 
 // material_versions.status
 export type VersionEvent = 'approve' | 'reject' | 'return';

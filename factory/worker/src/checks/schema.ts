@@ -109,6 +109,9 @@ export function normalizeOutputPath(filename: string): string | null {
   return isSafeRelativePath(p) ? p : null;
 }
 
+/** §E-1: kinds と parts[].kind は 1〜8 の整数 */
+export const isKind = (k: unknown): k is number => Number.isInteger(k) && (k as number) >= 1 && (k as number) <= 8;
+
 const fail = (detail: string): SchemaResult => ({ ok: false, reason: 'invalid_outputs', detail });
 const isStr = (v: unknown): v is string => typeof v === 'string';
 const isStrArr = (v: unknown): v is string[] => Array.isArray(v) && v.every(isStr);
@@ -146,9 +149,9 @@ export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
   const m = mj.value as Record<string, unknown>;
   if (!m || typeof m !== 'object' || Array.isArray(m)) return fail('json_invalid:material.json');
   for (const k of MATERIAL_REQUIRED_KEYS) if (!(k in m)) return fail(`missing_key:material.${k}`);
-  if (typeof m.schema_version !== 'number') return fail('bad_type:material.schema_version');
+  if (m.schema_version !== 1) return fail('bad_type:material.schema_version');
   if (!isStr(m.slug) || !isStr(m.title)) return fail('bad_type:material.slug_or_title');
-  if (!Array.isArray(m.kinds) || !m.kinds.every((k) => Number.isInteger(k))) return fail('bad_type:material.kinds');
+  if (!Array.isArray(m.kinds) || !m.kinds.every(isKind)) return fail('bad_type:material.kinds');
   if (!(m.catalog_item_id === null || isStr(m.catalog_item_id))) return fail('bad_type:material.catalog_item_id');
   if (!isStrArr(m.concept_codes)) return fail('bad_type:material.concept_codes');
   if (!isStr(m.summary_elementary) || !isStr(m.summary_secondary)) return fail('bad_type:material.summary');
@@ -163,8 +166,11 @@ export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
     if (!isStr(p.id) || !/^[A-Za-z0-9_-]{1,40}$/.test(p.id)) return fail(`bad_type:parts[${i}].id`);
     if (seenPartIds.has(p.id)) return fail(`duplicate_part:${p.id}`);
     seenPartIds.add(p.id);
-    if (!Number.isInteger(p.kind)) return fail(`bad_type:parts[${i}].kind`);
+    if (!isKind(p.kind)) return fail(`bad_type:parts[${i}].kind`);
     if (!isStr(p.title)) return fail(`bad_type:parts[${i}].title`);
+    // 安全の印は黙って false に落とさない（文字列 "true" 等は取り込みを止める。§E-1 の型・§R-46）
+    if (p.needs_supporter_check !== undefined && typeof p.needs_supporter_check !== 'boolean')
+      return fail(`bad_type:parts[${i}].needs_supporter_check`);
     const ep = p.entry_point as Record<string, unknown> | undefined;
     if (!ep || !(ENTRY_TYPES as readonly unknown[]).includes(ep.type) || !isStr(ep.text))
       return fail(`bad_type:parts[${i}].entry_point`);

@@ -5,6 +5,7 @@ import {
   PUBLISH_TRANSITIONS,
   VERSION_TRANSITIONS,
   WORK_TRANSITIONS,
+  isReingestable,
   nextJobStatus,
   nextPublishStatus,
   nextVersionStatus,
@@ -35,6 +36,7 @@ const WORK_EXPECTED: Array<[WorkStatus, WorkEvent, WorkStatus]> = [
   ['review', 'approved', 'idle'],
   ['review', 'rejected', 'idle'],
   ['review', 'returned', 'queued'],
+  ['idle', 'reingested', 'making'],
 ];
 const PUBLISH_EXPECTED: Array<[PublishStatus, PublishEvent, PublishStatus]> = [
   ['none', 'approve', 'available'],
@@ -63,6 +65,7 @@ const JOB_EXPECTED: Array<[JobStatus, JobEvent, JobStatus]> = [
   ['running', 'cancel', 'cancelled'],
   ['needs_answer', 'cancel', 'cancelled'],
   ['budget_reached', 'cancel', 'cancelled'],
+  ['failed', 'reingest', 'running'],
 ];
 const VERSION_EXPECTED: Array<[VersionStatus, VersionEvent, VersionStatus]> = [
   ['review', 'approve', 'approved'],
@@ -88,6 +91,16 @@ describe('work_status', () => {
   });
 });
 
+describe('work_status の reingest', () => {
+  it('idle → making は reingested の辺だけ（queued を経ずに making へ入る経路は他に無い）', () => {
+    expect(nextWorkStatus('idle', 'reingested')).toBe('making');
+    for (const from of WORK.filter((s) => s !== 'idle')) expect(() => nextWorkStatus(from, 'reingested')).toThrow(IllegalTransition);
+    for (const ev of events(WORK_TRANSITIONS).filter((e) => e !== 'reingested'))
+      if (ev !== 'job_queued') expect(() => nextWorkStatus('idle', ev)).toThrow(IllegalTransition);
+    expect(WORK_TRANSITIONS.filter((r) => r.to === 'making' && r.from.includes('idle')).map((r) => r.event)).toEqual(['reingested']);
+  });
+});
+
 describe('publish_status', () => {
   it.each(PUBLISH_EXPECTED)('%s --%s--> %s', (from, ev, to) => expect(nextPublishStatus(from, ev)).toBe(to));
   it('表に無い遷移はすべて IllegalTransition（none からの rollback / stop を含む）', () => {
@@ -103,14 +116,28 @@ describe('publish_status', () => {
 
 describe('factory_jobs.status', () => {
   it.each(JOB_EXPECTED)('%s --%s--> %s', (from, ev, to) => expect(nextJobStatus(from, ev)).toBe(to));
-  it('表に無い遷移はすべて IllegalTransition（終端からは動かない）', () => {
+  it('表に無い遷移はすべて IllegalTransition（終端からは動かない。failed は reingest の辺だけ）', () => {
     for (const from of JOB)
       for (const ev of events(JOB_TRANSITIONS)) {
         if (JOB_EXPECTED.some(([f, e]) => f === from && e === ev)) continue;
         expect(() => nextJobStatus(from, ev)).toThrow(IllegalTransition);
       }
-    for (const t of ['done', 'failed', 'cancelled'] as JobStatus[])
+    for (const t of ['done', 'cancelled'] as JobStatus[])
       for (const ev of events(JOB_TRANSITIONS)) expect(() => nextJobStatus(t, ev)).toThrow(IllegalTransition);
+  });
+  it('failed → running は reingest の辺だけ（他の文脈では IllegalTransition）', () => {
+    expect(nextJobStatus('failed', 'reingest')).toBe('running');
+    for (const ev of events(JOB_TRANSITIONS).filter((e) => e !== 'reingest')) expect(() => nextJobStatus('failed', ev)).toThrow(IllegalTransition);
+    // reingest は failed 以外からは使えない（done / cancelled / 進行中から running へ戻す経路にならない）
+    for (const from of JOB.filter((s) => s !== 'failed')) expect(() => nextJobStatus(from, 'reingest')).toThrow(IllegalTransition);
+  });
+  it('reingest の述語は failed + invalid_outputs + session あり だけ（§B-4-e 1・§R-43）', () => {
+    expect(isReingestable({ status: 'failed', error: 'invalid_outputs', session_id: 'sesn_1' })).toBe(true);
+    for (const error of ['terminated_without_outputs', 'terminated_waiting_answer', 'too_many_denies', 'create_unconfirmed', 'retries_exhausted', null])
+      expect(isReingestable({ status: 'failed', error, session_id: 'sesn_1' }), String(error)).toBe(false);
+    expect(isReingestable({ status: 'failed', error: 'invalid_outputs', session_id: null })).toBe(false);
+    expect(isReingestable({ status: 'failed', error: 'invalid_outputs', session_id: '' })).toBe(false);
+    for (const status of JOB.filter((s) => s !== 'failed')) expect(isReingestable({ status, error: 'invalid_outputs', session_id: 'sesn_1' })).toBe(false);
   });
   it('queued から running へ直接は行けない（creating を経る）', () => {
     expect(() => nextJobStatus('queued', 'created')).toThrow(IllegalTransition);
@@ -129,10 +156,10 @@ describe('material_versions.status', () => {
 });
 
 describe('表の件数が契約と一致', () => {
-  it('work 9 / publish 3 行 / job 11 行 / version 3', () => {
-    expect(WORK_TRANSITIONS.length).toBe(9);
+  it('work 10 / publish 3 行 / job 12 行 / version 3', () => {
+    expect(WORK_TRANSITIONS.length).toBe(10);
     expect(PUBLISH_TRANSITIONS.length).toBe(3);
-    expect(JOB_TRANSITIONS.length).toBe(11);
+    expect(JOB_TRANSITIONS.length).toBe(12);
     expect(VERSION_TRANSITIONS.length).toBe(3);
   });
 });

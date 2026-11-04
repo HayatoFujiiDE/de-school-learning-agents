@@ -48,20 +48,20 @@
         "fixture": "_shared/outputs/parts/p2/app.html"
       },
       {
-        "filename": "parts/p2/elementary-long.md",
-        "fixture": "_shared/outputs/parts/p2/elementary-long.md"
+        "filename": "parts/p2/p2-elementary-long.md",
+        "fixture": "_shared/outputs/parts/p2/p2-elementary-long.md"
       },
       {
-        "filename": "parts/p2/elementary-short.md",
-        "fixture": "_shared/outputs/parts/p2/elementary-short.md"
+        "filename": "parts/p2/p2-elementary-short.md",
+        "fixture": "_shared/outputs/parts/p2/p2-elementary-short.md"
       },
       {
-        "filename": "parts/p2/secondary-long.md",
-        "fixture": "_shared/outputs/parts/p2/secondary-long.md"
+        "filename": "parts/p2/p2-secondary-long.md",
+        "fixture": "_shared/outputs/parts/p2/p2-secondary-long.md"
       },
       {
-        "filename": "parts/p2/secondary-short.md",
-        "fixture": "_shared/outputs/parts/p2/secondary-short.md"
+        "filename": "parts/p2/p2-secondary-short.md",
+        "fixture": "_shared/outputs/parts/p2/p2-secondary-short.md"
       },
       {
         "filename": "selfcheck.md",

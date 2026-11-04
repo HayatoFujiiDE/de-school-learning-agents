@@ -44,6 +44,16 @@ describe('checkForbidden', () => {
     expect(r.app_html.map((x) => x.pattern).sort()).toEqual(['<link ', '<script src', 'fetch(', 'import '].sort());
   });
 
+  it('basename が app.html で終わるファイル（2 パーツ以上の p2-app.html）も型 4 の検査に入る', () => {
+    const i = base();
+    i.texts.set('parts/p2/p2-app.html', '<script src="https://cdn.example/x.js"></script>');
+    expect(checkForbidden(i).app_html).toEqual([{ path: 'parts/p2/p2-app.html', pattern: '<script src', count: 1 }]);
+    const j = base();
+    j.texts.set('parts/p2/p2-figure.html', '<script src="x.js"></script>'); // app.html で終わらない .html は対象外
+    j.texts.set('parts/p2/app.html.md', 'fetch(');
+    expect(checkForbidden(j).app_html).toEqual([]);
+  });
+
   it('app.html 以外の .md に fetch( があっても型 4 の検査には入らない', () => {
     const i = base();
     i.texts.set('parts/p1/elementary-long.md', 'fetch() という関数');

@@ -7,6 +7,7 @@ import type { SessionCreateParams } from '@anthropic-ai/sdk/resources/beta/sessi
 import { PortError, type CallOpts, type FactoryPort, type FileMeta } from './anthropic';
 import { accumulateCitations, finishCitations, isCitationAcc, newCitationAcc, type CitationAcc } from './checks/citations';
 import { checkForbidden } from './checks/forbidden';
+import { basenameOf, duplicateBasename, resolveOutputLayout } from './checks/layout';
 import { MAX_FILE_BYTES, MAX_FILES, REQUIRED_FILES, contentDigestInput, normalizeOutputPath, validateOutputs } from './checks/schema';
 import {
   ACTIVE_JOB_SQL,
@@ -26,7 +27,7 @@ import {
 import { JOB_MODEL, cfg, consoleUrl, type Env } from './env';
 import { EDITORIAL_STANDARDS, RUBRIC_COMMON, RUBRIC_KINDS } from './generated/claude-assets';
 import { OutOfTime, SAVE_FAILURES_MAX, ScanLimit, ScanStalled, runScan, stateJsonForSave, type ScanIO, type ScanState } from './scan';
-import { isActiveJob, isTerminalJob } from './state';
+import { isActiveJob, isReingestable, isTerminalJob } from './state';
 
 export { OutOfTime } from './scan';
 
@@ -503,6 +504,72 @@ export async function cancelJob(env: Env, port: FactoryPort, jobId: string): Pro
 }
 
 // ---------------------------------------------------------------------------
+// reingest（§B-4-e）: 取り込みで失敗した job を、session を作らずに取り込み直す。failed → running の唯一の経路（§C-2、§R-43）
+
+/** 述語（§B-4-e 1）。CAS の WHERE にもそのまま入れる */
+export const REINGEST_PREDICATE_SQL = "status = 'failed' AND error = 'invalid_outputs' AND session_id IS NOT NULL";
+
+/** 同じ素材に、この job（別名 self）より created_at が新しい job が無い（§B-4-e 1。後の注文を古い成果物で上書きしない） */
+const NO_NEWER_JOB_SQL = (self: string) =>
+  `NOT EXISTS (SELECT 1 FROM factory_jobs nj WHERE nj.material_id = ${self}.material_id AND nj.created_at > ${self}.created_at)`;
+
+/**
+ * §B-4-e 2 の batch（§B-2 のパターン: 述語の列を変える job の UPDATE を最後に 1 文）。
+ * 先に material を making（WHERE work_status='idle' AND EXISTS(job の述語)）、最後に job を running へ。
+ * job の述語 = §B-4-e 1 + 「この job より新しい job が無い」（materials の列には依存しない）。
+ * 同じ素材に active な job があれば最後の UPDATE が idx_jobs_one_active_per_material に当たり、batch 全体が巻き戻る
+ */
+export function reingestClaimStmts(p: { jobId: string; materialId: string; now: string }): Stmt[] {
+  const P = `SELECT 1 FROM factory_jobs pj WHERE pj.id = ? AND pj.material_id = ? AND pj.status = 'failed' AND pj.error = 'invalid_outputs'
+    AND pj.session_id IS NOT NULL AND ${NO_NEWER_JOB_SQL('pj')}`;
+  return [
+    stmt(
+      `UPDATE materials SET work_status = 'making', updated_at = ? WHERE id = ? AND work_status = 'idle' AND EXISTS (${P})`,
+      p.now,
+      p.materialId,
+      p.jobId,
+      p.materialId,
+    ),
+    stmt(
+      `UPDATE factory_jobs SET status = 'running', reconcile_stage = 'none', reconcile_state_json = '{}', error = NULL, last_error = NULL,
+         last_checked_at = NULL, reconcile_token = NULL, reconcile_until = NULL, updated_at = ?
+       WHERE id = ? AND material_id = ? AND ${REINGEST_PREDICATE_SQL} AND ${NO_NEWER_JOB_SQL('factory_jobs')}`,
+      p.now,
+      p.jobId,
+      p.materialId,
+    ),
+  ];
+}
+
+/** §B-4-e 1〜2。成功（running にした）なら null、そうでなければ返すべき応答 */
+export async function claimReingest(env: Env, jobId: string): Promise<ApiResult | null> {
+  const db = env.DB;
+  const job = await getJob(db, jobId);
+  if (!job) return err(404, 'not_found');
+  if (!isReingestable(job)) return err(409, 'not_reingestable');
+  const material = await getMaterial(db, job.material_id);
+  if (!material) return err(404, 'material_not_found');
+  // 素材が待機（idle）で、この job が同じ素材の最新の job であること（確認待ちの版や後の注文を古い成果物で上書きしない）
+  if (material.work_status !== 'idle') return err(409, 'material_busy');
+  const newer = await first<{ n: number }>(
+    db,
+    stmt('SELECT COUNT(*) AS n FROM factory_jobs WHERE material_id = ? AND created_at > ?', job.material_id, job.created_at),
+  );
+  if (Number(newer?.n ?? 0) > 0) return err(409, 'material_busy');
+  let r;
+  try {
+    r = await conditionalBatch(db, reingestClaimStmts({ jobId, materialId: job.material_id, now: nowIso() }));
+  } catch (e) {
+    if (isUniqueViolation(e)) return err(409, 'material_busy');
+    throw e;
+  }
+  // job の UPDATE が 0 行（同時に 2 回押した後の方など）。material の UPDATE も同じ述語で 0 行
+  if (!r.ok) return err(409, 'not_reingestable');
+  console.log(JSON.stringify({ at: 'reingest', job_id: jobId }));
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // answer（§B-4-c）
 
 export interface Question {
@@ -737,6 +804,8 @@ interface ReconcileState {
   /** listed / ingested: 取り込むファイルと、R2 に置き終えた file_id */
   files?: Array<{ file_id: string; filename: string; size: number }>;
   done?: string[];
+  /** ingested（versioned の途中）: 論理 Map の全ファイルを論理キーへ置き終えた。再入時は置き直さない（raw/ を取り直す時は消える） */
+  placed?: boolean;
   /** ingested: events（古い順）の途中経過。本文は持たず、出典照合の集計と採点結果だけ */
   ev?: { cursor: string | null; acc: CitationAcc; grader: { result: string; explanation: string } | null; complete: boolean };
 }
@@ -1149,11 +1218,14 @@ class Reconciler {
           state = { ...state, list };
           await this.writeState(job, 'inspected', state);
         }
-        byPath = new Map();
-        for (const f of list.items) {
-          const prev = byPath.get(f.filename);
-          if (!prev || prev.created_at < f.created_at) byPath.set(f.filename, f);
+        // 同じ場所への書き直しは files.list 上で 1 件に置き換わる（実測 §R-45 (a)）。同じ basename が 2 件あれば別の場所の同名ファイル
+        // なので、新しい方に寄せずに invalid_outputs（§B-4-d listed、§E-0）。basename で数えるのは raw/{basename} のキーと揃えるため
+        const dup = duplicateBasename(list.items.map((f) => f.filename));
+        if (dup !== null) {
+          await this.casJob('last_error = ?', '', `duplicate_basename:${dup}`.slice(0, 200));
+          return this.fail(job, 'invalid_outputs');
         }
+        byPath = new Map(list.items.map((f) => [f.filename, f]));
         const missing = REQUIRED_FILES.filter((r) => !byPath.has(r));
         if (missing.length === 0) break;
         // 最後のページまで見ても必須ファイルが欠けている → 3 秒待って 2 回まで取り直す
@@ -1172,6 +1244,8 @@ class Reconciler {
     }
 
     const prefix = `materials/${job.material_id}/${job.id}/`;
+    // Files API の filename は basename だけ（§E-0 / §R-41）。取り込みはまず raw/{basename} に置き、versioned で論理パスへ復元する
+    const rawKey = (filename: string) => `${prefix}raw/${basenameOf(filename)}`;
     if (stage === 'listed') {
       const done = new Set(state.done ?? []);
       for (const f of state.files ?? []) {
@@ -1180,7 +1254,7 @@ class Reconciler {
         const bytes = await this.port.downloadFile(f.file_id, this.call);
         if (bytes.byteLength > MAX_FILE_BYTES) return this.fail(job, 'invalid_outputs');
         await this.extend(); // R2 に書く直前にも所有権を確かめる
-        await this.env.R2.put(prefix + f.filename, bytes);
+        await this.env.R2.put(rawKey(f.filename), bytes);
         done.add(f.file_id);
         state = { ...state, done: [...done] };
         await this.writeState(job, 'listed', state);
@@ -1191,20 +1265,39 @@ class Reconciler {
 
     if (stage !== 'ingested') return 'noop';
 
-    // versioned: R2 の本文で検証
-    const files = new Map<string, Uint8Array>();
-    for (const f of state.files ?? []) {
-      const obj = await this.env.R2.get(prefix + f.filename);
+    // versioned: R2 の raw/ を読み、論理パスへ復元してから検証する（§B-4-d `versioned`、§E-0）
+    const rawNames = (state.files ?? []).map((f) => basenameOf(f.filename));
+    const raw = new Map<string, Uint8Array>();
+    for (const name of new Set(rawNames)) {
+      const obj = await this.env.R2.get(`${prefix}raw/${name}`);
       if (!obj) {
-        await this.writeState(job, 'listed', { files: state.files, done: [] }); // R2 に無い → 取り直す
+        await this.writeState(job, 'listed', { files: state.files, done: [] }); // raw/ に無い → 取り直す
         return 'refetch';
       }
-      files.set(f.filename, new Uint8Array(await obj.arrayBuffer()));
+      raw.set(name, new Uint8Array(await obj.arrayBuffer()));
     }
+    const dec = new TextDecoder();
+    const materialRaw = raw.get('material.json');
+    const layout = resolveOutputLayout(rawNames, materialRaw ? dec.decode(materialRaw) : '');
+    if (!layout.ok) {
+      await this.casJob('last_error = ?', '', layout.detail.slice(0, 200));
+      return this.fail(job, 'invalid_outputs');
+    }
+    const files = new Map<string, Uint8Array>();
+    for (const [logical, base] of layout.files) files.set(logical, raw.get(base)!);
     const schema = validateOutputs(files);
     if (!schema.ok) {
       await this.casJob('last_error = ?', '', schema.detail.slice(0, 200));
       return this.fail(job, 'invalid_outputs');
+    }
+    // 論理 Map の全ファイルを論理キーへ（検証係・配信・確認画面はこのキーだけを読む。raw/ は読まない）
+    if (!state.placed) {
+      for (const [logical, bytes] of files) {
+        await this.extend(); // R2 に書く直前に所有権を確かめる
+        await this.env.R2.put(prefix + logical, bytes);
+      }
+      state = { ...state, placed: true };
+      await this.writeState(job, 'ingested', state);
     }
     const citeSources = schema.sources.map((s) => ({ id: s.id, url: s.url, quoted_excerpt: s.quoted_excerpt, is_primary: s.is_primary }));
 
@@ -1228,7 +1321,6 @@ class Reconciler {
     const cit = finishCitations(ev.acc, citeSources);
     const grader = ev.grader;
 
-    const dec = new TextDecoder();
     const texts = new Map<string, string>();
     for (const [p, b] of files) if (p.startsWith('parts/')) texts.set(p, dec.decode(b));
     const forb = checkForbidden({
@@ -1240,7 +1332,7 @@ class Reconciler {
     });
     const digest = await crypto.subtle.digest('SHA-256', contentDigestInput(files));
     const sha = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-    const checks = { schema: 'ok', citations: cit.summary, ...forb };
+    const checks = { schema: 'ok', citations: cit.summary, ...forb, unreferenced_files: layout.unreferenced };
 
     const now = nowIso();
     const versionId = crypto.randomUUID();

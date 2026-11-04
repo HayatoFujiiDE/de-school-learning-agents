@@ -66,6 +66,53 @@ describe('validateOutputs', () => {
     expect(validateOutputs(goodFiles(m))).toMatchObject({ ok: false, detail: 'missing_variant:p1:secondary-long' });
   });
 
+  it.each([
+    ['"1.0"', '1.0'],
+    ['"1"', '1'],
+    ['2', 2],
+    ['0', 0],
+    ['1.5', 1.5],
+  ])('schema_version が %s なら invalid_outputs（=== 1 だけ通る）', (_label, v) => {
+    const m = goodMaterial();
+    m.schema_version = v;
+    expect(validateOutputs(goodFiles(m))).toMatchObject({ ok: false, detail: 'bad_type:material.schema_version' });
+  });
+
+  it.each([[[0]], [[9]], [[3, 9]], [[-1]], [[3.5]], [['explain_figure']], [['3']]])('kinds が %j なら invalid_outputs（1〜8 の整数）', (kinds) => {
+    const m = goodMaterial();
+    m.kinds = kinds;
+    expect(validateOutputs(goodFiles(m))).toMatchObject({ ok: false, detail: 'bad_type:material.kinds' });
+  });
+
+  it.each([0, 9, 2.5, '3', 'interactive', null])('parts[].kind が %j なら invalid_outputs（1〜8 の整数）', (kind) => {
+    const m = goodMaterial();
+    (m.parts as Array<Record<string, unknown>>)[0].kind = kind;
+    expect(validateOutputs(goodFiles(m))).toMatchObject({ ok: false, detail: 'bad_type:parts[0].kind' });
+  });
+
+  it('kinds / parts[].kind は 1 と 8 を含む（境界）', () => {
+    for (const k of [1, 8]) {
+      const m = goodMaterial();
+      m.kinds = [k];
+      (m.parts as Array<Record<string, unknown>>)[0].kind = k;
+      expect(validateOutputs(goodFiles(m)).ok, String(k)).toBe(true);
+    }
+  });
+
+  it('needs_supporter_check は真偽値だけ（文字列は false に落とさず invalid_outputs）', () => {
+    for (const v of ['true', 1, null]) {
+      const m = goodMaterial();
+      (m.parts as Array<Record<string, unknown>>)[0].needs_supporter_check = v;
+      const r = validateOutputs(goodFiles(m));
+      expect(r.ok, String(v)).toBe(false);
+    }
+    for (const v of [true, false]) {
+      const m = goodMaterial();
+      (m.parts as Array<Record<string, unknown>>)[0].needs_supporter_check = v;
+      expect(validateOutputs(goodFiles(m)).ok, String(v)).toBe(true);
+    }
+  });
+
   it('JSON 不正は invalid_outputs', () => {
     const files = goodFiles();
     files.set('claims.json', enc.encode('{not json'));

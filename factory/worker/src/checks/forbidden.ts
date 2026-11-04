@@ -89,7 +89,8 @@ export function checkForbidden(input: ForbiddenInput): ForbiddenResult {
         missingClaimRefs.push({ path: p, ref });
       }
     }
-    if (p.endsWith('/app.html') || p === 'app.html') {
+    // basename が app.html で終わるもの（2 パーツ以上の p2-app.html を含む。§E-0 (b)・§F-2）
+    if (p.slice(p.lastIndexOf('/') + 1).endsWith('app.html')) {
       for (const { label, re } of APP_HTML_PATTERNS) {
         const c = [...t.matchAll(new RegExp(re.source, re.flags))].length;
         if (c > 0) appHtml.push({ path: p, pattern: label, count: c });

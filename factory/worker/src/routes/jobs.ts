@@ -2,7 +2,7 @@
 import { first, stmt } from '../db';
 import { consoleUrl } from '../env';
 import { fromResult, isNonEmptyString, json, parseJsonField, readBody, type RouteCtx } from '../http';
-import { answerJob, cancelJob, getJob, getMaterial, queueJobForMaterial, reconcileJob, startJob } from '../jobs';
+import { answerJob, cancelJob, claimReingest, getJob, getMaterial, queueJobForMaterial, reconcileJob, startJob } from '../jobs';
 
 export async function createJob(c: RouteCtx): Promise<Response> {
   const b = await readBody(c.request);
@@ -55,10 +55,22 @@ export async function answerJobRoute(c: RouteCtx, id: string): Promise<Response>
 
 export const cancelJobRoute = async (c: RouteCtx, id: string) => fromResult(await cancelJob(c.env, await c.port(), id));
 
-export async function reconcileJobRoute(c: RouteCtx, id: string): Promise<Response> {
-  const j = await getJob(c.env.DB, id);
-  if (!j) return json(404, { error: 'not_found' });
+/** POST /api/jobs/:id/reconcile と reingest の続きで共通（同じ deadline・同じ応答の形） */
+async function reconcileAndReport(c: RouteCtx, id: string): Promise<Response> {
   const result = await reconcileJob(c.env, await c.port(), id, { deadline: Date.now() + 25_000 });
   const after = await getJob(c.env.DB, id);
   return json(200, { job_id: id, result, status: after?.status, phase: after?.phase, reconcile_stage: after?.reconcile_stage });
+}
+
+export async function reconcileJobRoute(c: RouteCtx, id: string): Promise<Response> {
+  const j = await getJob(c.env.DB, id);
+  if (!j) return json(404, { error: 'not_found' });
+  return reconcileAndReport(c, id);
+}
+
+/** §B-4-e: 述語の CAS で failed → running に戻し、続けて reconcile（session は作らない） */
+export async function reingestJobRoute(c: RouteCtx, id: string): Promise<Response> {
+  const refused = await claimReingest(c.env, id);
+  if (refused) return fromResult(refused);
+  return reconcileAndReport(c, id);
 }

@@ -224,6 +224,24 @@ async function main() {
     await md.text();
   }
 
+  // ---- (j-layout) 論理パスの復元（§E-0 / §B-4-d）: fake も本物と同じく files.list の filename は basename だけ ----
+  {
+    const head = async (key) => (await api('GET', `/__fake/r2-head?key=${encodeURIComponent(key)}`)).json;
+    const base = `materials/${aMid}/${aJob}/`;
+    const logical = await head(`${base}parts/p1/elementary-short.md`);
+    const raw = await head(`${base}raw/elementary-short.md`);
+    const p2 = await head(`${base}parts/p2/p2-elementary-short.md`);
+    check('(j-layout) R2 に論理キー parts/p1/elementary-short.md と raw/elementary-short.md の両方がある', logical?.exists === true && raw?.exists === true && p2?.exists === true, `logical=${logical?.exists} raw=${raw?.exists} p2=${p2?.exists}`);
+    const md = await fetch(`${BASE}/api/library/files/${aVid}/parts/p1/elementary-short.md`);
+    const rawRes = await fetch(`${BASE}/api/library/files/${aVid}/raw/elementary-short.md`);
+    check('(j-layout) GET /api/library/files/<version>/parts/p1/elementary-short.md → 200、raw/ は配信しない（404）', md.status === 200 && rawRes.status === 404, `md=${md.status} raw=${rawRes.status}`);
+    await md.text();
+    await rawRes.text();
+    const det = (await api('GET', `/api/review/${aVid}`)).json;
+    const unref = det?.version?.checks?.unreferenced_files;
+    check('(j-layout) checks_json.unreferenced_files が載る（この fixture では空配列）', Array.isArray(unref) && unref.length === 0, JSON.stringify(unref ?? null));
+  }
+
   // 2 つ目の承認版を作る（改善 job → v2）。rollback は「現在の版でない approved 版」が対象のため
   await setScenario('questions-empty-then-done');
   const imp = await api('POST', '/api/jobs', { material_id: aMid, kind: 'rework', no_personal_data: true });
@@ -368,6 +386,12 @@ async function main() {
     const m = (await api('GET', `/api/materials/${c.json?.material_id}`)).json?.material;
     const wantWork = scn === 'budget-reached' ? 'making' : 'idle';
     check(`(scenario ${scn}) job ${x?.status}/${x?.error ?? '-'}、material ${wantWork}`, !!x && want(x) && m?.work_status === wantWork, `status=${x?.status} error=${x?.error} work=${m?.work_status}`);
+    if (scn === 'terminated-no-outputs') {
+      // (k-reingest) の否定側: invalid_outputs 以外の failed は取り込み直せない（成功側は vitest test/reingest-route.test.ts）
+      const r = await api('POST', `/api/jobs/${c.json?.job_id}/reingest`);
+      const after = (await api('GET', `/api/jobs/${c.json?.job_id}`)).json?.job;
+      check('(k-reingest) terminated_without_outputs の job は reingest → 409 not_reingestable で failed のまま', r.status === 409 && r.json?.error === 'not_reingestable' && after?.status === 'failed', `status=${r.status} err=${r.json?.error} job=${after?.status}`);
+    }
   }
 
   // ---- (l) Access なし（非 localhost host）----

@@ -36,6 +36,7 @@
     not_waiting: '回答待ちの状態ではありません',
     answer_in_flight: '回答を送信中です。少し待ってから再取得してください',
     not_cancellable: '取り消せる状態ではありません',
+    not_reingestable: '取り込みをやり直せる状態ではありません（取り込みで失敗した job だけが対象です）',
     checklist_incomplete: '6 項目すべてを選んでください',
     checklist_has_ng: 'NG の項目があるため承認できません',
     verification_pending: '検証が終わっていません',
@@ -562,6 +563,7 @@
       var qs = j.questions || [];
       var canAnswer = j.status === 'needs_answer';
       var active = ['queued', 'creating', 'running', 'needs_answer', 'budget_reached'].indexOf(j.status) >= 0;
+      var canReingest = j.status === 'failed' && j.error === 'invalid_outputs';
       view.innerHTML = '<h1>job</h1><div class="card"><div class="row">' + pill(JOB_LABEL[j.status] || j.status, j.status === 'failed' ? 'red' : j.status === 'done' ? 'green' : 'orange') +
         '<span class="muted">' + esc(j.kind) + ' / ' + esc(j.model) + ' / 段階 ' + esc(j.phase) + '</span>' +
         '<a href="#/material/' + esc(j.material_id) + '">素材へ</a>' +
@@ -574,6 +576,7 @@
         (j.status === 'queued' ? '<button type="button" class="btn primary" id="start-btn">起動する</button>' : '') +
         (active && j.session_id ? '<button type="button" class="btn" id="rec-btn">状態を取り込む</button>' : '') +
         (active ? '<button type="button" class="btn danger" id="cancel-btn">取り消す</button>' : '') +
+        (canReingest ? '<button type="button" class="btn primary" id="reingest-btn">取り込みをやり直す</button>' : '') +
         '<button type="button" class="btn" id="reload-btn">再読み込み</button></div></div>' +
         (qs.length ? '<form id="ans-form" class="card"><h2>職人からの質問</h2>' + qs.map(function (q) {
           var saved = (j.answers || []).filter(function (a) { return a.question_id === q.id; })[0];
@@ -590,6 +593,20 @@
       var rec = $('#rec-btn');
       if (rec) rec.addEventListener('click', function () {
         action(rec, { title: '状態を取り込みます', body: '職人の作業場の状態を読み、必要なら成果物を取り込みます。', run: function () { return api('POST', '/api/jobs/' + encodeURIComponent(id) + '/reconcile'); }, success: '取り込みました' });
+      });
+      var reingest = $('#reingest-btn');
+      if (reingest) reingest.addEventListener('click', function () {
+        action(reingest, {
+          title: '取り込みをやり直します', body: '職人の成果物をそのまま取り込み直します（session は作りません）', okText: '取り込み直す',
+          run: function () { return api('POST', '/api/jobs/' + encodeURIComponent(id) + '/reingest'); },
+          success: '取り込みをやり直しました',
+          after: function (res) {
+            if (res && res.status === 'done') toast('取り込み直しました。確認待ちに出ています');
+            else if (res && res.status === 'failed') toast('取り込み直しましたが、また失敗しました（エラーを確認してください）', true);
+            else if (res) toast('取り込み直しを始めました（続きは自動で進みます: ' + (JOB_LABEL[res.status] || res.status || '') + '）');
+            route();
+          }
+        });
       });
       var cancel = $('#cancel-btn');
       if (cancel) cancel.addEventListener('click', function () {
@@ -674,6 +691,7 @@
       if (red(checks.missing_source_refs)) flags.push('出典 id の不一致 ' + checks.missing_source_refs.length + ' 件');
       if (red(checks.missing_claim_refs)) flags.push('claim 参照の不一致 ' + checks.missing_claim_refs.length + ' 件');
       if (red(checks.kakunin_zumi)) flags.push('「確認済み」 ' + checks.kakunin_zumi.length + ' 件');
+      var unref = Array.isArray(checks.unreferenced_files) ? checks.unreferenced_files : [];
       var vstat = v.verification_status;
       view.innerHTML = '<h1>' + esc(d.material ? d.material.title : '') + ' v' + esc(v.version) + '</h1>' +
         '<div class="card"><div class="row">' + pill('版: ' + v.status, v.status === 'approved' ? 'green' : v.status === 'rejected' ? 'red' : 'orange') +
@@ -684,6 +702,8 @@
         '<a href="#/material/' + esc(v.material_id) + '">素材へ</a></div>' +
         '<p>費用: 制作 ' + fmtCents(v.list_cost_cents) + ' / 検証 ' + fmtCents(d.verify_cost_cents) + ' ・ 採点: ' + esc(v.grader_result || '—') + (v.grader_explanation ? ' — ' + esc(v.grader_explanation) : '') + '</p>' +
         (flags.length ? '<p class="err">機械検査: ' + esc(flags.join(' / ')) + '</p>' : '<p class="ok pill">機械検査: 赤印なし</p>') +
+        (unref.length ? '<div id="unref-files"><p class="muted">参照されていないファイル（material.json から参照されていないため、確認・配信の対象外です）</p><ul>' +
+          unref.map(function (n) { return '<li class="pre">' + esc(n) + '</li>'; }).join('') + '</ul></div>' : '') +
         (verification && verification.overall_note ? '<p class="muted">検証係のメモ: ' + esc(verification.overall_note) + '</p>' : '') + '</div>' +
         partsHtml +
         '<div class="card"><h2>主張（claims）</h2>' + claimsHtml + '</div>' +
