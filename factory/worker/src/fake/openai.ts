@@ -3,7 +3,7 @@
 // シナリオは settings.fake_openai_scenario（既定 ok）。呼び出しは settings.fake_openai_calls_json に {model,size,quality,output_format,background} を追記する
 // （smoke が「OpenAI 0 回」を数える）。prompt は記録しない。
 
-import { getSetting, nowIso, setSetting } from '../db';
+import { all, first, getSetting, isoPlus, nowIso, setSetting, stmt, tokyoDay } from '../db';
 import type { Env } from '../env';
 import { OpenAiError, type ImageGenParams, type ImagePort, type ImageUsage } from '../openai';
 
@@ -138,6 +138,13 @@ export async function readOpenAiCalls(db: D1Database): Promise<Array<Record<stri
   }
 }
 
+/** smoke の門（/__fake/openai-gate）を閉じている間、generate は応答を返さずに待つ（D の後・OpenAI の応答待ちを作る）。上限 90 秒 */
+const GATE_MAX_MS = 90_000;
+async function waitGate(db: D1Database): Promise<void> {
+  const until = Date.now() + GATE_MAX_MS;
+  while (Date.now() < until && (await getSetting(db, 'fake_openai_gate')) === '1') await new Promise((r) => setTimeout(r, 200));
+}
+
 export function createFakeImagePort(env: Env): ImagePort {
   return {
     isFake: true,
@@ -145,6 +152,7 @@ export function createFakeImagePort(env: Env): ImagePort {
       const s = (await getSetting(env.DB, 'fake_openai_scenario')) ?? 'ok';
       const scenario: FakeOpenAiScenario = (FAKE_OPENAI_SCENARIOS as readonly string[]).includes(s) ? (s as FakeOpenAiScenario) : 'ok';
       await appendOpenAiCall(env.DB, p, scenario);
+      await waitGate(env.DB);
       const image = () => (p.output_format === 'webp' ? TINY_WEBP_B64 : bytesToBase64(grayPng(1, 1)));
       switch (scenario) {
         case 'ok':
@@ -194,5 +202,73 @@ export async function handleFakeOpenAiControl(request: Request, env: Env): Promi
     return j(200, { scenario: b.scenario });
   }
   if (url.pathname === '/__fake/openai-calls' && request.method === 'GET') return j(200, { calls: await readOpenAiCalls(env.DB) });
+
+  // ---- smoke（§O-8）の制御。どれも fake が許可された時だけ届く（src/anthropic.ts の FAKE_GUARD の内側）----
+  const body = async (): Promise<Record<string, unknown> | null> => {
+    try {
+      const v = await request.json();
+      return v && typeof v === 'object' ? (v as Record<string, unknown>) : null;
+    } catch {
+      return null;
+    }
+  };
+  const isId = (v: unknown): v is string => typeof v === 'string' && /^img_[0-9a-f]{32}$/.test(v);
+  // 門を閉じる / 開ける（closed: true の間、generate は待つ）
+  if (url.pathname === '/__fake/openai-gate' && request.method === 'POST') {
+    const b = await body();
+    if (!b || typeof b.closed !== 'boolean') return j(400, { error: 'bad_request' });
+    await setSetting(env.DB, 'fake_openai_gate', b.closed ? '1' : '0');
+    return j(200, { closed: b.closed });
+  }
+  // job の依頼の行（状態と数値だけ。input_json・r2_key は返さない）
+  if (url.pathname === '/__fake/image-requests' && request.method === 'GET') {
+    const jobId = url.searchParams.get('job_id') ?? '';
+    const rows = await all<Record<string, unknown>>(
+      env.DB,
+      stmt(
+        `SELECT id, custom_tool_use_id, state, error, enqueue_count, dispatched_at IS NOT NULL AS dispatched, u_cents, actual_cents,
+                usage_json = '{"missing":true}' AS usage_missing, sha256, bytes, media_type, format
+         FROM image_requests WHERE job_id = ? ORDER BY created_at ASC, id ASC`,
+        jobId,
+      ),
+    );
+    return j(200, { requests: rows });
+  }
+  // 時間の経過の代わり: queued の enqueued_at を minutes 分前にする（cron の C1 / C2 は 5 分超だけを選ぶ）
+  if (url.pathname === '/__fake/image-age' && request.method === 'POST') {
+    const b = await body();
+    const minutes = Number(b?.minutes);
+    if (!b || !isId(b.request_id) || !Number.isInteger(minutes) || minutes < 1 || minutes > 60) return j(400, { error: 'bad_request' });
+    const r = await env.DB.prepare("UPDATE image_requests SET enqueued_at = ? WHERE id = ? AND state = 'queued'").bind(isoPlus(-minutes * 60_000), b.request_id).run();
+    return j(200, { changed: Number(r.meta?.changes ?? 0) });
+  }
+  // 同じ message を queue へ times 回送る（(i6) 同じ依頼の重複配送）
+  if (url.pathname === '/__fake/image-send' && request.method === 'POST') {
+    const b = await body();
+    const times = Number(b?.times);
+    if (!b || !isId(b.request_id) || !Number.isInteger(times) || times < 1 || times > 5) return j(400, { error: 'bad_request' });
+    if (!env.IMAGE_GEN) return j(500, { error: 'no_queue' });
+    for (let i = 0; i < times; i++) await env.IMAGE_GEN.send({ request_id: b.request_id });
+    return j(200, { sent: times });
+  }
+  // done の画像の R2 の物体を別の正しい PNG に差し替える（(i2) sha256 の不一致）
+  if (url.pathname === '/__fake/image-corrupt' && request.method === 'POST') {
+    const b = await body();
+    if (!b || !isId(b.request_id)) return j(400, { error: 'bad_request' });
+    const row = await first<{ r2_key: string | null }>(env.DB, stmt("SELECT r2_key FROM image_requests WHERE id = ? AND state = 'done'", b.request_id));
+    if (!row?.r2_key) return j(404, { error: 'not_found' });
+    await env.R2.put(row.r2_key, grayPng(2, 2));
+    return j(200, { replaced: true });
+  }
+  // 今日（Asia/Tokyo）の画像の記帳に 1 行足す（(i10) 月の記帳を境界の値にする。ref_id は if:fake_<uuid>）
+  if (url.pathname === '/__fake/image-ledger' && request.method === 'POST') {
+    const b = await body();
+    const cents = Number(b?.cents);
+    if (!b || !Number.isInteger(cents) || cents < 0 || cents > 100_000) return j(400, { error: 'bad_request' });
+    await env.DB.prepare("INSERT INTO cost_ledger (id, day, kind, ref_id, cents, created_at) VALUES (?, ?, 'image', ?, ?, ?)")
+      .bind(crypto.randomUUID(), tokyoDay(), `if:fake_${crypto.randomUUID()}`, cents, nowIso())
+      .run();
+    return j(200, { added: cents });
+  }
   return null;
 }

@@ -40,6 +40,8 @@ interface Call {
   custom_id?: string;
   /** 検証係の batch（§L-2）だけ: 1 件目の user 文の claims_json と、送った assistant turn の数 */
   verify?: { claims_text: string; assistant_turns: number };
+  /** smoke の制御 /__fake/session-append（§O-8 smoke）だけ: 足すファイル（本文は記録に持つ）・status・list_cost・識別子 */
+  append?: { key: string; files: Array<{ filename: string; content: string }>; status?: string; list_cost?: string };
 }
 
 interface Staged<T> {
@@ -88,8 +90,13 @@ interface View {
   metadata: Record<string, string>;
   created_at: string;
   events: Array<Record<string, unknown>>;
-  files: Map<string, string>; // filename → fixture path
+  files: Map<string, string>; // filename → fixture path（smoke が足したファイルは INLINE_PREFIX + key/index）
+  /** smoke が足したファイルの本文（INLINE_PREFIX 付きの path → 本文） */
+  inline: Map<string, string>;
 }
+
+/** /__fake/session-append で足したファイルの path の印（fixture の path と混ざらない） */
+const INLINE_PREFIX = 'inline/';
 
 const notFound = () => new PortError(true, 404, 'not_found');
 
@@ -108,6 +115,7 @@ function buildView(calls: Call[], sessionId: string): View {
     ...(evs.initial ?? []).map((e) => ({ ...e })),
   ];
   const files = new Map<string, string>();
+  const inline = new Map<string, string>();
   for (const f of fls.initial ?? []) files.set(f.filename, f.fixture);
 
   const seen = new Set<string>();
@@ -115,6 +123,18 @@ function buildView(calls: Call[], sessionId: string): View {
   for (const c of calls) {
     if (c.session_id !== sessionId) continue;
     if (c.op === 'sessions.archive') status = 'terminated';
+    if (c.op === 'fake.append' && c.append) {
+      // smoke の制御: 送った event と同じ順序の位置に、職人の event（custom_tool_use 等）とファイルを足す
+      for (const e of c.events ?? []) events.push({ ...e });
+      c.append.files.forEach((f, i) => {
+        const ref = `${INLINE_PREFIX}${c.append!.key}/${i}`;
+        files.set(f.filename, ref);
+        inline.set(ref, f.content);
+      });
+      if (status !== 'terminated' && c.append.status) status = c.append.status;
+      if (c.append.list_cost) listCost = c.append.list_cost;
+      continue;
+    }
     if (c.op === 'sessions.update') {
       const cents = Number(c.params?.budget_cents ?? 0);
       events.push({ type: 'session.updated', budget: { type: 'limit', max_list_cost: { amount: String(cents), currency: 'USD' } } });
@@ -151,7 +171,33 @@ function buildView(calls: Call[], sessionId: string): View {
     if (!e.id) e.id = `sevt_fake_${i}`;
     e.processed_at = new Date(base + i * 1000).toISOString();
   });
-  return { scenario: sc, status, listCost, metadata: create.metadata ?? {}, created_at: create.at, events, files };
+  return { scenario: sc, status, listCost, metadata: create.metadata ?? {}, created_at: create.at, events, files, inline };
+}
+
+/** inline のファイル（INLINE_PREFIX + key/index）の本文を呼び出し記録から読む */
+function inlineText(calls: Call[], ref: string): string | undefined {
+  const m = /^inline\/([0-9a-f-]{36})\/(\d+)$/.exec(ref);
+  if (!m) return undefined;
+  const c = calls.find((x) => x.op === 'fake.append' && x.append?.key === m[1]);
+  return c?.append?.files[Number(m[2])]?.content;
+}
+
+/** smoke の制御 /__fake/fail-sends: session ごとに「この type を含む次の送信を n 回失敗させる」 */
+type SendFailures = Record<string, { type: string; count: number }>;
+async function takeSendFailure(db: D1Database, sessionId: string, events: Array<Record<string, unknown>>): Promise<boolean> {
+  const raw = await getSetting(db, 'fake_send_fail_json');
+  if (!raw) return false;
+  let all: SendFailures = {};
+  try {
+    all = JSON.parse(raw) as SendFailures;
+  } catch {
+    return false;
+  }
+  const f = all[sessionId];
+  if (!f || f.count <= 0 || !events.some((e) => e.type === f.type)) return false;
+  all[sessionId] = { ...f, count: f.count - 1 };
+  await setSetting(db, 'fake_send_fail_json', JSON.stringify(all));
+  return true;
 }
 
 /**
@@ -244,7 +290,13 @@ export function createFakePort(env: Env): FactoryPort {
     },
     async sendEvents(id, events) {
       buildView(await readCalls(db), id); // 存在確認
-      await appendCall(db, { op: 'events.send', at: nowIso(), session_id: id, events: await redactImageData(events as unknown as Array<Record<string, unknown>>) });
+      const evs = events as unknown as Array<Record<string, unknown>>;
+      if (await takeSendFailure(db, id, evs)) {
+        // smoke (i11): 送信の失敗（本物の API の 5xx と同じく PortError）。記録には type だけ残す
+        await appendCall(db, { op: 'events.send_failed', at: nowIso(), session_id: id, events: evs.map((e) => ({ type: e.type, custom_tool_use_id: e.custom_tool_use_id })) });
+        throw new PortError(true, 500, 'api_error');
+      }
+      await appendCall(db, { op: 'events.send', at: nowIso(), session_id: id, events: await redactImageData(evs) });
     },
     async archiveSession(id) {
       await appendCall(db, { op: 'sessions.archive', at: nowIso(), session_id: id });
@@ -254,7 +306,7 @@ export function createFakePort(env: Env): FactoryPort {
       const out: FileMeta[] = [];
       let i = 0;
       for (const [filename, fixture] of v.files) {
-        const text = FIXTURE_FILES[fixture];
+        const text = fixture.startsWith(INLINE_PREFIX) ? v.inline.get(fixture) : FIXTURE_FILES[fixture];
         if (text === undefined) continue;
         // 本物の Files API は filename にディレクトリを含めず basename だけを返す（契約 §E-0 / §R-41）。fixture の filename は論理パスのまま置く
         const basename = filename.slice(filename.lastIndexOf('/') + 1);
@@ -264,7 +316,8 @@ export function createFakePort(env: Env): FactoryPort {
     },
     async downloadFile(fileId) {
       if (!fileId.startsWith('file_fake_')) throw notFound();
-      const text = FIXTURE_FILES[unb64url(fileId.slice('file_fake_'.length))];
+      const ref = unb64url(fileId.slice('file_fake_'.length));
+      const text = ref.startsWith(INLINE_PREFIX) ? inlineText(await readCalls(db), ref) : FIXTURE_FILES[ref];
       if (text === undefined) throw notFound();
       return enc.encode(text);
     },
@@ -566,6 +619,58 @@ export async function handleFakeControl(request: Request, env: Env): Promise<Res
     if (!key.startsWith('materials/') || key.includes('..')) return j(400, { error: 'bad_key' });
     const obj = await env.R2.head(key);
     return j(200, { exists: obj !== null, size: obj?.size ?? null });
+  }
+  // smoke（§O-8）: 既存の session に職人の event（agent.custom_tool_use・status_idle 等）とファイル（本文を直接）を足す。
+  // image_id は登録の時に決まるので、image_id を参照する material.json を fixture に置けない（smoke が実行時に作って足す）
+  if (url.pathname === '/__fake/session-append' && request.method === 'POST') {
+    let b: { session_id?: unknown; events?: unknown; files?: unknown; status?: unknown; list_cost?: unknown } = {};
+    try {
+      b = (await request.json()) as typeof b;
+    } catch {
+      return j(400, { error: 'invalid_json' });
+    }
+    if (typeof b.session_id !== 'string') return j(400, { error: 'bad_session' });
+    try {
+      buildView(await readCalls(env.DB), b.session_id);
+    } catch {
+      return j(404, { error: 'not_found' });
+    }
+    const events = Array.isArray(b.events) ? (b.events as Array<Record<string, unknown>>).filter((e) => e && typeof e === 'object' && typeof e.type === 'string') : [];
+    const files = Array.isArray(b.files)
+      ? (b.files as Array<{ filename?: unknown; content?: unknown }>).filter((f) => typeof f?.filename === 'string' && typeof f?.content === 'string').map((f) => ({ filename: f.filename as string, content: f.content as string }))
+      : [];
+    await appendCall(env.DB, {
+      op: 'fake.append',
+      at: nowIso(),
+      session_id: b.session_id,
+      events,
+      append: {
+        key: crypto.randomUUID(),
+        files,
+        ...(typeof b.status === 'string' ? { status: b.status } : {}),
+        ...(typeof b.list_cost === 'string' ? { list_cost: b.list_cost } : {}),
+      },
+    });
+    return j(200, { events: events.length, files: files.length });
+  }
+  // smoke (i11): session の、type を含む次の送信を count 回失敗させる
+  if (url.pathname === '/__fake/fail-sends' && request.method === 'POST') {
+    let b: { session_id?: unknown; type?: unknown; count?: unknown } = {};
+    try {
+      b = (await request.json()) as typeof b;
+    } catch {
+      return j(400, { error: 'invalid_json' });
+    }
+    if (typeof b.session_id !== 'string' || typeof b.type !== 'string' || !Number.isInteger(b.count)) return j(400, { error: 'bad_request' });
+    let all: SendFailures = {};
+    try {
+      all = JSON.parse((await getSetting(env.DB, 'fake_send_fail_json')) ?? '{}') as SendFailures;
+    } catch {
+      all = {};
+    }
+    all[b.session_id] = { type: b.type, count: b.count as number };
+    await setSetting(env.DB, 'fake_send_fail_json', JSON.stringify(all));
+    return j(200, { ok: true });
   }
   if (url.pathname === '/__fake/calls' && request.method === 'GET') {
     const sid = url.searchParams.get('session_id');

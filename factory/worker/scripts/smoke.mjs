@@ -1,6 +1,7 @@
-// smoke（契約 §H (a)〜(e),(g)〜(i),(k)〜(n)、§K-8 (o)〜(s)、§L-7 (l5)、§N-5 (n2)(n3)、§N-6-7 (n6c)）。scripts/smoke.sh が wrangler dev（fake）を起動してから呼ぶ。
+// smoke（契約 §H (a)〜(e),(g)〜(i),(k)〜(n)、§K-8 (o)〜(s)、§L-7 (l5)、§N-5 (n2)(n3)、§N-6-7 (n6c)、§O-8 (i1)〜(i12)）。scripts/smoke.sh が wrangler dev（fake）を起動してから呼ぶ。
 // 出力: 1 行ずつ `PASS <名前>` / `FAIL <名前> <理由>`。最後に SMOKE_RESULT=PASS|FAIL。応答本文は必要な field だけを見る。
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import http from 'node:http';
 import vm from 'node:vm';
 
@@ -526,6 +527,9 @@ async function main() {
   // ---- 入口（§K-8）----
   await intakeSmoke();
 
+  // ---- 画像生成（§O-8 (i1)〜(i12)。(i13) = 上の既存の全件）----
+  await imageSmoke();
+
   console.log(`SMOKE_RESULT=${failed === 0 ? 'PASS' : 'FAIL'}`);
   process.exit(failed === 0 ? 0 : 1);
 }
@@ -771,6 +775,702 @@ async function intakeSmoke() {
     const st2 = await status();
     check('(s) 当月合計が上限以上なら会議は起きない（Batch を呼ばない）', mt.status === 200 && mt.json?.skipped === 'cap' && after === before && st2.meeting?.last_status === 'ended', `status=${mt.status} batches=${before}->${after}`);
   }
+}
+
+// ===========================================================================
+// §O-8 smoke (i1)〜(i12): 画像生成。fake の Anthropic（/__fake/session-append で職人の agent.custom_tool_use・評価・ファイルを足す）+
+// fake の OpenAI（/__fake/openai のシナリオ、/__fake/openai-gate で応答待ちを作る）+ ローカルの queue。
+// wrangler dev の queue（miniflare の broker）は message を 1 件ずつ到着順に配る（前の consumer が終わるまで次を配らない）。
+// 時間の経過（queued 5 分）は /__fake/image-age で enqueued_at を前にずらして代える。
+const IMG_TOOL = 'generate_image';
+const SHARED_MATERIAL = fs.readFileSync(new URL('../test/fixtures/_shared/outputs/material.json', import.meta.url), 'utf8');
+const UNAVAILABLE_TEXT = '今は画像を作れません。図は SVG で描いてください。';
+let wevtN = 0;
+const nudge = (sid, tag) => webhook(`wevt_img_${tag}_${++wevtN}_${RUN}`, sid);
+const sha256Hex = (buf) => crypto.createHash('sha256').update(Buffer.from(buf)).digest('hex');
+const imgInput = (prompt, over = {}) => ({ prompt, accuracy: 'standard', size: '1024x1024', quality: 'high', format: 'png', background: 'opaque', alt: 'smoke の図', ...over });
+
+async function fakeOpenAi(scenario) {
+  const r = await api('POST', '/__fake/openai', { scenario });
+  if (r.status !== 200) throw new Error(`fakeOpenAi ${scenario} -> ${r.status}`);
+}
+async function gate(closed) {
+  const r = await api('POST', '/__fake/openai-gate', { closed });
+  if (r.status !== 200) throw new Error(`gate -> ${r.status}`);
+}
+async function openAiCount() {
+  return ((await api('GET', '/__fake/openai-calls')).json?.calls ?? []).length;
+}
+async function imageRows(jobId) {
+  return (await api('GET', `/__fake/image-requests?job_id=${encodeURIComponent(jobId)}`)).json?.requests ?? [];
+}
+async function imagesStatus() {
+  return (await api('GET', '/api/images/status')).json ?? {};
+}
+async function waitRows(jobId, pred, timeoutMs = 20_000) {
+  const until = Date.now() + timeoutMs;
+  let rows = [];
+  while (Date.now() < until) {
+    rows = await imageRows(jobId);
+    if (pred(rows)) return rows;
+    await sleep(250);
+  }
+  return rows;
+}
+const TERMINAL = ['done', 'refused', 'failed'];
+const allTerminal = (n) => (rows) => rows.length === n && rows.every((r) => TERMINAL.includes(r.state));
+
+async function appendSession(sid, body) {
+  const r = await api('POST', '/__fake/session-append', { session_id: sid, ...body });
+  if (r.status !== 200) throw new Error(`session-append -> ${r.status}`);
+}
+
+/** 注文 → webhook 1 発で phase=making（questions-empty-then-done。define_outcome を送った後の職人に、ここから event を足す） */
+async function imageJob(tag) {
+  const c = await create('questions-empty-then-done', tag);
+  const jobId = c.json?.job_id;
+  const sid = c.json?.session_id;
+  if (c.status !== 201 || !sid) throw new Error(`imageJob ${tag}: create ${c.status}`);
+  await nudge(sid, tag);
+  const j = await waitJob(jobId, (x) => x.phase === 'making' && !x.reconcile_token);
+  if (j?.phase !== 'making') throw new Error(`imageJob ${tag}: phase=${j?.phase}`);
+  return { tag, jobId, sid, materialId: c.json.material_id, turns: 0 };
+}
+
+/** 職人が 1 turn で generate_image を inputs の数だけ呼んで止まる（requires_action）→ webhook。custom_tool_use の id を返す */
+async function askImages(job, inputs) {
+  const t = ++job.turns;
+  const ids = inputs.map((_, i) => `sevt_img_${job.tag}_${t}_${i}_${RUN}`);
+  await appendSession(job.sid, {
+    events: [
+      { type: 'session.status_running' },
+      ...ids.map((id, i) => ({ type: 'agent.custom_tool_use', id, name: IMG_TOOL, input: inputs[i] })),
+      { type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ids }, stop_details: null },
+    ],
+  });
+  await nudge(job.sid, job.tag);
+  return ids;
+}
+
+async function toolResults(sid) {
+  return (await calls(sid)).flatMap((c) => (c.op === 'events.send' ? c.events ?? [] : [])).filter((e) => e.type === 'user.custom_tool_result');
+}
+const resultsFor = (rs, id) => rs.filter((e) => e.custom_tool_use_id === id);
+
+/**
+ * ids のすべてに result が 1 件以上届くまで待つ。consumer の終わりの reconcile が lease の競合で返せなかった時のために、
+ * 4 秒届かなければ webhook（次の reconcile）を 1 発送る。nudges = 送った webhook の数（PASS 行に出す）
+ */
+async function waitResults(job, ids, timeoutMs = 30_000) {
+  const until = Date.now() + timeoutMs;
+  let nudges = 0;
+  let last = Date.now();
+  let rs = [];
+  while (Date.now() < until) {
+    rs = await toolResults(job.sid);
+    if (ids.every((id) => resultsFor(rs, id).length > 0)) break;
+    if (Date.now() - last > 4000) {
+      await nudge(job.sid, job.tag);
+      nudges++;
+      last = Date.now();
+    }
+    await sleep(300);
+  }
+  return { rs, nudges };
+}
+
+/** 職人が採用して終える: material.json の parts[0].files に image_id の図を足し、評価 satisfied + end_turn → webhook → job の終端を待つ */
+async function finishWithImages(job, refs) {
+  const mat = JSON.parse(SHARED_MATERIAL);
+  for (const r of refs) mat.parts[0].files.push({ path: r.path, role: 'figure', image_id: r.image_id, alt: 'smoke の図' });
+  await appendSession(job.sid, {
+    events: [
+      { type: 'session.status_running' },
+      { type: 'span.outcome_evaluation_start', id: `sevt_es_${job.tag}_${RUN}`, outcome_id: 'outc_fake', iteration: 1 },
+      {
+        type: 'span.outcome_evaluation_end',
+        id: `sevt_ee_${job.tag}_${RUN}`,
+        outcome_evaluation_start_id: `sevt_es_${job.tag}_${RUN}`,
+        outcome_id: 'outc_fake',
+        iteration: 1,
+        result: 'satisfied',
+        explanation: 'smoke',
+        usage: { input_tokens: 10, output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      },
+      { type: 'session.status_idle', stop_reason: { type: 'end_turn' }, stop_details: null },
+    ],
+    files: [{ filename: 'material.json', content: JSON.stringify(mat, null, 2) }],
+  });
+  await nudge(job.sid, job.tag);
+  return waitJob(job.jobId, (x) => x.status === 'done' || x.status === 'failed');
+}
+
+/** 終わった job の取り置き（ih:）を F で確定させる: 動いている job を取り消し、cron を 1 回 */
+async function closeJobs(jobs) {
+  for (const j of jobs) {
+    const s = (await api('GET', `/api/jobs/${j.jobId}`)).json?.job?.status;
+    if (['queued', 'running', 'needs_answer', 'budget_reached'].includes(s)) await api('POST', `/api/jobs/${j.jobId}/cancel`);
+  }
+  await cron();
+}
+
+/** 掃き出し: 専用 job に 1 枚頼み done まで待つ。broker は到着順に 1 件ずつ配るので、これが done なら前に積んだ message は処理済み */
+async function drainQueue(sentinel) {
+  const before = (await imageRows(sentinel.jobId)).length;
+  await askImages(sentinel, [imgInput('掃き出し', { quality: 'low' })]);
+  const rows = await waitRows(sentinel.jobId, (rs) => rs.length === before + 1 && TERMINAL.includes(rs[before].state), 30_000);
+  return rows[before]?.state === 'done';
+}
+
+async function imageSmoke() {
+  await fakeOpenAi('ok');
+  await gate(false);
+  const opened = [];
+  try {
+    await imageCases(opened);
+  } catch (e) {
+    fail('(i) image smoke crashed', `${e && e.name}: ${String(e && e.message).slice(0, 200)}`);
+  } finally {
+    await gate(false).catch(() => undefined);
+    await fakeOpenAi('ok').catch(() => undefined);
+  }
+}
+
+async function imageCases(opened) {
+  const sentinel = await imageJob('isen');
+  opened.push(sentinel);
+
+  // ---- (i1) 注文 → generate_image → consumer → fake OpenAI 1 回 → reconcile が result 1 回 → 版に png → 確認画面 → 承認 → 配信の SHA-256 = sha256 ----
+  const A = await imageJob('i1');
+  opened.push(A);
+  let aImageId = null;
+  let aSha = null;
+  let aVid = null;
+  {
+    const n0 = await openAiCount();
+    const [tid] = await askImages(A, [imgInput('赤い線が 15 ブロックで止まるレッドストーンの図')]);
+    const rows = await waitRows(A.jobId, allTerminal(1));
+    const { rs, nudges } = await waitResults(A, [tid]);
+    const n1 = await openAiCount();
+    const row = rows[0];
+    aImageId = row?.id ?? null;
+    aSha = row?.sha256 ?? null;
+    const res = resultsFor(rs, tid);
+    const img = res[0]?.content?.[0];
+    const text = res[0]?.content?.[1]?.text ?? '';
+    check(
+      '(i1) generate_image → queue の consumer が done・fake OpenAI 1 回・result 1 回',
+      row?.state === 'done' && row?.dispatched === 1 && n1 - n0 === 1 && res.length === 1,
+      `state=${row?.state} openai=${n1 - n0} results=${res.length} nudges=${nudges}`,
+    );
+    check(
+      '(i1) result は形 A（image の base64 block + 成功の文）: data の SHA-256 = image_requests.sha256・文に image_id と残り 7 枚',
+      res[0]?.is_error === false && img?.type === 'image' && img?.source?.type === 'base64' && img?.source?.media_type === 'image/png' && !!aSha && img?.source?.data_sha256 === aSha && text.includes(aImageId) && text.includes('残りは 7 枚'),
+      `is_error=${res[0]?.is_error} type=${img?.type}/${img?.source?.type} sha_eq=${img?.source?.data_sha256 === aSha} id_in_text=${text.includes(String(aImageId))}`,
+    );
+    const j = await finishWithImages(A, [{ path: 'parts/p1/p1-gen-1.png', image_id: aImageId }]);
+    const mat = (await api('GET', `/api/materials/${A.materialId}`)).json;
+    aVid = mat?.versions?.[0]?.id ?? null;
+    check('(i1) 採用 → 取り込みで版が review', j?.status === 'done' && mat?.versions?.[0]?.status === 'review', `job=${j?.status}/${j?.error ?? '-'} last=${j?.last_error ?? '-'} version=${mat?.versions?.[0]?.status}`);
+    const rf = await fetch(`${BASE}/api/review/${aVid}/files/parts/p1/p1-gen-1.png`);
+    const rfBuf = await rf.arrayBuffer();
+    check('(i1) 確認用 files の png は 200 image/png・SHA-256 = sha256', rf.status === 200 && /image\/png/.test(rf.headers.get('content-type') ?? '') && sha256Hex(rfBuf) === aSha, `status=${rf.status} type=${rf.headers.get('content-type')}`);
+    // 確認画面（admin.js を node:vm で読み、実 API の詳細を描く）: サムネイルの下に「生成: standard・<prompt>」が 1 つ
+    const detail = (await api('GET', `/api/review/${aVid}`)).json;
+    const gi = detail?.generated_images ?? [];
+    check(
+      '(i1) GET /api/review/:id の generated_images に 1 件（path・accuracy・prompt・alt）',
+      gi.length === 1 && gi[0].path === 'parts/p1/p1-gen-1.png' && gi[0].accuracy === 'standard' && /レッドストーン/.test(gi[0].prompt ?? '') && gi[0].alt === 'smoke の図',
+      JSON.stringify(gi.map((g) => ({ path: g.path, accuracy: g.accuracy }))),
+    );
+    {
+      const code = await (await fetch(`${BASE}/admin/admin.js`)).text();
+      const win = { __FACTORY_ADMIN_NO_BOOT__: true };
+      vm.runInNewContext(code, { window: win, console }, { timeout: 2000 });
+      const R = win.FactoryAdminReview;
+      const html = detail?.version ? R.reviewHtml(detail, R.newReviewState(), {}) : '';
+      const genN = (html.match(/data-gen="1"/g) || []).length;
+      const thumbs = (html.match(/class="thumb"/g) || []).length;
+      check(
+        '(i1) 確認画面: サムネイル 2（svg + 生成 png）・生成の情報 1 つ（「生成: standard・…」）',
+        genN === 1 && thumbs === 2 && html.includes('生成: standard・赤い線が 15 ブロック'),
+        `gen=${genN} thumbs=${thumbs}`,
+      );
+    }
+    // (i2) 承認前は配信しない
+    const pre = await fetch(`${BASE}/api/library/files/${aVid}/parts/p1/p1-gen-1.png`);
+    await pre.arrayBuffer();
+    const d = await cronUntil(aVid, (x) => x.version?.verification_status === 'done');
+    const ap = await api('POST', `/api/review/${aVid}/decision`, { decision: 'approve', checklist: ALL_OK, note: 'smoke image', verification_id: d?.verification_id });
+    const lib = await fetch(`${BASE}/api/library/files/${aVid}/parts/p1/p1-gen-1.png`);
+    const libBuf = await lib.arrayBuffer();
+    check(
+      '(i1) 承認 → 配信の png は 200・SHA-256 = image_requests.sha256',
+      ap.status === 200 && lib.status === 200 && sha256Hex(libBuf) === aSha,
+      `approve=${ap.status}/${ap.json?.error ?? '-'} lib=${lib.status} sha_eq=${sha256Hex(libBuf) === aSha}`,
+    );
+    // ---- (i2) 承認前・停止後は 404（対照: 承認後は 200）----
+    const st = await api('POST', `/api/materials/${A.materialId}/stop`, { note: 'smoke 画像の停止' });
+    const post = await fetch(`${BASE}/api/library/files/${aVid}/parts/p1/p1-gen-1.png`);
+    await post.arrayBuffer();
+    check('(i2) 配信の png: 承認前 404・承認後 200・停止後 404', pre.status === 404 && lib.status === 200 && st.status === 200 && post.status === 404, `pre=${pre.status} approved=${lib.status} stop=${st.status} stopped=${post.status}`);
+  }
+
+  // ---- (i2) 別 job の image_id・sha256 不一致は invalid_outputs（bad_image_ref）。対照: (i1) は同じ手順で done ----
+  {
+    const B = await imageJob('i2b');
+    opened.push(B);
+    const jb = await finishWithImages(B, [{ path: 'parts/p1/p1-gen-1.png', image_id: aImageId }]);
+    check('(i2) 別 job の image_id を参照 → failed invalid_outputs・bad_image_ref', jb?.status === 'failed' && jb?.error === 'invalid_outputs' && jb?.last_error === 'bad_image_ref:parts/p1/p1-gen-1.png', `job=${jb?.status}/${jb?.error} last=${jb?.last_error}`);
+    const C = await imageJob('i2c');
+    opened.push(C);
+    const [tid] = await askImages(C, [imgInput('sha 不一致の図')]);
+    const rows = await waitRows(C.jobId, allTerminal(1));
+    await waitResults(C, [tid]);
+    const cor = await api('POST', '/__fake/image-corrupt', { request_id: rows[0]?.id });
+    const jc = await finishWithImages(C, [{ path: 'parts/p1/p1-gen-1.png', image_id: rows[0]?.id }]);
+    check('(i2) R2 の物体が sha256 と違う → failed invalid_outputs・bad_image_ref', rows[0]?.state === 'done' && cor.status === 200 && jc?.status === 'failed' && jc?.error === 'invalid_outputs' && jc?.last_error === 'bad_image_ref:parts/p1/p1-gen-1.png', `row=${rows[0]?.state} corrupt=${cor.status} job=${jc?.status}/${jc?.error} last=${jc?.last_error}`);
+  }
+  await closeJobs(opened.splice(1));
+
+  // ---- (i3) enqueue の後に cancel → fake OpenAI 0 回・failed job_ended ----
+  {
+    await gate(true);
+    const X = await imageJob('i3x');
+    const Y = await imageJob('i3y');
+    opened.push(X, Y);
+    await askImages(X, [imgInput('門で待つ図')]);
+    const xRows = await waitRows(X.jobId, (rs) => rs[0]?.state === 'dispatched');
+    const n0 = await openAiCount(); // X の呼び出しは記録済み（門の前で記録する）
+    await askImages(Y, [imgInput('取り消される図')]);
+    const yQueued = await waitRows(Y.jobId, (rs) => rs[0]?.state === 'queued');
+    const cancel = await api('POST', `/api/jobs/${Y.jobId}/cancel`);
+    await gate(false);
+    await waitRows(X.jobId, allTerminal(1));
+    const drained = await drainQueue(sentinel); // Y の message の consumer が走った後
+    const n1 = await openAiCount();
+    const yAfter = (await imageRows(Y.jobId))[0];
+    const age = await api('POST', '/__fake/image-age', { request_id: yAfter?.id, minutes: 6 });
+    await cron();
+    const yEnd = (await imageRows(Y.jobId))[0];
+    check(
+      '(i3) queued の間に cancel → consumer は D で 0 行（queued のまま・呼ばない）→ cron の C2 で failed job_ended、OpenAI は掃き出しの 1 回だけ',
+      xRows[0]?.state === 'dispatched' && yQueued[0]?.state === 'queued' && cancel.status === 200 && drained && yAfter?.state === 'queued' && yAfter?.dispatched === 0 && age.json?.changed === 1 && yEnd?.state === 'failed' && yEnd?.error === 'job_ended' && n1 - n0 === 1,
+      `x=${xRows[0]?.state} y=${yQueued[0]?.state}->${yAfter?.state}->${yEnd?.state}/${yEnd?.error} cancel=${cancel.status} drained=${drained} openai_delta=${n1 - n0}（掃き出し 1 を含む）`,
+    );
+  }
+
+  // ---- (i5) 同じ turn で generate_image を 3 つ → 3 件とも result、生成 3 回 ----
+  {
+    const J = await imageJob('i5');
+    opened.push(J);
+    const n0 = await openAiCount();
+    const ids = await askImages(J, [imgInput('図 1'), imgInput('図 2'), imgInput('図 3')]);
+    const rows = await waitRows(J.jobId, allTerminal(3));
+    const { rs, nudges } = await waitResults(J, ids);
+    const n1 = await openAiCount();
+    const per = ids.map((id) => resultsFor(rs, id).length);
+    check('(i5) 同じ turn の 3 つ → 3 件とも done・result は各 1 件・生成 3 回', rows.every((r) => r.state === 'done') && per.every((x) => x === 1) && n1 - n0 === 3, `states=${rows.map((r) => r.state).join(',')} results=${per.join(',')} openai=${n1 - n0} nudges=${nudges}`);
+  }
+
+  // ---- (i6) 同じ message を 3 回 send → 生成 1 回・result 1 回 ----
+  {
+    const J = await imageJob('i6');
+    opened.push(J);
+    await gate(true);
+    const n0 = await openAiCount();
+    const [tid] = await askImages(J, [imgInput('重複配送の図')]); // send 1 回目（reconcile）
+    const r0 = await waitRows(J.jobId, (rs) => rs[0]?.state === 'dispatched');
+    const extra = await api('POST', '/__fake/image-send', { request_id: r0[0]?.id, times: 2 }); // 2・3 回目
+    await gate(false);
+    await waitRows(J.jobId, allTerminal(1));
+    const drained = await drainQueue(sentinel);
+    const { nudges } = await waitResults(J, [tid]);
+    await nudge(J.sid, J.tag);
+    await nudge(J.sid, J.tag);
+    await sleep(1500);
+    const rs = await toolResults(J.sid);
+    const n1 = await openAiCount();
+    check(
+      '(i6) 同じ依頼の message 3 回 → 生成 1 回（+ 掃き出し 1）・result 1 件（webhook を 2 発足しても増えない）',
+      extra.json?.sent === 2 && drained && n1 - n0 === 2 && resultsFor(rs, tid).length === 1,
+      `sent=${extra.json?.sent} drained=${drained} openai_delta=${n1 - n0} results=${resultsFor(rs, tid).length} nudges=${nudges}`,
+    );
+  }
+
+  // ---- (i4) 9 回目 → OpenAI は 8 回のまま ----
+  {
+    const J = await imageJob('i4');
+    opened.push(J);
+    const n0 = await openAiCount();
+    const ids = await askImages(J, Array.from({ length: 9 }, (_, i) => imgInput(`9 枚の ${i + 1}`)));
+    const rows = await waitRows(J.jobId, allTerminal(9), 40_000);
+    const { rs, nudges } = await waitResults(J, ids, 40_000);
+    const n1 = await openAiCount();
+    const done = rows.filter((r) => r.state === 'done').length;
+    const refused = rows.filter((r) => r.state === 'refused');
+    const ninth = resultsFor(rs, refused[0]?.custom_tool_use_id ?? '-')[0];
+    check(
+      '(i4) 1 job に 9 回 → done 8・refused job_image_limit 1・OpenAI 8 回・result 9 件（9 件目は is_error）',
+      done === 8 && refused.length === 1 && refused[0].error === 'job_image_limit' && n1 - n0 === 8 && ids.every((id) => resultsFor(rs, id).length === 1) && ninth?.is_error === true,
+      `done=${done} refused=${refused.map((r) => r.error).join(',')} openai=${n1 - n0} results=${ids.map((id) => resultsFor(rs, id).length).join('')} nudges=${nudges}`,
+    );
+  }
+  await closeJobs(opened.splice(1));
+
+  // ---- (i7) 止める → queued は failed halted、dispatched は done で返る。再開する → 次の依頼が通る ----
+  {
+    const J = await imageJob('i7');
+    opened.push(J);
+    await gate(true);
+    const ids = await askImages(J, [imgInput('止める前の 1'), imgInput('止める前の 2'), imgInput('止める前の 3')]);
+    const r0 = await waitRows(J.jobId, (rs) => rs.length === 3 && rs.filter((r) => r.state === 'dispatched').length === 1 && rs.filter((r) => r.state === 'queued').length === 2);
+    const n0 = await openAiCount();
+    const halt = await api('POST', '/api/images/halt');
+    await gate(false);
+    await waitRows(J.jobId, (rs) => rs.some((r) => r.state === 'done'));
+    await sleep(3000); // 残り 2 件の message の consumer（D は停止中で 0 行）
+    const mid = await imageRows(J.jobId);
+    const queued = mid.filter((r) => r.state === 'queued');
+    const ages = [];
+    for (const r of queued) ages.push((await api('POST', '/__fake/image-age', { request_id: r.id, minutes: 6 })).json?.changed);
+    await cron();
+    const end = await waitRows(J.jobId, allTerminal(3));
+    const { rs, nudges } = await waitResults(J, ids);
+    const n1 = await openAiCount();
+    const doneRow = end.find((r) => r.state === 'done');
+    const haltedRows = end.filter((r) => r.state === 'failed' && r.error === 'halted');
+    const doneRes = resultsFor(rs, doneRow?.custom_tool_use_id ?? '-')[0];
+    const haltedRes = haltedRows.map((r) => resultsFor(rs, r.custom_tool_use_id)[0]);
+    check(
+      '(i7) 止める: dispatched の 1 件は done で返り（画像 block）、queued の 2 件は queued のまま → C2 で failed halted（is_error「今は画像を作れません」）・停止後の OpenAI 0 回',
+      r0.length === 3 && halt.status === 200 && halt.json?.halted === 'manual' && mid.filter((r) => r.state === 'done').length === 1 && queued.length === 2 && ages.every((c) => c === 1) &&
+        !!doneRow && doneRes?.is_error === false && doneRes?.content?.[0]?.type === 'image' && haltedRows.length === 2 &&
+        haltedRes.every((x) => x?.is_error === true && x?.content?.[0]?.text === UNAVAILABLE_TEXT) && n1 - n0 === 0,
+      `states=${end.map((r) => `${r.state}/${r.error ?? '-'}`).join(',')} halt=${halt.status}/${halt.json?.halted} openai_after_halt=${n1 - n0} nudges=${nudges}`,
+    );
+    // 停止中の新しい依頼は refused halted（対照）→ 再開 → 次の依頼が done
+    const [t2] = await askImages(J, [imgInput('停止中の依頼')]);
+    const r2 = await waitRows(J.jobId, allTerminal(4));
+    await waitResults(J, [t2]);
+    const un = await api('POST', '/api/images/unhalt');
+    const st = await imagesStatus();
+    const [t3] = await askImages(J, [imgInput('再開後の依頼')]);
+    const r3 = await waitRows(J.jobId, allTerminal(5));
+    const { rs: rs3 } = await waitResults(J, [t3]);
+    check(
+      '(i7) 停止中の新しい依頼は refused halted → 再開する（200・halted null）→ 次の依頼は done で返る',
+      r2[3]?.state === 'refused' && r2[3]?.error === 'halted' && un.status === 200 && st.halted === null && r3[4]?.state === 'done' && resultsFor(rs3, t3)[0]?.is_error === false,
+      `stopped=${r2[3]?.state}/${r2[3]?.error} unhalt=${un.status} halted=${st.halted} next=${r3[4]?.state}`,
+    );
+  }
+
+  // ---- (i8) quota → 停止、次の cron でも停止のまま ----
+  {
+    const J = await imageJob('i8');
+    opened.push(J);
+    const before = (await imagesStatus()).halted;
+    await fakeOpenAi('quota');
+    const [tid] = await askImages(J, [imgInput('残高切れの図')]);
+    const rows = await waitRows(J.jobId, allTerminal(1));
+    const { rs } = await waitResults(J, [tid]);
+    const h1 = (await imagesStatus()).halted;
+    await cron();
+    const h2 = (await imagesStatus()).halted;
+    await fakeOpenAi('ok');
+    check(
+      '(i8) quota → failed quota・停止 quota（前は null）・次の cron の後も quota・result は is_error',
+      before === null && rows[0]?.state === 'failed' && rows[0]?.error === 'quota' && h1 === 'quota' && h2 === 'quota' && resultsFor(rs, tid)[0]?.is_error === true,
+      `before=${before} row=${rows[0]?.state}/${rows[0]?.error} halted=${h1}->${h2}`,
+    );
+    const un = await api('POST', '/api/images/unhalt');
+    if (un.status !== 200) fail('(i8) 後始末の再開', `status=${un.status}`);
+  }
+
+  // ---- (i9) ok（対照）/ no_usage / over_reserve / bad_bytes_with_usage、+ 1.5 MB の PNG（base64 で約 2 MB）----
+  {
+    const J = await imageJob('i9');
+    opened.push(J);
+    const runOne = async (scenario, n) => {
+      await fakeOpenAi(scenario);
+      const [tid] = await askImages(J, [imgInput(`i9 ${scenario}`)]);
+      const rows = await waitRows(J.jobId, allTerminal(n));
+      const { rs } = await waitResults(J, [tid]);
+      const halted = (await imagesStatus()).halted;
+      const un = halted ? await api('POST', '/api/images/unhalt') : null;
+      return { row: rows[n - 1], res: resultsFor(rs, tid), halted, unhalt: un?.status ?? null };
+    };
+    const ok = await runOne('ok', 1);
+    check('(i9) 対照: ok（実額 6¢ ≤ U 10¢）→ done・停止しない', ok.row?.state === 'done' && ok.row?.actual_cents === 6 && ok.halted === null, `row=${ok.row?.state} actual=${ok.row?.actual_cents} halted=${ok.halted}`);
+    const nu = await runOne('no_usage', 2);
+    check(
+      '(i9) no_usage → done（usage missing・実額 NULL）+ 停止 usage_missing:<id>・result は成功の文',
+      nu.row?.state === 'done' && nu.row?.usage_missing === 1 && nu.row?.actual_cents === null && nu.halted === `usage_missing:${nu.row?.id}` && nu.res[0]?.is_error === false && nu.unhalt === 200,
+      `row=${nu.row?.state} missing=${nu.row?.usage_missing} halted=${nu.halted} unhalt=${nu.unhalt}`,
+    );
+    const ov = await runOne('over_reserve', 3);
+    check(
+      '(i9) over_reserve → done（実額 61¢ > U 10¢）+ 停止 over_reserve:<id>',
+      ov.row?.state === 'done' && ov.row?.actual_cents === 61 && ov.row?.u_cents === 10 && ov.halted === `over_reserve:${ov.row?.id}` && ov.unhalt === 200,
+      `row=${ov.row?.state} actual=${ov.row?.actual_cents} halted=${ov.halted}`,
+    );
+    const bb = await runOne('bad_bytes_with_usage', 4);
+    check(
+      '(i9) bad_bytes_with_usage → failed bad_response（実額 61¢）+ 停止 over_reserve:<id>・result は is_error',
+      bb.row?.state === 'failed' && bb.row?.error === 'bad_response' && bb.row?.actual_cents === 61 && bb.halted === `over_reserve:${bb.row?.id}` && bb.res[0]?.is_error === true && bb.unhalt === 200,
+      `row=${bb.row?.state}/${bb.row?.error} actual=${bb.row?.actual_cents} halted=${bb.halted}`,
+    );
+    const lg = await runOne('ok_large', 5);
+    const blk = lg.res[0]?.content?.[0]?.source;
+    const file = await fetch(`${BASE}/api/images/requests/${lg.row?.id}/file`);
+    const fileBuf = await file.arrayBuffer();
+    check(
+      '(i9/t14) 1.5 MB 級の PNG → done・custom_tool_result の base64 block（約 2 MB）が送られ、復号の SHA-256 = sha256 = 運営の画像ファイル',
+      lg.row?.state === 'done' && lg.row?.bytes > 1_400_000 && blk?.type === 'base64' && blk?.data_length > 1_900_000 && blk?.data_sha256 === lg.row?.sha256 && file.status === 200 && sha256Hex(fileBuf) === lg.row?.sha256 && lg.halted === null,
+      `row=${lg.row?.state} bytes=${lg.row?.bytes} b64_len=${blk?.data_length} sha_eq=${blk?.data_sha256 === lg.row?.sha256} file=${file.status} halted=${lg.halted}`,
+    );
+    await fakeOpenAi('ok');
+  }
+
+  // ---- (i11) 返す送信を fake で 1 回失敗 → 次の reconcile が送る、result は 1 件 ----
+  {
+    const J = await imageJob('i11');
+    opened.push(J);
+    const arm = await api('POST', '/__fake/fail-sends', { session_id: J.sid, type: 'user.custom_tool_result', count: 1 });
+    const [tid] = await askImages(J, [imgInput('送信失敗の図')]);
+    await waitRows(J.jobId, allTerminal(1));
+    const { rs, nudges } = await waitResults(J, [tid]);
+    await nudge(J.sid, J.tag);
+    await sleep(1500);
+    const cs = await calls(J.sid);
+    const failedSends = cs.filter((c) => c.op === 'events.send_failed' && (c.events ?? []).some((e) => e.custom_tool_use_id === tid)).length;
+    const final = resultsFor(await toolResults(J.sid), tid);
+    check(
+      '(i11) 返す送信が 1 回失敗 → 次の reconcile が送る・result は 1 件（その後の webhook でも増えない）',
+      arm.status === 200 && failedSends === 1 && resultsFor(rs, tid).length === 1 && final.length === 1 && final[0].is_error === false && nudges >= 1,
+      `failed_sends=${failedSends} results=${final.length} nudges=${nudges}`,
+    );
+  }
+  await closeJobs(opened.splice(1));
+
+  // ---- (i12) 運営の操作の画面（admin.js を node:vm で起動し、DOM の要素数とトースト）----
+  {
+    const J = await imageJob('i12');
+    opened.push(J);
+    await adminImagesSmoke(J);
+  }
+  await closeJobs(opened.splice(1));
+
+  // ---- (i10) 月の記帳 2721 で新しい job → monthly_cap、取り置きのある job は続く ----
+  {
+    const H = await imageJob('i10h');
+    opened.push(H);
+    await askImages(H, [imgInput('取り置きを作る図')]);
+    await waitRows(H.jobId, allTerminal(1));
+    const m0 = (await imagesStatus()).month_cents;
+    const seed = await api('POST', '/__fake/image-ledger', { cents: 2721 - m0 });
+    const m1 = (await imagesStatus()).month_cents;
+    const N = await imageJob('i10n');
+    opened.push(N);
+    const n0 = await openAiCount();
+    const [tn] = await askImages(N, [imgInput('月の上限の図')]);
+    const nRows = await waitRows(N.jobId, allTerminal(1));
+    const { rs: nRs } = await waitResults(N, [tn]);
+    const n1 = await openAiCount();
+    const [th] = await askImages(H, [imgInput('取り置きのある job の 2 枚目')]);
+    const hRows = await waitRows(H.jobId, allTerminal(2));
+    const n2 = await openAiCount();
+    const m2 = (await imagesStatus()).month_cents;
+    check(
+      '(i10) 月の記帳 2721¢ → 新しい job は refused monthly_cap（OpenAI 0 回・is_error）、取り置きのある job の 2 枚目は done（OpenAI 1 回）・記帳は増えない',
+      m0 < 2721 && seed.status === 200 && m1 === 2721 && nRows[0]?.state === 'refused' && nRows[0]?.error === 'monthly_cap' && n1 - n0 === 0 && resultsFor(nRs, tn)[0]?.is_error === true &&
+        hRows[1]?.state === 'done' && n2 - n1 === 1 && m2 === 2721,
+      `month=${m0}->${m1}->${m2} new=${nRows[0]?.state}/${nRows[0]?.error} openai=${n1 - n0},${n2 - n1} held=${hRows[1]?.state} th=${!!th}`,
+    );
+  }
+  await closeJobs(opened);
+}
+
+/** 最小の DOM（id を持つ要素だけ）。innerHTML を入れると、その中の id="…" の要素を作り直す（本物の DOM の再描画と同じく古い要素は外れる） */
+function makeDom(indexHtml) {
+  const els = new Map();
+  const mk = (id) => {
+    const listeners = {};
+    const cls = new Set();
+    let html = '';
+    const el = {
+      id,
+      textContent: '',
+      value: '',
+      disabled: false,
+      open: false,
+      tagName: 'DIV',
+      listeners,
+      classList: {
+        add: (c) => cls.add(c),
+        remove: (c) => cls.delete(c),
+        toggle: (c, on) => ((on === undefined ? !cls.has(c) : on) ? cls.add(c) : cls.delete(c)),
+        contains: (c) => cls.has(c),
+      },
+      className: '',
+      addEventListener: (t, f) => (listeners[t] ??= []).push(f),
+      removeEventListener: (t, f) => {
+        listeners[t] = (listeners[t] ?? []).filter((x) => x !== f);
+      },
+      focus() {},
+      showModal() {
+        el.open = true;
+      },
+      close() {
+        el.open = false;
+      },
+      querySelector: (sel) => doc.querySelector(sel),
+      querySelectorAll: () => [],
+      setAttribute() {},
+      removeAttribute() {},
+      getAttribute: () => null,
+    };
+    Object.defineProperty(el, 'innerHTML', {
+      get: () => html,
+      set: (v) => {
+        html = String(v);
+        register(html);
+      },
+    });
+    return el;
+  };
+  const register = (html) => {
+    for (const m of html.matchAll(/\bid="([^"]+)"/g)) els.set(m[1], mk(m[1]));
+  };
+  const doc = {
+    body: mk('body'),
+    hidden: false,
+    activeElement: null,
+    querySelector: (sel) => {
+      const m = /^#([\w-]+)$/.exec(sel);
+      return m ? els.get(m[1]) ?? null : null;
+    },
+    querySelectorAll: () => [],
+    addEventListener() {},
+    createElement: () => mk(''),
+  };
+  register(indexHtml);
+  return { doc, el: (id) => els.get(id) ?? null };
+}
+
+const click = (el) => (el?.listeners?.click ?? []).slice().forEach((f) => f({ preventDefault() {}, target: el }));
+async function waitFor(pred, ms = 8000) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (pred()) return true;
+    await sleep(50);
+  }
+  return pred();
+}
+
+/** (i12): #/images を起動して 止める → 状況帯に停止の文 → 再開する（dispatched が残る間は 409 のトースト）→ 再開 → 消える */
+async function adminImagesSmoke(J) {
+  const html = await (await fetch(`${BASE}/admin/`)).text();
+  const code = await (await fetch(`${BASE}/admin/admin.js`)).text();
+  const n = (s, re) => (String(s).match(re) || []).length;
+  // 純関数: 読み込み中 / 取得失敗 / 0 件
+  {
+    const win = { __FACTORY_ADMIN_NO_BOOT__: true };
+    vm.runInNewContext(code, { window: win, console }, { timeout: 2000 });
+    const I = win.FactoryAdminImages;
+    const empty = I.imagesHtml({ halted: null, month_cents: 0, month_cap_cents: 3000, holds_open: 0, dispatched: 0, recent: [] });
+    check(
+      '(i12) 純関数: 読み込み中 1・取得失敗 1（もう一度読み込む）・0 件で「まだありません」1・行 0',
+      n(I.imagesLoadingHtml(), /data-img-loading="1"/g) === 1 && n(I.imagesErrorHtml('x'), /data-img-error="1"/g) === 1 && I.imagesErrorHtml('x').includes('id="img-retry"') && n(empty, /data-img-empty="1"/g) === 1 && n(empty, /data-img-row="1"/g) === 0,
+      'pure',
+    );
+  }
+  // 生成中（dispatched）を 1 つ作っておく（門を閉じる）
+  await gate(true);
+  await askImages(J, [imgInput('画面の操作中に生成中の図')]);
+  const disp = await waitRows(J.jobId, (rs) => rs[0]?.state === 'dispatched');
+
+  const dom = makeDom(html);
+  const busySeen = [];
+  const ctx = {
+    console,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    addEventListener() {},
+    location: { hash: '#/images', pathname: '/admin/' },
+    document: dom.doc,
+    fetch: (path, opt = {}) => {
+      const method = opt.method ?? 'GET';
+      if (method !== 'GET') {
+        const b = dom.el(path.endsWith('/unhalt') ? 'img-unhalt-btn' : 'img-halt-btn');
+        busySeen.push({ path, disabled: b?.disabled, text: b?.textContent });
+      }
+      const headers = { ...(opt.headers ?? {}) };
+      if (method !== 'GET') headers.origin = BASE;
+      return fetch(BASE + path, { method, headers, body: opt.body });
+    },
+  };
+  ctx.window = ctx;
+  let bootErr = null;
+  try {
+    vm.runInNewContext(code, ctx, { timeout: 5000 });
+  } catch (e) {
+    bootErr = String(e && e.message).slice(0, 120);
+  }
+  const view = () => dom.el('view')?.innerHTML ?? '';
+  const band = () => dom.el('status')?.innerHTML ?? '';
+  const toast = () => ({ text: dom.el('toast')?.textContent ?? '', cls: dom.el('toast')?.className ?? '' });
+  await waitFor(() => view().includes('data-img-state=') && band().includes('data-img-band="1"'));
+  const st0 = await imagesStatus();
+  check(
+    '(i12) 起動: 状況帯に「画像: 今月」1・停止の文 0・#/images は running・行数 = 最近の件数・止める有効 / 再開する無効',
+    !bootErr && n(band(), /data-img-band="1"/g) === 1 && n(band(), /data-img-halted="1"/g) === 0 && view().includes('data-img-state="running"') &&
+      n(view(), /data-img-row="1"/g) === Math.min(20, (st0.recent ?? []).length) && (st0.recent ?? []).length > 0 &&
+      /id="img-halt-btn">/.test(view()) && /id="img-unhalt-btn" disabled>/.test(view()) && disp[0]?.state === 'dispatched',
+    `boot=${bootErr ?? 'ok'} band=${n(band(), /data-img-band="1"/g)} rows=${n(view(), /data-img-row="1"/g)}/${(st0.recent ?? []).length} disp=${disp[0]?.state}`,
+  );
+  // 止める: 予告（ダイアログ）→ 実行（処理中・無効）→ トースト → 状況帯に停止の文
+  click(dom.el('img-halt-btn'));
+  const dlg1 = dom.el('dlg')?.open === true && dom.el('dlg-title')?.textContent === '新しい画像の生成を止めます';
+  click(dom.el('dlg-ok'));
+  await waitFor(() => view().includes('data-img-state="halted"') && band().includes('data-img-halted="1"'));
+  const t1 = toast();
+  const b1 = busySeen.find((x) => x.path === '/api/images/halt');
+  check(
+    '(i12) 止める: ダイアログ → 送信中は無効・「処理中…」→ トースト「画像の生成を止めました」→ #/images は halted・状況帯に停止の文 1',
+    dlg1 && b1?.disabled === true && b1?.text === '処理中…' && t1.text === '画像の生成を止めました' && !t1.cls.includes('error') &&
+      n(band(), /data-img-halted="1"/g) === 1 && band().includes('手で止めました') && /id="img-unhalt-btn">/.test(view()),
+    `dlg=${dlg1} busy=${JSON.stringify(b1 ?? null)} toast=${t1.text}/${t1.cls} halted_band=${n(band(), /data-img-halted="1"/g)}`,
+  );
+  // 再開する（生成中が残る）→ 409 dispatched_remain のトースト・停止のまま
+  click(dom.el('img-unhalt-btn'));
+  const dlg2 = dom.el('dlg-body')?.textContent === 'OpenAI の利用画面で実額を確かめてから押してください';
+  click(dom.el('dlg-ok'));
+  await waitFor(() => toast().cls.includes('error'));
+  await waitFor(() => view().includes('data-img-disp="1"'));
+  const t2 = toast();
+  check(
+    '(i12) 生成中が残る間の再開 → エラーのトースト（dispatched_remain の文）・停止のまま・「生成中の画像が 1 枚」',
+    dlg2 && t2.cls.includes('error') && t2.text.startsWith('生成中の画像が残っているため') && view().includes('data-img-state="halted"') && n(band(), /data-img-halted="1"/g) === 1,
+    `dlg=${dlg2} toast=${t2.text.slice(0, 30)}/${t2.cls} state=${/data-img-state="halted"/.test(view())}`,
+  );
+  // 生成を終わらせて再開 → 成功のトースト → 状況帯から停止の文が消える
+  await gate(false);
+  await waitRows(J.jobId, allTerminal(1));
+  dom.el('toast').className = 'toast hidden';
+  dom.el('toast').textContent = '';
+  // 409 の後の再描画（opts.fail → route()）で作り直されたボタンを押す
+  click(dom.el('img-unhalt-btn'));
+  click(dom.el('dlg-ok'));
+  await waitFor(() => toast().text !== '' && view().includes('data-img-state="running"') && !band().includes('data-img-halted="1"'));
+  const t3 = toast();
+  check(
+    '(i12) 生成が終わった後の再開 → トースト「画像の生成を再開しました」→ #/images は running・状況帯の停止の文 0',
+    t3.text === '画像の生成を再開しました' && !t3.cls.includes('error') && view().includes('data-img-state="running"') && n(band(), /data-img-halted="1"/g) === 0 && (await imagesStatus()).halted === null,
+    `toast=${t3.text}/${t3.cls} running=${view().includes('data-img-state="running"')} halted_band=${n(band(), /data-img-halted="1"/g)}`,
+  );
 }
 
 main().catch((e) => {
