@@ -121,8 +121,17 @@ export async function listPartPaths(r2: R2Bucket, r2Prefix: string): Promise<str
   return null; // 空ページが続く等で終わらない一覧は上限超過と同じ扱い
 }
 
-/** parts/** の本文（.md / .html / .svg）を全部入れる。上限（文字数・件数）を超えたら null（切り詰めない） */
-export async function buildUserContent(env: Pick<Env, 'R2'>, v: VersionForVerify): Promise<string | null> {
+/** 一覧にあった parts の key が get で読めなかった（黙って飛ばさない。契約 v3.4-38） */
+export interface PartMissing {
+  error: 'part_missing';
+}
+
+/**
+ * parts/** の本文（.md / .html / .svg）を全部入れる。
+ * - 上限（文字数・件数）を超えたら null（切り詰めない）
+ * - 一覧にあった key が読めなければ { error: 'part_missing' }（その part を抜いた入力で検証しない）
+ */
+export async function buildUserContent(env: Pick<Env, 'R2'>, v: VersionForVerify): Promise<string | null | PartMissing> {
   const sourcesObj = await env.R2.get(v.r2_prefix + 'sources.json');
   const sourcesText = sourcesObj ? await sourcesObj.text() : '{"sources":[]}';
   const paths = await listPartPaths(env.R2, v.r2_prefix);
@@ -131,7 +140,7 @@ export async function buildUserContent(env: Pick<Env, 'R2'>, v: VersionForVerify
   const bodies: string[] = [];
   for (const p of paths) {
     const o = await env.R2.get(v.r2_prefix + p);
-    if (!o) continue;
+    if (!o) return { error: 'part_missing' };
     const t = await o.text();
     total += t.length + p.length;
     if (total > VERIFY_INPUT_CHAR_LIMIT) return null;
@@ -163,6 +172,7 @@ async function runAttempt(env: Env, port: FactoryPort, v: VersionForVerify): Pro
     .filter((id): id is string => typeof id === 'string');
   const content = await buildUserContent(env, v);
   if (content === null) return { ok: false, reason: 'input_too_large', microDollars: 0, terminal: true };
+  if (typeof content !== 'string') return { ok: false, reason: content.error, microDollars: 0, terminal: true };
   const messages: MessageParam[] = [{ role: 'user', content }];
   let micro = 0;
   let pauses = 0;
@@ -212,6 +222,12 @@ async function runAttempt(env: Env, port: FactoryPort, v: VersionForVerify): Pro
     return { ok: false, reason: `stop_${String(resp.stop_reason)}`, microDollars: micro };
   }
   return { ok: false, reason: 'turn_limit', microDollars: micro };
+}
+
+/** 終端の失敗の理由を improvement_notes に残す文（版には last_error 列が無い） */
+function terminalNote(reason: string, versionId: string): string {
+  if (reason === 'part_missing') return `検証できませんでした（${reason}）。parts の一部が読めません（R2 の一覧にあるファイルを取得できませんでした）。版 ${versionId}`;
+  return `検証できませんでした（${reason}）。本文の合計が ${VERIFY_INPUT_CHAR_LIMIT} 文字、または parts のファイル数が ${VERIFY_PARTS_LIMIT} 件を超えています。版 ${versionId}`;
 }
 
 /** §B-5-3: 1 件だけ検証する。戻り値は状態名（ログ用） */
@@ -312,7 +328,7 @@ export async function runVerificationStep(env: Env, port: FactoryPort): Promise<
           `INSERT INTO improvement_notes (id, material_id, source, note, created_at) SELECT ?, ?, 'verification', ?, ? WHERE EXISTS (${PV})`,
           crypto.randomUUID(),
           v.material_id,
-          `検証できませんでした（${result.reason}）。本文の合計が ${VERIFY_INPUT_CHAR_LIMIT} 文字、または parts のファイル数が ${VERIFY_PARTS_LIMIT} 件を超えています。版 ${v.id}`,
+          terminalNote(result.reason, v.id),
           now,
           v.id,
           token,

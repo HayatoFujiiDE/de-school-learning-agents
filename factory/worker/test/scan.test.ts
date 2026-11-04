@@ -1,5 +1,6 @@
 // 走査の再開（src/scan.ts）: 同じ文脈なら続きから、文脈が違えば捨てて先頭から、連続時間切れ N 回で stalled
 import { describe, expect, it } from 'vitest';
+import { PortError } from '../src/anthropic';
 import {
   OutOfTime,
   SCAN_MAX_STALLS,
@@ -220,6 +221,154 @@ describe('runScan（時間切れの後に続きから）', () => {
     }).catch((e: unknown) => e);
     expect(r).toBeInstanceOf(ScanLimit);
     expect((r as ScanLimit).code).toBe('scan_too_many_pages');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 取得側の例外（PortError の timeout / 5xx 等）も「完了しなかった 1 回」として数える（契約 v3.4-36）
+
+/** fetch の n 回目（0 始まり）以降で例外を投げる pager。投げた例外はそのまま呼び出し側へ出る */
+function failingPager(events: Ev[], failFrom: number, err: Error, pageSize = 3) {
+  const p = pager(events, pageSize);
+  let n = 0;
+  return {
+    calls: p.calls,
+    fetch: async (cursor: string | null) => {
+      if (n++ >= failFrom) throw err;
+      return p.fetch(cursor);
+    },
+  };
+}
+
+async function scanWith(
+  s: ReturnType<typeof store>,
+  fetch: (cursor: string | null) => Promise<{ data: Ev[]; next: string | null }>,
+  o: { head?: string | null; budget?: number } = {},
+) {
+  return runScan<Ev, Agg>({
+    saved: s.box.saved,
+    base: { purpose: 'files', job_status: 'running', job_phase: 'making', session_status: 'idle' },
+    ...(o.head !== undefined ? { head: o.head } : {}),
+    init: () => ({ types: [], found: false }),
+    fetch,
+    idOf: (e) => e.id,
+    fold: (agg, items) => {
+      for (const e of items) agg.types.push(e.id);
+      return false;
+    },
+    before: beforeWithBudget(o.budget ?? 100),
+    save: s.save,
+    maxPages: 500,
+  }).catch((e: unknown) => e);
+}
+
+describe('runScan（取得側の例外も完了しなかった 1 回）', () => {
+  // 取得側の PortError（timeout）。runScan は例外の種類を問わず数える（5xx も同じ経路）
+  const timeout = new PortError(false, undefined, 'timeout');
+
+  it('1 ページ目の取得が例外: 保存が無ければ文脈付きの空 state に stalls=1 を書き、同じ例外を投げ直す', async () => {
+    const s = store();
+    const r = await scanWith(s, failingPager(evs(10), 0, timeout).fetch);
+    expect(r).toBe(timeout);
+    const saved = s.box.saved as ScanState<Agg>;
+    expect(saved.stalls).toBe(1);
+    expect(saved.pages).toBe(0); // 次回は必ず restart
+    expect(saved.ctx.purpose).toBe('files');
+    expect(s.box.lastErrors).toEqual([]); // last_error は呼び出し側が例外の種類で残す
+  });
+
+  it('途中まで進んだ後の例外: 進んだ分の途中集計は残り、stalls も 1 として保存済み。次の呼び出しは続きから', async () => {
+    const events = evs(10);
+    const s = store();
+    const r = await scanWith(s, failingPager(events, 2, timeout).fetch); // 2 ページ取って 3 回目の取得で例外
+    expect(r).toBe(timeout);
+    const saved = s.box.saved as ScanState<Agg>;
+    expect(saved.pages).toBe(2);
+    expect(saved.stalls).toBe(1);
+    const p = pager(events);
+    const done = (await scanWith(s, p.fetch)) as { agg: Agg };
+    expect(p.calls).toEqual([null, 'c6', 'c9']);
+    expect(done.agg.types).toEqual([...events].reverse().map((e) => e.id));
+    expect((s.box.saved as ScanState<Agg>).stalls).toBe(0);
+  });
+
+  it(`取得の例外が続くと ${SCAN_MAX_STALLS} 回目で ScanStalled（時間切れと混ざっても数える）`, async () => {
+    const s = store();
+    const results: unknown[] = [];
+    for (let i = 0; i < SCAN_MAX_STALLS + 1; i++) {
+      // 奇数回は時間切れ（before が OutOfTime）、偶数回は取得の例外
+      results.push(i % 2 === 1 ? await scanWith(s, pager(evs(10)).fetch, { budget: 0 }) : await scanWith(s, failingPager(evs(10), 0, timeout).fetch));
+    }
+    expect(results.slice(0, SCAN_MAX_STALLS - 1).every((r) => r === timeout || r instanceof OutOfTime)).toBe(true);
+    expect(results[SCAN_MAX_STALLS - 1]).toBeInstanceOf(ScanStalled);
+    expect(results[SCAN_MAX_STALLS]).toBeInstanceOf(ScanStalled);
+    expect((s.box.saved as ScanState<Agg>).stalls).toBe(SCAN_MAX_STALLS);
+  });
+
+  it('所有権喪失など OutOfTime 以外の before の例外は数えない', async () => {
+    const s = store();
+    const lost = new Error('lost_lease');
+    const r = await runScan<Ev, Agg>({
+      saved: undefined,
+      base: { purpose: 'files', job_status: 'running', job_phase: 'making', session_status: 'idle' },
+      init: () => ({ types: [], found: false }),
+      fetch: pager(evs(3)).fetch,
+      fold: () => false,
+      before: async () => {
+        throw lost;
+      },
+      save: s.save,
+      maxPages: 500,
+    }).catch((e: unknown) => e);
+    expect(r).toBe(lost);
+    expect(s.box.saved).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// head 指定の経路（files の走査: 先頭 id は同じ呼び出しの idle 走査で取ったもの）
+
+describe('runScan（head を外から与える経路）', () => {
+  it('同じ head で途中なら続きから（1 ページ目の取り直しはしない）', async () => {
+    const events = evs(10);
+    const s = store();
+    const a = await scanWith(s, pager(events).fetch, { head: 'sevt_9', budget: 2 });
+    expect(a).toBeInstanceOf(OutOfTime);
+    expect((s.box.saved as ScanState<Agg>).cursor).toBe('c6');
+    const p = pager(events);
+    const b = (await scanWith(s, p.fetch, { head: 'sevt_9' })) as { agg: Agg; head: string };
+    expect(p.calls).toEqual(['c6', 'c9']);
+    expect(b.head).toBe('sevt_9');
+    expect(b.agg.types).toEqual([...events].reverse().map((e) => e.id));
+  });
+
+  it('同じ head で完了済みなら取得せずに集計を使う（reuse）', async () => {
+    const events = evs(10);
+    const s = store();
+    const a = (await scanWith(s, pager(events).fetch, { head: 'sevt_9' })) as { agg: Agg };
+    const p = pager(events);
+    const b = (await scanWith(s, p.fetch, { head: 'sevt_9' })) as { agg: Agg; head: string };
+    expect(p.calls).toEqual([]);
+    expect(b.agg).toEqual(a.agg);
+    expect(b.head).toBe('sevt_9');
+  });
+
+  it('head が違えば途中集計・完了済み集計とも捨てて先頭から（restart）', async () => {
+    const events = evs(10);
+    // 途中
+    const s1 = store();
+    await scanWith(s1, pager(events).fetch, { head: 'sevt_9', budget: 2 });
+    const p1 = pager(events);
+    const r1 = (await scanWith(s1, p1.fetch, { head: 'sevt_10' })) as { agg: Agg; head: string };
+    expect(p1.calls[0]).toBeNull();
+    expect(r1.head).toBe('sevt_10');
+    expect(r1.agg.types.length).toBe(10); // 古い途中集計（6 件）が混ざらない
+    // 完了済み
+    const s2 = store();
+    await scanWith(s2, pager(events).fetch, { head: 'sevt_9' });
+    const p2 = pager(events);
+    await scanWith(s2, p2.fetch, { head: null });
+    expect(p2.calls).toEqual([null, 'c3', 'c6', 'c9']);
   });
 });
 

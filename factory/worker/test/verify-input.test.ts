@@ -1,15 +1,15 @@
-// 検証係の入力: 取り込んだ parts/**（R2 の一覧）の .md / .html / .svg を全部入れ、上限を超えたら切り詰めずに null（試行は failed）
+// 検証係の入力: 取り込んだ parts/**（R2 の一覧）の .md / .html / .svg を全部入れ、上限を超えたら切り詰めずに null、一覧の key が読めなければ part_missing（試行は failed）
 import { describe, expect, it } from 'vitest';
 import { VERIFY_INPUT_CHAR_LIMIT, VERIFY_PARTS_LIMIT, buildUserContent } from '../src/verify';
 
 /** list（prefix・cursor・2 件ずつ）と get だけを持つ最小の R2。読んだ key を記録する */
-function r2(files: Record<string, string>, pageSize = 2) {
+function r2(files: Record<string, string>, pageSize = 2, unreadable: string[] = []) {
   const reads: string[] = [];
   const lists: Array<string | undefined> = [];
   const bucket = {
     get: async (key: string) => {
       reads.push(key);
-      return key in files ? { text: async () => files[key] } : null;
+      return key in files && !unreadable.includes(key) ? { text: async () => files[key] } : null;
     },
     list: async (o: { prefix?: string; cursor?: string }) => {
       lists.push(o.cursor);
@@ -70,6 +70,17 @@ describe('buildUserContent', () => {
     const big = 'あ'.repeat(VERIFY_INPUT_CHAR_LIMIT);
     const { bucket } = r2({ 'p/sources.json': '{}', 'p/parts/p1/a.md': 'x', 'p/parts/p1/b.md': big });
     expect(await buildUserContent({ R2: bucket }, v)).toBeNull();
+  });
+
+  it('一覧にあった part が読めなければ { error: part_missing }（黙って飛ばさない。上限超過の null と区別できる）', async () => {
+    const { bucket, reads } = r2(
+      { 'p/sources.json': '{}', 'p/parts/p1/a.md': 'A本文', 'p/parts/p1/b.md': 'B本文', 'p/parts/p1/c.md': 'C本文' },
+      2,
+      ['p/parts/p1/b.md'],
+    );
+    const out = await buildUserContent({ R2: bucket }, v);
+    expect(out).toEqual({ error: 'part_missing' });
+    expect(reads).toContain('p/parts/p1/b.md');
   });
 
   it(`parts のファイル数が ${VERIFY_PARTS_LIMIT} 件を超えたら null`, async () => {

@@ -151,7 +151,16 @@ export interface ScanIO<T, A> {
 
 /**
  * 保存済みの途中集計から再開できる走査。ページごとに save し、時間切れ（before が OutOfTime）で抜ける前にも必ず保存する。
- * 1 ページも進めずに時間切れなら last_error='scan_no_progress' を残す。連続時間切れが SCAN_MAX_STALLS 回で ScanStalled。
+ * 1 ページも進めずに時間切れなら last_error='scan_no_progress' を残す。
+ * 「完了しなかった呼び出し」は時間切れ（before の OutOfTime）と取得側の例外（fetch が投げた PortError の timeout / 5xx 等すべて）の両方。
+ * どちらも stalls を保存してから抜け、連続 SCAN_MAX_STALLS 回で ScanStalled（契約 v3.4-36）。取得側の例外はそのまま投げ直す
+ * （last_error は呼び出し側が例外の種類で残す）。before のそれ以外の例外（所有権喪失）と ScanLimit は数えない。
+ *
+ * 先頭 event の確認（完了済み集計の再利用・続きからの再開の前提）:
+ * - io.head が undefined（events を desc で読む走査）: 同じ呼び出しで 1 ページ目を取り直して先頭 id を比べる。
+ * - io.head 指定（files の走査）: 先頭 id は同じ呼び出しの idle 走査で取ったもの。その取得からこの走査までの呼び出し内の窓で
+ *   event が増えても、ここでは気づかない。これは次の呼び出し（webhook / cron）が先頭を取り直して文脈の違いとして捕まえるので、
+ *   ここで再確認はしない（契約 v3.4-36「呼び出し内の窓は次の呼び出しで再確認される」）。
  */
 export async function runScan<T, A>(io: ScanIO<T, A>): Promise<{ agg: A; head: string | null }> {
   const prev = carriedStalls(io.saved, io.base.purpose);
@@ -161,26 +170,41 @@ export async function runScan<T, A>(io: ScanIO<T, A>): Promise<{ agg: A; head: s
   let st: ScanState<A> | null = null;
   let progressed = false;
 
+  /**
+   * この呼び出しを「完了しなかった 1 回」として残す（時間切れ・取得側の例外の共通経路）。上限に達していたら ScanStalled。
+   * 進んだ分はページごとに保存済み（stalls も同じ値で書いてある）。1 ページも進めなかった時だけ回数を足して保存する:
+   * 前回までの途中集計があれば消さずにそのまま（文脈が同じなら次回も続きから）、無ければ文脈付きの空 state（pages=0 は次回必ず restart）
+   */
+  const countIncomplete = async (lastError?: string): Promise<void> => {
+    if (!progressed) {
+      const keep =
+        st ??
+        (isScanState(io.saved) && io.saved.ctx.purpose === io.base.purpose
+          ? (io.saved as ScanState<A>)
+          : newScanState<A>({ ...io.base, head: io.head ?? null }, io.init(), stalls));
+      await io.save({ ...keep, stalls }, lastError);
+    }
+    if (isStalled(stalls)) throw new ScanStalled();
+  };
+
   const guard = async (): Promise<void> => {
     try {
       await io.before();
     } catch (e) {
       if (!(e instanceof OutOfTime)) throw e;
-      if (!progressed) {
-        // 1 ページも進めなかった: 回数だけ足して残す。前回までの途中集計があれば消さずにそのまま（文脈が同じなら次回も続きから）、
-        // 無ければ文脈不明の空 state（pages=0 は次回必ず restart）
-        const keep =
-          st ??
-          (isScanState(io.saved) && io.saved.ctx.purpose === io.base.purpose
-            ? (io.saved as ScanState<A>)
-            : newScanState<A>({ ...io.base, head: null }, io.init(), stalls));
-        await io.save({ ...keep, stalls }, 'scan_no_progress');
-        if (isStalled(stalls)) throw new ScanStalled();
-        throw new OutOfTime(true);
-      }
-      // 進んだ分はページごとに保存済み（stalls も同じ値で書いてある）
-      if (isStalled(stalls)) throw new ScanStalled();
-      throw new OutOfTime(false);
+      const noProgress = !progressed;
+      await countIncomplete(noProgress ? 'scan_no_progress' : undefined);
+      throw new OutOfTime(noProgress);
+    }
+  };
+
+  /** 取得側の例外（timeout / 5xx 等）も完了しなかった 1 回として数えてから投げ直す */
+  const fetchPage = async (cursor: string | null): Promise<Page<T>> => {
+    try {
+      return await io.fetch(cursor);
+    } catch (e) {
+      await countIncomplete();
+      throw e;
     }
   };
 
@@ -205,7 +229,7 @@ export async function runScan<T, A>(io: ScanIO<T, A>): Promise<{ agg: A; head: s
   } else {
     // 1 ページ目で head を確かめる。続きから再開する時はこのページは集計済みなので捨てる
     await guard();
-    const first = await io.fetch(null);
+    const first = await fetchPage(null);
     const head = first.data.length > 0 ? (io.idOf?.(first.data[0]) ?? null) : null;
     const cur: ScanCtx = { ...io.base, head };
     const d = decideResume(io.saved, cur);
@@ -220,7 +244,7 @@ export async function runScan<T, A>(io: ScanIO<T, A>): Promise<{ agg: A; head: s
 
   while (!st.done) {
     await guard();
-    await step(await io.fetch(st.cursor));
+    await step(await fetchPage(st.cursor));
   }
   st.stalls = 0;
   await io.save(st);

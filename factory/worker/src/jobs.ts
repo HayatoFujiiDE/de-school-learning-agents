@@ -424,6 +424,45 @@ const deadlineGuard = (deadline: number) => async () => {
   if (Date.now() > deadline - 5_000) throw new OutOfTime();
 };
 
+/**
+ * answer 側の走査保存（reconcile_state_json.scan.answer）。述語 = needs_answer かつ sending かつ answer_token 一致。
+ * needs_answer の間に書けるのはこの文だけ（reconcile 側の writeState は status IN ('running','budget_reached') が述語なので書けない）
+ */
+export function answerScanSaveStmt(p: { json: string; lastError: string | null; now: string; jobId: string; token: string }): Stmt {
+  return stmt(
+    `UPDATE factory_jobs SET reconcile_state_json = ?, last_error = COALESCE(?, last_error), updated_at = ?
+     WHERE id = ? AND status = 'needs_answer' AND answer_state = 'sending' AND answer_token = ?`,
+    p.json,
+    p.lastError,
+    p.now,
+    p.jobId,
+    p.token,
+  );
+}
+
+/** reconcile 側の reconcile_state_json 保存（stage=null なら reconcile_stage は変えない）。述語 = status IN ('running','budget_reached') かつ reconcile_token 一致 */
+export function reconcileStateWriteStmt(p: {
+  stage: string | null;
+  json: string;
+  lastError: string | null;
+  now: string;
+  jobId: string;
+  token: string;
+}): Stmt {
+  const set =
+    p.stage === null
+      ? 'reconcile_state_json = ?, last_error = COALESCE(?, last_error)'
+      : 'reconcile_stage = ?, reconcile_state_json = ?, last_error = COALESCE(?, last_error)';
+  const setParams = p.stage === null ? [p.json, p.lastError] : [p.stage, p.json, p.lastError];
+  return stmt(
+    `UPDATE factory_jobs SET ${set}, updated_at = ? WHERE (status IN ('running','budget_reached')) AND id = ? AND reconcile_token = ?`,
+    ...setParams,
+    p.now,
+    p.jobId,
+    p.token,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // cancel（§B-3, §B-4-a-7）
 
@@ -594,19 +633,7 @@ export async function answerJob(env: Env, port: FactoryPort, jobId: string, body
   const saveScan = async (s: ScanState<{ found: boolean }>, lastError?: string): Promise<void> => {
     const r = await guardedStateWrite(
       { ...state, scan: { ...state.scan, answer: s } },
-      (json) =>
-        cas(
-          db,
-          stmt(
-            `UPDATE factory_jobs SET reconcile_state_json = ?, last_error = COALESCE(?, last_error), updated_at = ?
-             WHERE id = ? AND status = 'needs_answer' AND answer_state = 'sending' AND answer_token = ?`,
-            json,
-            lastError ?? null,
-            nowIso(),
-            jobId,
-            token,
-          ),
-        ),
+      (json) => cas(db, answerScanSaveStmt({ json, lastError: lastError ?? null, now: nowIso(), jobId, token })),
       (n) => cas(db, stmt(`UPDATE factory_jobs SET reconcile_state_json = ${BUMP_SAVE_FAILURES_SQL} WHERE id = ? AND answer_token = ?`, n, jobId, token)),
     );
     if (!r.ok) throw new LostAnswerClaim();
@@ -1068,15 +1095,12 @@ class Reconciler {
    * 大きすぎる / 保存の例外が続いた時は job を failed にして Stopped（同じページで永久に再失敗しない）
    */
   private async writeState(job: JobRow, stage: string | null, state: ReconcileState, lastError?: string): Promise<void> {
-    const cond = "status IN ('running','budget_reached')";
     let r: { ok: boolean; state: ReconcileState };
     try {
       r = await guardedStateWrite(
         { ...state, save_failures: this.state.save_failures },
         (json) =>
-          stage === null
-            ? this.casJob('reconcile_state_json = ?, last_error = COALESCE(?, last_error)', cond, json, lastError ?? null)
-            : this.casJob('reconcile_stage = ?, reconcile_state_json = ?, last_error = COALESCE(?, last_error)', cond, stage, json, lastError ?? null),
+          cas(this.db, reconcileStateWriteStmt({ stage, json, lastError: lastError ?? null, now: nowIso(), jobId: this.jobId, token: this.token })),
         (n) => cas(this.db, stmt(`UPDATE factory_jobs SET reconcile_state_json = ${BUMP_SAVE_FAILURES_SQL} WHERE id = ? AND reconcile_token = ?`, n, this.jobId, this.token)),
       );
     } catch (e) {
@@ -1174,7 +1198,7 @@ class Reconciler {
     const citeSources = schema.sources.map((s) => ({ id: s.id, url: s.url, quoted_excerpt: s.quoted_excerpt, is_primary: s.is_primary }));
 
     // events を古い順に最後のページまで。ページごとに集計と続き位置を保存する
-    // 旧形式の集計（tool_result ごとの配列）が残っていたら先頭から集計し直す
+    // 旧形式の集計（tool_result ごとの配列 / 順序逆転の仮集計 pend を持つ形 / キーが名前空間化されていない形）が残っていたら先頭から集計し直す
     let ev = state.ev && isCitationAcc(state.ev.acc) ? state.ev : { cursor: null, acc: newCitationAcc(), grader: null, complete: false };
     for (let i = 0; !ev.complete; i++) {
       if (i >= MAX_PAGES) throw new Error('too_many_pages');
