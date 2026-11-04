@@ -20,6 +20,10 @@ import { SCOUT_FEEDS } from '../generated/scout-sources';
 import { SCOUT_MODEL } from '../scout';
 import { parseXaiResponse } from '../xai';
 import { FIXTURE_FILES } from './fixtures.generated';
+import { handleFakeOpenAiControl } from './openai';
+
+// 画像生成の fake（§O-4 e）。src/anthropic.ts の getImagePort が loadFake（動的 import 1 箇所）経由でここから取る
+export { createFakeImagePort } from './openai';
 
 /** 入口（§K-8）の fixture。job の scenario ではない */
 const INTAKE_FIXTURE_DIRS = ['scout', 'meeting'];
@@ -150,6 +154,32 @@ function buildView(calls: Call[], sessionId: string): View {
   return { scenario: sc, status, listCost, metadata: create.metadata ?? {}, created_at: create.at, events, files };
 }
 
+/**
+ * custom_tool_result の image block（base64 直。§O-6 a 形 A）は、記録では data を長さと復号後の SHA-256 に置き換える
+ * （fake_calls_json を 2 MB 級にしない。smoke は sha256 で image_requests.sha256 と突き合わせる）
+ */
+async function redactImageData(events: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>> {
+  const out: Array<Record<string, unknown>> = [];
+  for (const e of events) {
+    if (e.type !== 'user.custom_tool_result' || !Array.isArray(e.content)) {
+      out.push(e);
+      continue;
+    }
+    const content: unknown[] = [];
+    for (const c of e.content as Array<Record<string, unknown>>) {
+      const src = c?.type === 'image' ? (c.source as Record<string, unknown> | undefined) : undefined;
+      if (src && src.type === 'base64' && typeof src.data === 'string') {
+        const bin = atob(src.data);
+        const bytes = Uint8Array.from(bin, (ch) => ch.charCodeAt(0));
+        const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');
+        content.push({ type: 'image', source: { type: 'base64', media_type: src.media_type, data_length: src.data.length, data_sha256: digest } });
+      } else content.push(c);
+    }
+    out.push({ ...e, content });
+  }
+  return out;
+}
+
 const enc = new TextEncoder();
 const b64url = (s: string) => btoa(String.fromCharCode(...enc.encode(s))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const unb64url = (s: string) => {
@@ -214,7 +244,7 @@ export function createFakePort(env: Env): FactoryPort {
     },
     async sendEvents(id, events) {
       buildView(await readCalls(db), id); // 存在確認
-      await appendCall(db, { op: 'events.send', at: nowIso(), session_id: id, events: events as unknown as Array<Record<string, unknown>> });
+      await appendCall(db, { op: 'events.send', at: nowIso(), session_id: id, events: await redactImageData(events as unknown as Array<Record<string, unknown>>) });
     },
     async archiveSession(id) {
       await appendCall(db, { op: 'sessions.archive', at: nowIso(), session_id: id });
@@ -513,6 +543,8 @@ export const feedFetch: typeof fetch = async (input) => {
 /** /__fake/settings（POST {scenario}）と /__fake/calls（GET ?session_id=）。呼び出し元で Access を通過済み */
 export async function handleFakeControl(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
+  const openai = await handleFakeOpenAiControl(request, env);
+  if (openai) return openai;
   const j = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
   if (url.pathname === '/__fake/settings' && request.method === 'POST') {
