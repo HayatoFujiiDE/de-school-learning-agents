@@ -13,23 +13,18 @@
 .chip.src-gap{background:transparent;border:1px dashed #cfcabd;color:var(--gap)}
 .chip.k-trying{background:var(--record-soft);color:var(--record)}
 
-/* ---------- 構図（≥ 1121）: 上 = 関心 | 志向性 / 中 = バディ | 本人 | いまの調子 / 下 = 体験 | 習熟 ---------- */
-.self-orbit{display:grid;grid-template-columns:minmax(0,1fr) 240px minmax(0,1fr);column-gap:36px;row-gap:32px;
-  grid-template-areas:"int . ori" "bud hub psy" "exp . mas";position:relative;isolation:isolate}
-.self-orbit>.ax-int{grid-area:int}
-.self-orbit>.ax-ori{grid-area:ori}
-.self-orbit>.ax-exp{grid-area:exp}
-.self-orbit>.ax-psy{grid-area:psy}
-.self-orbit>.ax-mas{grid-area:mas}
-.self-orbit>.self-hub{grid-area:hub}
-.self-orbit>.self-bud{grid-area:bud}
+/* ---------- 構図（≥ 1121。V-10）: 3 列の独立した縦積み。左 = 関心 → 体験 / 中央 = 本人 + バディ / 右 = 志向性 → 心理 → 習熟 ---------- */
+.self-orbit{display:grid;grid-template-columns:minmax(0,1fr) 280px minmax(0,1fr);column-gap:32px;grid-template-areas:"l c r";align-items:start;position:relative;isolation:isolate}
+.self-col{display:flex;flex-direction:column;gap:24px;min-width:0}
+.col-l{grid-area:l}
+.col-r{grid-area:r}
+/* 中央列は sticky（下のカードを読む間も本人が見える）。上の余白は円がページ頭にかからないため */
+.col-c{grid-area:c;position:sticky;top:96px;z-index:1;padding-top:40px;align-items:center}
 
-/* 本人（真ん中）。円は本人のまわりに置き、カードより下に描く */
-.self-hub{--av:200px;--c1:340px;--c2:600px;display:flex;align-items:center;justify-content:center;min-width:0}
-.self-hub-inner{position:sticky;top:96px;z-index:1;display:flex;flex-direction:column;align-items:center;gap:8px}
-.self-hub-inner::before,.self-hub-inner::after{content:'';position:absolute;left:50%;top:calc(var(--av) / 2 + 7.5px);border-radius:50%;transform:translate(-50%,-50%);z-index:-1;pointer-events:none}
-.self-hub-inner::before{width:var(--c1);height:var(--c1);border:1px solid var(--line)}
-.self-hub-inner::after{width:var(--c2);height:var(--c2);border:1px dashed #e6e2d8}
+/* 本人。円はアバターを中心に 1 本、カードより下に描く */
+.self-hub{--av:200px;--c1:340px;display:flex;justify-content:center;min-width:0}
+.self-hub-inner{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:8px}
+.self-hub-inner::before{content:'';position:absolute;left:50%;top:calc(var(--av) / 2 + 7.5px);width:var(--c1);height:var(--c1);border-radius:50%;border:1px solid var(--line);transform:translate(-50%,-50%);z-index:-1;pointer-events:none}
 .sx-name{font-size:16px;font-weight:700;line-height:1.5;margin-top:6px}
 
 .sx-av{position:relative;display:grid;place-items:center;border-radius:50%;background:#f3eee5;overflow:hidden;flex-shrink:0}
@@ -41,22 +36,21 @@
 .sx-av.thumb{width:64px;height:64px}
 .sx-av.thumb .sx-av-letter{font-size:22px}
 
-/* バディ（左の中段）: 吹き出し + DES.buddy(44)。右寄せ・縦中央 */
-.self-bud{display:flex;align-items:center;justify-content:flex-end;gap:10px;position:relative;z-index:1;min-width:0}
-.sx-bud-pair{display:flex;align-items:flex-start;gap:10px;min-width:0}
-.self-bud .des-buddy{flex-shrink:0}
-.sx-bubble{background:#fff;border:1px solid var(--line);border-radius:14px 0 14px 14px;padding:14px 18px;max-width:360px;font-size:13px;line-height:1.9;min-width:0}
-.sx-bubble .link-btn{margin-top:4px;min-height:44px;padding:0}
+/* バディの吹き出し（本人の直下・幅 280・尖った角は上辺中央）。DES.buddy(44) は吹き出しの左上に置き、文を回り込ませる */
+.self-bud{position:relative;z-index:1;width:100%;min-width:0;display:flex;justify-content:center}
+.sx-bubble{position:relative;width:100%;max-width:280px;background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px;font-size:13px;line-height:1.9;min-width:0}
+.sx-bubble::before{content:'';position:absolute;left:50%;top:-7px;width:12px;height:12px;background:#fff;border-left:1px solid var(--line);border-top:1px solid var(--line);transform:translateX(-50%) rotate(45deg)}
+.sx-bubble>.des-buddy{float:left;margin:2px 10px 2px 0}
+.sx-bubble .link-btn{display:flex;clear:both;margin-top:4px;min-height:44px;padding:0}
 
 /* ---------- 観点カード ---------- */
-.axis-card{position:relative;z-index:1;align-self:start;background:#fff;border:1px solid var(--line);border-radius:18px;padding:16px 18px 14px;min-width:0;box-shadow:var(--shadow)}
+.axis-card{position:relative;z-index:1;background:#fff;border:1px solid var(--line);border-radius:18px;padding:16px 18px 14px;min-width:0;box-shadow:var(--shadow)}
 .axis-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
 .axis-head h2{font-size:15px;line-height:1.6;font-weight:700;min-width:0}
 .axis-head .btn{flex-shrink:0}
 .sx-list{display:grid;gap:8px;min-width:0}
 .sx-group+.sx-group,.sx-tail{margin-top:14px}
 .sx-group-h{font-size:10px;letter-spacing:.14em;color:var(--muted);font-weight:600;margin:0 0 6px;line-height:1.6}
-.sx-group-h:focus,.kufu-head h2:focus{outline:none}
 
 /* 行（出所の区別: 本人の言葉 = 左 3px 青 / 記録 = 左 3px 緑 / 見立て = 破線 / まだ分からない = 枠なし） */
 .srow{position:relative;background:#fff;border-radius:10px;min-width:0}
@@ -109,8 +103,9 @@ button.srow-main:hover{background:#fbfaf6;filter:none}
 .sx-fold .link-btn,.sx-away>.link-btn{min-height:44px;padding:0;font-size:12px}
 .sx-away{margin-top:6px;border-top:1px dashed var(--line);padding-top:2px}
 .sx-away-list{list-style:none;margin:0;padding:0;display:grid;gap:4px}
-.sx-away-i{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--gap)}
-.sx-away-i .btn{flex-shrink:0}
+.sx-away-row{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--gap)}
+.sx-away-ops{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.sx-away-ops .link-btn{min-height:44px;padding:0 6px;font-size:11px}
 .chip.sx-count{height:18px;padding:0 7px;margin-left:4px;font-size:10px}
 
 /* 体験: 左に日付の列 */
@@ -130,6 +125,8 @@ button.srow-main:hover{background:#fbfaf6;filter:none}
 .kfit-i>.ico{width:16px;height:16px;color:var(--record);margin-top:4px}
 .kfit-text{font-size:13px;line-height:1.8}
 .kfit-meta{font-size:11px;color:var(--muted)}
+.kfit-i.f-own .kfit-body{border-left:3px solid var(--own);padding:6px 10px;background:#fff;border-radius:0 10px 10px 0}
+.kfit-body{min-width:0;flex:1}
 .kfit-note{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:11px;color:var(--muted);line-height:1.6}
 .kufu-new{padding:12px 0 4px}
 .kufu-scene{display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,1.4fr);gap:28px;padding:18px 0;border-top:1px solid var(--line);margin-top:14px}
@@ -141,7 +138,7 @@ button.srow-main:hover{background:#fbfaf6;filter:none}
 .ks-buddy .des-buddy{flex-shrink:0;margin-top:3px}
 .kidea-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
 .kidea{display:grid;gap:4px;padding:10px 12px 6px;border:1px solid var(--line);border-radius:10px;background:#fff;min-width:0}
-.kidea.f-own{border:0;border-left:3px solid var(--own);border-radius:0 10px 10px 0;background:#fbfaf6}
+.kidea.f-own{border:0;border-left:3px solid var(--own);border-radius:0 10px 10px 0;background:#fff}
 .kidea-head{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .kidea-text{font-size:13px;line-height:1.8}
 .kidea-res{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
@@ -181,49 +178,51 @@ dialog.self-sheet{width:min(560px,calc(100% - 32px))}
 .sx-enter{animation:sxIn .18s ease-out}
 @media(prefers-reduced-motion:reduce){.sx-enter,.srow-open,.sx-history{animation:none}}
 
-/* 四隅のカードから本人の方へ: 点 + 線（≥ 1121 のみ） */
+/* 各カードから本人の方へ: 点 + 線（≥ 1121。左列は右辺、右列は左辺の top:34px） */
 @media(min-width:1121px){
-.ax-int::before,.ax-ori::before,.ax-exp::before,.ax-mas::before{content:'';position:absolute;top:34px;width:7px;height:7px;border-radius:50%;background:#a3ab96}
-.ax-int::after,.ax-ori::after,.ax-exp::after,.ax-mas::after{content:'';position:absolute;top:37px;width:36px;height:1px;background:#c9ccbf}
-.ax-int::before,.ax-exp::before{right:-4px}
-.ax-ori::before,.ax-mas::before{left:-4px}
-.ax-int::after,.ax-exp::after{left:100%}
-.ax-ori::after,.ax-mas::after{right:100%}
+.self-col>.axis-card::before{content:'';position:absolute;top:34px;width:7px;height:7px;border-radius:50%;background:#a3ab96}
+.self-col>.axis-card::after{content:'';position:absolute;top:37px;width:32px;height:1px;background:#c9ccbf}
+.col-l>.axis-card::before{right:-4px}
+.col-l>.axis-card::after{left:100%}
+.col-r>.axis-card::before{left:-4px}
+.col-r>.axis-card::after{right:100%}
 }
 
-/* ---------- 951〜1120 ---------- */
+/* ---------- 951〜1120 / 701〜950: 上に本人の段（本人 | 吹き出し）、その下に 2 列の縦積み。同心円なし ---------- */
 @media(max-width:1120px){
-.self-orbit{grid-template-columns:minmax(0,1fr) 84px 84px minmax(0,1fr);column-gap:20px;
-  grid-template-areas:"int int ori ori" "bud hub hub psy" "exp exp mas mas"}
-.self-hub{--av:150px;--c1:300px;--c2:520px}
-}
-
-/* ---------- 701〜950 ---------- */
-@media(max-width:950px){
-.self-orbit{grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:20px;row-gap:24px;
-  grid-template-areas:"int ori" "hub hub" "bud bud" "psy psy" "exp mas"}
-.self-hub{--av:140px;--c2:260px;padding:28px 0 4px}
-.self-hub-inner{position:relative;top:auto}
+.self-orbit{grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:20px;row-gap:20px;grid-template-areas:"c c" "l r"}
+.self-col{gap:20px}
+.col-c{position:relative;top:auto;padding-top:0;flex-direction:row;flex-wrap:wrap;justify-content:center;align-items:center;column-gap:28px;row-gap:16px}
+.self-hub{--av:150px}
 .self-hub-inner::before{display:none}
-.self-bud{justify-content:center}
-.sx-bubble{max-width:520px}
+.self-bud{width:auto;flex:0 1 420px}
+.sx-bubble{max-width:420px}
+.sx-bubble::before{left:-7px;top:50%;transform:translateY(-50%) rotate(-45deg)}
+}
+@media(max-width:950px){
+.self-hub{--av:140px}
 .kufu-scene{grid-template-columns:minmax(0,1fr);gap:14px}
 }
 
-/* ---------- ≤ 700（390） ---------- */
+/* ---------- ≤ 700（390）: 1 列。hub → 吹き出し → 関心 → 志向性 → 体験 → 心理 → 習熟 → 工夫 ---------- */
 @media(max-width:700px){
 .self-page{padding-bottom:80px}
 .self-head{flex-direction:column;gap:12px;margin-bottom:24px}
 .self-head h1{font-size:25px}
 .self-head-side{align-items:flex-start;padding-top:0}
 .sx-legend{justify-content:flex-start;max-width:none}
-.self-orbit{grid-template-columns:minmax(0,1fr);row-gap:20px;
-  grid-template-areas:"hub" "bud" "int" "ori" "exp" "psy" "mas"}
-.self-hub{--av:132px;--c2:220px;padding:36px 0 8px}
-.self-bud{justify-content:flex-start}
-.self-bud .des-buddy{order:-1}
-.sx-bud-pair{width:100%}
-.sx-bubble{border-radius:0 14px 14px 14px;max-width:none}
+.self-orbit{display:flex;flex-direction:column;align-items:stretch;gap:20px}
+.self-col,.col-c{display:contents}
+.self-hub{order:1;--av:132px;padding:36px 0 8px}
+.self-bud{order:2;width:100%;flex:none}
+.ax-int{order:3}
+.ax-ori{order:4}
+.ax-exp{order:5}
+.ax-psy{order:6}
+.ax-mas{order:7}
+.self-hub-inner::before{display:block;width:220px;height:220px;border:1px dashed #e6e2d8}
+.sx-bubble{max-width:none}
+.sx-bubble::before{left:50%;top:-7px;transform:translateX(-50%) rotate(45deg)}
 /* 左の背骨線（x = 8）と、各カードの見出しの高さの点。カードは左へ 20px 下げる */
 .axis-card{margin-left:20px;padding:14px 14px 12px}
 .axis-card::before{content:'';position:absolute;left:-17px;top:24px;width:9px;height:9px;border-radius:50%;background:#a3ab96}
@@ -234,7 +233,6 @@ dialog.self-sheet{width:min(560px,calc(100% - 32px))}
 .kufu-head{flex-direction:column;gap:10px}
 .sx-hairs{grid-template-columns:repeat(2,minmax(0,1fr))}
 dialog.self-sheet{margin:auto auto 0;width:100%;max-width:100%;border-radius:18px 18px 0 0;padding:18px 16px 24px}
-.exp-line{grid-template-columns:40px minmax(0,1fr)}
 }
 
 /* ---------- 小学生向け（es）: 本文 14 / メタ 12 / 見出し 11、操作 48px ---------- */
@@ -242,5 +240,6 @@ html[data-mode="es"] .self-page{font-size:14px}
 html[data-mode="es"] .srow-text,html[data-mode="es"] .sx-bubble,html[data-mode="es"] .kidea-text,html[data-mode="es"] .ks-buddy,html[data-mode="es"] .kfit-text,html[data-mode="es"] .self-head .sx-intro,html[data-mode="es"] .sx-edit textarea,html[data-mode="es"] .sx-rnote{font-size:14px}
 html[data-mode="es"] .srow-meta,html[data-mode="es"] .sx-date,html[data-mode="es"] .sx-btext,html[data-mode="es"] .sx-basis-i,html[data-mode="es"] .sx-reply,html[data-mode="es"] .exp-date,html[data-mode="es"] .kfit-meta,html[data-mode="es"] .kfit-note,html[data-mode="es"] .sx-sublinks,html[data-mode="es"] .sx-edit label,html[data-mode="es"] .kufu-head .sx-intro,html[data-mode="es"] .self-page .date-stamp,html[data-mode="es"] .sx-orig{font-size:12px}
 html[data-mode="es"] .sx-group-h,html[data-mode="es"] .sx-sub-h{font-size:11px}
+html[data-mode="es"] .sx-sublinks .link-btn,html[data-mode="es"] .sx-away-ops .link-btn,html[data-mode="es"] .sx-see,html[data-mode="es"] .sx-log li,html[data-mode="es"] .sx-fold .link-btn,html[data-mode="es"] .sx-away>.link-btn{font-size:12px}
 html[data-mode="es"] .self-page .btn.small,html[data-mode="es"] .self-sheet .btn.small,html[data-mode="es"] .self-page .link-btn,html[data-mode="es"] .srow-main,html[data-mode="es"] .sx-rnote{min-height:48px}
 html[data-mode="es"] .kidea-ops .sx-more,html[data-mode="es"] .sx-color{width:48px;height:48px}
