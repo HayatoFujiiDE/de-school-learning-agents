@@ -2,7 +2,7 @@
 // p2: custom tool を持つ agent を API で作れるか / p3: custom_tool_use の数分後に custom_tool_result を送って受け付けられるか /
 // p4: 同じ custom_tool_use_id への 2 回目の result、archive 後の result への応答。
 // Access の内側だけ（index.ts の ROUTES）。返すのは id・種別・状態コード・エラー種別だけ（本文・鍵は返さない）。
-import { APIError } from '@anthropic-ai/sdk';
+import { APIError, toFile } from '@anthropic-ai/sdk';
 import { makeClient } from '../anthropic';
 import { getSetting, setSetting } from '../db';
 import { todayCostCents } from '../jobs';
@@ -39,7 +39,10 @@ export async function probeImageTool(c: RouteCtx): Promise<Response> {
       const agent = await client.beta.agents.create({
         name: 'probe-generate-image',
         model: 'claude-haiku-5-5',
-        system: 'You are a probe. Call the generate_image tool exactly once with prompt "a red cube". After you receive its result, reply with the single word OK and stop.',
+        system:
+          body.variant === 'describe'
+            ? 'You are a probe. Call the generate_image tool exactly once with prompt "a shape". When you receive its result, describe exactly what the returned image shows (shape and color) in one short English sentence, then stop. If you cannot see an image, say NO IMAGE.'
+            : 'You are a probe. Call the generate_image tool exactly once with prompt "a red cube". After you receive its result, reply with the single word OK and stop.',
         tools: [TOOL],
         metadata: { probe: 'image-tool' },
       });
@@ -98,6 +101,10 @@ export async function probeImageTool(c: RouteCtx): Promise<Response> {
         name: e.type === 'agent.custom_tool_use' ? e.name : undefined,
         stop: e.type === 'session.status_idle' ? (e.stop_reason as { type?: unknown; event_ids?: unknown } | undefined) : undefined,
         ref: e.type === 'user.custom_tool_result' ? e.custom_tool_use_id : undefined,
+        text:
+          e.type === 'agent.message' && Array.isArray(e.content)
+            ? (e.content as Array<{ type?: string; text?: string }>).filter((b) => b.type === 'text').map((b) => b.text ?? '').join(' ').slice(0, 300)
+            : undefined,
       }));
       return json(200, { ok: true, status: (s as { status?: unknown }).status, events });
     }
@@ -108,11 +115,47 @@ export async function probeImageTool(c: RouteCtx): Promise<Response> {
       } as never);
       return json(200, { ok: true, sent: id });
     }
+    // p5: custom_tool_result に画像ブロックを入れて返す（mode=file は Files API へ upload して file 参照、mode=base64 は直）
+    if (step === 'result_image') {
+      const id = String(body.tool_use_id ?? '');
+      const mode = body.mode === 'file' ? 'file' : 'base64';
+      const key = (c.env as unknown as { OPENAI_API_KEY?: string }).OPENAI_API_KEY;
+      if (!key) return json(409, { error: 'no_openai_key' });
+      const spent = Number((await getSetting(c.env.DB, 'probe_p1_spent_cents')) ?? '0');
+      if (spent >= 300) return json(409, { error: 'probe_budget_used' });
+      const r = await fetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-image-2.5-flare', prompt: 'A single solid blue triangle centered on a plain white background. Nothing else.', size: '1024x1024', quality: 'low', n: 1, output_format: 'png' }),
+        signal: AbortSignal.timeout(120_000),
+      });
+      const j = (await r.json().catch(() => ({}))) as { data?: Array<{ b64_json?: string }> };
+      await setSetting(c.env.DB, 'probe_p1_spent_cents', String(spent + 1));
+      const b64 = j.data?.[0]?.b64_json;
+      if (!r.ok || !b64) return json(200, { ok: false, http: r.status, error: 'image_failed' });
+      let source: Record<string, unknown>;
+      let fileId: string | null = null;
+      if (mode === 'file') {
+        const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+        const meta = await client.files.upload({ file: await toFile(bytes, 'p5-probe.png', { type: 'image/png' }) });
+        fileId = meta.id;
+        await setSetting(c.env.DB, 'probe_p5_file', meta.id);
+        source = { type: 'file', file_id: meta.id };
+      } else {
+        source = { type: 'base64', media_type: 'image/png', data: b64 };
+      }
+      await client.beta.sessions.events.send(sid, {
+        events: [{ type: 'user.custom_tool_result', custom_tool_use_id: id, content: [{ type: 'image', source }], is_error: false }],
+      } as never);
+      return json(200, { ok: true, mode, has_file: !!fileId, approx_bytes: Math.floor((b64.length * 3) / 4) });
+    }
     if (step === 'archive') {
       const out: Record<string, unknown> = {};
       try { await client.beta.sessions.archive(sid); out.session = 'archived'; } catch (e) { out.session = errView(e); }
       const aid = saved.agent_id;
       if (aid && aid !== c.env.FACTORY_AGENT_ID) { try { await client.beta.agents.archive(aid); out.agent = 'archived'; } catch (e) { out.agent = errView(e); } }
+      const pf = await getSetting(c.env.DB, 'probe_p5_file');
+      if (pf) { try { await client.files.delete(pf); out.file = 'deleted'; } catch (e) { out.file = errView(e); } await setSetting(c.env.DB, 'probe_p5_file', ''); }
       await setSetting(c.env.DB, 'probe_image_tool', JSON.stringify({ ...saved, done: true }));
       return json(200, { ok: true, ...out });
     }
