@@ -6,7 +6,7 @@ import type { MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk/resource
 import { PortError, type FactoryPort } from './anthropic';
 import { sanitizeLlmProposal } from './checks/intake';
 import { FORBIDDEN_WORDS } from './checks/forbidden';
-import { all, cas, conditionalBatch, getSetting, isoPlus, nowIso, prepare, setSetting, stmt, tokyoDay, type Stmt } from './db';
+import { all, cas, claimSetting, conditionalBatch, first, getSetting, isoPlus, nowIso, prepare, setSetting, stmt, tokyoDay, type Stmt } from './db';
 import { cfg, type Env } from './env';
 import { capCheck, microToCents, sonnetBatchMicroDollars } from './ledger';
 import { insertProposalStmt } from './proposals';
@@ -30,6 +30,8 @@ export const MEETING_LIMITS = {
   inputChars: 120_000,
   /** 1 tick で回収する submitted 行の数 */
   collectPerTick: 3,
+  /** 応答不明の batches.create の復旧（§R-40）: batch の created_at が行の created_at〜updated_at からこの幅の中なら候補にする（時計のずれの許容） */
+  recoverSkewMs: 2 * 60_000,
 } as const;
 
 /** 会議の system prompt（固定文） */
@@ -90,7 +92,29 @@ export interface MeetingOutput {
   standards_suggestions: string[];
 }
 
-/** 会議の出力（JSON テキスト）を検査する。形が違えば null。4 視点は 400 文字で切る */
+const RANKED_KEYS = new Set(['proposal_id', 'title', 'body', 'concept_codes', 'kinds', 'age_band', 'priority', 'reason']);
+const AGE_BANDS = new Set(['elementary', 'secondary', 'both']);
+
+/**
+ * ranked の 1 要素が MEETING_SCHEMA の items に合うか（§K-5-3 / §R-40 (b)）。
+ * 必須: title, body, reason（string）/ concept_codes（string の配列）/ kinds（整数の配列）/ age_band（列挙）/ priority（1..5 の整数）。
+ * proposal_id は省略可（あれば string）。許可キー以外が 1 つでもあれば schema 外。継承プロパティは見ない（own key だけ）
+ */
+export function isRankedItem(x: unknown): boolean {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return false;
+  const r = x as Record<string, unknown>;
+  for (const k of Object.keys(r)) if (!RANKED_KEYS.has(k)) return false;
+  const own = (k: string) => Object.prototype.hasOwnProperty.call(r, k);
+  if (own('proposal_id') && typeof r.proposal_id !== 'string') return false;
+  for (const k of ['title', 'body', 'reason']) if (!own(k) || typeof r[k] !== 'string') return false;
+  if (!own('concept_codes') || !Array.isArray(r.concept_codes) || !r.concept_codes.every((c) => typeof c === 'string')) return false;
+  if (!own('kinds') || !Array.isArray(r.kinds) || !r.kinds.every((k) => Number.isInteger(k))) return false;
+  if (!own('age_band') || typeof r.age_band !== 'string' || !AGE_BANDS.has(r.age_band)) return false;
+  if (!own('priority') || !Number.isInteger(r.priority) || (r.priority as number) < 1 || (r.priority as number) > 5) return false;
+  return true;
+}
+
+/** 会議の出力（JSON テキスト）を検査する。形が違えば null（ranked は切る前の全要素を検査し、1 つでも schema 外なら null）。4 視点は 400 文字で切る */
 export function parseMeetingOutput(text: string): MeetingOutput | null {
   let j: unknown;
   try {
@@ -105,7 +129,7 @@ export function parseMeetingOutput(text: string): MeetingOutput | null {
   const keys = ['research', 'pedagogy', 'expression', 'verification'] as const;
   if (!keys.every((k) => typeof v[k] === 'string')) return null;
   if (!Array.isArray(o.ranked) || !Array.isArray(o.standards_suggestions)) return null;
-  if (!o.ranked.every((r) => r && typeof r === 'object' && !Array.isArray(r))) return null;
+  if (!o.ranked.every(isRankedItem)) return null;
   if (!o.standards_suggestions.every((s) => typeof s === 'string')) return null;
   const views = Object.fromEntries(keys.map((k) => [k, (v[k] as string).slice(0, MEETING_LIMITS.viewChars)])) as unknown as MeetingViews;
   return {
@@ -180,6 +204,7 @@ export function meetingParams(input: string): MessageCreateParamsNonStreaming {
 export type MeetingStart =
   | { status: 'paused' }
   | { status: 'already_submitted' }
+  | { status: 'already_ran_today' }
   | { status: 'skipped'; reason: string }
   | { status: 'submitted'; meeting_id: string; batch_id: string }
   | { status: 'failed'; meeting_id: string; error: string };
@@ -189,8 +214,17 @@ function kindOf(e: unknown): string {
   return `batch_${e instanceof Error ? e.name.replace(/[^A-Za-z0-9_]/g, '').slice(0, 40) : 'error'}`;
 }
 
-/** 会議を起こす（§K-5-1）。cron（判定の後）と手動が呼ぶ */
-export async function startMeeting(env: Env, port: FactoryPort, opts: { trigger: 'cron' | 'manual'; deadline: number; now?: Date }): Promise<MeetingStart> {
+/**
+ * 会議を起こす（§K-5-1）。cron（判定の後）と手動が呼ぶ。
+ * claimDay（cron だけ渡す）: submitted 行を入れた後に settings.meeting_last_day をこの日へ CAS で進め、取れた時だけ Batch を作る
+ * （submitted の 1 件制約が lock、日付が実行権。取れなければ入れた行を消して already_ran_today。§R-40 (c)）。
+ * 手動は従来どおり meeting_last_day を今日にする（同じ日の cron は起こさない）
+ */
+export async function startMeeting(
+  env: Env,
+  port: FactoryPort,
+  opts: { trigger: 'cron' | 'manual'; deadline: number; now?: Date; claimDay?: string },
+): Promise<MeetingStart> {
   const db = env.DB;
   const now = opts.now ?? new Date();
   if ((await getSetting(db, 'paused')) === '1') return { status: 'paused' };
@@ -215,7 +249,15 @@ export async function startMeeting(env: Env, port: FactoryPort, opts: { trigger:
     ),
   );
   if (!inserted) return { status: 'already_submitted' };
-  await setSetting(db, 'meeting_last_day', tokyoDay(now));
+  if (opts.claimDay !== undefined) {
+    // 実行権（定期実行日の CAS）。取れなければ入れた行を消す（Batch はまだ作っていない）。取れた後は結果（失敗を含む）に関係なく今日の分は使った
+    if (!(await claimSetting(db, 'meeting_last_day', opts.claimDay))) {
+      await prepare(db, stmt("DELETE FROM meeting_minutes WHERE id = ? AND status = 'submitted' AND batch_id IS NULL", id)).run();
+      return { status: 'already_ran_today' };
+    }
+  } else {
+    await setSetting(db, 'meeting_last_day', tokyoDay(now));
+  }
   try {
     const b = await port.createBatch({ requests: [{ custom_id: id, params: meetingParams(input) }] }, { deadline: opts.deadline });
     await prepare(db, stmt("UPDATE meeting_minutes SET batch_id = ?, updated_at = ? WHERE id = ? AND status = 'submitted'", b.id, nowIso(), id)).run();
@@ -223,10 +265,79 @@ export async function startMeeting(env: Env, port: FactoryPort, opts: { trigger:
     return { status: 'submitted', meeting_id: id, batch_id: b.id };
   } catch (e) {
     const kind = kindOf(e);
-    await prepare(db, stmt("UPDATE meeting_minutes SET status = 'failed', last_error = ?, updated_at = ? WHERE id = ? AND status = 'submitted'", kind, nowIso(), id)).run();
-    console.log(JSON.stringify({ at: 'meeting', meeting_id: id, status: 'failed', error: kind }));
+    // 応答不明（timeout・接続断）は batch ができて課金されたかもしれないので、保守的見積りを台帳に載せて failed（§R-40 (e)）。
+    // 次の tick で batches.list から 1 回だけ復旧を試みる（recoverUnconfirmed）
+    const cents = kind === 'create_unconfirmed' ? cfg(env).meetingUnconfirmedCents : 0;
+    await failRow(db, id, 'failed', kind, cents, now);
     return { status: 'failed', meeting_id: id, error: kind };
   }
+}
+
+/**
+ * 応答不明だった batches.create の復旧（§R-40 (e)）。collectMeetings の先頭で、直近 24 時間の `create_unconfirmed` / `create_incomplete`（batch_id を書く前に止まった行）を 1 件だけ見る。
+ * 1 回だけ: last_error を `create_unconfirmed` / `create_incomplete` → `create_recovering` へ CAS で進めてから batches.list の 1 ページ目（新しい順 20 件）を読む。
+ * Message Batch の list 応答には custom_id が無い（SDK の MessageBatch 型）ので、custom_id の照合は回収時の results（custom_id === 行の id）で行い、
+ * ここでは「created_at が行の作成〜失敗の時刻の範囲（±2 分）・request 数 1・他の行が使っていない batch」がちょうど 1 件の時だけ batch_id を補って submitted に戻す。
+ * 見つからない / 候補が 2 件以上 / list の失敗は failed のまま（last_error に結果の種別）。見積りの費用行はそのまま残す（実費は回収時に別に載る。上限の判定は多めに倒れる）
+ */
+export async function recoverUnconfirmed(env: Env, port: FactoryPort, opts: { deadline: number; now?: Date }): Promise<string | null> {
+  const db = env.DB;
+  const now = opts.now ?? new Date();
+  const row = await first<{ id: string; created_at: string; updated_at: string; last_error: string }>(
+    db,
+    stmt(
+      "SELECT id, created_at, updated_at, last_error FROM meeting_minutes WHERE status = 'failed' AND last_error IN ('create_unconfirmed', 'create_incomplete') AND batch_id IS NULL AND created_at > ? ORDER BY created_at DESC LIMIT 1",
+      isoPlus(-MEETING_LIMITS.expireMs, now),
+    ),
+  );
+  if (!row) return null;
+  const mark = (to: string, from: string) =>
+    cas(db, stmt("UPDATE meeting_minutes SET last_error = ?, updated_at = ? WHERE id = ? AND status = 'failed' AND last_error = ? AND batch_id IS NULL", to, nowIso(), row.id, from));
+  if (!(await mark('create_recovering', row.last_error))) return null;
+  let list;
+  try {
+    list = await port.listBatchesPage({ deadline: opts.deadline });
+  } catch (e) {
+    const kind = e instanceof PortError ? `recover_list_${e.status ?? e.kind}` : 'recover_list_error';
+    await mark(kind, 'create_recovering');
+    return `${row.id}:${kind}`;
+  }
+  const lo = Date.parse(row.created_at) - MEETING_LIMITS.recoverSkewMs;
+  const hi = Date.parse(row.updated_at) + MEETING_LIMITS.recoverSkewMs;
+  const used = new Set(
+    (await all<{ batch_id: string }>(db, stmt('SELECT batch_id FROM meeting_minutes WHERE batch_id IS NOT NULL ORDER BY created_at DESC LIMIT 100'))).map((r) => r.batch_id),
+  );
+  const cands = list.filter((b) => {
+    const t = Date.parse(b.created_at);
+    return Number.isFinite(t) && t >= lo && t <= hi && b.request_total === 1 && !used.has(b.id);
+  });
+  if (cands.length !== 1) {
+    const kind = cands.length === 0 ? 'recover_not_found' : 'recover_ambiguous';
+    await mark(kind, 'create_recovering');
+    console.log(JSON.stringify({ at: 'meeting', meeting_id: row.id, status: 'failed', error: kind }));
+    return `${row.id}:${kind}`;
+  }
+  const b = cands[0];
+  // submitted は同時に 1 件だけ・同じ batch を 2 行で使わない
+  const ok = await cas(
+    db,
+    stmt(
+      `UPDATE meeting_minutes SET status = 'submitted', batch_id = ?, last_error = NULL, updated_at = ?
+       WHERE id = ? AND status = 'failed' AND last_error = 'create_recovering' AND batch_id IS NULL
+         AND NOT EXISTS (SELECT 1 FROM meeting_minutes m2 WHERE m2.status = 'submitted')
+         AND NOT EXISTS (SELECT 1 FROM meeting_minutes m3 WHERE m3.batch_id = ?)`,
+      b.id,
+      nowIso(),
+      row.id,
+      b.id,
+    ),
+  );
+  if (!ok) {
+    await mark('recover_conflict', 'create_recovering');
+    return `${row.id}:recover_conflict`;
+  }
+  console.log(JSON.stringify({ at: 'meeting', meeting_id: row.id, status: 'submitted', recovered: true }));
+  return `${row.id}:recovered`;
 }
 
 interface MinutesRow {
@@ -241,15 +352,22 @@ export async function collectMeetings(env: Env, port: FactoryPort, opts: { deadl
   const db = env.DB;
   const now = opts.now ?? new Date();
   const out: string[] = [];
-  // batch_id を書く前に止まった行
-  await prepare(
+  // 応答不明だった create の復旧（1 回だけ）。復旧できた行は下の回収にそのまま乗る
+  if (Date.now() < opts.deadline - 5_000) {
+    const rec = await recoverUnconfirmed(env, port, { deadline: opts.deadline, now });
+    if (rec) out.push(rec);
+  }
+  // batch_id を書く前に止まった行（create の結果が不明）: create_unconfirmed と同じく見積りを台帳に載せて failed（行ごとに条件付き batch）。
+  // 復旧（recoverUnconfirmed）は次の tick で 1 回だけ（この tick の復旧は上で済んでいる）
+  const orphans = await all<{ id: string }>(
     db,
     stmt(
-      "UPDATE meeting_minutes SET status = 'failed', last_error = 'create_incomplete', updated_at = ? WHERE status = 'submitted' AND batch_id IS NULL AND updated_at < ?",
-      nowIso(),
+      "SELECT id FROM meeting_minutes WHERE status = 'submitted' AND batch_id IS NULL AND updated_at < ? ORDER BY created_at ASC LIMIT ?",
       isoPlus(-MEETING_LIMITS.orphanMs, now),
+      MEETING_LIMITS.collectPerTick,
     ),
-  ).run();
+  );
+  for (const o of orphans) await failRow(db, o.id, 'failed', 'create_incomplete', cfg(env).meetingUnconfirmedCents, now);
   const rows = await all<MinutesRow>(
     db,
     stmt("SELECT id, created_at, updated_at, batch_id FROM meeting_minutes WHERE status = 'submitted' AND batch_id IS NOT NULL ORDER BY created_at ASC LIMIT ?", MEETING_LIMITS.collectPerTick),
@@ -385,7 +503,8 @@ export async function meetingTick(env: Env, port: FactoryPort, opts: { deadline:
   out.collected = await collectMeetings(env, port, { deadline: opts.deadline, now });
   const last = await getSetting(env.DB, 'meeting_last_day');
   if (meetingDueOn(cfg(env).meetingDays, last, now) && Date.now() < opts.deadline - 30_000) {
-    const s = await startMeeting(env, port, { trigger: 'cron', deadline: opts.deadline, now });
+    // 判定は読みだけ。実行権は startMeeting が submitted 行を入れた後に meeting_last_day の CAS で取る（重複 cron でも同じ日に 1 回）
+    const s = await startMeeting(env, port, { trigger: 'cron', deadline: opts.deadline, now, claimDay: tokyoDay(now) });
     out.start = s.status;
   }
   return out;

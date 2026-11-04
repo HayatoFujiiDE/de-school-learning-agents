@@ -55,6 +55,7 @@ export function intakePort(over: Partial<FactoryPort> = {}): Counted {
       count('batchResults', id);
       return [];
     },
+    listBatchesPage: no,
   };
   for (const [k, f] of Object.entries(over)) {
     (base as unknown as Record<string, unknown>)[k] = async (...a: unknown[]) => {

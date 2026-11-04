@@ -84,9 +84,9 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
     if (!paused && scoutDueOn(cfg(env).scoutDay, await getSetting(db, 'scout_last_day'), now)) {
       if (!enough()) out.scout = 'skipped_time';
       else {
-        // 週 1 回: 結果（失敗を含む）に関係なく今日の分は使ったことにする（自動再試行しない）
-        await setSetting(db, 'scout_last_day', tokyoDay(now));
-        const r = await runScout(env, port, { trigger: 'cron', deadline: intakeDeadline, fetchImpl: await getFeedFetch(env, portCtx), now });
+        // 週 1 回: runScout が lock を取った後に scout_last_day を CAS で今日へ進め、取れた時だけ走る（lock → 日付の順。
+        // 走行中で lock を取れなければ日付を消費しない）。取れた後は結果（失敗を含む）に関係なく今日の分は使ったことにする
+        const r = await runScout(env, port, { trigger: 'cron', deadline: intakeDeadline, fetchImpl: await getFeedFetch(env, portCtx), now, claimDay: tokyoDay(now) });
         out.scout = r.status;
       }
     }

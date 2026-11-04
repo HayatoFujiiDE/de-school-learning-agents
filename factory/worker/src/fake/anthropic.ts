@@ -9,7 +9,7 @@
 
 import type { Message, MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { MessageBatchIndividualResponse } from '@anthropic-ai/sdk/resources/messages/batches';
-import { PortError, type BatchView, type FactoryPort, type FileMeta, type SessionView } from '../anthropic';
+import { BATCH_LIST_LIMIT, PortError, type BatchView, type FactoryPort, type FileMeta, type SessionView } from '../anthropic';
 import { getSetting, nowIso, setSetting } from '../db';
 import type { Env } from '../env';
 import { SCOUT_FEEDS } from '../generated/scout-sources';
@@ -340,6 +340,18 @@ export function createFakePort(env: Env): FactoryPort {
         usage: { cache_creation_input_tokens: 0, cache_read_input_tokens: 0, ...(fx.usage ?? {}) },
       };
       return [{ custom_id: c.custom_id ?? '', result: { type: 'succeeded', message } } as unknown as MessageBatchIndividualResponse];
+    },
+    async listBatchesPage(): Promise<BatchView[]> {
+      // 作った batch（呼び出し記録）を新しい順に BATCH_LIST_LIMIT 件。custom_id は list の応答に無いので返さない（本物と同じ）
+      const made = (await readCalls(db)).filter((x) => x.op === 'batches.create' && typeof x.batch_id === 'string').reverse().slice(0, BATCH_LIST_LIMIT);
+      await appendCall(db, { op: 'batches.list', at: nowIso() });
+      return made.map((c) => ({
+        id: c.batch_id as string,
+        processing_status: 'in_progress',
+        created_at: c.at,
+        expires_at: new Date(Date.parse(c.at) + 86_400_000).toISOString(),
+        request_total: 1,
+      }));
     },
   };
 }

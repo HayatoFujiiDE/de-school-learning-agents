@@ -6,7 +6,7 @@
 import type { MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk/resources/messages/messages';
 import { PortError, type FactoryPort } from './anthropic';
 import { sanitizeLlmProposal } from './checks/intake';
-import { all, cas, conditionalBatch, first, getSetting, isoPlus, nowIso, prepare, stmt, tokyoDay, type Stmt } from './db';
+import { all, cas, claimSetting, conditionalBatch, first, getSetting, isoPlus, nowIso, prepare, stmt, tokyoDay, type Stmt } from './db';
 import { cfg, type Env } from './env';
 import { SCOUT_FEEDS, SCOUT_X_HANDLES } from './generated/scout-sources';
 import { capCheck, haikuMicroDollars, microToCents } from './ledger';
@@ -85,7 +85,7 @@ export const SCOUT_SCHEMA = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// RSS / Atom（正規表現で最小限）
+// RSS / Atom（項目の切り出しは indexOf の線形パース。項目内の field は正規表現で最小限）
 
 export interface FeedItem {
   feed: number;
@@ -145,11 +145,44 @@ function linkOf(block: string): string | null {
   return null;
 }
 
+/** ASCII の英大文字だけを小文字にする（長さが変わらないので、元の文字列と位置がそろう） */
+const asciiLower = (s: string): string => s.replace(/[A-Z]+/g, (m) => m.toLowerCase());
+
+const ITEM_TAGS = ['item', 'entry'] as const;
+
+/**
+ * `<item>` / `<entry>` を線形に拾う（正規表現の後戻りで閉じタグ無しの入力が二次的なコストにならないよう indexOf で進む）。
+ * 開始タグ `<item>` / `<item 属性>`（大文字小文字は問わない）を探し、対応する閉じタグ `</item>` を indexOf で探す。
+ * 閉じタグが無ければそこで打ち切る。1 フィード max 件まで。
+ */
 export function parseFeed(xml: string, feed = 0, max: number = SCOUT_LIMITS.itemsPerFeed): FeedItem[] {
   const out: FeedItem[] = [];
-  for (const m of xml.matchAll(/<(item|entry)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi)) {
-    if (out.length >= max) break;
-    const block = m[2];
+  const lc = asciiLower(xml);
+  let pos = 0;
+  while (out.length < max) {
+    const lt = lc.indexOf('<', pos);
+    if (lt < 0) break;
+    const name = ITEM_TAGS.find((n) => lc.startsWith(n, lt + 1));
+    if (!name) {
+      pos = lt + 1;
+      continue;
+    }
+    const after = lt + 1 + name.length;
+    const ch = lc.charAt(after);
+    let contentStart: number;
+    if (ch === '>') contentStart = after + 1;
+    else if (/\s/.test(ch)) {
+      const gt = lc.indexOf('>', after);
+      if (gt < 0) break;
+      contentStart = gt + 1;
+    } else {
+      pos = after; // <items> などは別のタグ
+      continue;
+    }
+    const close = lc.indexOf(`</${name}>`, contentStart);
+    if (close < 0) break; // 閉じタグが無い: 打ち切り
+    pos = close + name.length + 3;
+    const block = xml.slice(contentStart, close);
     const title = cleanText(tagText(block, ['title']) ?? '');
     const dateRaw = tagText(block, ['pubDate', 'published', 'updated', 'dc:date']);
     const ts = dateRaw ? Date.parse(cleanText(dateRaw)) : Number.NaN;
@@ -314,11 +347,17 @@ export interface ScoutOptions {
   /** RSS の取得に使う fetch（fake では fixture を返す） */
   fetchImpl: typeof fetch;
   now?: Date;
+  /**
+   * cron の週 1 回: lock を取った後に settings.scout_last_day をこの日（Asia/Tokyo の YYYY-MM-DD）へ CAS で進め、取れた時だけ走る。
+   * lock を取れなかった（already_running）時は日付を消費しない。手動起動は渡さない
+   */
+  claimDay?: string;
 }
 
 export type ScoutOutcome =
   | { status: 'paused' }
   | { status: 'already_running' }
+  | { status: 'already_ran_today' }
   | { status: 'skipped'; run_id: string; reason: string }
   | { status: 'done' | 'failed'; run_id: string; rss_items: number; x_posts: number; proposed: number; dropped: number; cents: number; error: string | null };
 
@@ -335,6 +374,17 @@ function errKind(prefix: string, e: unknown): string {
   return `${prefix}_${e instanceof Error ? e.name.replace(/[^A-Za-z0-9_]/g, '').slice(0, 40) : 'error'}`;
 }
 
+/**
+ * xAI の呼び出しが課金されたか分からない失敗か。分かっているのは「API が 2xx 以外で応答した（拒否された）」と「key が無く呼ばなかった」だけで、
+ * それ以外（応答不明の timeout / 接続断、2xx の後で本文を読めない・解釈できない、XaiError 以外の例外）は不明として扱う
+ */
+export function xaiCostUnknown(e: unknown): boolean {
+  if (!(e instanceof XaiError)) return true;
+  if (e.kind === 'no_key') return false;
+  if (!e.responded) return true;
+  return e.status === undefined || (e.status >= 200 && e.status < 300);
+}
+
 async function recordCost(db: D1Database, runId: string, cents: number, now: Date): Promise<void> {
   if (cents <= 0) return;
   const t = nowIso();
@@ -348,7 +398,7 @@ const utcDate = (d: Date) => d.toISOString().slice(0, 10);
 
 /**
  * 収集を 1 回走らせる。cron と手動が呼ぶ（cron は週 1 判定の後）。
- * 順序: pause → lock → 上限 → scout_runs(running) → RSS → X → Haiku → proposals + done（条件付き batch）
+ * 順序: pause → lock →（cron は）定期実行日の CAS → 上限 → scout_runs(running) → RSS → X → Haiku → proposals + done（条件付き batch）
  */
 export async function runScout(env: Env, port: FactoryPort, opts: ScoutOptions): Promise<ScoutOutcome> {
   const db = env.DB;
@@ -359,6 +409,8 @@ export async function runScout(env: Env, port: FactoryPort, opts: ScoutOptions):
   if (!(await acquireLock(db, token, now))) return { status: 'already_running' };
   const runId = crypto.randomUUID();
   try {
+    // 週 1 回の実行権（lock → 日付の順）。取れたら結果（失敗を含む）に関係なく今日の分は使ったことにする（自動再試行しない）
+    if (opts.claimDay !== undefined && !(await claimSetting(db, 'scout_last_day', opts.claimDay))) return { status: 'already_ran_today' };
     // lock の失効後に残った running は捨てる
     await prepare(
       db,
@@ -478,6 +530,11 @@ async function scoutBody(env: Env, port: FactoryPort, opts: ScoutOptions, runId:
         try {
           x = await port.xaiResponses(req, { deadline: opts.deadline });
         } catch (e) {
+          // 結果不明（timeout・接続断・本文が読めない）は課金されたかもしれないので、保守的見積りを台帳に載せてから止まる
+          if (xaiCostUnknown(e)) {
+            cents += c.scoutXaiUnconfirmedCents;
+            await recordCost(db, runId, c.scoutXaiUnconfirmedCents, now);
+          }
           throw new ScoutStop(errKind('xai', e));
         }
         xPosts = x.usage.x_posts_fetched;

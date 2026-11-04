@@ -19,6 +19,7 @@ import {
   tokyoWeekday,
 } from '../src/scout';
 import { parseXaiResponse, xaiMicroDollars } from '../src/xai';
+import { claimSetting } from '../src/db';
 import { d1, migratedDb, one, rows } from './d1-shim';
 import { fixture, fixtureJson, intakePort } from './intake-port';
 
@@ -259,5 +260,87 @@ describe('runScout（node:sqlite の実 DB + fixture）', () => {
     const r = await runScout(env, p.port, opts());
     expect(r).toMatchObject({ status: 'done', rss_items: 0, proposed: 0 });
     expect(p.calls).toEqual({});
+  });
+
+  it('定期実行日は lock → 日付の順（§R-40 (c)(g)）: 走行中で lock を取れない cron は日付を消費しない', async () => {
+    raw.prepare("INSERT INTO settings VALUES ('scout_run_lock', 'other', ?)").run(new Date().toISOString());
+    expect(await runScout(env, intakePort().port, { ...opts(), trigger: 'cron', claimDay: '2026-11-09' })).toEqual({ status: 'already_running' });
+    expect(one(raw, "SELECT COUNT(*) AS c FROM settings WHERE key = 'scout_last_day'").c).toBe(0);
+  });
+
+  it('同じ日の 2 本目（古い判定で来た cron）は already_ran_today で外部を呼ばない。失敗の後も同じ日は走らない', async () => {
+    const db = d1(raw);
+    const r = await Promise.all([claimSetting(db, 'scout_last_day', '2026-11-09'), claimSetting(db, 'scout_last_day', '2026-11-09')]);
+    expect(r.filter(Boolean)).toHaveLength(1);
+    raw.prepare("DELETE FROM settings WHERE key = 'scout_last_day'").run();
+
+    const bad = (async () => new Response('x', { status: 503 })) as typeof fetch;
+    const first = await runScout(env, intakePort().port, { ...opts(), trigger: 'cron', fetchImpl: bad, claimDay: '2026-11-09' });
+    expect(first).toMatchObject({ status: 'failed' });
+    const p = intakePort();
+    expect(await runScout(env, p.port, { ...opts(), trigger: 'cron', claimDay: '2026-11-09' })).toEqual({ status: 'already_ran_today' });
+    expect(p.calls).toEqual({});
+    expect(fetches).toEqual([]);
+    expect(one(raw, 'SELECT COUNT(*) AS c FROM scout_runs').c).toBe(1);
+    expect(one(raw, "SELECT value FROM settings WHERE key = 'scout_run_lock'").value).toBe('');
+  });
+
+  it('xAI の結果不明（timeout）は見積り（既定 100 セント）を台帳に載せて failed。応答のあった 5xx は載せない（§R-40 (e)）', async () => {
+    const { XaiError } = await import('../src/xai');
+    const p = intakePort({
+      xaiResponses: async () => {
+        throw new XaiError(false, undefined, 'timeout');
+      },
+    });
+    const r = await runScout(env, p.port, opts());
+    expect(r).toMatchObject({ status: 'failed', error: 'xai_timeout' });
+    if (r.status !== 'failed') return;
+    expect(rows(raw, 'SELECT kind, ref_id, cents FROM cost_ledger')).toEqual([{ kind: 'scout', ref_id: r.run_id, cents: 100 }]);
+    expect(one(raw, 'SELECT cents FROM scout_runs WHERE id = ?', r.run_id).cents).toBe(100);
+
+    raw.prepare('DELETE FROM cost_ledger').run();
+    raw.prepare('DELETE FROM scout_runs').run();
+    const p2 = intakePort({
+      xaiResponses: async () => {
+        throw new XaiError(true, 503, 'api_error');
+      },
+    });
+    expect(await runScout(env, p2.port, opts())).toMatchObject({ status: 'failed', error: 'xai_503' });
+    expect(one(raw, 'SELECT COUNT(*) AS c FROM cost_ledger').c).toBe(0);
+  });
+
+  it('見積りは SCOUT_XAI_UNCONFIRMED_CENTS で変えられる。2xx の後で本文が読めない時も不明として載せる', async () => {
+    (env as unknown as Record<string, string>).SCOUT_XAI_UNCONFIRMED_CENTS = '30';
+    const { XaiError } = await import('../src/xai');
+    const p = intakePort({
+      xaiResponses: async () => {
+        throw new XaiError(true, 200, 'invalid_json');
+      },
+    });
+    await runScout(env, p.port, opts());
+    expect(one(raw, "SELECT SUM(cents) AS c FROM cost_ledger WHERE kind = 'scout'").c).toBe(30);
+  });
+});
+
+describe('RSS の線形パース（§R-40 (f)）', () => {
+  it('閉じタグの無い 512KB の入力でも速く終わる（打ち切り）', () => {
+    const inputs = [
+      '<rss><channel>' + '<item><title>t</title>'.repeat(Math.ceil((512 * 1024) / 22)),
+      '<feed>' + '<entry x="1">'.repeat(Math.ceil((512 * 1024) / 13)),
+      '<rss>' + '<item '.repeat(Math.ceil((512 * 1024) / 6)),
+    ];
+    for (const xml of inputs) {
+      expect(xml.length).toBeGreaterThanOrEqual(512 * 1024);
+      const t0 = performance.now();
+      const items = parseFeed(xml);
+      const ms = performance.now() - t0;
+      expect(items).toEqual([]);
+      expect(ms).toBeLessThan(500);
+    }
+  });
+
+  it('閉じた項目は拾い、閉じていない最後の項目で打ち切る。<items> などの別タグは項目にしない。大文字のタグも読む', () => {
+    const xml = '<rss><items>x</items><ITEM><title>a</title></ITEM><item foo="1"><title>b</title></item><item><title>c</title>';
+    expect(parseFeed(xml).map((i) => i.title)).toEqual(['a', 'b']);
   });
 });

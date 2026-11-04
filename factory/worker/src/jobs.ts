@@ -1085,6 +1085,17 @@ class Reconciler {
       if (!moved) throw new LostLease();
       return 'outcome_sent';
     }
+    // §R-40 (a): needs_answer へ進むと以後この job の head は再確認されない（needs_answer の間 reconcile は走査しない）。
+    // files 集計（再利用を含む）の文脈 head は直前の idle 走査の先頭 event なので、遷移の直前に events を desc で 1 ページ取り直し、
+    // 先頭 id が違えば遷移せず、files の途中集計を捨てて次の呼び出しに回す（次の呼び出しは idle・files とも先頭から走査し直す）
+    await this.extend();
+    const top = await this.port.listEventsPage(job.session_id!, { order: 'desc', page: null }, this.call);
+    const headNow = top.data.length > 0 ? eventId(top.data[0]) : null;
+    if (headNow !== head) {
+      const { files: _stale, ...scanRest } = this.state.scan ?? {};
+      await this.writeState(job, null, { ...this.state, scan: scanRest });
+      return 'deferred_head_changed';
+    }
     const asked = await this.casJob("status = 'needs_answer', questions_json = ?", "status = 'running' AND phase = 'questions'", JSON.stringify(questions));
     if (!asked) throw new LostLease();
     return 'needs_answer';

@@ -38,6 +38,9 @@
     "SCOUT_MONTHLY_CAP_CENTS": "500",
     "MEETING_MONTHLY_CAP_CENTS": "200",
     "SCOUT_DAY": "1",
-    "MEETING_DAYS": "1,15"
+    "MEETING_DAYS": "1,15",
+    // 結果不明の外部呼び出し 1 回を cost_ledger に載せる保守的見積り（セント。月次上限をすり抜けないため）
+    "SCOUT_XAI_UNCONFIRMED_CENTS": "100",
+    "MEETING_UNCONFIRMED_CENTS": "20"
   }
 }

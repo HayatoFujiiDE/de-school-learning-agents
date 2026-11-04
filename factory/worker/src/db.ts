@@ -94,4 +94,21 @@ export async function setSetting(db: D1Database, key: string, value: string): Pr
   ).run();
 }
 
+/**
+ * settings の CAS で「この値の実行権」を取る（定期実行日 scout_last_day / meeting_last_day）。
+ * 行が無ければ INSERT、あれば値が違う時だけ UPDATE。changes が 1 の呼び出しだけが true（同じ日に 2 本来ても 1 本だけ進む）
+ */
+export async function claimSetting(db: D1Database, key: string, value: string): Promise<boolean> {
+  return cas(
+    db,
+    stmt(
+      `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at WHERE settings.value <> excluded.value`,
+      key,
+      value,
+      nowIso(),
+    ),
+  );
+}
+
 export const ACTIVE_JOB_SQL = "('queued','creating','running','needs_answer','budget_reached')";

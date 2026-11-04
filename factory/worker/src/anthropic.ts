@@ -7,6 +7,7 @@ import type { Message, MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk
 import type { SessionCreateParams } from '@anthropic-ai/sdk/resources/beta/sessions/sessions';
 import type { BetaManagedAgentsEventParams } from '@anthropic-ai/sdk/resources/beta/sessions/events';
 import type { BatchCreateParams, MessageBatchIndividualResponse } from '@anthropic-ai/sdk/resources/messages/batches';
+import { MAX_FILE_BYTES } from './checks/schema';
 import { isLocalHostname, type Env } from './env';
 import { XaiError, xaiResponses, type XaiRequest, type XaiResult } from './xai';
 
@@ -45,10 +46,18 @@ export interface BatchView {
   processing_status: 'in_progress' | 'canceling' | 'ended';
   created_at: string;
   expires_at: string;
+  /** request_counts の合計（list / retrieve の応答にある時だけ） */
+  request_total?: number;
 }
 
 /** batches.results から読む行数の上限（会議は 1 件しか送らない） */
 export const BATCH_RESULTS_MAX = 10;
+/** batches.results の本文を読む量の上限（これを超えた分は読まずに切る。切れた行は使わない） */
+export const BATCH_RESULTS_MAX_BYTES = 1024 * 1024;
+/** files.download の本文を読む量の上限（成果物 1 ファイルの上限と同じ。超えたら MAX_FILE_BYTES + 1 bytes で切って返し、呼び出し側の大きさ検査で落とす） */
+export const DOWNLOAD_MAX_BYTES = MAX_FILE_BYTES;
+/** batches.list で読む件数（1 ページだけ） */
+export const BATCH_LIST_LIMIT = 20;
 
 export interface FactoryPort {
   readonly isFake: boolean;
@@ -67,6 +76,8 @@ export interface FactoryPort {
   createBatch(params: BatchCreateParams, o?: CallOpts): Promise<BatchView>;
   retrieveBatch(batchId: string, o?: CallOpts): Promise<BatchView>;
   batchResults(batchId: string, o?: CallOpts): Promise<MessageBatchIndividualResponse[]>;
+  /** messages.batches.list の 1 ページ目だけ（新しい順に BATCH_LIST_LIMIT 件）。応答不明だった batches.create の復旧（§R-40）に使う */
+  listBatchesPage(o?: CallOpts): Promise<BatchView[]>;
   /** 入口（§K-4-3）: xAI Responses API（x_search）。XAI_API_KEY が無ければ XaiError('no_key')。失敗は XaiError */
   xaiResponses(req: XaiRequest, o?: CallOpts): Promise<XaiResult>;
 }
@@ -115,12 +126,13 @@ function toView(s: { id: string; status: string; usage?: { list_cost?: { amount:
 }
 
 /** §D-4: client はリクエストごとに生成する */
-export function makeClient(env: Env, opts: { timeoutMs?: number } = {}): Anthropic {
+export function makeClient(env: Env, opts: { timeoutMs?: number; fetchImpl?: typeof fetch } = {}): Anthropic {
   return new Anthropic({
     apiKey: env.ANTHROPIC_API_KEY ?? null,
     webhookKey: env.ANTHROPIC_WEBHOOK_SIGNING_KEY ?? null,
     maxRetries: 1,
     timeout: opts.timeoutMs ?? 60_000,
+    ...(opts.fetchImpl ? { fetch: opts.fetchImpl } : {}),
   });
 }
 
@@ -133,9 +145,105 @@ export function requestOptions(o?: CallOpts): { timeout?: number; maxRetries?: n
   return { timeout: Math.max(1_000, Math.min(remaining, CALL_TIMEOUT_MAX_MS)), maxRetries: 0 };
 }
 
-function realPort(env: Env): FactoryPort {
-  const client = makeClient(env);
-  const longClient = makeClient(env, { timeoutMs: 300_000 });
+/**
+ * 本文を読む呼び出し（batches.results / files.download）の RequestOptions。
+ * SDK（@anthropic-ai/sdk 1.3.0 client.js fetchWithTimeout）の timeout は fetch がヘッダを返した時点で clearTimeout され、本文の受信には効かない。
+ * RequestOptions.signal（internal/request-options.d.ts: `signal?: AbortSignal`）は呼び出し側の signal に abort listener を付け、
+ * 本文が読み終わるまで外さない（internal/request-signal.ts の説明どおり）ので、絶対期限の AbortSignal.timeout を渡して本文の受信まで縛る。
+ * 期限は deadline があれば min(残り時間, 60 秒)、無ければ 60 秒。
+ */
+export function bodyRequestOptions(o?: CallOpts): { timeout: number; maxRetries: number; signal: AbortSignal } {
+  const ms = o?.deadline ? Math.max(1_000, Math.min(o.deadline - Date.now(), CALL_TIMEOUT_MAX_MS)) : CALL_TIMEOUT_MAX_MS;
+  return { timeout: ms, maxRetries: o?.deadline ? 0 : 1, signal: AbortSignal.timeout(ms) };
+}
+
+/** signal が abort されたら reject する Promise（本文の read と競わせる。fetch 実装が signal で本文を止めなくても期限で抜ける） */
+function abortRace(signal: AbortSignal): { promise: Promise<never>; dispose: () => void } {
+  let onAbort = () => {};
+  const promise = new Promise<never>((_, reject) => {
+    onAbort = () => reject(new PortError(false, undefined, 'timeout'));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  });
+  promise.catch(() => undefined);
+  return { promise, dispose: () => signal.removeEventListener('abort', onAbort) };
+}
+
+/**
+ * 本文を maxBytes + 1 bytes まで読む（それより先は読まずに reader.cancel）。truncated = maxBytes を超えた。
+ * 期限（signal）で中断したら PortError(timeout)。read は signal とも競わせる（fetch 実装が signal で本文を止めなくても期限で抜ける）
+ */
+export async function readBodyCapped(res: Response, maxBytes: number, signal: AbortSignal): Promise<{ bytes: Uint8Array; truncated: boolean }> {
+  if (!res.body) return { bytes: new Uint8Array(0), truncated: false };
+  const reader = res.body.getReader();
+  const race = abortRace(signal);
+  const keep = maxBytes + 1;
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < keep) {
+      const { done, value } = await Promise.race([reader.read(), race.promise]);
+      if (done) break;
+      const part = value.byteLength > keep - total ? value.subarray(0, keep - total) : value;
+      chunks.push(part);
+      total += part.byteLength;
+    }
+  } catch (e) {
+    reader.cancel().catch(() => undefined);
+    if (signal.aborted) throw new PortError(false, undefined, 'timeout');
+    throw e;
+  } finally {
+    race.dispose();
+  }
+  const truncated = total > maxBytes;
+  if (truncated) reader.cancel().catch(() => undefined);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.byteLength;
+  }
+  return { bytes: out, truncated };
+}
+
+/**
+ * batches.results の JSONL を読む（BATCH_RESULTS_MAX 行 / BATCH_RESULTS_MAX_BYTES まで）。
+ * 上限で切った時は、最後まで改行で閉じた行だけを使う（切れた行は捨てる）。
+ */
+export function parseResultsJsonl(bytes: Uint8Array, truncated: boolean): MessageBatchIndividualResponse[] {
+  let text = new TextDecoder().decode(truncated ? bytes.subarray(0, BATCH_RESULTS_MAX_BYTES) : bytes);
+  if (truncated) {
+    const nl = text.lastIndexOf('\n');
+    text = nl < 0 ? '' : text.slice(0, nl);
+  }
+  const out: MessageBatchIndividualResponse[] = [];
+  for (const line of text.split('\n')) {
+    if (out.length >= BATCH_RESULTS_MAX) break;
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      out.push(JSON.parse(t) as MessageBatchIndividualResponse);
+    } catch {
+      throw new PortError(true, undefined, 'invalid_results');
+    }
+  }
+  return out;
+}
+
+/** signal の期限切れ（SDK の APIUserAbortError や本文 read の AbortError を含む）は応答不明の timeout にする */
+async function callWithSignal<T>(signal: AbortSignal, f: () => Promise<T>): Promise<T> {
+  try {
+    return await f();
+  } catch (e) {
+    if (signal.aborted && !(e instanceof PortError)) throw new PortError(false, undefined, 'timeout');
+    throw toPortError(e);
+  }
+}
+
+/** 本物の port。fetchImpl はテストで本文の受信を模擬する時だけ渡す（SDK の ClientOptions.fetch） */
+export function realPort(env: Env, opts: { fetchImpl?: typeof fetch } = {}): FactoryPort {
+  const client = makeClient(env, { fetchImpl: opts.fetchImpl });
+  const longClient = makeClient(env, { timeoutMs: 300_000, fetchImpl: opts.fetchImpl });
   return {
     isFake: false,
     createSession: (params, o) => call(async () => ({ id: (await client.beta.sessions.create(params, requestOptions(o))).id })),
@@ -166,22 +274,34 @@ function realPort(env: Env): FactoryPort {
           next: p.next_page ?? null,
         };
       }),
-    downloadFile: (fileId, o) =>
-      call(async () => {
-        const res = await client.beta.files.download(fileId, {}, requestOptions(o));
-        return new Uint8Array(await res.arrayBuffer());
-      }),
+    downloadFile: (fileId, o) => {
+      // 本文の受信まで絶対期限で縛り、DOWNLOAD_MAX_BYTES + 1 bytes より先は読まない（超えた分は呼び出し側の大きさ検査で落ちる）
+      const ro = bodyRequestOptions(o);
+      return callWithSignal(ro.signal, async () => {
+        const res = await client.beta.files.download(fileId, {}, ro);
+        return (await readBodyCapped(res, DOWNLOAD_MAX_BYTES, ro.signal)).bytes;
+      });
+    },
     createMessage: (params, o) => call(() => longClient.messages.create(params, requestOptions(o))),
     createBatch: (params, o) => call(async () => toBatchView(await client.messages.batches.create(params, requestOptions(o)))),
     retrieveBatch: (id, o) => call(async () => toBatchView(await client.messages.batches.retrieve(id, {}, requestOptions(o)))),
-    batchResults: (id, o) =>
+    batchResults: (id, o) => {
+      // SDK の batches.results()（resources/messages/batches.js）は retrieve → results_url を GET して JSONLDecoder を返すだけで、
+      // 本文の量を数える口が無い。同じ 2 つの request を SDK の client で行い、本文は asResponse() の Response から上限付きで読む
+      const ro = bodyRequestOptions(o);
+      return callWithSignal(ro.signal, async () => {
+        const batch = await client.messages.batches.retrieve(id, {}, ro);
+        if (!batch.results_url) throw new PortError(true, undefined, 'no_results_url');
+        const res = await client.get<unknown>(batch.results_url, { ...ro, headers: { Accept: 'application/binary' } }).asResponse();
+        const body = await readBodyCapped(res, BATCH_RESULTS_MAX_BYTES, ro.signal);
+        return parseResultsJsonl(body.bytes, body.truncated);
+      });
+    },
+    listBatchesPage: (o) =>
       call(async () => {
-        const out: MessageBatchIndividualResponse[] = [];
-        for await (const r of await client.messages.batches.results(id, {}, requestOptions(o))) {
-          out.push(r);
-          if (out.length >= BATCH_RESULTS_MAX) break;
-        }
-        return out;
+        // list() は PagePromise。await で 1 ページ目だけを受け取り、次のページは取らない（core/pagination: Page.data）
+        const p = await client.messages.batches.list({ limit: BATCH_LIST_LIMIT }, requestOptions(o));
+        return p.data.slice(0, BATCH_LIST_LIMIT).map(toBatchView);
       }),
     xaiResponses: async (req, o) => {
       if (!env.XAI_API_KEY) throw new XaiError(false, undefined, 'no_key');
@@ -191,8 +311,21 @@ function realPort(env: Env): FactoryPort {
   };
 }
 
-function toBatchView(b: { id: string; processing_status: BatchView['processing_status']; created_at: string; expires_at: string }): BatchView {
-  return { id: b.id, processing_status: b.processing_status, created_at: b.created_at, expires_at: b.expires_at };
+function toBatchView(b: {
+  id: string;
+  processing_status: BatchView['processing_status'];
+  created_at: string;
+  expires_at: string;
+  request_counts?: { processing: number; succeeded: number; errored: number; canceled: number; expired: number } | null;
+}): BatchView {
+  const c = b.request_counts;
+  return {
+    id: b.id,
+    processing_status: b.processing_status,
+    created_at: b.created_at,
+    expires_at: b.expires_at,
+    ...(c ? { request_total: c.processing + c.succeeded + c.errored + c.canceled + c.expired } : {}),
+  };
 }
 
 export interface PortContext {

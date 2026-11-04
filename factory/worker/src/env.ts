@@ -23,6 +23,10 @@ export interface Env {
   MEETING_MONTHLY_CAP_CENTS?: string;
   SCOUT_DAY?: string;
   MEETING_DAYS?: string;
+  /** 結果不明（timeout・接続断・本文が読めない）の xAI 呼び出し 1 回を台帳に載せる保守的見積り（セント） */
+  SCOUT_XAI_UNCONFIRMED_CENTS?: string;
+  /** 応答不明の batches.create 1 回を台帳に載せる保守的見積り（セント） */
+  MEETING_UNCONFIRMED_CENTS?: string;
 
   // secrets
   ANTHROPIC_API_KEY?: string;
@@ -57,6 +61,8 @@ export const cfg = (env: Env) => ({
   /** 0=日〜6=土（Asia/Tokyo）。範囲外なら週次の自動実行はしない */
   scoutDay: intVar(env.SCOUT_DAY, 1),
   meetingDays: parseDays(env.MEETING_DAYS ?? '1,15'),
+  scoutXaiUnconfirmedCents: intVar(env.SCOUT_XAI_UNCONFIRMED_CENTS, 100),
+  meetingUnconfirmedCents: intVar(env.MEETING_UNCONFIRMED_CENTS, 20),
 });
 
 /** SCOUT_MAX_TURNS を var で大きくしても 1 run の X 検索がこれ以上の turn を使わない（外部コストの有限化） */
