@@ -5,7 +5,7 @@ import type { MessageBatchIndividualResponse } from '@anthropic-ai/sdk/resources
 import { PortError } from '../src/anthropic';
 import type { Env } from '../src/env';
 import { claimSetting } from '../src/db';
-import { collectMeetings, isRankedItem, meetingDueOn, meetingTick, parseMeetingOutput, startMeeting } from '../src/meeting';
+import { collectMeetings, failRow, isRankedItem, orphanGuard, meetingDueOn, meetingTick, parseMeetingOutput, startMeeting } from '../src/meeting';
 import { d1, migratedDb, one, rows } from './d1-shim';
 import { fixtureJson, intakePort } from './intake-port';
 
@@ -291,6 +291,18 @@ describe('会議の実行権・応答不明の create（§R-40 (c)(e)、node:sql
     expect(await collectMeetings(env, p.port, { deadline: deadline() })).toEqual([]);
     expect(p.calls.listBatchesPage).toBe(1);
     expect(one(raw, 'SELECT status, batch_id, last_error FROM meeting_minutes')).toEqual({ status: 'failed', batch_id: null, last_error: 'recover_not_found' });
+  });
+
+  it('孤児の SELECT 後に batch_id が保存された行は create_incomplete にしない（台帳も載せない）', async () => {
+    const id = 'mtg-race';
+    const old = new Date(Date.now() - 20 * 60_000).toISOString();
+    raw.prepare("INSERT INTO meeting_minutes (id, created_at, updated_at, trigger, status) VALUES (?, ?, ?, 'cron', 'submitted')").run(id, old, old);
+    const cutoff = new Date(Date.now() - 10 * 60_000).toISOString();
+    // SELECT（batch_id IS NULL）で選ばれた後、failRow の前に create 側が batch_id を保存した状況
+    raw.prepare("UPDATE meeting_minutes SET batch_id = 'msgbatch_race' WHERE id = ?").run(id);
+    await failRow(env.DB, id, 'failed', 'create_incomplete', 20, new Date(), orphanGuard(cutoff));
+    expect(one(raw, 'SELECT status, batch_id, last_error FROM meeting_minutes')).toEqual({ status: 'submitted', batch_id: 'msgbatch_race', last_error: null });
+    expect(rows(raw, 'SELECT id FROM cost_ledger')).toEqual([]);
   });
 
   it('batch_id を書く前に止まった行（create_incomplete）も見積りを載せて failed。次の tick で 1 回だけ復旧を試みる', async () => {

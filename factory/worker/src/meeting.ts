@@ -6,7 +6,7 @@ import type { MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk/resource
 import { PortError, type FactoryPort } from './anthropic';
 import { sanitizeLlmProposal } from './checks/intake';
 import { FORBIDDEN_WORDS } from './checks/forbidden';
-import { all, cas, claimSetting, conditionalBatch, first, getSetting, isoPlus, nowIso, prepare, setSetting, stmt, tokyoDay, type Stmt } from './db';
+import { all, cas, claimSetting, conditionalBatch, first, getSetting, isoPlus, nowIso, prepare, setSetting, stmt, tokyoDay, type SqlValue, type Stmt } from './db';
 import { cfg, type Env } from './env';
 import { capCheck, microToCents, sonnetBatchMicroDollars } from './ledger';
 import { insertProposalStmt } from './proposals';
@@ -359,15 +359,17 @@ export async function collectMeetings(env: Env, port: FactoryPort, opts: { deadl
   }
   // batch_id を書く前に止まった行（create の結果が不明）: create_unconfirmed と同じく見積りを台帳に載せて failed（行ごとに条件付き batch）。
   // 復旧（recoverUnconfirmed）は次の tick で 1 回だけ（この tick の復旧は上で済んでいる）
+  const orphanCutoff = isoPlus(-MEETING_LIMITS.orphanMs, now);
   const orphans = await all<{ id: string }>(
     db,
     stmt(
       "SELECT id FROM meeting_minutes WHERE status = 'submitted' AND batch_id IS NULL AND updated_at < ? ORDER BY created_at ASC LIMIT ?",
-      isoPlus(-MEETING_LIMITS.orphanMs, now),
+      orphanCutoff,
       MEETING_LIMITS.collectPerTick,
     ),
   );
-  for (const o of orphans) await failRow(db, o.id, 'failed', 'create_incomplete', cfg(env).meetingUnconfirmedCents, now);
+  // SELECT と UPDATE の間に batch_id が保存された行を failed にしないよう、同じ条件を台帳 INSERT と UPDATE の両方へ入れる
+  for (const o of orphans) await failRow(db, o.id, 'failed', 'create_incomplete', cfg(env).meetingUnconfirmedCents, now, orphanGuard(orphanCutoff));
   const rows = await all<MinutesRow>(
     db,
     stmt("SELECT id, created_at, updated_at, batch_id FROM meeting_minutes WHERE status = 'submitted' AND batch_id IS NOT NULL ORDER BY created_at ASC LIMIT ?", MEETING_LIMITS.collectPerTick),
@@ -379,11 +381,25 @@ export async function collectMeetings(env: Env, port: FactoryPort, opts: { deadl
   return out;
 }
 
-const P_SUBMITTED = (id: string) => stmt("SELECT 1 FROM meeting_minutes pm WHERE pm.id = ? AND pm.status = 'submitted'", id);
+/** failRow へ渡す追加の WHERE 述語（AND で結合。列は修飾しない） */
+export interface RowGuard {
+  sql: string;
+  params: SqlValue[];
+}
 
-function ledgerGuarded(meetingId: string, cents: number, now: Date): Stmt[] {
+/** 孤児（create_incomplete）用: SELECT と同じ `batch_id IS NULL AND updated_at < cutoff` */
+export const orphanGuard = (cutoff: string): RowGuard => ({ sql: 'batch_id IS NULL AND updated_at < ?', params: [cutoff] });
+
+const P_SUBMITTED = (id: string, extra?: RowGuard) =>
+  stmt(
+    `SELECT 1 FROM meeting_minutes pm WHERE pm.id = ? AND pm.status = 'submitted'${extra ? ` AND (${extra.sql})` : ''}`,
+    id,
+    ...(extra?.params ?? []),
+  );
+
+function ledgerGuarded(meetingId: string, cents: number, now: Date, extra?: RowGuard): Stmt[] {
   if (cents <= 0) return [];
-  const g = P_SUBMITTED(meetingId);
+  const g = P_SUBMITTED(meetingId, extra);
   return [
     stmt(
       `INSERT INTO cost_ledger (id, day, kind, ref_id, cents, created_at) SELECT ?, ?, 'meeting', ?, ?, ? WHERE EXISTS (${g.sql})`,
@@ -397,10 +413,26 @@ function ledgerGuarded(meetingId: string, cents: number, now: Date): Stmt[] {
   ];
 }
 
-async function failRow(db: D1Database, id: string, status: 'failed' | 'expired', error: string, cents: number, now: Date): Promise<string> {
+export async function failRow(
+  db: D1Database,
+  id: string,
+  status: 'failed' | 'expired',
+  error: string,
+  cents: number,
+  now: Date,
+  extra?: RowGuard,
+): Promise<string> {
   await conditionalBatch(db, [
-    ...ledgerGuarded(id, cents, now),
-    stmt("UPDATE meeting_minutes SET status = ?, last_error = ?, cents = ?, updated_at = ? WHERE id = ? AND status = 'submitted'", status, error, cents, nowIso(), id),
+    ...ledgerGuarded(id, cents, now, extra),
+    stmt(
+      `UPDATE meeting_minutes SET status = ?, last_error = ?, cents = ?, updated_at = ? WHERE id = ? AND status = 'submitted'${extra ? ` AND (${extra.sql})` : ''}`,
+      status,
+      error,
+      cents,
+      nowIso(),
+      id,
+      ...(extra?.params ?? []),
+    ),
   ]);
   console.log(JSON.stringify({ at: 'meeting', meeting_id: id, status, error }));
   return `${id}:${status}`;
