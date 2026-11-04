@@ -148,3 +148,15 @@ v5 §6 のまま（#1 の契約 v3.7 に本書 §1〜§3 の SQL 全文と完了
 - **精算が先、upload が後**: upload の処理権の CAS（§3）に `AND EXISTS (SELECT 1 FROM image_attempts a WHERE a.id = image_requests.attempt_id AND a.state = 'settled')` を足す。consumer と cron のどちらの経路でも、精算前の upload は 0 行
 - **probe の許可の取り残し**: 許可を書いた後に予約が 0 行・許可の直後に停止した時のため、cron が `image_probe_allowed` を「value の attempt が無く、`updated_at` が 10 分より前」または「value の attempt が settled / void / unknown」の時に消す（`DELETE … WHERE key=… AND value=?` で、読んだ値の時だけ）。管理画面は予約 0 行を見たら、その場でも同じ削除をする
 - 検証に追加: t12 を request `reserved` / `dispatched` / DLQ 後 `failed` の 3 通りにし、どれも 5 分で unknown・返金なし・rollback の完了条件が 0 / t11 に「許可 → 予約 0 行」「許可直後の停止」から次の probe を許可できる / t13 に「精算前の upload の処理権は 0 行」/ t14 に files の png・webp は通り、migration 0004 後に `kind='image'`・`notify='skip'` が入り、既存の台帳が残る
+
+## 9. §8 レビュー（Astra high・REVISE 1 件）の反映
+
+- **usage が無い時も stored の attempt を必ず精算できる**: 勝者 CAS（request を `stored` にする batch）は attempt の `usage_json` を**必ず非 NULL で書く**。usage が返った時はその値、無い・読めない時は `'{"missing":true}'`。精算の規則（consumer と cron で同じ SQL）: `usage_json` が missing → `settled_cents = reserve_cents`（U のまま。返金なし。v4 §3 と同じ）、それ以外 → usage から実額を出し、実額 ≤ U なら差額を返金、実額 > U なら halted。cron の精算の対象は「request `stored` かつ attempt `dispatched`」全部（usage の有無で絞らない）。勝者 CAS の SQL に `usage_json IS NOT NULL` を CHECK 相当の述語として置く（NULL を渡したら 0 行で勝者にならない）
+- **probe の許可の削除は DELETE 自身で条件を見直す**:
+  ```sql
+  DELETE FROM settings WHERE key = 'image_probe_allowed' AND value = ?att
+    AND ( EXISTS (SELECT 1 FROM image_attempts a WHERE a.id = ?att AND a.state IN ('settled','void','unknown'))
+       OR ( NOT EXISTS (SELECT 1 FROM image_attempts a WHERE a.id = ?att) AND updated_at < ?now_minus_10min ) );
+  ```
+  読んだ後に同じ attempt の予約が成功していれば 0 行（生きた予約の許可を消さない）
+- 検証に追加: t13 を「usage あり / usage 欠落 × stored 直後に停止」の 2 通りにし、どちらも cron が 1 回だけ精算（欠落は U のまま）→ upload → 通知 / t11 に「掃除が古い許可を読む → 同じ attempt の予約が成功 → DELETE は 0 行」/ t14 に「variants の png・webp は通らない」負例
