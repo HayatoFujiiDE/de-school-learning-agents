@@ -3,6 +3,7 @@
 import { getFeedFetch, getPort } from './anthropic';
 import { all, getSetting, isoPlus, nowIso, setSetting, stmt, tokyoDay } from './db';
 import { cfg, type Env } from './env';
+import { IMAGE_CRON_BUDGET_MS, imageCronStep } from './images';
 import { meetingTick } from './meeting';
 import { runScout, scoutDueOn } from './scout';
 import { getJob, markWebhookProcessed, reconcileJob, recoverCreating, startJob, type JobRow } from './jobs';
@@ -75,6 +76,13 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
     out.triage = await triageStep(env, { deadline: cronStart + CRON_LIMIT_MS - INTAKE_END_MARGIN_MS });
   } catch (e) {
     out.triage_error = e instanceof Error ? e.name : 'error';
+  }
+
+  // 3-c. 画像の回収（§O-4 d。3-b の直後。締め切り = min(開始 + 60 秒, cron の締め切り)。停止中・一時停止中も行う。生成はしない）
+  try {
+    out.images = await imageCronStep(env, { deadline: Math.min(Date.now() + IMAGE_CRON_BUDGET_MS, cronStart + CRON_LIMIT_MS - INTAKE_END_MARGIN_MS) });
+  } catch (e) {
+    out.images_error = e instanceof Error ? e.name : 'error';
   }
 
   // 入口（§K-4, §K-5）。pause 中は新しい外部呼び出しをしない（収集は runScout が、会議の起動は startMeeting が見る。会議の回収は行う）

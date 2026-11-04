@@ -2,6 +2,8 @@
 // - 最上位 6 ファイルは同名で対応する
 // - material.json の parts[].variants[].path / parts[].files[].path は basename で raw から引く
 // - raw に同じ basename が 2 つ以上 / 別々の論理パスが同じ basename を指す → duplicate_basename:<name>（§E-0 (b): 素材全体で一意）
+// - imagePaths（§O-7 = 旧 §M-2-7 3。image_id を持つ files[] の論理パス）は raw から引かず Map に入れない（取り込みが image_requests と R2 から採る）。
+//   basename の一意の判定には入れる: raw に同じ basename がある / 別の論理パスと basename が同じ → duplicate_basename:<name>
 // - material.json が JSON として読めない → json_invalid:material.json
 // - 参照先が raw に無い path は Map に入れない（§E の missing_ref に任せる）。どこからも参照されない raw は unreferenced（昇順）
 // 形の検査（parts が配列か・path が文字列か 等）はここでは寛容に読み飛ばし、validateOutputs（§E）に落とさせる。
@@ -45,7 +47,7 @@ export function duplicateBasename(filenames: string[]): string | null {
   return dup.length > 0 ? dup[0] : null;
 }
 
-export function resolveOutputLayout(rawNames: string[], materialJsonText: string): OutputLayout {
+export function resolveOutputLayout(rawNames: string[], materialJsonText: string, imagePaths: readonly string[] = []): OutputLayout {
   // raw に同じ basename が 2 つ以上（listed で先に落ちるが、純関数としても守る）
   const dupRaw = duplicateBasename(rawNames);
   if (dupRaw !== null) return { ok: false, detail: `duplicate_basename:${dupRaw}` };
@@ -54,11 +56,12 @@ export function resolveOutputLayout(rawNames: string[], materialJsonText: string
   const files = new Map<string, string>();
   /** basename → それを指している論理パス（別の論理パスが同じ basename を指したら衝突） */
   const owner = new Map<string, string>();
+  const images = new Set(imagePaths);
   const claim = (logical: string, base: string): string | null => {
     const prev = owner.get(base);
     if (prev !== undefined && prev !== logical) return base;
     owner.set(base, logical);
-    files.set(logical, base);
+    if (!images.has(logical)) files.set(logical, base);
     return null;
   };
 
@@ -75,6 +78,13 @@ export function resolveOutputLayout(rawNames: string[], materialJsonText: string
       // 安全でない path（`..`・先頭 `/` 等）は R2 のキーにしない。§E の path_outside_part に落ちる
       if (!isSafeRelativePath(logical)) continue;
       const base = basenameOf(logical);
+      if (images.has(logical)) {
+        // 生成した画像は raw から引かない。raw に同じ basename があれば素材全体の一意が崩れる（§O-2: outputs に置かない）
+        if (raw.has(base)) return { ok: false, detail: `duplicate_basename:${base}` };
+        const clash = claim(logical, base);
+        if (clash !== null) return { ok: false, detail: `duplicate_basename:${clash}` };
+        continue;
+      }
       if (!raw.has(base)) continue; // 参照先不在は §E の missing_ref
       const clash = claim(logical, base);
       if (clash !== null) return { ok: false, detail: `duplicate_basename:${clash}` };
