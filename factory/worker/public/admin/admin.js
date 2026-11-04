@@ -876,11 +876,14 @@
   var ANSWER_NOTICE = '回答は編集基準のログにも残ります。子どもや家庭の個人情報を含めないでください。';
   var ACTIVE_JOB_STATUSES = ['queued', 'creating', 'running', 'needs_answer', 'budget_reached'];
   var DRAFT_PREFIX = 'fa-answer-draft:';
+  // localStorage が使えない環境でも、同じページを開いている間は下書きを失わない（送信失敗 → 再描画で消えないように）
+  var answerDraftMem = {};
 
   /** 下書き（{ [question_id]: { mode: 'default'|'own', text } }）。読み書きの失敗は無視して画面は動かす */
   function loadAnswerDraft(jobId, qs) {
     var raw = null;
     try { raw = JSON.parse(window.localStorage.getItem(DRAFT_PREFIX + jobId) || 'null'); } catch (e) { raw = null; }
+    if (!raw || typeof raw !== 'object') raw = answerDraftMem[jobId] || null;
     var out = {};
     if (!raw || typeof raw !== 'object') return out;
     qs.forEach(function (q) {
@@ -891,8 +894,8 @@
     });
     return out;
   }
-  function saveAnswerDraft(jobId, draft) { try { window.localStorage.setItem(DRAFT_PREFIX + jobId, JSON.stringify(draft)); } catch (e) { /* 保存できなくても入力は続けられる */ } }
-  function clearAnswerDraft(jobId) { try { window.localStorage.removeItem(DRAFT_PREFIX + jobId); } catch (e) { /* 無視 */ } }
+  function saveAnswerDraft(jobId, draft) { answerDraftMem[jobId] = JSON.parse(JSON.stringify(draft)); try { window.localStorage.setItem(DRAFT_PREFIX + jobId, JSON.stringify(draft)); } catch (e) { /* 保存できなくても入力は続けられる */ } }
+  function clearAnswerDraft(jobId) { delete answerDraftMem[jobId]; try { window.localStorage.removeItem(DRAFT_PREFIX + jobId); } catch (e) { /* 無視 */ } }
 
   function defaultText(q) { return q && q['default'] !== null && q['default'] !== undefined ? String(q['default']) : ''; }
   /** 1 問の下書き → 送る答え。案を選んだ問は default の全文、自分で答えた問は trim 後の値。未回答は null */
@@ -1024,23 +1027,31 @@
     });
   }
 
-  function sendAnswers(id, btn, title, answers) {
+  /** hooks.start / hooks.end: 送信の開始と終了（成功・失敗とも）。送信中は入力とボタンを止めるために使う */
+  function sendAnswers(id, btn, title, answers, hooks) {
+    hooks = hooks || {};
     action(btn, {
       title: title, body: ANSWER_NOTICE, busyText: '送信中…',
-      run: function () { return api('POST', '/api/jobs/' + encodeURIComponent(id) + '/answer', { answers: answers }); },
+      run: function () { if (hooks.start) hooks.start(); return api('POST', '/api/jobs/' + encodeURIComponent(id) + '/answer', { answers: answers }); },
       success: '回答を送りました。職人が制作を始めます',
-      after: function () { clearAnswerDraft(id); route(); },
-      fail: function () { route(); } // 409 answer_in_flight / not_waiting 等は toast の後に読み直す（下書きは残す）
+      after: function () { if (hooks.end) hooks.end(); clearAnswerDraft(id); route(); },
+      fail: function () { if (hooks.end) hooks.end(); route(); } // 409 answer_in_flight / not_waiting 等は toast の後に読み直す（下書きは残す）
     });
   }
 
   function bindAnswerInputs(view, id, qs, draft) {
     var btn = $('#ans-btn');
+    var sending = false;
+    function setSending(on) {
+      sending = on;
+      Array.prototype.forEach.call(view.querySelectorAll('.aq-card input, .aq-card textarea'), function (el) { el.disabled = on; });
+      if (!on) refresh();
+    }
     function refresh() {
       var p = answerProgress(qs, draft);
       $('#aq-progress').textContent = p.total + ' 問中 ' + p.done + ' 問に答えました';
       $('#aq-left').textContent = p.complete ? '' : 'あと ' + (p.total - p.done) + ' 問';
-      btn.disabled = !p.complete;
+      btn.disabled = sending || !p.complete;
       qs.forEach(function (q, i) {
         var card = view.querySelector('[data-aq-i="' + i + '"]');
         var done = draftAnswer(q, draft[q.id]) !== null;
@@ -1073,8 +1084,8 @@
     $('#ans-form').addEventListener('submit', function (ev) { ev.preventDefault(); });
     btn.addEventListener('click', function () {
       var p = refresh();
-      if (!p.complete) return;
-      sendAnswers(id, btn, '回答を送って制作を始めます', p.answers);
+      if (sending || !p.complete) return;
+      sendAnswers(id, btn, '回答を送って制作を始めます', p.answers, { start: function () { setSending(true); }, end: function () { setSending(false); } });
     });
     refresh();
   }
