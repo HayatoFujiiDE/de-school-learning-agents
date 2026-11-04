@@ -24,7 +24,8 @@ npm run smoke                         # 受け入れ基準を fake で一周（S
 - Worker: `https://de-school-factory.h-fujii.workers.dev`（管理画面 `/admin/`。Cloudflare Access でふじさんのメールだけ許可）
 - Anthropic: workspace「Learning-Agents」、職人 `de-school-material-maker` / 作業場 `de-school-factory-cloud`（ID は `claude-lock.json`）、webhook 登録済み（4 種類）、月の支出上限 $100
 - Cloudflare: D1 `factory`、R2 `factory-materials`、Access アプリ 2 つ（`de-school-factory admin` = admin/api を許可制、`de-school-factory library public bypass` = `/api/library/*` を公開）
-- secret: `ANTHROPIC_API_KEY` / `ANTHROPIC_WEBHOOK_SIGNING_KEY` 投入済み。`XAI_API_KEY` は未投入（RSS だけで動く）
+- secret: `ANTHROPIC_API_KEY` / `ANTHROPIC_WEBHOOK_SIGNING_KEY` / `OPENAI_API_KEY` 投入済み（2026-11-04）。`XAI_API_KEY` は未投入（RSS だけで動く）
+- 名前の対応: Cloudflare の Worker 名は `de-school-factory`。OpenAI 側の鍵の名前は `learning-agents-factory-worker`（Default project・Service account・90 日。期限が来たら同じ手順で `wrangler secret put OPENAI_API_KEY`）。Anthropic の workspace は `Learning-Agents`。名前は揃えていないが、どれも同じ工場を指す
 
 ## 本番に出す手順（運営が通常ターミナルで行う。順番どおり）
 
