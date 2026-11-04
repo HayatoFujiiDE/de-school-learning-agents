@@ -12,3 +12,4 @@
 10. 各 part の entry_point が「説明の前に触れること」（look / touch / try / make のどれか）を 1 文で示している
 11. ゲーム的な形（お題・クイズ・「なし」を当てる など）の変奏 `parts/<part_id>/game.md` が素材全体で 1 つ以上あり、material.json の variants に game: true で載っている
 12. 詳しい版（elementary-long.md / secondary-long.md）に、関心別の入口の例（マイクラ / プログラミング / ものづくり / デジもの / 画像・動画 / 絵 のうち 2 つ以上）が「〜が好きなら」の形で書かれている
+11. parts[].files のうち `image_id` を持つ項目は、`alt`（絵の内容を日本語 1〜2 文、120 字以内）を持ち、`path` の拡張子が `.png` か `.webp`。画像の中身は採点しない（人が確認画面で見る）
