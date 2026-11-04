@@ -424,3 +424,21 @@ body.floor-wide .view { max-width: 1600px; padding-left: 12px; padding-right: 12
   .scene-filter { top: 8px; font-size: 13px; padding: 6px 12px; }
   .fq-head h2 { font-size: 18px; }
 }
+
+/* ---- スマホで答える・確認する（640px 以下）。質問文を全幅に、タップしやすく、iOS の入力時拡大を防ぐ ---- */
+@media (max-width: 640px) {
+  .top { flex-wrap: nowrap; gap: 8px; padding: 8px 12px; }
+  .brand { flex: none; font-size: 14px; }
+  .nav { flex-wrap: nowrap; overflow-x: auto; gap: 4px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav a { white-space: nowrap; padding: 6px 8px; }
+  body.has-foot #status { display: none; }
+  .view { padding: 12px; }
+  .aq-head { flex-wrap: wrap; gap: 8px; align-items: center; }
+  .aq-q { order: 3; flex-basis: 100%; font-size: 16px; }
+  .aq-done { margin: 0 0 0 auto; }
+  .aq-opt { padding: 14px 12px; min-height: 48px; }
+  .aq-opt input[type=radio] { width: 22px; height: 22px; margin-top: 1px; }
+  .aq-own textarea, .rv-reason textarea, .dlg textarea { font-size: 16px; }
+  .rv-foot { padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
+}
