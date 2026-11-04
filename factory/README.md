@@ -19,6 +19,13 @@ npm test                              # 純関数のテスト
 npm run smoke                         # 受け入れ基準を fake で一周（SMOKE_RESULT=PASS）
 ```
 
+## 本番の現状（2026-11-04）
+
+- Worker: `https://de-school-factory.h-fujii.workers.dev`（管理画面 `/admin/`。Cloudflare Access でふじさんのメールだけ許可）
+- Anthropic: workspace「Learning-Agents」、職人 `de-school-material-maker` / 作業場 `de-school-factory-cloud`（ID は `claude-lock.json`）、webhook 登録済み（4 種類）、月の支出上限 $100
+- Cloudflare: D1 `factory`、R2 `factory-materials`、Access アプリ 2 つ（`de-school-factory admin` = admin/api を許可制、`de-school-factory library public bypass` = `/api/library/*` を公開）
+- secret: `ANTHROPIC_API_KEY` / `ANTHROPIC_WEBHOOK_SIGNING_KEY` 投入済み。`XAI_API_KEY` は未投入（RSS だけで動く）
+
 ## 本番に出す手順（運営が通常ターミナルで行う。順番どおり）
 
 1. Anthropic 側
