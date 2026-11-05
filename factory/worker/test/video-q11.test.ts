@@ -67,6 +67,8 @@ let r2: Map<string, string>;
 let gets: string[];
 let failPut: Set<string>;
 let onPut: ((k: string) => void) | null;
+/** 呼び出しの数を取る settings の 1 文（§Q-11 3）を流す直前に呼ぶ（時計を進めて「1 文に時間がかかった」を作る） */
+let onClaim: (() => void) | null;
 
 const metaKey = (vid: string) => `${PREFIX}video-meta/${vid}.json`;
 const callKey = (vid: string, n: number) => `${PREFIX}video-calls/${vid}/${n}.json`;
@@ -74,8 +76,25 @@ const metaRecord = (vid: string) => JSON.parse(String(r2.get(metaKey(vid)))) as 
 const metaCount = (vid: string) => (one(db, `SELECT value FROM settings WHERE key = '${videoMetaCountKey('v1', vid)}'`)?.value as string | undefined) ?? null;
 
 function makeEnv(vars: Record<string, string> = {}): Env {
+  const base = d1(db);
+  const DB = {
+    prepare(sql: string) {
+      const st = base.prepare(sql);
+      if (!sql.startsWith("INSERT INTO settings (key, value, updated_at) VALUES (?, '1', ?)")) return st;
+      const wrap = (x: D1PreparedStatement): D1PreparedStatement =>
+        ({
+          bind: (...p: unknown[]) => wrap(x.bind(...p)),
+          run: async () => {
+            onClaim?.();
+            return x.run();
+          },
+        }) as unknown as D1PreparedStatement;
+      return wrap(st);
+    },
+    batch: base.batch.bind(base),
+  } as unknown as D1Database;
   return {
-    DB: d1(db),
+    DB,
     R2: {
       async put(k: string, v: string) {
         onPut?.(k);
@@ -266,6 +285,7 @@ beforeEach(() => {
   gets = [];
   failPut = new Set();
   onPut = null;
+  onClaim = null;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -370,6 +390,59 @@ describe('§Q-11 2・12 分類（本物の port。fetch を差し替える）', 
     const m = await metaAttempt(makeEnv(), real(() => new Response(body, { status: 200 })).port);
     expect(m.get('v1')?.outcome).toBe('ok');
     expect(metaRecord('v1').title).toBe('a'.repeat(200));
+  });
+
+  it('既定の要求の締め切りは 5,000 ms（timeoutMs を渡さない本物の port。試行の締め切りが遠ければ 5,000 ms のまま）', async () => {
+    const spy = vi.spyOn(AbortSignal, 'timeout');
+    const fetchImpl = (async () => json200(okBody)) as typeof fetch;
+    const port = youtubeOEmbedPort({ fetchImpl });
+    expect(await port.lookup(YT1)).toMatchObject({ outcome: 'ok' });
+    expect(await port.lookup(YT1, { deadline: Date.now() + 600_000 })).toMatchObject({ outcome: 'ok' });
+    expect(spy.mock.calls.map((c) => c[0])).toEqual([5_000, 5_000]);
+  });
+
+  it('本文の大きさの境界: ちょうど 65,536 bytes は読む、65,537 bytes は unavailable', async () => {
+    const sized = (n: number) => {
+      const base = JSON.stringify({ title: '', author_name: '公式チャンネル' });
+      const pad = n - new TextEncoder().encode(base).byteLength;
+      const body = JSON.stringify({ title: 'a'.repeat(pad), author_name: '公式チャンネル' });
+      expect(new TextEncoder().encode(body).byteLength).toBe(n);
+      return body;
+    };
+    const at = (n: number) => youtubeOEmbedPort({ fetchImpl: (async () => new Response(sized(n), { status: 200 })) as typeof fetch }).lookup(YT1);
+    expect((await at(OEMBED_BODY_MAX_BYTES)).outcome).toBe('ok');
+    expect(OEMBED_BODY_MAX_BYTES).toBe(65_536);
+    expect((await at(OEMBED_BODY_MAX_BYTES + 1)).outcome).toBe('unavailable');
+  });
+
+  it('数の 1 文に時間がかかった時: 入口の残り 5,001 ms・1 文で 2,000 ms → 要求の締め切りは 3,001 ms 以下。残りを使い切った → 呼ばない（数は取った後）', async () => {
+    seed([video(), V2()]);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-05T03:00:00.000Z'));
+    const spy = vi.spyOn(AbortSignal, 'timeout');
+    const r = real(() => json200(okBody), OEMBED_TIMEOUT_MS);
+    const env = makeEnv();
+    // v1 だけを見る（V2 は記録済みにして呼ばない）
+    putMeta('v2', { ...OK_REC, title: '回路の例', author_name: 'ibxtoycat' });
+    onClaim = () => vi.setSystemTime(Date.now() + 2_000);
+    expect((await metaAttempt(env, r.port, 5_001)).get('v1')?.outcome).toBe('ok');
+    expect(r.seen).toHaveLength(1);
+    expect(spy.mock.calls).toHaveLength(1);
+    expect(spy.mock.calls[0][0]).toBeLessThanOrEqual(3_001);
+    expect(spy.mock.calls[0][0]).toBeGreaterThan(0);
+    // 残りを全部使い切る 1 文 → fetch しない。数は増えている
+    r2.delete(metaKey('v1'));
+    onClaim = () => vi.setSystemTime(Date.now() + 5_001);
+    expect((await metaAttempt(env, r.port, 5_001)).get('v1')).toEqual({ outcome: 'unknown' });
+    expect(r.seen).toHaveLength(1);
+    expect(spy.mock.calls).toHaveLength(1);
+    expect(metaCount('v1')).toBe('2');
+  });
+
+  it('port の要求の締め切り: 試行の締め切りが過ぎていれば fetch しない（unavailable）', async () => {
+    const r = real(() => json200(okBody), OEMBED_TIMEOUT_MS);
+    expect(await r.port.lookup(YT1, { deadline: Date.now() - 1 })).toEqual({ outcome: 'unavailable' });
+    expect(r.seen).toHaveLength(0);
   });
 
   it('youtube_id の形が違えば fetch しない（unavailable）', async () => {
@@ -676,6 +749,12 @@ describe('§Q-11 2・12 保存する値', () => {
     ['watch ページ（形が違う）', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'],
     ['channel の id に記号', 'https://www.youtube.com/channel/UC!x'],
     ['入れ子の path', 'https://www.youtube.com/@official/videos'],
+    ['復号すると制御文字（@%00）', 'https://www.youtube.com/@%00'],
+    ['復号できない（@a%ZZ）', 'https://www.youtube.com/@a%ZZ'],
+    ['復号すると / （c/%2Fwatch）', 'https://www.youtube.com/c/%2Fwatch'],
+    ['復号すると空白（user/a%20b）', 'https://www.youtube.com/user/a%20b'],
+    ['復号すると %（@a%2541）', 'https://www.youtube.com/@a%2541'],
+    ['復号すると \\（@a%5Cb）', 'https://www.youtube.com/@a%5Cb'],
     ['文字列でない', 42 as unknown as string],
   ])('author_url が %s なら空', (_n, raw) => {
     expect(safeAuthorUrl(raw)).toBe('');
@@ -684,6 +763,8 @@ describe('§Q-11 2・12 保存する値', () => {
 
   it('日本語のハンドル・channel・c・user は保存される（URL.href = percent-encode された形）', () => {
     expect(safeAuthorUrl('https://www.youtube.com/@科学教室')).toBe(new URL('https://www.youtube.com/@科学教室').href);
+    // percent-encode された形で渡されても通る
+    expect(safeAuthorUrl(new URL('https://www.youtube.com/@科学教室').href)).toBe(new URL('https://www.youtube.com/@科学教室').href);
     expect(safeAuthorUrl('https://www.youtube.com/@子どもと楽しむ科学実験教室')).toBe(new URL('https://www.youtube.com/@子どもと楽しむ科学実験教室').href);
     expect(safeAuthorUrl('https://www.youtube.com/@official')).toBe('https://www.youtube.com/@official');
     expect(safeAuthorUrl('https://www.youtube.com/channel/UC_x-1')).toBe('https://www.youtube.com/channel/UC_x-1');
@@ -870,6 +951,28 @@ describe('§Q-11 4・8・12 回収・review API・確認画面', () => {
       const h = R.reviewHtml(d([video()], [m]), R.newReviewState(), {});
       expect(h).toContain(`data-video-meta-mark="${mark}">${text}</p>`);
       expect(h).toContain(CHECK);
+    });
+
+    it('ok だが照合できない（channel_match unknown）→ 「チャンネル名を照合できませんでした。本人のチャンネルか確かめてください」', () => {
+      const h = R.reviewHtml(d([video({ channel: '!!!' })], [vm1({ author_name: '???', channel_match: 'unknown' })]), R.newReviewState(), {});
+      expect(h).toContain('data-video-meta-mark="unknown_match">チャンネル名を照合できませんでした。本人のチャンネルか確かめてください</p>');
+      expect(h).toContain('YouTube の公式情報: レッドストーンの基本 / ');
+      expect(h).not.toContain('data-video-meta-mark="unknown"');
+    });
+
+    it.each(['https://www.youtube.com/@%00', 'https://www.youtube.com/@a%ZZ', 'https://www.youtube.com/c/%2Fwatch', 'https://www.youtube.com/user/a%20b'])(
+      '形は合うが復号すると不正な author_url（%s）はリンクにしない',
+      (url) => {
+        const h = R.reviewHtml(d([video()], [vm1({ author_url: url })]), R.newReviewState(), {});
+        expect(h).not.toContain('data-video-meta-link');
+        expect(h).toContain('YouTube の公式情報: レッドストーンの基本 / 公式チャンネル</p>');
+      },
+    );
+
+    it('percent-encode された日本語のハンドルはリンクにする', () => {
+      const url = new URL('https://www.youtube.com/@科学教室').href;
+      const h = R.reviewHtml(d([video()], [vm1({ author_url: url })]), R.newReviewState(), {});
+      expect(h).toContain(`<a href="${url}" rel="noopener noreferrer" target="_blank" data-video-meta-link="1">`);
     });
 
     it('video_meta に無い動画は「まだ取れていません」。video_meta の無い応答（古い Worker）は何も出さない', () => {
