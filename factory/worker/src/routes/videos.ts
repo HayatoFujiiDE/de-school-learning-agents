@@ -1,7 +1,9 @@
 // 動画の確認（Gemini）の運営の操作（契約 §Q-6・§Q-9.5）。認証は §B-1 の admin と同じ（index.ts の requireAccess。GET 以外は Origin 検証）。
 // - GET  /api/videos/status … 有効か・鍵があるか（値は返さない）・今月の記帳（vv:*）
-// - POST /api/videos/enable … settings video_gen_enabled を '1' にする（probe の結果を司令塔が確かめてから。鍵が無ければ 409）
+// - POST /api/videos/enable … settings video_gen_enabled を '1' にする（probe の結果を司令塔が確かめてから。鍵が無ければ 409）。
+//   本文 {"fallback": true} の時だけ settings video_fallback_enabled を '1' にする（予備のモデル §Q-10 10。GEMINI_VIDEO_FALLBACK_MODEL が空なら 409）
 // - POST /api/probe/video   … 一時 route（§Q-6）。取り置き vv:probe:{youtube_id}:{start}:{end} と月・日の上限を通してから 1 回だけ呼ぶ。
+//   入力 model: "primary"（既定）| "fallback"（予備のモデルで呼ぶ。ref に :fb。予備が未設定なら 409。§Q-10 10）。
 //   返すのは {status, clip_accepted, usage_present, text_head, error_code} だけ（観測値。clip が区間の中身に効いているかは司令塔が text_head で判断する）。
 //   clip_accepted は PROBE_CLIP_ACCEPTED_LABEL の意味: true = HTTP 2xx・error_code なし・本文あり、false = API が 4xx で断った、null = それ以外（5xx・応答なし・形の違い）
 // 鍵の値・応答本文はログにも応答にも出さない（text_head は記録の先頭 300 字だけ）。
@@ -13,7 +15,7 @@ import { json, readBody, type RouteCtx } from '../http';
 import { tokyoMonth } from '../ledger';
 import { VIDEO_MAX_RANGE_SEC, YOUTUBE_ID_RE } from '../checks/schema';
 import { dailyReservedSql } from '../verify';
-import { VIDEO_ENABLED_KEY, probeLedgerRef, videoPrompt, videoReserveStmt } from '../videos';
+import { VIDEO_ENABLED_KEY, VIDEO_FALLBACK_ENABLED_KEY, probeLedgerRef, videoPrompt, videoReserveStmt } from '../videos';
 
 /** probe の返す本文の先頭（§Q-6） */
 export const PROBE_TEXT_HEAD_CHARS = 300;
@@ -42,7 +44,16 @@ export async function videoMonthCents(db: D1Database, d: Date = new Date()): Pro
 export async function videoStatusSummary(
   env: Env,
   gemini: Pick<GeminiPort, 'configured'>,
-): Promise<{ enabled: boolean; configured: boolean; month_cents: number; month_cap_cents: number; u_cents: number; model: string }> {
+): Promise<{
+  enabled: boolean;
+  configured: boolean;
+  month_cents: number;
+  month_cap_cents: number;
+  u_cents: number;
+  model: string;
+  fallback_enabled: boolean;
+  fallback_model: string;
+}> {
   const c = cfg(env);
   return {
     enabled: (await getSetting(env.DB, VIDEO_ENABLED_KEY)) === '1',
@@ -51,6 +62,9 @@ export async function videoStatusSummary(
     month_cap_cents: c.videoMonthlyCapCents,
     u_cents: c.videoUCents,
     model: c.videoModel,
+    // §Q-10 10: 予備のモデル（名前だけ。'' = 未設定）と、使うか
+    fallback_enabled: (await getSetting(env.DB, VIDEO_FALLBACK_ENABLED_KEY)) === '1' && c.videoFallbackModel.length > 0,
+    fallback_model: c.videoFallbackModel,
   };
 }
 
@@ -59,8 +73,18 @@ export async function getVideosStatus(c: RouteCtx, gemini?: GeminiPort): Promise
   return json(200, await videoStatusSummary(c.env, gemini ?? (await getGeminiPort(c.env, { hostname: c.url.hostname }))));
 }
 
-/** POST /api/videos/enable（§Q-9.5「動画の確認を有効にする」。止める操作は §Q に無い） */
+/**
+ * POST /api/videos/enable（§Q-9.5「動画の確認を有効にする」。止める操作は §Q に無い）。
+ * 本文 {"fallback": true} の時は予備のモデルを使うようにする（§Q-10 10。GEMINI_VIDEO_FALLBACK_MODEL が空なら 409。video_gen_enabled は変えない）
+ */
 export async function enableVideos(c: RouteCtx, gemini?: GeminiPort): Promise<Response> {
+  const b = await readBody(c.request, 4096);
+  if (b?.fallback === true) {
+    if (!cfg(c.env).videoFallbackModel) return json(409, { error: 'fallback_not_configured' });
+    await setSetting(c.env.DB, VIDEO_FALLBACK_ENABLED_KEY, '1');
+    console.log(JSON.stringify({ at: 'video_enable', model_role: 'fallback' }));
+    return json(200, { fallback_enabled: true });
+  }
   const g = gemini ?? (await getGeminiPort(c.env, { hostname: c.url.hostname }));
   // 鍵が無いまま立てると、その間に検証した版の動画は記録なし（missing）のまま残る（§Q-9.1）ので断る
   if (!g.configured) return json(409, { error: 'not_configured' });
@@ -79,14 +103,17 @@ export async function probeVideo(c: RouteCtx, gemini?: GeminiPort): Promise<Resp
   const e = b?.end_sec;
   // clip: false は診断用（区間を付けずに 1 回だけ。取り置きの ref を分ける）
   const clip = b?.clip === false ? false : true;
-  if (typeof yt !== 'string' || !YOUTUBE_ID_RE.test(yt) || !isSec(s) || !isSec(e) || s >= e || e - s > VIDEO_MAX_RANGE_SEC) return json(400, { error: 'invalid_input' });
+  // model: "fallback" は予備のモデルで呼ぶ（§Q-10 10。取り置きの ref に :fb）。無ければ主のモデル
+  const role = b?.model === undefined || b?.model === 'primary' ? 'primary' : b?.model === 'fallback' ? 'fallback' : null;
+  if (typeof yt !== 'string' || !YOUTUBE_ID_RE.test(yt) || !isSec(s) || !isSec(e) || s >= e || e - s > VIDEO_MAX_RANGE_SEC || role === null) return json(400, { error: 'invalid_input' });
+  const k = cfg(c.env);
+  if (role === 'fallback' && !k.videoFallbackModel) return json(409, { error: 'fallback_not_configured' });
   const g = gemini ?? (await getGeminiPort(c.env, { hostname: c.url.hostname }));
   // 鍵が無い時は呼ばず、取り置きもしない（§Q-4）
   if (!g.configured) return json(409, { error: 'not_configured' });
-  const k = cfg(c.env);
   const at = new Date();
   const day = tokyoDay(at);
-  const ref = probeLedgerRef(yt, s, e) + (clip ? '' : ':noclip');
+  const ref = probeLedgerRef(yt, s, e) + (clip ? '' : ':noclip') + (role === 'fallback' ? ':fb' : '');
   const reserved = await cas(
     c.env.DB,
     videoReserveStmt({
@@ -107,7 +134,10 @@ export async function probeVideo(c: RouteCtx, gemini?: GeminiPort): Promise<Resp
   }
   let out: { status: number | null; clip_accepted: boolean | null; usage_present: boolean; text_head: string; error_code: string | null; clip: boolean; api_error: { status: string; message: string } | null };
   try {
-    const r = await g.watch({ youtubeId: yt, startSec: s, endSec: e, prompt: videoPrompt(s, e), clip }, { deadline: Date.now() + PROBE_TIMEOUT_MS });
+    const r = await g.watch(
+      { youtubeId: yt, startSec: s, endSec: e, prompt: videoPrompt(s, e), clip, ...(role === 'fallback' ? { model: k.videoFallbackModel } : {}) },
+      { deadline: Date.now() + PROBE_TIMEOUT_MS },
+    );
     const text = String(r.text ?? '');
     const status = typeof r.httpStatus === 'number' ? r.httpStatus : null;
     const errorCode = text.trim() ? null : 'no_text';
@@ -118,6 +148,6 @@ export async function probeVideo(c: RouteCtx, gemini?: GeminiPort): Promise<Resp
     const errorCode = ge?.kind ?? 'unknown';
     out = { status, clip_accepted: clipAcceptedOf(status, errorCode, ''), usage_present: ge?.usagePresent ?? false, text_head: '', error_code: errorCode, clip, api_error: ge?.apiError ?? null };
   }
-  console.log(JSON.stringify({ at: 'video_probe', status: out.status, error_code: out.error_code }));
+  console.log(JSON.stringify({ at: 'video_probe', model_role: role, status: out.status, error_code: out.error_code }));
   return json(200, out);
 }
