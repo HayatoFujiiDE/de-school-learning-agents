@@ -14,7 +14,7 @@ import {
   CAPTURE_EVENT_PAGES_MAX,
   CAPTURE_SUBMIT_RESERVE_MS,
   CAPTURE_SYNC_RESERVE_MS,
-  verifyCapturesKey,
+  verifyPlanKey,
   VERDICT_SCHEMA,
   VERIFIER_SYSTEM,
   VERIFY_INPUT_CHAR_LIMIT,
@@ -644,21 +644,21 @@ describe('§P Astra R1 N2〜N4・入力の区切りの偽装', () => {
     const env = makeEnv();
     await runVerificationStep(env, port, { deadline: Date.now() + 120_000 });
     const token = String(ver().verification_token);
-    if (o.dropStats) r2.delete(verifyCapturesKey('v1', token));
+    if (o.dropStats) r2.delete(verifyPlanKey('v1', token));
     s.status = 'ended';
     const out = await runVerificationStep(env, port, { deadline: Date.now() + 120_000 });
     return { out, created, token };
   }
 
-  it('N3: 回収時の meta.captures は提出時の数の記録から読む（切っていないちょうど 30,000 字の本文は truncated に数えない）', async () => {
+  it('N3: 回収時の meta.captures は提出時の plan.json から読む（切っていないちょうど 30,000 字の本文は truncated に数えない）', async () => {
     seed([['s1', URL_A]]);
     const { out, token } = await batchRun([use('u1', URL_A), result('u1', 'あ'.repeat(30_000))]);
     expect(out).toContain('collect=done');
-    expect(JSON.parse(String(r2.get(verifyCapturesKey('v1', token))))).toEqual({ used: 1, missing: 0, truncated: 0 });
+    expect(JSON.parse(String(r2.get(verifyPlanKey('v1', token))))).toEqual({ v: 1, figures: { shown: [], not_seen: [] }, captures: { used: 1, missing: 0, truncated: 0 } });
     expect(savedResult().meta.captures).toEqual({ used: 1, missing: 0, truncated: 0 });
   });
 
-  it('N3: 数の記録が無ければ meta に captures を入れない', async () => {
+  it('N3: plan.json が無く図も無い版 → done（図なし）、meta に captures を入れない', async () => {
     seed([['s1', URL_A]]);
     const { out } = await batchRun([use('u1', URL_A), result('u1', 'あ')], { dropStats: true });
     expect(out).toContain('collect=done');

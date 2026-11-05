@@ -543,22 +543,37 @@ export function captureSection(sourcesText: string, file: SourceCapturesFile, av
   };
 }
 
-/** Batch の最初のターンの取得記録の数（会話 JSON の横に置く。回収時の meta.captures はここから読む。§P b 5） */
-export const verifyCapturesKey = (vid: string, token: string) => `verify/${vid}/${token}/captures.json`;
+/**
+ * Batch の最初のターンを出す時に決めた計画（会話 JSON の横に置く。§O-12 c・§P b 5）。回収時の図の集合と meta.captures はここから読む
+ * （回収はプロンプトの文字列を解析しない。プロンプトには取得したページ等の信頼できない本文が入るため）。提出のたびに上書きする
+ */
+export const verifyPlanKey = (vid: string, token: string) => `verify/${vid}/${token}/plan.json`;
+
+export interface VerifyPlan {
+  v: 1;
+  figures: { shown: string[]; not_seen: string[] };
+  captures: CaptureStats;
+}
 
 const capturesMeta = (c: CaptureStats | null): Pick<VerifyMeta, 'captures'> => (c ? { captures: c } : {});
 
-/** verifyCapturesKey の中身を読む（無い・読めない・形が違えば null = meta に captures を入れない） */
-async function readCaptureStats(env: Pick<Env, 'R2'>, key: string): Promise<CaptureStats | null> {
+/** verifyPlanKey の中身を読む（無い・読めない・形が違えば null） */
+async function readPlan(env: Pick<Env, 'R2'>, key: string): Promise<VerifyPlan | null> {
+  const o = await env.R2.get(key);
+  if (!o) return null;
   try {
-    const o = await env.R2.get(key);
-    if (!o) return null;
     const v = JSON.parse(await o.text()) as Record<string, unknown>;
+    const f = v?.figures as Record<string, unknown> | undefined;
+    const c = v?.captures as Record<string, unknown> | undefined;
+    const strs = (a: unknown) => (Array.isArray(a) && a.every((x) => typeof x === 'string') ? (a as string[]) : null);
     const n = (x: unknown) => (typeof x === 'number' && Number.isInteger(x) && x >= 0 ? x : null);
-    const used = n(v?.used);
-    const missing = n(v?.missing);
-    const truncated = n(v?.truncated);
-    return used === null || missing === null || truncated === null ? null : { used, missing, truncated };
+    const shown = strs(f?.shown);
+    const notSeen = strs(f?.not_seen);
+    const used = n(c?.used);
+    const missing = n(c?.missing);
+    const truncated = n(c?.truncated);
+    if (v?.v !== 1 || !shown || !notSeen || used === null || missing === null || truncated === null) return null;
+    return { v: 1, figures: { shown, not_seen: notSeen }, captures: { used, missing, truncated } };
   } catch {
     return null;
   }
@@ -688,59 +703,27 @@ async function discardBody(obj: unknown): Promise<void> {
 }
 
 /**
- * 会話の最初の user message から、画像ブロックとして渡した png / webp の path（`## 画像 {path}` の text の直後に image がある組）。
- * Batch の回収で「見せた図」を決め直すのに使う（§O-12 c。会話 JSON は R2 にあり、同じ版・同じ R2 内容なら同じ結果）
+ * Batch の回収時の図の集合と取得記録の数（§O-12 c 最後・§P b 5）。提出時に書いた plan.json を読み、プロンプトの文字列は解析しない。
+ * - 旧形式の会話（§O-12 の前に出した Batch。最初の user content が文字列）: 版に図（R2 の parts/** を列挙し直す）があれば claim_set_mismatch、0 枚なら従来どおり
+ * - plan.json がある: 版の図の一覧が plan の「見せた図 + not_seen」と一致する時だけその集合を使う（会話の後に増えた図等は claim_set_mismatch）
+ * - plan.json が無い・読めない: 版に図があれば claim_set_mismatch（再試行で作り直す）、0 枚なら図なし・meta に captures なし
  */
-export function shownImagePathsOf(messages: MessageParam[]): string[] {
-  const c = messages[0]?.role === 'user' ? messages[0].content : null;
-  if (!Array.isArray(c)) return [];
-  const out: string[] = [];
-  for (let i = 0; i + 1 < c.length; i++) {
-    const b = c[i] as { type?: unknown; text?: unknown };
-    if (b?.type === 'text' && typeof b.text === 'string' && b.text.startsWith(IMAGE_HEADING_PREFIX) && (c[i + 1] as { type?: unknown })?.type === 'image') {
-      out.push(b.text.slice(IMAGE_HEADING_PREFIX.length));
-    }
-  }
-  return out;
-}
-
-/**
- * Batch の回収時の図の集合（§O-12 c 最後）: 図の一覧は版の R2 を同じ手順で列挙し直し（本文・画像は読まない）、
- * 見せた画像は R2 の会話 JSON の画像ブロックから決める。見せた図 = 一覧 − not_seen。
- * not_seen は「容量のため見せなかった」画像だけ = 会話に画像ブロックが無く、会話の図の一覧の行に NOT_SEEN_MARK が付いている png / webp。
- * どちらでもない png / webp（会話の後に増えた等）と、旧形式の会話（§O-12 の前に出した Batch。最初の user content が文字列）で版に図があるものは
- * claim_set_mismatch（再試行で新しい形の入力を作り直す。§O-12 c 最後）。図が 0 枚の版は旧形式でも従来どおり
- */
-async function figurePlanAtCollect(env: Env, r: VersionForVerify, prev: MessageParam[] | null): Promise<{ shown: string[]; notSeen: string[] } | { fail: string }> {
+async function figurePlanAtCollect(
+  env: Env,
+  r: BatchRow,
+  prev: MessageParam[] | null,
+): Promise<{ shown: string[]; notSeen: string[]; captures: CaptureStats | null } | { fail: string }> {
   const all = await listPartKeys(env.R2, r.r2_prefix);
   if (all === null) return { fail: 'input_too_large' };
   const figures = all.filter((p) => FIGURE_RE.test(p));
-  if (figures.length === 0) return { shown: [], notSeen: [] };
   const first = prev?.[0];
-  if (first && typeof first.content === 'string') return { fail: 'claim_set_mismatch' };
-  const images = figures.filter((p) => IMAGE_PART_RE.test(p));
-  if (images.length === 0) return { shown: figures, notSeen: [] };
-  if (!prev) return { fail: 'conversation_missing' };
-  const given = new Set(shownImagePathsOf(prev));
-  const markedNotSeen = new Set(notSeenLinesOf(prev, images));
-  const notSeen: string[] = [];
-  for (const p of images) {
-    if (given.has(p)) continue;
-    if (!markedNotSeen.has(p)) return { fail: 'claim_set_mismatch' };
-    notSeen.push(p);
-  }
-  const ns = new Set(notSeen);
-  return { shown: figures.filter((p) => !ns.has(p)), notSeen };
-}
-
-/** 会話の最初の user message の図の一覧（FIGURES_HEADING の text block）で、行が `- {path}` で始まり NOT_SEEN_MARK で終わる candidates の path */
-function notSeenLinesOf(messages: MessageParam[], candidates: string[]): string[] {
-  const c = messages[0]?.role === 'user' ? messages[0].content : null;
-  if (!Array.isArray(c)) return [];
-  const listing = c.find((b) => (b as { type?: unknown }).type === 'text' && String((b as { text?: unknown }).text ?? '').startsWith(FIGURES_HEADING)) as { text: string } | undefined;
-  if (!listing) return [];
-  const lines = listing.text.split('\n').slice(1);
-  return candidates.filter((p) => lines.some((l) => l.endsWith(NOT_SEEN_MARK) && (l === `- ${p}${NOT_SEEN_MARK}` || l.startsWith(`- ${p}: `))));
+  if (first && typeof first.content === 'string') return figures.length ? { fail: 'claim_set_mismatch' } : { shown: [], notSeen: [], captures: null };
+  const plan = await readPlan(env, verifyPlanKey(r.id, r.verification_token));
+  if (!plan) return figures.length ? { fail: 'claim_set_mismatch' } : { shown: [], notSeen: [], captures: null };
+  const planned = [...plan.figures.shown, ...plan.figures.not_seen];
+  const now = new Set(figures);
+  if (new Set(planned).size !== planned.length || planned.length !== now.size || planned.some((p) => !now.has(p))) return { fail: 'claim_set_mismatch' };
+  return { shown: [...plan.figures.shown].sort(), notSeen: [...plan.figures.not_seen].sort(), captures: plan.captures };
 }
 
 const oneLineText = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -1339,14 +1322,13 @@ export async function submitOne(env: Env, port: FactoryPort, r: BatchRow, deadli
       if (input === null) return failAttempt(env, l, r.material_id, { reason: 'input_too_large', terminal: true });
       if ('error' in input) return failAttempt(env, l, r.material_id, { reason: input.error, terminal: true });
       messages = [{ role: 'user', content: input.content }];
-      // 決定的なので書き直してよい。画像ブロック（≤ VERIFY_IMAGE_BYTES_LIMIT の base64）も入る（回収時に見せた図をここから決め直す §O-12 c）
+      // 決定的なので書き直してよい。画像ブロック（≤ VERIFY_IMAGE_BYTES_LIMIT の base64）も入る（回収時の図の集合はこの後の plan.json で決める）
       await env.R2.put(key, JSON.stringify(messages));
-      // §P b 5: 取得記録の数（回収時の meta.captures。書けなければ meta に入れないだけ）
-      try {
-        await env.R2.put(verifyCapturesKey(r.id, r.verification_token), JSON.stringify(input.captures));
-      } catch {
-        // 数の記録だけなので試行は続ける
-      }
+      // §O-12 c・§P b 5: 回収時に使う計画（見せた図・容量のため見せなかった図・取得記録の数）。提出のたびに上書きする。
+      // 書けなければ準備の失敗（batch を作る前なので見積りなし）
+      const notSeen = new Set(input.notSeen);
+      const plan: VerifyPlan = { v: 1, figures: { shown: input.figures.filter((p) => !notSeen.has(p)), not_seen: input.notSeen }, captures: input.captures };
+      await env.R2.put(verifyPlanKey(r.id, r.verification_token), JSON.stringify(plan));
     } else {
       const m = await readConversation(env, key);
       if (!m) return failAttempt(env, l, r.material_id, { reason: 'conversation_missing' });
@@ -1400,7 +1382,7 @@ async function decideTurn(env: Env, r: BatchRow, row: MessageBatchIndividualResp
     if ('fail' in plan) return { kind: 'fail', micro, reason: plan.fail };
     const report = validateVerdicts(tu.input, claimIdsOf(r.claims_json), plan.shown);
     if (!report) return { kind: 'fail', micro, reason: 'claim_set_mismatch' };
-    return { kind: 'report', micro, report: withNotSeen(report, plan.notSeen), meta: { mode: 'batch', turns: r.verify_turn + 1, ...fetchMeta([...(prev ?? []), assistant]), ...capturesMeta(await readCaptureStats(env, verifyCapturesKey(r.id, r.verification_token))) } };
+    return { kind: 'report', micro, report: withNotSeen(report, plan.notSeen), meta: { mode: 'batch', turns: r.verify_turn + 1, ...fetchMeta([...(prev ?? []), assistant]), ...capturesMeta(plan.captures) } };
   }
   let tail: MessageParam[];
   let pauseInc = 0;
