@@ -239,7 +239,9 @@
     var works = S().works || [], g = group(works);
     main.textContent = '';
     var kids = [H('div', { class: 'page-head' }, [
-      H('div', null, [H('h1', { tabindex: '-1', 'data-fk': 'works-h' }, T('works')), H('p', null, T('works_sub'))]),
+      // 見出しの横に「作品展示を見る」（contract-app §AG-1。3 幅とも同じリンク。下タブは増やさない）
+      H('div', null, [H('div', { class: 'wk-title-row' }, [H('h1', { tabindex: '-1', 'data-fk': 'works-h' }, T('works')),
+        H('a', { class: 'link-btn wk-gallery-link', href: '#gallery' }, [H('span', null, T('gl_see')), H('span', { 'aria-hidden': 'true' }, '→')])]), H('p', null, T('works_sub'))]),
       // 作品 0 件の時は破線の枠だけ（同じ操作を 2 つ並べない。§U-12 (f)）
       works.length ? H('div', { class: 'actions' }, [H('button', { class: 'btn orange', type: 'button', 'data-action': 'wk-open', 'data-arg': 'head' }, [icon('camera'), H('span', null, T('add_capture'))])]) : null
     ])];
@@ -373,6 +375,11 @@
     }))] : [H('p', { class: 'wb-empty' }, T('shares_none'))];
     return block(w, 'shares', T('share'), kids);
   }
+  // 作品展示（contract-app §AG-2 の 1 つずつ）: 出す / 出している（時刻）+ 外す。中身は gallery.js。見せる（§W-4）とは別の操作
+  function galleryBlock(w) {
+    if (!DES.gallery || !DES.gallery.workBlock) return null;
+    return block(w, 'gallery', T('gallery'), DES.gallery.workBlock(w));
+  }
   function siblingsBlock(w) {
     var sib = siblings(S().works, w);
     if (!sib.length) return null;
@@ -386,7 +393,7 @@
     main.textContent = '';
     var left = [ownBlock(w, 'like', T('like_point')), ownBlock(w, 'craft', T('craft_point'))];
     if (w.from === 'capture') left.push(readBlock(w));
-    var right = [rolesBlock(w), sharesBlock(w), siblingsBlock(w)];
+    var right = [rolesBlock(w), sharesBlock(w), galleryBlock(w), siblingsBlock(w)];
     main.appendChild(H('div', { class: 'works-page work-detail', 'data-work': w.id }, [
       H('p', { class: 'wd-back' }, [H('a', { class: 'link-btn', href: '#works', 'data-action': 'wd-back', 'data-id': w.id, 'aria-label': T('back_works') }, [H('span', { 'aria-hidden': 'true' }, '←'), H('span', null, T('works'))])]),
       headEl(w, a),

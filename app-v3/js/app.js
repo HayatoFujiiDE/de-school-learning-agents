@@ -37,7 +37,9 @@ window.DES = window.DES || {};
     // §AC-6 / AC-7: 大きく見る・もとの大きさ・左メニューの開閉
     expand: 'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
     shrink: 'M9 4v5H4 M15 4v5h5 M9 20v-5H4 M15 20v-5h5',
-    sidebar: 'M4 4h16v16H4z M9 4v16 M14 10l-2 2 2 2'
+    sidebar: 'M4 4h16v16H4z M9 4v16 M14 10l-2 2 2 2',
+    // 作品展示（contract-app §AG-1）: 額縁と山
+    gallery: 'M3 4h18v16H3z M6 7h12v10H6z M6 17l4-5 3 3 2-2 3 4'
   };
   var THICK = { more: 3, drag: 3 };
   DES.icon = function (name) {
@@ -73,11 +75,11 @@ window.DES = window.DES || {};
   function icon(n) { return DES.raw(DES.icon(n)); }
   function $(s) { return document.querySelector(s); }
   function esc(v) { return window.CSS && CSS.escape ? CSS.escape(v) : String(v).replace(/"/g, '\\"'); }
-  var ROUTES = ['talk', 'plan', 'make', 'works', 'today', 'self', 'map', 'trail', 'paused'];
-  var NAV = ['talk', 'make', 'works', 'today', 'self', 'map', 'trail'];
+  var ROUTES = ['talk', 'plan', 'make', 'works', 'gallery', 'today', 'self', 'map', 'trail', 'paused'];
+  var NAV = ['talk', 'make', 'works', 'gallery', 'today', 'self', 'map', 'trail'];
 
-  // #make/<id>（作業台）・#works/<id>・#today/<id>・#map/<arg> は前方一致（CONTRACT-v3 §U-3 / §W / §X / §Y）。他は完全一致
-  var PREFIX = ['make', 'works', 'today', 'map'];
+  // #make/<id>（作業台）・#works/<id>・#gallery/<id>・#today/<id>・#map/<arg> は前方一致（CONTRACT-v3 §U-3 / §W / §AG / §X / §Y）。他は完全一致
+  var PREFIX = ['make', 'works', 'gallery', 'today', 'map'];
   function route() {
     var h = window.location.hash.replace(/^#/, ''), base = h.split('/')[0];
     if (PREFIX.indexOf(base) >= 0) return base;
@@ -162,7 +164,7 @@ window.DES = window.DES || {};
   var toastTimer = null, toastFn = null, toastGone = null;
   function placeToast() {
     var el = $('#toast'), host = document.body;
-    ['#plan-dialog', '#make-dialog', '#works-dialog', '#today-dialog'].forEach(function (s) { var d = $(s); if (d && d.open) host = d; });
+    ['#plan-dialog', '#make-dialog', '#works-dialog', '#today-dialog', '#gallery-dialog'].forEach(function (s) { var d = $(s); if (d && d.open) host = d; });
     if (el.parentNode !== host) host.appendChild(el);
   }
   APP.toast = function (text, action) {
@@ -376,6 +378,7 @@ window.DES = window.DES || {};
     else if (r === 'plan') DES.plan.renderPage(main);
     else if (r === 'make') DES.make.render(main, APP.routeArg());
     else if (r === 'works') DES.works.render(main, APP.routeArg());
+    else if (r === 'gallery') DES.gallery.render(main, APP.routeArg());
     else if (r === 'today') DES.today.render(main, APP.routeArg());
     else if (r === 'map') DES.map.render(main, APP.routeArg());
     else if (r === 'self') DES.self.render(main);
@@ -439,10 +442,11 @@ window.DES = window.DES || {};
 
   function closeTransient() {
     var u = DES.ui;
-    ['#plan-dialog', '#nav-drawer', '#row-sheet', '#pick-sheet', '#mode-dialog', '#make-dialog', '#works-dialog', '#today-dialog'].forEach(function (s) { APP.closeDialog($(s), true); });
+    ['#plan-dialog', '#nav-drawer', '#row-sheet', '#pick-sheet', '#mode-dialog', '#make-dialog', '#works-dialog', '#today-dialog', '#gallery-dialog'].forEach(function (s) { APP.closeDialog($(s), true); });
     u.menu = null; u.edit = null; u.goalEdit = null; u.noSlot = {};
     DES.make.resetUi();
     DES.works.resetUi();
+    DES.gallery.resetUi();
     DES.today.resetUi();
     DES.map.resetUi();
     DES.trail.resetUi();
@@ -543,6 +547,7 @@ window.DES = window.DES || {};
     DES.talk.bind();
     DES.make.bind();
     DES.works.bind();
+    DES.gallery.bind();
     DES.today.bind();
     DES.map.bind();
     APP.render();
