@@ -87,12 +87,13 @@
   if (typeof document === 'undefined') return;
 
   // ======================================================================
-  // ブラウザ: 枠に操作を結ぶ。api = { view(), apply(v, smooth), commit(), fit(), keyCenter(el), minZoom() }
+  // ブラウザ: 枠に操作を結ぶ。api = { view(), apply(v, smooth), commit(), fit(), keyCenter(el), minZoom() }。
+  // 戻り値の destroy() は、地図を作り直す・ページを離れる前に必ず呼ぶ（window の受け口を外し、押している最中の状態とタイマーを捨てる。以後は何もしない）
   // ======================================================================
   MPC.KEY_STEP = 1.25;
   MPC.PAN_STEP = 80;
   MPC.attach = function (frame, api) {
-    var pts = {}, drag = null, pinch = null, moved = false, suppress = false, hooked = false;
+    var pts = {}, drag = null, pinch = null, moved = false, suppress = false, hooked = false, dead = false;
     function minZ() { return api.minZoom ? api.minZoom() : MPC.MIN; }
     // 枠の中の座標（枠線の内側 = 板の原点から）
     function local(e) { var r = frame.getBoundingClientRect(); return { x: e.clientX - r.left - frame.clientLeft, y: e.clientY - r.top - frame.clientTop }; }
@@ -122,6 +123,7 @@
       frame.classList.add('is-dragging');
     }
     function down(e) {
+      if (dead) return;
       // 前のドラッグのクリック捨ては、次に押した時に必ず終わる（操作の部品を押した時も）
       suppress = false;
       if (isUi(e.target)) return;
@@ -133,7 +135,7 @@
     }
     function move(e) {
       var k = String(e.pointerId);
-      if (!pts[k]) return;
+      if (dead || !pts[k]) return;
       // マウスのボタンがもう離れている（離したのを受け取れなかった）なら、そこで終わり
       if (e.pointerType === 'mouse' && !(e.buttons & 1)) { end(k, true); return; }
       pts[k] = local(e);
@@ -154,8 +156,10 @@
     }
     // 終わり。離した（up）時だけ、動かした後のクリックを捨てる。取り消し（cancel）ではクリックが来ないので捨てない
     function end(k, cancelled) {
-      if (!pts[k]) return;
+      if (dead || !pts[k]) return;
       delete pts[k];
+      // 取り消しで終わった時はクリックが来ないので、前に立てたクリック捨て（ピンチで片指を離した時など）も必ず外す
+      if (cancelled) suppress = false;
       if (!ids().length) unhook();
       if (pinch) {
         if (ids().length < 2) {
@@ -186,10 +190,12 @@
     frame.addEventListener('pointerup', up);
     frame.addEventListener('pointercancel', cancel);
     // ドラッグ・ピンチの後のクリックは捨てる（ノードを選ばない・何もない所の解除もしない）
-    frame.addEventListener('click', function (e) { if (suppress) { suppress = false; e.stopPropagation(); e.preventDefault(); } }, true);
+    // キーボードで押した（Enter / Space。detail 0）クリックはドラッグの結果ではないので捨てない
+    frame.addEventListener('click', function (e) { if (suppress && e.detail !== 0) { suppress = false; e.stopPropagation(); e.preventDefault(); } }, true);
     // ホイール・トラックパッドのピンチ（ctrlKey 付き）= ポインタの位置を基点に拡大縮小。ページはスクロールさせない
     var wheelT = null;
     frame.addEventListener('wheel', function (e) {
+      if (dead) return;
       if (e.target && e.target.closest && e.target.closest('.mp-detail')) return;
       e.preventDefault();
       var p = local(e), dy = e.deltaY * (e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? 400 : 1));
@@ -200,7 +206,7 @@
     }, { passive: false });
     // キー（枠か地図の中のノードにフォーカスがある時）: + − で拡大縮小（フォーカスしたノードを基点）・0 で全体・矢印で移動
     frame.addEventListener('keydown', function (e) {
-      if (e.defaultPrevented || e.altKey || e.metaKey || e.ctrlKey) return;
+      if (dead || e.defaultPrevented || e.altKey || e.metaKey || e.ctrlKey) return;
       if (e.target && e.target.closest && e.target.closest('.mp-detail')) return;
       var c = api.keyCenter(e.target) || { x: frame.clientWidth / 2, y: frame.clientHeight / 2 }, v = api.view(), k = e.key, nv = null;
       if (k === '+' || k === '=') nv = MPC.zoomAt(v, MPC.KEY_STEP, c.x, c.y, minZ());
@@ -215,6 +221,15 @@
       api.apply(nv, true);
       api.commit();
     });
-    return { dragging: function () { return !!(pinch || (drag && moved)); } };
+    return {
+      dragging: function () { return !!(pinch || (drag && moved)); },
+      destroy: function () {
+        dead = true;
+        unhook();
+        clearTimeout(wheelT);
+        pts = {}; drag = null; pinch = null; moved = false; suppress = false;
+        frame.classList.remove('is-dragging');
+      }
+    };
   };
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : this));
