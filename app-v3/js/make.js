@@ -121,7 +121,8 @@
   // 今日のお題から（§X-2 / X-8）: お題の問い・最初の一歩・必要な物を引き継いだ活動（origin 'today'、odaiId 付き）。
   // 題材が §U-1 の 3 つなら theme 活動（見本の作業対象から）、それ以外は外で作って写真で記録する ext 活動（手順 = お題の makeSteps）。
   // 同じお題から作った活動があれば作らずにその id を返す。o: { id, mode, now, acts, question（自分の案にした問い）, recText（記録の 1 行。作った時点の表示の文字列） }
-  // 戻り値: { id, act, created, changed }（changed = 既存の活動の問いを本人が書き換えた）
+  // 戻り値: { id, act, created, changed }（changed = 既存の活動の問いを書き換えた）
+  // 既存の活動: 問いが今のタイトルと違えば（元のお題の問いに戻す時も）タイトルを書き換える。本人の言葉として残すのは元の問いと違う時だけ
   function fromOdai(odai, o) {
     o = o || {};
     if (!odai || !odai.id) return null;
@@ -130,10 +131,10 @@
     var hit = null;
     (o.acts || []).forEach(function (x) { if (!hit && x && x.odaiId === odai.id) hit = x; });
     if (hit) {
-      if (!own || hit.title === q) return { id: hit.id, act: hit, created: false, changed: false };
+      if (!q || hit.title === q) return { id: hit.id, act: hit, created: false, changed: false };
       var X = clone(hit);
       X.title = q;
-      pushMsg(X, { who: 'child', text: q });
+      if (own) pushMsg(X, { who: 'child', text: q });
       return { id: X.id, act: X, created: false, changed: true };
     }
     var title = own ? q : MD.pick(odai.title, o.mode);
@@ -143,7 +144,8 @@
       a = newAct({ id: o.id, title: title, origin: 'today', theme: theme, stage: stageOf(theme, variant, 'sample'), now: o.now });
     } else {
       var steps = Array.isArray(odai.makeSteps) && odai.makeSteps.length ? odai.makeSteps : MD.theme('mc').extSteps;
-      a = newAct({ id: o.id, title: title, origin: 'today', theme: 'mc', ext: { link: null, photos: [], visible: [] }, steps: steps, stepsKind: 'ext', now: o.now });
+      // 題材は 'odai'（写真のダミー・任せる候補はお題から。3 題材の中身を出さない）
+      a = newAct({ id: o.id, title: title, origin: 'today', theme: ODAI_THEME, ext: { link: null, photos: [], visible: [] }, steps: steps, stepsKind: 'ext', now: o.now });
     }
     a.odaiId = odai.id;
     pushMsg(a, { who: 'record', k: 'odai_rec', v: { q: odai.title, step: odai.firstStep, need: odai.need }, text: o.recText || null });
@@ -282,14 +284,44 @@
     var th = MD.theme(a.theme);
     return { stage: stageOf(a.theme, th.ideas[0], 'draft'), fromStage: false };
   }
+  // 今日のお題から作った外で作る活動（theme 'odai'）: 任せる候補は 手順を整理して / 必要な物をまとめて（お題の makeSteps / 必要な物から）。
+  // 「どこが違う？」の材料・色 は必要な物、それ以外は手順。言葉で頼む も手順
+  var ODAI_THEME = 'odai', ODAI_OPTS = ['osteps', 'oneed'], ODAI_ASPECT = ['osteps', 'osteps', 'oneed', 'osteps', 'osteps'];
+  function isOdaiExt(a) { return !!(a && a.theme === ODAI_THEME); }
+  function odaiDef(a) { var K = DES.todayData; return K && a && a.odaiId ? K.get(a.odaiId) : null; }
+  // メモの中身: お題のデータから（today-data.js の leaveNote）。データが無い時は活動の手順だけ
+  function odaiNote(a, opt, alt) {
+    var K = DES.todayData, od = odaiDef(a);
+    if (od && K.leaveNote) return K.leaveNote(od, opt, alt);
+    if (opt !== 'osteps' || !a.steps.length) return null;
+    return { title: ['作り方の手順', 'つくりかたの手じゅん'], lines: a.steps.map(function (s, i) { return [(i + 1) + '. ' + s[0], (i + 1) + '. ' + s[1]]; }) };
+  }
+  function leaveOdai(a, opt, o) {
+    o = o || {};
+    if (opt === 'aspect') opt = ODAI_ASPECT[Math.max(0, Math.min(4, o.aspect | 0))];
+    if (ODAI_OPTS.indexOf(opt) < 0) return { act: a, ids: [] };
+    var A = clone(a), card = o.card ? find(A.shelf, o.card) : null;
+    // 同じ種類のメモを作り直す時は、もう一方の形にする（§U-11 指摘 13 と同じ）
+    var alt = !!(card && card.kind === 'note' && card.opt === opt && !card.alt), n = odaiNote(A, opt, alt);
+    if (!n) return { act: a, ids: [] };
+    var spec = { kind: 'note', theme: ODAI_THEME, title: clone(n.title), lines: clone(n.lines), opt: opt, alt: alt };
+    spec.batch = nid(A, 'b'); spec.time = tick(A, 1); spec.id = nid(A, 'k'); spec.state = 'making';
+    A.shelf = [spec].concat(A.shelf);
+    return { act: A, ids: [spec.id], opt: opt };
+  }
+  function remakeOptions(a, c) {
+    if (isOdaiExt(a)) return ODAI_OPTS.slice();
+    return c && c.kind === 'note' ? ['calc', 'steps', 'cmd'] : ['redo', 'two', 'fix'];
+  }
   function leaveOptions(a) {
+    if (isOdaiExt(a)) return ODAI_OPTS.slice();
     if (a.stage && a.stage.kind === 'sample') return ['find', 'one'];
     if (a.stage && a.stage.kind === 'draft') return ['redo', 'two', 'fix'];
     if (a.ext) return ['calc', 'steps', 'cmd'];
     return ['redo', 'two', 'fix'];
   }
   var OPT_KEY = { find: ['leave_opts_sample', 0], one: ['leave_opts_sample', 1], redo: ['leave_opts_draft', 0], two: ['leave_opts_draft', 1], fix: ['leave_opts_draft', 2],
-    calc: ['leave_opts_ext', 0], steps: ['leave_opts_ext', 1], cmd: ['leave_opts_ext', 2] };
+    calc: ['leave_opts_ext', 0], steps: ['leave_opts_ext', 1], cmd: ['leave_opts_ext', 2], osteps: ['leave_opts_odai', 0], oneed: ['leave_opts_odai', 1] };
   M.OPT_KEY = OPT_KEY;
   // 「どこが違う？」の候補（形 / 大きさ / 材料・色 / 動き / それ以外）→ 作り直しの種類
   var ASPECT_OPT = ['redo', 'one', 'fix', 'one', 'redo'];
@@ -330,6 +362,7 @@
   // 任せる（作っている の破線カードを置く。中身は settle で決まる）
   function leave(a, opt, o) {
     o = o || {};
+    if (isOdaiExt(a)) return leaveOdai(a, opt, o);
     if (opt === 'aspect') opt = ASPECT_OPT[Math.max(0, Math.min(4, o.aspect | 0))];
     var A = clone(a), base = o.card ? { stage: cardStage(find(A.shelf, o.card)), fromStage: false } : baseStage(A);
     if (!base.stage || (base.stage.kind === 'note' && opt !== 'calc' && opt !== 'steps' && opt !== 'cmd')) base = baseStage(A);
@@ -386,8 +419,11 @@
     var A = clone(a);
     if (!A.ext) A.ext = { link: null, photos: [], visible: [] };
     var last = A.ext.photos[A.ext.photos.length - 1];
-    var n = last ? (last.n + 1) % MD.PHOTO_COUNT : 0;
-    var ph = { id: nid(A, 'ph'), theme: last ? last.theme : A.theme, n: n, kind: kind === 'shot' ? 'shot' : 'photo', time: nowOf(A) };
+    // お題の活動の写真はそのお題の線画（ダミー 3 枚を順に。theme 'odai' + odai）
+    var odai = isOdaiExt(A), cnt = odai && DES.todayData ? DES.todayData.photoCount(A.odaiId) : (odai ? 3 : MD.PHOTO_COUNT);
+    var n = last ? (last.n + 1) % cnt : 0;
+    var ph = { id: nid(A, 'ph'), theme: odai ? ODAI_THEME : (last ? last.theme : A.theme), n: n, kind: kind === 'shot' ? 'shot' : 'photo', time: nowOf(A) };
+    if (odai) ph.odai = A.odaiId;
     A.ext.visible = visibleIds(A).concat([ph.id]);
     A.ext.photos.push(ph);
     var res = commitChange(A, { who: 'own', kind: ph.kind, what: { k: ph.kind === 'shot' ? 'added_shot' : 'added_photo' }, photoId: ph.id, advance: true });
@@ -492,6 +528,7 @@
     return 'unknown';
   }
   function requestOpt(a) {
+    if (isOdaiExt(a)) return 'osteps';
     if (a.stage && a.stage.kind === 'sample') return 'one';
     if (a.stage && a.stage.kind === 'draft') return 'fix';
     if (a.ext) return 'cmd';
@@ -777,7 +814,7 @@
     demo: demo, cardStage: cardStage, pushMsg: pushMsg, lastWhat: lastWhat, reopenAt: reopenAt, replyTarget: replyTarget,
     finishMaking: finishMaking, cardNames: cardNames, visiblePhotos: visiblePhotos, cardTitle: cardTitle,
     canRevertTo: canRevertTo, restoreState: restoreState, findMsg: findMsg, declineReply: declineReply, undoDeclineReply: undoDeclineReply, migrate: migrate,
-    migrateWork: migrateWork, withPending: withPending, fromOdai: fromOdai,
+    migrateWork: migrateWork, withPending: withPending, fromOdai: fromOdai, isOdaiExt: isOdaiExt, remakeOptions: remakeOptions, ODAI_THEME: ODAI_THEME,
     // §W（作品の一覧・詳細）が使う
     defaultStatus: defaultStatus, normalizeWorks: normalizeWorks, chState: chState, baseState: baseState, curState: curState
   };
@@ -1019,6 +1056,8 @@
     if (a.stage && a.stage.kind !== 'note') return MD.art(a.stage);
     var vp = visiblePhotos(a);
     if (vp.length) return MD.photoArt(vp[vp.length - 1]);
+    // お題の活動（theme 'odai'）はお題の絵（3 題材の見本を出さない）
+    if (isOdaiExt(a)) { var od = odaiDef(a); return od ? DES.todayData.cardArt(od) : MD.photoArt({ theme: ODAI_THEME }); }
     var th = MD.theme(a.theme), c = a.shelf.filter(function (x) { return x.kind !== 'note'; })[0];
     return MD.art(c ? cardStage(c) : stageOf(a.theme, th.sample, 'sample'));
   }
@@ -1387,7 +1426,7 @@
     kids.push(H('div', { class: 'card-ops' }, ops));
     if (u.remakeFor === c.id && !pt) {
       // メモ（計算・手順）は外の記録の候補で作り直す（§U-11 指摘 13）
-      kids.push(H('div', { class: 'remake-opts', role: 'group', 'aria-label': T('remake') }, (c.kind === 'note' ? ['calc', 'steps', 'cmd'] : ['redo', 'two', 'fix']).map(function (o) {
+      kids.push(H('div', { class: 'remake-opts', role: 'group', 'aria-label': T('remake') }, remakeOptions(a, c).map(function (o) {
         return btn(optLabel(o), 'mk-remake', { id: a.id, arg: c.id + '|' + o });
       })));
     }

@@ -2,7 +2,7 @@
    v1.0 の例 2 本（回りながら落ちる種 / この街の案内板）+ 11 月の季節（落ち葉・どんぐり・夕方が早くなる・冬鳥・初雪）+ 本人の好き
    （既存データのマイクラの建築・Python のゲーム・電気の回路）。外からの依頼は 1 本だけ（架空・実在の団体名なし・締切つき）。
    屋外・生き物・刃物を使うお題は safety: true、外に出て探すお題は outdoor: true。人の名前は足さない。
-   文言は [中学生向け, 小学生向け] の組。絵は数値だけから組み立てる 2 色の線画 SVG（墨 + 橙 / オリーブ。make-data.js と同じ色）。
+   文言は [中学生向け, 小学生向け] の組。絵は数値だけから組み立てる 2 色の線画 SVG（1 枚ごとに 墨 + 橙 か 墨 + オリーブ。淡い面は同じ色の透明度）。
    play.result(values) と drawArt(kind, values) は決定論。node からも読める（tools/today-test.js）。 */
 (function (root) {
   'use strict';
@@ -10,11 +10,15 @@
   var MD = DES.makeData || (typeof require === 'function' ? require('./make-data.js') : null);
   var TDD = DES.todayData = {};
 
-  var INK = '#292c29', OLIVE = '#524e44', ORANGE = '#ed922c', SAND = '#f1ece3', PAPER = '#ffffff', SOFT = '#fbecd7', MID = '#e4ded1';
+  var INK = '#292c29', OLIVE = '#524e44', ORANGE = '#ed922c', WHITE = '#ffffff';
   TDD.FITS = ['near', 'next', 'new'];
+  TDD.COLORS = { ink: INK, olive: OLIVE, orange: ORANGE };
 
   // ---------- 線画の部品（viewBox 240×150。make-data.js の線画と同じ枠） ----------
+  // 2 色の線画（§X-3 / §U-1）: 1 枚ごとに 墨 + 橙 か 墨 + オリーブ の 2 色だけ。淡い面は同じ色の透明度で作り、別の色を足さない
   function r1(n) { return Math.round(n * 10) / 10; }
+  function fo(a) { return ' fill-opacity="' + a + '"'; }
+  function so(a) { return ' stroke-opacity="' + a + '"'; }
   function wrap(body, cls) {
     return '<svg class="mk-art td-art' + (cls ? ' ' + cls : '') + '" viewBox="0 0 240 150" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">' + body + '</svg>';
   }
@@ -24,27 +28,28 @@
   function rect(x, y, w, h, fill, extra) {
     return '<rect x="' + r1(x) + '" y="' + r1(y) + '" width="' + r1(w) + '" height="' + r1(h) + '" fill="' + fill + '" stroke="' + INK + '" stroke-width="1.2"' + (extra || '') + '/>';
   }
-  function poly(pts, fill, w) {
-    return '<path d="M' + pts.map(function (p) { return r1(p[0]) + ' ' + r1(p[1]); }).join('L') + 'Z" fill="' + fill + '" stroke="' + INK + '" stroke-width="' + (w || 1.2) + '" stroke-linejoin="round"/>';
+  function poly(pts, fill, w, extra) {
+    return '<path d="M' + pts.map(function (p) { return r1(p[0]) + ' ' + r1(p[1]); }).join('L') + 'Z" fill="' + fill + '" stroke="' + INK + '" stroke-width="' + (w || 1.2) + '" stroke-linejoin="round"' + (extra || '') + '/>';
   }
-  function circle(cx, cy, r, fill, stroke, w) {
-    return '<circle cx="' + r1(cx) + '" cy="' + r1(cy) + '" r="' + r1(r) + '" fill="' + fill + '" stroke="' + (stroke || 'none') + '" stroke-width="' + (w || 1.2) + '"/>';
+  function circle(cx, cy, r, fill, stroke, w, extra) {
+    return '<circle cx="' + r1(cx) + '" cy="' + r1(cy) + '" r="' + r1(r) + '" fill="' + fill + '" stroke="' + (stroke || 'none') + '" stroke-width="' + (w || 1.2) + '"' + (extra || '') + '/>';
   }
-  function ground() { return line(14, 140, 226, 140, OLIVE, 1.2); }
+  function ground(col) { return line(14, 140, 226, 140, col || INK, 1.2); }
   function arrow(x, y, dir, col) {
-    var d = dir < 0 ? -1 : 1;
-    return line(x - 7 * d, y, x + 7 * d, y, col || OLIVE, 1.4) + line(x + 7 * d, y, x + 3 * d, y - 4, col || OLIVE, 1.4) + line(x + 7 * d, y, x + 3 * d, y + 4, col || OLIVE, 1.4);
+    var d = dir < 0 ? -1 : 1, c = col || INK;
+    return line(x - 7 * d, y, x + 7 * d, y, c, 1.4) + line(x + 7 * d, y, x + 3 * d, y - 4, c, 1.4) + line(x + 7 * d, y, x + 3 * d, y + 4, c, 1.4);
   }
-  // 写真のダミー（四隅の枠で「写真」と分かるように。make-data.js の photoArt と同じ印）
+  // 写真のダミー（四隅の枠で「写真」と分かるように。墨の淡い線なので色は増えない）
   function corners() {
-    return '<path d="M8 22 V8 H22 M218 8 H232 V22 M232 128 V142 H218 M22 142 H8 V128" stroke="' + OLIVE + '" stroke-width="1.6" fill="none"/>';
+    return '<path d="M8 22 V8 H22 M218 8 H232 V22 M232 128 V142 H218 M22 142 H8 V128" stroke="' + INK + '" stroke-width="1.6" fill="none"' + so(0.55) + '/>';
   }
+  TDD.frameOnly = function () { return wrap(corners(), 'is-photo'); };
 
   // ---------- 絵の種類（kind ごとに values から描く） ----------
   var ART = {};
-  // 落ち葉: 風 = 横に流れる長さと矢印の数 / 葉の重さ = 左右のゆれ幅
+  // 落ち葉（墨 + 橙）: 風 = 横に流れる長さと矢印の数 / 葉の重さ = 左右のゆれ幅
   function leafShape(cx, cy, s) {
-    return '<path d="M' + r1(cx) + ' ' + r1(cy - 7 * s) + 'Q' + r1(cx + 6 * s) + ' ' + r1(cy) + ' ' + r1(cx) + ' ' + r1(cy + 7 * s) + 'Q' + r1(cx - 6 * s) + ' ' + r1(cy) + ' ' + r1(cx) + ' ' + r1(cy - 7 * s) + 'Z" fill="' + SOFT + '" stroke="' + ORANGE + '" stroke-width="1.3"/>' +
+    return '<path d="M' + r1(cx) + ' ' + r1(cy - 7 * s) + 'Q' + r1(cx + 6 * s) + ' ' + r1(cy) + ' ' + r1(cx) + ' ' + r1(cy + 7 * s) + 'Q' + r1(cx - 6 * s) + ' ' + r1(cy) + ' ' + r1(cx) + ' ' + r1(cy - 7 * s) + 'Z" fill="' + ORANGE + '"' + fo(0.25) + ' stroke="' + ORANGE + '" stroke-width="1.3"/>' +
       line(cx, cy - 6 * s, cx, cy + 6 * s, ORANGE, 0.9);
   }
   function leavesAmp(v) { return 4 + v.wind * 4 + (3 - v.weight) * 3; }
@@ -54,75 +59,88 @@
     for (i = 0; i < 3; i++) {
       var x0 = 40 + i * 30, y0 = 34 + i * 6, pts = [[x0, y0]];
       for (k = 1; k <= 4; k++) pts.push([x0 + drift * k / 4 + (k % 2 ? amp : -amp), y0 + (134 - y0) * k / 4]);
-      out += '<path d="M' + pts.map(function (p) { return r1(p[0]) + ' ' + r1(p[1]); }).join('L') + '" stroke="' + OLIVE + '" stroke-width="1.1" fill="none" stroke-dasharray="3 3" stroke-linejoin="round"/>';
+      out += '<path d="M' + pts.map(function (p) { return r1(p[0]) + ' ' + r1(p[1]); }).join('L') + '" stroke="' + INK + '" stroke-width="1.1" fill="none" stroke-dasharray="3 3" stroke-linejoin="round"' + so(0.45) + '/>';
       out += leafShape(pts[2][0], pts[2][1], 0.9) + leafShape(pts[4][0], pts[4][1] - 2, 0.8);
     }
-    for (i = 0; i < v.wind; i++) out += arrow(176 + (i % 2) * 22, 34 + Math.floor(i / 2) * 14, 1);
+    for (i = 0; i < v.wind; i++) out += arrow(176 + (i % 2) * 22, 34 + Math.floor(i / 2) * 14, 1, ORANGE);
     return wrap(out);
   };
-  // 夕方の明かり: 外の暗さ = 太陽の高さと窓の斜線の数 / 電池の数 = 電池の印と光の大きさ
+  // 夕方の明かり（墨 + 橙）: 外の暗さ = 太陽の高さと窓の斜線の数 / 電池の数 = 電池の印と光の大きさ
   ART.dusk = function (v) {
     var out = ground(), on = v.dark >= 2, i;
-    out += rect(22, 20, 96, 100, PAPER, ' rx="6"') + line(70, 20, 70, 120, INK, 1) + line(22, 92, 118, 92, OLIVE, 1);
-    for (i = 0; i < v.dark * 2; i++) { var y = 26 + i * 8; out += line(26, y, 66, y - 6, OLIVE, 0.6) + line(74, y, 114, y - 6, OLIVE, 0.6); }
+    out += rect(22, 20, 96, 100, WHITE, ' rx="6"') + line(70, 20, 70, 120, INK, 1) + line(22, 92, 118, 92, INK, 1, so(0.5));
+    for (i = 0; i < v.dark * 2; i++) { var y = 26 + i * 8; out += line(26, y, 66, y - 6, INK, 0.6, so(0.35)) + line(74, y, 114, y - 6, INK, 0.6, so(0.35)); }
     if (v.dark < 4) out += circle(46, 36 + v.dark * 16, 9, ORANGE, INK, 1.2);
-    else out += '<path d="M44 34 a10 10 0 1 0 10 12 a8 8 0 1 1 -10 -12Z" fill="' + SOFT + '" stroke="' + INK + '" stroke-width="1.2"/>';
+    else out += '<path d="M44 34 a10 10 0 1 0 10 12 a8 8 0 1 1 -10 -12Z" fill="' + ORANGE + '"' + fo(0.3) + ' stroke="' + INK + '" stroke-width="1.2"/>';
     // 回路（右）: 電池 → 電球
     out += '<path d="M140 110 H198 V54 H140 Z" stroke="' + INK + '" stroke-width="1.4" fill="none" stroke-linejoin="round"/>';
-    out += '<rect x="132" y="' + (80 - v.cells * 9) + '" width="16" height="' + (v.cells * 18) + '" fill="#fcfbf8" stroke="none"/>';
+    out += '<rect x="132" y="' + (80 - v.cells * 9) + '" width="16" height="' + (v.cells * 18) + '" fill="' + WHITE + '" stroke="none"/>';
     for (i = 0; i < v.cells; i++) { var cy = 80 - (v.cells - 1) * 9 + i * 18; out += line(133, cy - 3, 147, cy - 3, INK, 1.5) + line(136, cy + 2, 144, cy + 2, INK, 2.8); }
     var glow = on ? 14 + v.cells * 5 : 0;
-    if (on) out += circle(198, 54, glow, SOFT, null);
+    if (on) out += circle(198, 54, glow, ORANGE, null, 1, fo(0.22));
     if (on) for (i = 0; i < v.cells * 2; i++) { var a = -Math.PI / 2 + (i - (v.cells * 2 - 1) / 2) * 0.45; out += line(198 + Math.cos(a) * (glow - 2), 54 + Math.sin(a) * (glow - 2), 198 + Math.cos(a) * (glow + 6), 54 + Math.sin(a) * (glow + 6), ORANGE, 1.8); }
-    out += circle(198, 54, 11, on ? '#ffe3b8' : PAPER, INK, 1.4);
+    out += circle(198, 54, 11, on ? ORANGE : WHITE, INK, 1.4, on ? fo(0.4) : '');
     return wrap(out);
   };
-  // マイクラの屋根: 作るの線画（make-data.js の roof）をそのまま使う
-  ART.mcroof = function (v) { return MD.art({ kind: 'sample', theme: 'mc', variant: 'roof', values: { size: v.size, block: v.block } }); };
-  // 回りながら落ちる種（紙の模型）: 羽の長さ = 羽と回る弧 / クリップ = 重りの数と落ちる線
+  // どんぐりの帽子みたいな屋根（墨 + オリーブ）: 段の数 = ブロックの段 / ブロック = 石（点）・ガラス（斜めの光）・オークの板（木目）
+  function block(x, y, b, kind) {
+    var out = rect(x, y, b, b, kind === 0 ? OLIVE : (kind === 2 ? OLIVE : WHITE), kind === 0 ? fo(0.2) : (kind === 2 ? fo(0.07) : ''));
+    if (kind === 0) out += circle(x + b * 0.35, y + b * 0.4, Math.max(0.9, b * 0.08), OLIVE);
+    else if (kind === 1) out += line(x + b * 0.2, y + b * 0.6, x + b * 0.55, y + b * 0.25, OLIVE, 1) + line(x + b * 0.45, y + b * 0.8, x + b * 0.8, y + b * 0.45, OLIVE, 1);
+    else out += line(x + b * 0.15, y + b * 0.38, x + b * 0.85, y + b * 0.38, OLIVE, 0.9) + line(x + b * 0.15, y + b * 0.68, x + b * 0.85, y + b * 0.68, OLIVE, 0.9);
+    return out;
+  }
+  ART.mcroof = function (v) {
+    var out = ground(OLIVE), s = v.size, b0 = Math.min(16, 200 / (2 * s - 1), 120 / s);
+    for (var i = 0; i < s; i++) {
+      var w = 2 * (s - 1 - i) + 1, x0 = 120 - w * b0 / 2, y = 140 - (i + 1) * b0;
+      for (var j = 0; j < w; j++) out += block(x0 + j * b0, y, b0, v.block);
+    }
+    return wrap(out);
+  };
+  // 回りながら落ちる種（紙の模型・墨 + 橙）: 羽の長さ = 羽と回る弧 / クリップ = 重りの数と落ちる線
   ART.seed = function (v) {
-    // 羽の先と回る弧が枠（240×150）からはみ出さない大きさ（羽 6 cm・クリップ 2 個でも上端 8 より下）
+    // 羽の先と回る弧が枠からはみ出さない大きさ（羽 6 cm・クリップ 2 個でも上端 8 より下）
     var out = ground(), L = 12 + v.wing * 7, top = 66 + v.clip * 6, tipY = top - L * 0.8, i;
-    out += poly([[116, top], [116 - L * 0.55, tipY], [116 - L * 0.55 + 12, tipY - 5], [120, top]], PAPER);
-    out += poly([[124, top], [124 + L * 0.55, tipY], [124 + L * 0.55 - 12, tipY - 5], [120, top]], PAPER);
-    out += rect(114, top, 12, 40, PAPER);
+    out += poly([[116, top], [116 - L * 0.55, tipY], [116 - L * 0.55 + 12, tipY - 5], [120, top]], WHITE);
+    out += poly([[124, top], [124 + L * 0.55, tipY], [124 + L * 0.55 - 12, tipY - 5], [120, top]], WHITE);
+    out += rect(114, top, 12, 40, WHITE);
     for (i = 0; i < v.clip; i++) out += rect(112, top + 24 + i * 6, 16, 4.5, ORANGE, ' rx="1.5"');
     var arcs = Math.max(1, v.wing - 2);
     for (i = 0; i < arcs; i++) {
       var ry = 4 + i * 2, rx = L * 0.55 + 6 + i * 6, y = tipY - 7 - i * 3.5;
-      out += '<path d="M' + r1(120 - rx) + ' ' + r1(y) + 'A' + r1(rx) + ' ' + ry + ' 0 0 0 ' + r1(120 + rx) + ' ' + r1(y) + '" stroke="' + OLIVE + '" stroke-width="1.1" fill="none" stroke-dasharray="4 3"/>';
+      out += '<path d="M' + r1(120 - rx) + ' ' + r1(y) + 'A' + r1(rx) + ' ' + ry + ' 0 0 0 ' + r1(120 + rx) + ' ' + r1(y) + '" stroke="' + ORANGE + '" stroke-width="1.1" fill="none" stroke-dasharray="4 3"/>';
     }
-    for (i = 0; i <= v.clip; i++) out += line(104 - i * 6, top + 44, 104 - i * 6, Math.min(136, top + 52 + i * 6), OLIVE, 1, ' stroke-dasharray="2 3"');
+    for (i = 0; i <= v.clip; i++) out += line(104 - i * 6, top + 44, 104 - i * 6, Math.min(136, top + 52 + i * 6), ORANGE, 1, ' stroke-dasharray="2 3"');
     return wrap(out);
   };
-  // 落ち葉の色: 週 + 日当たり = 葉の中の橙の線の数 / 右に近い色のブロック 4 つ（近いもの 1 つを囲む）
+  // 落ち葉の色（墨 + 橙）: 週 + 日当たり = 葉の中の橙の線の数 / 右に近い色のブロック 4 つ（苔 = 墨の点、黄 → 赤 = 橙の濃さ）。近いもの 1 つを囲む
   function leafTurn(v) { return Math.max(0, Math.min(9, Math.round((v.week - 1) * 2 + v.sun * 1.5))); }
   function leafColorIdx(v) { return Math.max(0, Math.min(3, Math.floor((leafTurn(v) + 1) / 2.6))); }
   ART.leaf = function (v) {
     var out = '', k = leafTurn(v), ci = leafColorIdx(v), i;
-    out += '<path d="M84 16 Q132 52 84 136 Q36 52 84 16Z" fill="' + PAPER + '" stroke="' + INK + '" stroke-width="1.4" stroke-linejoin="round"/>';
+    out += '<path d="M84 16 Q132 52 84 136 Q36 52 84 16Z" fill="' + WHITE + '" stroke="' + INK + '" stroke-width="1.4" stroke-linejoin="round"/>';
     for (i = 0; i < 9; i++) {
       var y = 30 + i * 11, t = (y - 16) / 120, hw = Math.max(2, 46 * Math.sin(Math.PI * t) * 0.92 - 3);
-      out += line(84 - hw, y, 84 + hw, y, i < k ? ORANGE : OLIVE, i < k ? 2.2 : 0.9);
+      out += i < k ? line(84 - hw, y, 84 + hw, y, ORANGE, 2.2) : line(84 - hw, y, 84 + hw, y, INK, 0.9, so(0.3));
     }
     out += line(84, 18, 84, 146, INK, 1.2);
     for (i = 0; i < 4; i++) {
       var x = 150 + (i % 2) * 38, yy = 30 + Math.floor(i / 2) * 50;
-      var fill = i === 0 ? MID : (i === 1 ? '#fff3d6' : (i === 2 ? SOFT : ORANGE));
-      out += rect(x, yy, 30, 30, fill);
-      if (i === 0) out += circle(x + 10, yy + 12, 1.6, OLIVE) + circle(x + 20, yy + 20, 1.6, OLIVE);
+      out += i === 0 ? rect(x, yy, 30, 30, WHITE) + circle(x + 10, yy + 12, 1.6, INK) + circle(x + 20, yy + 20, 1.6, INK) + circle(x + 22, yy + 9, 1.2, INK)
+        : rect(x, yy, 30, 30, ORANGE, fo([0, 0.3, 0.6, 1][i]));
       if (i === ci) out += '<rect x="' + (x - 4) + '" y="' + (yy - 4) + '" width="38" height="38" rx="4" fill="none" stroke="' + INK + '" stroke-width="2"/>';
     }
     return wrap(out);
   };
-  // 雪の結晶: 気温 = 形（板・針・枝・扇）/ 湿り気 = 腕の長さと枝の数
+  // 雪の結晶（墨 + 橙）: 気温 = 形（板・針・枝・扇）/ 湿り気 = 腕の長さと枝の数
   ART.snow = function (v) {
     var out = '', R = 30 + v.wet * 8, cx = 120, cy = 76, i, j;
     var arm = function (a, len, w) { return line(cx, cy, cx + Math.cos(a) * len, cy + Math.sin(a) * len, INK, w || 1.6); };
     if (v.temp === 0 || v.temp === 4) {
       var pr = v.temp === 0 ? R * 0.75 : R * 0.42, pts = [];
       for (i = 0; i < 6; i++) pts.push([cx + Math.cos(i * Math.PI / 3) * pr, cy + Math.sin(i * Math.PI / 3) * pr]);
-      out += poly(pts, SOFT, 1.4);
+      out += poly(pts, ORANGE, 1.4, fo(0.18));
     }
     for (i = 0; i < 6; i++) {
       var a = i * Math.PI / 3 - Math.PI / 2;
@@ -130,13 +148,13 @@
       out += arm(a, R, 1.6);
       if (v.temp === 4) {
         var fx = cx + Math.cos(a) * R, fy = cy + Math.sin(a) * R;
-        out += poly([[cx + Math.cos(a - 0.22) * R * 0.55, cy + Math.sin(a - 0.22) * R * 0.55], [fx + Math.cos(a - 0.5) * 6, fy + Math.sin(a - 0.5) * 6], [fx + Math.cos(a + 0.5) * 6, fy + Math.sin(a + 0.5) * 6], [cx + Math.cos(a + 0.22) * R * 0.55, cy + Math.sin(a + 0.22) * R * 0.55]], PAPER, 1.1);
+        out += poly([[cx + Math.cos(a - 0.22) * R * 0.55, cy + Math.sin(a - 0.22) * R * 0.55], [fx + Math.cos(a - 0.5) * 6, fy + Math.sin(a - 0.5) * 6], [fx + Math.cos(a + 0.5) * 6, fy + Math.sin(a + 0.5) * 6], [cx + Math.cos(a + 0.22) * R * 0.55, cy + Math.sin(a + 0.22) * R * 0.55]], WHITE, 1.1);
       }
       if (v.temp === 2 || v.temp === 3) {
         var nb = (v.temp === 2 ? 1 : 2) + v.wet;
         for (j = 1; j <= nb; j++) {
           var d = R * j / (nb + 1), bx = cx + Math.cos(a) * d, by = cy + Math.sin(a) * d, bl = 6 + (nb - j) * 2;
-          out += line(bx, by, bx + Math.cos(a - 0.9) * bl, by + Math.sin(a - 0.9) * bl, OLIVE, 1.2) + line(bx, by, bx + Math.cos(a + 0.9) * bl, by + Math.sin(a + 0.9) * bl, OLIVE, 1.2);
+          out += line(bx, by, bx + Math.cos(a - 0.9) * bl, by + Math.sin(a - 0.9) * bl, INK, 1.1, so(0.6)) + line(bx, by, bx + Math.cos(a + 0.9) * bl, by + Math.sin(a + 0.9) * bl, INK, 1.1, so(0.6));
         }
       }
       out += circle(cx + Math.cos(a) * (R + (v.temp === 1 ? -3 : 3)), cy + Math.sin(a) * (R + (v.temp === 1 ? -3 : 3)), 1.8, ORANGE);
@@ -144,60 +162,60 @@
     out += circle(cx, cy, 3, ORANGE, INK, 1);
     return wrap(out);
   };
-  // 案内板: 文字の大きさ = 3 行の文字の太さ / 離れる距離 = 人の位置と大きさ。読める行は塗り、読めない行は破線
+  // 案内板（墨 + 橙）: 文字の大きさ = 3 行の文字の太さ / 離れる距離 = 人の位置と大きさ。読める行は塗り、読めない行は淡い破線
   var DIST = [2, 5, 10, 20, 30];
   function signRows(v) { var out = []; for (var r = 0; r < 3; r++) out.push((v.size + 2 - r) * 5 >= DIST[v.dist]); return out; }
   ART.sign = function (v) {
     var out = ground(), rows = signRows(v), r;
     out += line(60, 98, 60, 140, INK, 2) + line(126, 98, 126, 140, INK, 2);
-    out += rect(30, 18, 128, 80, PAPER, ' rx="6"');
+    out += rect(30, 18, 128, 80, WHITE, ' rx="6"');
     var y = 28;
     for (r = 0; r < 3; r++) {
       var h = (v.size + 2 - r) * 2.4, w = [86, 66, 76][r];
       out += rows[r] ? '<rect x="40" y="' + r1(y) + '" width="' + w + '" height="' + r1(h) + '" rx="1.5" fill="' + INK + '"/>'
-        : '<rect x="40" y="' + r1(y) + '" width="' + w + '" height="' + r1(h) + '" rx="1.5" fill="none" stroke="' + OLIVE + '" stroke-width="1" stroke-dasharray="3 2"/>';
+        : '<rect x="40" y="' + r1(y) + '" width="' + w + '" height="' + r1(h) + '" rx="1.5" fill="none" stroke="' + INK + '" stroke-width="1" stroke-dasharray="3 2"' + so(0.45) + '/>';
       y += h + 6;
     }
     out += arrow(140, 34, 1, ORANGE);
     var px = 172 + v.dist * 12, s = 1 - v.dist * 0.14, head = 132 - 40 * s;
-    out += circle(px, head, 5 * s + 1, PAPER, INK, 1.3) + line(px, head + 6 * s, px, 140 - 12 * s, INK, 1.4) +
+    out += circle(px, head, 5 * s + 1, WHITE, INK, 1.3) + line(px, head + 6 * s, px, 140 - 12 * s, INK, 1.4) +
       line(px, 140 - 12 * s, px - 5 * s, 140, INK, 1.4) + line(px, 140 - 12 * s, px + 5 * s, 140, INK, 1.4) + line(px - 6 * s, head + 14 * s, px + 6 * s, head + 14 * s, INK, 1.4);
-    out += line(158, 146, px, 146, OLIVE, 0.9, ' stroke-dasharray="2 3"');
+    out += line(158, 146, px, 146, ORANGE, 0.9, ' stroke-dasharray="2 3"');
     return wrap(out);
   };
-  // どんぐり: 長さ・太さ = 実の形 / 帽子の模様（細長い = しま、丸い = うろこ）/ 右に近いなかまの形を囲む
+  // どんぐり（墨 + 橙）: 長さ・太さ = 実の形 / 帽子の模様（細長い = しま、丸い = うろこ）/ 右に近いなかまの形を囲む
   function acornKind(v) { return v.len - v.width >= 2 ? 2 : (v.width - v.len >= 1 ? 0 : 1); }
-  function acorn(cx, cy, rx, ry, stripes, fill) {
-    var out = '<ellipse cx="' + r1(cx) + '" cy="' + r1(cy + ry * 0.25) + '" rx="' + r1(rx) + '" ry="' + r1(ry) + '" fill="' + (fill || SOFT) + '" stroke="' + INK + '" stroke-width="1.3"/>';
+  function acorn(cx, cy, rx, ry, stripes, tint) {
+    var out = '<ellipse cx="' + r1(cx) + '" cy="' + r1(cy + ry * 0.25) + '" rx="' + r1(rx) + '" ry="' + r1(ry) + '" fill="' + (tint ? ORANGE : WHITE) + '"' + (tint ? fo(0.25) : '') + ' stroke="' + INK + '" stroke-width="1.3"/>';
     var capY = cy - ry * 0.45;
-    out += '<path d="M' + r1(cx - rx - 2) + ' ' + r1(capY) + 'Q' + r1(cx) + ' ' + r1(capY - ry * 0.9) + ' ' + r1(cx + rx + 2) + ' ' + r1(capY) + 'Z" fill="' + MID + '" stroke="' + INK + '" stroke-width="1.3" stroke-linejoin="round"/>';
-    if (stripes) { for (var i = 1; i <= 2; i++) out += line(cx - rx + i * 2, capY - i * ry * 0.18, cx + rx - i * 2, capY - i * ry * 0.18, OLIVE, 0.9); }
-    else { for (var j = -1; j <= 1; j++) out += '<path d="M' + r1(cx + j * rx * 0.55 - 3) + ' ' + r1(capY - 3) + 'q3 -4 6 0" stroke="' + OLIVE + '" stroke-width="0.9" fill="none"/>'; }
+    out += '<path d="M' + r1(cx - rx - 2) + ' ' + r1(capY) + 'Q' + r1(cx) + ' ' + r1(capY - ry * 0.9) + ' ' + r1(cx + rx + 2) + ' ' + r1(capY) + 'Z" fill="' + INK + '"' + fo(0.12) + ' stroke="' + INK + '" stroke-width="1.3" stroke-linejoin="round"/>';
+    if (stripes) { for (var i = 1; i <= 2; i++) out += line(cx - rx + i * 2, capY - i * ry * 0.18, cx + rx - i * 2, capY - i * ry * 0.18, INK, 0.9, so(0.55)); }
+    else { for (var j = -1; j <= 1; j++) out += '<path d="M' + r1(cx + j * rx * 0.55 - 3) + ' ' + r1(capY - 3) + 'q3 -4 6 0" stroke="' + INK + '" stroke-width="0.9" fill="none"' + so(0.55) + '/>'; }
     out += line(cx, capY - ry * 0.45, cx + 2, capY - ry * 0.45 - 7, INK, 1.4);
     return out;
   }
   ART.acorn = function (v) {
     var out = ground(), k = acornKind(v), i;
-    out += acorn(86, 82, 10 + v.width * 4, 14 + v.len * 6, v.len > v.width);
-    // 右の列: 丸い / その間 / 細長い なかまの形（帯 40 ずつ。近いものを橙の枠で囲む）
+    out += acorn(86, 82, 10 + v.width * 4, 14 + v.len * 6, v.len > v.width, true);
+    // 右の列: 丸い / その間 / 細長い なかまの形（帯 42 ずつ。近いものを橙の枠で囲む）
     var refs = [[33, 15, 15, false], [75, 13, 20, false], [117, 9, 24, true]];
     for (i = 0; i < 3; i++) {
       var p = refs[i], band = 34 + i * 42;
-      out += acorn(190, p[0], p[1] * 0.7, p[2] * 0.55, p[3], PAPER);
+      out += acorn(190, p[0], p[1] * 0.7, p[2] * 0.55, p[3], false);
       if (i === k) out += '<rect x="166" y="' + (band - 20) + '" width="48" height="40" rx="6" fill="none" stroke="' + ORANGE + '" stroke-width="1.8"/>';
     }
     return wrap(out);
   };
-  // 冬鳥: 群れの数 = V の字の鳥の数 / 風 = 下の矢印の向き
+  // 冬鳥（墨 + 橙）: 群れの数 = V の字の鳥の数 / 風 = 下の矢印の向き（向かい風 = 墨、追い風 = 橙）
   ART.birds = function (v) {
     var out = '', i;
-    out += '<ellipse cx="120" cy="132" rx="96" ry="10" fill="' + SAND + '" stroke="' + OLIVE + '" stroke-width="1"/>';
+    out += '<ellipse cx="120" cy="132" rx="96" ry="10" fill="' + INK + '"' + fo(0.06) + ' stroke="' + INK + '" stroke-width="1"' + so(0.4) + '/>';
     for (i = 0; i < v.n; i++) {
       var rank = Math.ceil(i / 2), side = i % 2 ? -1 : 1, x = 178 - rank * 17, y = 54 + (i ? side * rank * 9 : 0);
       out += '<path d="M' + r1(x - 7) + ' ' + r1(y) + 'Q' + r1(x - 3.5) + ' ' + r1(y - 5) + ' ' + r1(x) + ' ' + r1(y) + 'Q' + r1(x + 3.5) + ' ' + r1(y - 5) + ' ' + r1(x + 7) + ' ' + r1(y) + '" stroke="' + INK + '" stroke-width="1.6" fill="none" stroke-linecap="round"/>';
     }
-    if (v.wind === 1) out += line(60, 108, 180, 108, OLIVE, 1, ' stroke-dasharray="2 5"');
-    else for (i = 0; i < 3; i++) out += arrow(80 + i * 40, 108, v.wind === 0 ? -1 : 1, v.wind === 0 ? OLIVE : ORANGE);
+    if (v.wind === 1) out += line(60, 108, 180, 108, INK, 1, ' stroke-dasharray="2 5"' + so(0.5));
+    else for (i = 0; i < 3; i++) out += arrow(80 + i * 40, 108, v.wind === 0 ? -1 : 1, v.wind === 0 ? INK : ORANGE);
     out += circle(40, 30, 9, ORANGE, INK, 1.2);
     return wrap(out);
   };
@@ -443,7 +461,43 @@
     if (!p) return '';
     var v = TDD.defaults(odai);
     Object.keys(p.values).forEach(function (k) { v[k] = p.values[k]; });
-    return TDD.drawArt(odai.art, v).replace('</svg>', corners() + '</svg>').replace(/class="mk-art( td-art)?"/, 'class="mk-art td-art is-photo"');
+    return TDD.drawArt(odai.art, v).replace('</svg>', corners() + '</svg>').replace('class="mk-art td-art"', 'class="mk-art td-art is-photo"');
+  };
+
+  // ---------- 作るの作業台（3 題材に無いお題 = theme 'odai' の外で作る活動）に渡す中身 ----------
+  // 作業台の「写真を足す」のダミー: そのお題の線画（探す写真と同じ 3 枚を順に）。make-data.js の MD.photoArt がここを呼ぶ
+  TDD.workPhotoArt = function (photo) {
+    var o = TDD.get(photo && photo.odai);
+    if (!o) return TDD.frameOnly();
+    var list = o.find.photos;
+    return TDD.photoArt(o, list[((photo.n || 0) % list.length + list.length) % list.length].id);
+  };
+  TDD.photoCount = function (id) { var o = TDD.get(id); return o ? o.find.photos.length : 3; };
+  if (MD) MD.odaiPhotoArt = TDD.workPhotoArt;
+  // 「バディに任せる」の候補で作るメモ（お題の makeSteps / 必要な物から。3 題材の中身は出さない）。
+  // opt: 'osteps' = 手順を整理して / 'oneed' = 必要な物をまとめて。alt = 同じ種類で作り直した時のもう一方の形
+  function splitNeed(pair, m) { var p = String(pair[m] || '').split(/\s*·\s*/); return { things: p[0] || '', place: p.slice(1).join(' · ') }; }
+  TDD.leaveNote = function (odai, opt, alt) {
+    if (!odai) return null;
+    if (opt === 'osteps') {
+      if (!odai.makeSteps || !odai.makeSteps.length) return null;
+      var list = alt ? [odai.firstStep].concat(odai.makeSteps.slice(1)) : odai.makeSteps;
+      return { title: alt ? ['作り方の手順（最初の一歩から）', 'つくりかたの手じゅん（さいしょの一歩から）'] : ['作り方の手順', 'つくりかたの手じゅん'],
+        lines: list.slice(0, 4).map(function (s, i) { return [(i + 1) + '. ' + s[0], (i + 1) + '. ' + s[1]]; }) };
+    }
+    if (opt === 'oneed') {
+      var js = splitNeed(odai.need, 0), es = splitNeed(odai.need, 1);
+      if (alt) {
+        var tj = js.things.split('・'), te = es.things.split('・');
+        return { title: ['持ち物チェック', 'もちものチェック'],
+          lines: tj.map(function (t, i) { return ['□ ' + t, '□ ' + (te[i] || t)]; }).concat(js.place ? [['□ 場所: ' + js.place, '□ ばしょ: ' + es.place]] : []) };
+      }
+      var lines = [['用意する物: ' + js.things, 'よういするもの: ' + es.things]];
+      if (js.place) lines.push(['場所: ' + js.place, 'ばしょ: ' + es.place]);
+      if (odai.safety) lines.push(['始める前にサポーターと確認する', 'はじめる前にサポーターとかくにんする']);
+      return { title: ['必要な物と場所', 'ひつようなものとばしょ'], lines: lines };
+    }
+    return null;
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = TDD;
