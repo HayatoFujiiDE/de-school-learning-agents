@@ -956,18 +956,22 @@ describe('§O-8 t12 入力検査・U の表・取り込みの image_id・鍵の�
     const files: Record<string, string> = {
       'p/sources.json': '{"sources":[]}',
       'p/parts/p1/a.md': '本文',
+      'p/parts/p1/photo-1.png': 'PNG',
       'p/material.json': JSON.stringify(imageMaterial([{ path: 'parts/p1/photo-1.png', role: 'figure', image_id: IMG }])),
     };
     const bucket = {
-      get: async (k: string) => (k in files ? { text: async () => files[k] } : null),
+      get: async (k: string) => (k in files ? { text: async () => files[k], arrayBuffer: async () => new TextEncoder().encode(files[k]).buffer } : null),
       list: async (o: { prefix?: string }) => ({ objects: Object.keys(files).filter((k) => k.startsWith(o.prefix ?? '')).sort().map((key) => ({ key })), truncated: false }),
     } as unknown as R2Bucket;
     const v = { id: 'v1', material_id: 'm1', r2_prefix: 'p/', claims_json: '{"claims":[]}' };
-    const out = String(await buildUserContent({ R2: bucket, DB: env.DB }, v));
-    expect(out).toContain('# 画像（生成した絵。画像そのものは渡さない）\n- parts/p1/photo-1.png: 正確さ=scientific、prompt=a red cube、alt=赤い立方体');
+    // §O-12: 見出しは図・画像の一覧（生成した画像の行の形は §O-7 のまま）。content は block の配列
+    const textOf = (r: unknown) => (r as Array<{ type: string; text?: string }>).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+    const out = textOf(await buildUserContent({ R2: bucket, DB: env.DB }, v));
+    expect(out).toContain('# 図・画像（あなたが確かめる図。svg は上の parts の本文、png / webp はこの後の画像）\n- parts/p1/photo-1.png: 正確さ=scientific、prompt=a red cube、alt=赤い立方体');
     // 画像の無い版は変わらない（DB を読まない）
+    delete files['p/parts/p1/photo-1.png'];
     files['p/material.json'] = JSON.stringify(goodMaterial());
-    expect(String(await buildUserContent({ R2: bucket }, v))).not.toContain('# 画像');
+    expect(textOf(await buildUserContent({ R2: bucket }, v))).not.toContain('# 図・画像');
     // 参照した依頼の行が無い
     files['p/material.json'] = JSON.stringify(imageMaterial([{ path: 'parts/p1/photo-1.png', image_id: `img_${'b'.repeat(32)}` }]));
     expect(await buildUserContent({ R2: bucket, DB: env.DB }, v)).toEqual({ error: 'part_missing' });
