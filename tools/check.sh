@@ -37,6 +37,13 @@ case " $* " in *" today"*)
   printf '%-40s %s\n' "today-test" "${tv:-TODAY_TEST=MISSING}"
   [ "$tv" = "TODAY_TEST=PASS" ] || fail=1
 ;; esac
+# 学びマップの純関数テスト（CONTRACT-v3 §Y-8）: map のルートを検査する時だけ
+case " $* " in *" map"*)
+  node "$(dirname "$0")/map-test.js" > "$TMP/map-test.log" 2>&1
+  mv=$(grep -o 'MAP_TEST=[A-Z]*' "$TMP/map-test.log")
+  printf '%-40s %s\n' "map-test" "${mv:-MAP_TEST=MISSING}"
+  [ "$mv" = "MAP_TEST=PASS" ] || fail=1
+;; esac
 rm -rf "$TMP"
 printf 'CHECK_RESULT=%s\n' "$([ $fail -eq 0 ] && echo PASS || echo FAIL)"
 exit $fail
