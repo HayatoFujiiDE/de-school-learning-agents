@@ -188,7 +188,7 @@
    - plan.json の `videos.shown` と `videos.not_seen` は、それぞれの中で重複を許さず、互いに交わらない。受け入れテストに入れる。
    - SQL は `day = tokyoDay(now)`、`month = day.slice(0,7)`、`dailyReservedSql(day, …)` を同じ日付で組み立て、既存の位置パラメータで bind する。
    - 日次の保証は「取り置きを入れる時点の条件」である（全台帳の hard cap ではない。既存の記帳方式と同じ）。
-10. **watch ページの扱い（自動のセキュリティ確認の指摘）**: allowlist の hosts（作業場の通信）には YouTube を入れない。domains（web_fetch / web_search）だけに入れる。watch ページの題名・概要欄は投稿者が自由に書ける文なので、検証係は watch ページの本文だけを根拠に claim を confirmed にしない。動画を出典にした claim を confirmed にできるのは「動画の記録で確認:」の時だけとする（PR-Q2 の system 段落と検査に入れる）。
+10. **watch ページの扱い（自動のセキュリティ確認の指摘）**: ~~allowlist の hosts（作業場の通信）には YouTube を入れない。domains（web_fetch / web_search）だけに入れる。~~ **改め（2026-11-05）**: API は web ツールの allowed_domains が limited 環境の allowed_hosts の中にあることを求め、外れると sessions.create が 400 `invalid_request_error`（「web tool `allowed_domains` must stay within the `allowed_hosts`…」）になる。本番で新しい素材がすべて始まらなくなったため、ふじさんの判断で hosts に `youtube.com` と `*.youtube.com` だけを足す（動画の本体の googlevideo.com・画像の ytimg.com は入れない。package manager は閉じたまま）。整合は test/allowlist-env.test.ts で検査する。watch ページの題名・概要欄は投稿者が自由に書ける文なので、検証係は watch ページの本文だけを根拠に claim を confirmed にしない。動画を出典にした claim を confirmed にできるのは「動画の記録で確認:」の時だけとする（PR-Q2 の system 段落と検査に入れる）。
 11. **Q-9.10 の有界な形（実装レビュー R1〜R3 の後の裁定）**: 「watch ページだけで confirmed にしない」は、モデルの振る舞いの約束ではなく、Worker が判定の後に当てる次の検査として保証する。
    - **見せないもの**: 検証係は YouTube のページの文を受け取らない。入力の sources_json では、YouTube の出典の quoted_excerpt を伏せる。取得記録にも入れない。検証係の web_fetch の許可にも入れない。YouTube の出典は、url が YouTube の行と、版の動画が指す行の両方とする。
    - **残してよい条件**: YouTube の出典を含む claim は、次のどれかの構造化された証拠がある時だけ confirmed のまま残す。
