@@ -38,8 +38,8 @@ a.work-card:hover{border-color:#cfcabd}
 .wd-title .inline-edit{max-width:560px}
 .wd-title-row{display:flex;align-items:center;gap:4px 6px;flex-wrap:wrap;min-width:0}
 .wd-title-row h1{font-size:23px;line-height:1.4;overflow-wrap:anywhere;min-width:0}
-.wd-title-row h1:focus{outline:none}
-.wd-title-row h1:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
+/* 開いた時にフォーカスを置く見出し（tabindex=-1）は、パネル・相談・棚の見出しと同じく輪を出さない（plan.css .panel-head h2 / make.css .chat-head h2） */
+.works-page h1:focus{outline:none}
 .wd-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
 .wd-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:flex-end;flex:0 1 auto;max-width:100%}
 .chip.k-wdone{background:var(--record-soft);color:var(--record)}
@@ -115,7 +115,7 @@ a.work-card:hover{border-color:#cfcabd}
 html[data-mode="es"] .wb-text,html[data-mode="es"] .sf-note{font-size:15px}
 html[data-mode="es"] .wb-empty,html[data-mode="es"] .wb-roles,html[data-mode="es"] .wb-shares li,html[data-mode="es"] .share-preview ul,html[data-mode="es"] .sf-view figcaption{font-size:14px}
 html[data-mode="es"] .sf-text,html[data-mode="es"] .work-meta,html[data-mode="es"] .wd-meta{font-size:12px}
-html[data-mode="es"] .sf-frame,html[data-mode="es"] .wd-back .link-btn,html[data-mode="es"] .wb-sib .link-btn{min-height:48px}
+html[data-mode="es"] .sf-frame,html[data-mode="es"] .wd-back .link-btn,html[data-mode="es"] .wb-sib .link-btn,html[data-mode="es"] .works-page .inline-edit input{min-height:48px}
 
 /* ---------- 幅ごと ---------- */
 @media(max-width:1120px){

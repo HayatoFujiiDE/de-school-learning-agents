@@ -49,6 +49,14 @@
   }
   function storyFrames(a, w) {
     if (!a || !w) return [];
+    var k = w.at ? idx(a.changes, w.at) : -1;
+    // 残した時点の変化が無い（変化の前に残した・取り消された）時は、作品が持つ状態 1 コマだけ。
+    // 活動の今の a.base / a.stage は後から変わりうる（同じ活動で見本を置き直す等）ので使わない
+    if (k < 0) {
+      var own = w.snap ? artOf(a, w.snap) : null;
+      return [{ id: '@work', kind: 'work', time: w.snapTime || w.atTime || null, who: null, with: null, what: null,
+        art: own || clone(w.art || null), inherited: false, last: true }];
+    }
     var frames = [], prev = null;
     function push(f, st) {
       var art = artOf(a, st);
@@ -58,14 +66,12 @@
       f.last = false;
       frames.push(f);
     }
+    // 変化が 1 つでもある活動の a.base は書き換わらない（pickSample が base を置き直すのは変化 0 の時だけ）
     push({ id: '@base', kind: 'base', time: a.baseTime || null, who: null, with: null, what: null }, M.baseState(a));
-    var k = w.at ? idx(a.changes, w.at) : -1;
     for (var i = 0; i <= k; i++) {
       var c = a.changes[i];
       push({ id: c.id, kind: c.kind, time: c.time, who: c.who, with: c.with || null, what: clone(c.what) }, M.chState(a, c));
     }
-    // 残した時点の変化が活動に見つからない時（取り消された等）は、作品が持つ状態を最後のコマにする
-    if (w.at && k < 0 && w.snap) push({ id: '@work', kind: 'work', time: w.atTime || w.snapTime || null, who: null, with: null, what: null }, w.snap);
     frames[frames.length - 1].last = true;
     return frames;
   }
@@ -147,7 +153,10 @@
     var fr = storyFrames(a, w);
     out.push(fr.length ? { k: 'pv_story', v: { n: fr.length } } : { k: 'pv_story_lost' });
     var read = w.from === 'capture' && w.read && w.read.text && !w.read.declined ? w.read.text : null;
-    out.push({ k: 'pv_roles', src: 'record', roles: clone(w.roles || null), read: read });
+    // 相手に見せるものには個人名を入れない（§W-4）: 手伝った人は名前でなく「いっしょに作った人 n 回」にまとめる。名前は本人の詳細だけ
+    var r = w.roles || null, withN = 0;
+    if (r && r.people) r.people.forEach(function (p) { withN += p.n || 0; });
+    out.push({ k: 'pv_roles', src: 'record', roles: r ? { own: r.own || 0, ai: r.ai || 0, with: withN } : null, read: read });
     return out;
   }
 
@@ -417,6 +426,9 @@
       S().saveFailed = true;
       DES.app.renderSaveState();
       DES.app.render();
+      // 描き直しで消えたフォーカスを、操作した場所（編集なら「直す」）へ戻す
+      var t = (o.sel && document.querySelector(o.sel)) || (o.focus && document.querySelector('[data-fk="' + esc(o.focus) + '"]'));
+      if (t) t.focus();
       DES.app.toast(T('save_fail'));
       return false;
     }
@@ -437,7 +449,7 @@
   }
   W.openCapture = function (opener) {
     var d = { type: 'capture', imgs: [MD.captures[0].id], title: '', titleEdited: false, made: null, madeEdited: false, madeLine: '', catalogId: '', catEdited: false,
-      read: { text: null, edited: false, declined: false }, readEdit: null, status: 'done', failed: false, saved: null };
+      read: { text: null, edited: false, declined: false }, readEdit: null, status: 'done', failed: false };
     syncDefaults(d);
     wk().dlg = d;
     render();
@@ -523,9 +535,10 @@
     var f = dlgEl().querySelector('input');
     if (f) f.focus();
   }
+  // 見せる相手に出す関わり: 本人 + いっしょに作った人（名前は出さない）
   function ownPeople(r) {
     var parts = [T('roles_count', { who: T('who_own'), n: r.own })];
-    r.people.forEach(function (p) { parts.push(T('roles_count', { who: p.name, n: p.n })); });
+    if (r.with) parts.push(T('roles_count', { who: T('who_with'), n: r.with }));
     return parts.join(' · ');
   }
   function previewItem(it) {
@@ -623,28 +636,22 @@
   A['wk-save'] = function () {
     var d = wk().dlg;
     if (!d || d.type !== 'capture') return;
-    // 再試行はフォームの今の値で作り直す（§U-11 指摘 10）。前の試みで足した作品と活動は外してから
-    if (d.saved) {
-      S().works = S().works.filter(function (w) { return w.id !== d.saved; });
-      S().activities = S().activities.filter(function (a) { return a.id !== d.savedAct; });
-      d.saved = null;
-    }
-    {
-      var line = trim(d.madeLine);
-      var made = d.made == null ? null : d.made;
-      var res = M.addCapture(S().activities, S().works, {
-        workId: DES.plan.newId('w'), actId: DES.plan.newId('a'), images: d.imgs, title: d.title,
-        made: made, madeLine: line, status: d.status,
-        catalogId: d.catalogId || null, read: d.read, now: DES.data.now, date: stamp(), mode: mode()
-      });
-      if (!res) return;
-      S().activities = res.activities;
-      S().works = res.works;
-      d.saved = res.work.id;
-      d.savedAct = res.act.id;
-    }
+    // 再試行も毎回フォームの今の値で作る（§U-11 指摘 10）。失敗した試みはメモリにも残さない（§W-5）
+    var prevActs = S().activities, prevWorks = S().works;
+    var res = M.addCapture(prevActs, prevWorks, {
+      workId: DES.plan.newId('w'), actId: DES.plan.newId('a'), images: d.imgs, title: d.title,
+      made: d.made == null ? null : d.made, madeLine: trim(d.madeLine), status: d.status,
+      catalogId: d.catalogId || null, read: d.read, now: DES.data.now, date: stamp(), mode: mode()
+    });
+    if (!res) return;
+    S().activities = res.activities;
+    S().works = res.works;
     // 活動を先に保存し、成功した時だけ作品を保存する（作品だけが残って活動が無い状態を作らない）
     if (!(DES.store.save('activities') && DES.store.save('works'))) {
+      // 画面の状態を保存の前へ戻す。活動だけ書けていた時のために、戻した一覧で書き直しておく
+      S().activities = prevActs;
+      S().works = prevWorks;
+      DES.store.save('activities');
       S().saveFailed = true;
       d.failed = true;
       DES.app.renderSaveState();
@@ -652,7 +659,7 @@
       return;
     }
     S().saveFailed = false;
-    var wid = d.saved;
+    var wid = res.work.id;
     DES.app.closeDialog(dlgEl(), true);
     wk().dlg = null;
     // 保存後は詳細でなく一覧の該当カードへ（既存の挙動）。閉じた dialog は開いたボタンへフォーカスを戻すので、描き直した後にカードへ移す
@@ -750,7 +757,7 @@
     if (!w) return;
     var r = remove(S().works, w.id), id = w.id;
     if (!r) return;
-    var ok = saveWorks(r.works, { navigate: function () { wk().pendingFocus = 'works-h'; window.location.replace('#works'); } });
+    var ok = saveWorks(r.works, { sel: '[data-action="wd-remove"]', navigate: function () { wk().pendingFocus = 'works-h'; window.location.replace('#works'); } });
     if (!ok) return;
     DES.app.toast(T('removed_work'), { label: T('undo_restore'), fn: function () {
       saveWorks(restore(S().works, r.undo), { focus: 'work:' + id });
