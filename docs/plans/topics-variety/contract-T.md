@@ -1,4 +1,4 @@
-# contract-T — お題のストック（工場 §T）v2.2
+# contract-T — お題のストック（工場 §T）v2.3
 
 2026-11-06。`CONTRACT-factory.md` §T の正本。§J の「『今日のお題』（`topics`）は本スライスに含めない」と §R-35 の「`topics` は別裁定へ」を、本書で裁定して置き換える。設計の要約は `design.md`。v1 への Astra high レビュー（REVISE。B1〜B7・M1〜M16）と v2 への 2 回目（REVISE。R1〜R10）への裁定は T-16。
 
@@ -47,7 +47,7 @@
 | `stances` | 2〜4 | 2〜4 | 2〜4 | 0 |
 | `next` | 必須。`make_steps` 3〜4 | 同左 | 同左 | null |
 | `make` | null | null | null | 必須。`steps` 3〜4。`category` は `tags.interests` に含まれる |
-| `sources` | 1〜6 | 0〜6 | 1〜6 | 0〜2 |
+| `sources` | 1〜6 | 0〜6 | 1〜6 | 0（make は事実・考えを持たないので、出典も持たない） |
 
 全種類に共通:
 
@@ -269,7 +269,7 @@ cron の 1 tick で検査するお題は最大 `TOPIC_CHECK_PER_TICK` = 3 本（
 - 結果: `found`（`evidence = 'worker_fetch'`・`excerpt`）/ `not_found`（2xx で開けたが引用が無い）/ `fetch_failed`（2xx 以外・時間切れ・接続の失敗）/ `blocked`（規則違反・種類違い）。
 - 名前が社内の宛先に解決されるかどうかは見ない（Workers の `fetch` は公開のインターネットに出る。約束しない範囲）。
 
-**3. 支えているか・重いか**（呼び出し 1 回。ツールなし。再送なしと絶対の締め切り — `TOPIC_CHECK_TIMEOUT_MS` = 60 秒 — を渡す。`TOPIC_CHECK_MODEL`、既定は生成と同じ。`max_tokens` = 2000）: 入力はお題の本文と、`found` の出典の `excerpt`（user 文の別ブロック）。出力はクライアントツール `save_check` の強制呼び出し:
+**3. 支えているか・重いか**（呼び出し 1 回。ツールなし。再送なしと絶対の締め切り — `TOPIC_CHECK_TIMEOUT_MS` = 60 秒 — を渡す。`TOPIC_CHECK_MODEL`、既定は生成と同じ。`max_tokens` = 2000）: 入力はお題の本文と、`found` の出典の `excerpt`（user 文の別ブロック）。出力はクライアントツール `save_check`（`strict: true`）。今のモデルは `tool_choice` での強制ができない（公式。`CONTRACT-factory.md` §T の末尾）ので `auto` で渡し、呼ばれなかった時は T-7 の「応答が使えない」として扱う:
 
 ```
 { "sources": [{ "source_id", "support": "supported"|"unsupported"|"unclear" }],
@@ -357,7 +357,7 @@ system 文（verbatim）:
 
 - **予定の確定**（費用なし。入・切が入の時だけ）: 対象の日 D について、`topic_plans` の INSERT と、その日の `topic_schedule` の INSERT 全部を 1 つの D1 batch で行う（batch は 1 つのトランザクション。`topic_plans` の主キーに当たれば全部が書かれない）。確定は 1 日に 1 回だけで、確定の後に出せるようになったお題はその日の予定に入らない（次の日以降の候補）。
   - 翌日の分: Asia/Tokyo の 18:00 以降の tick で、`topic_plans` に翌日の行が無ければ作る。
-  - 当日の分: `topic_plans` に当日の行が無ければ、時刻に関係なく作る（初回の deploy の日・前日の tick が全部落ちた日のため）。
+  - 当日の分: `topic_plans` に当日の行が無く、出せるお題（`ready`）が 1 本以上ある時に、時刻に関係なく作る（初回の deploy の日・前日の tick が全部落ちた日のため。出せるお題がまだ 1 本も無いうちに空の予定を確定しない）。
 - 枠: `news` 2 / `talk` 1 / `philo` 1 / `make` 3（定数 `TOPIC_SLOTS`）。
 - 選び方（種類ごと・決定論の純関数 `pickForDay(candidates, history, D)`）: 候補 = その種類の `ready` で、`evergreen = 1` または `fresh_until >= D`。同じ系譜（`lineage_id`）が `D − 30` 以上 `D − 1` 以下の予定にあるものを除く。系譜ごとに 1 本だけ残す（`depth` が大きい方、同じなら新しい方）。並びは (1) `slot_day = D` (2) まだ一度も出していない (3) 最後に出した日が古い (4) `starred` (5) id。上から枠の数だけ。足りなければ足りないまま。種類をまたいで同じ系譜が重なった時は、後の種類の候補から外す（`UNIQUE (day, lineage_id)` に当てない）。
 - 翌日と当日の確定が同じ tick で重なることはあるが、1 つの tick の中で順に行う（当日 → 翌日）。別々の tick が同時に別の日を確定した時に、30 日の規則が 1 日ぶん破れることは約束の外（起きるのは cron が重なって走った時だけ）。
@@ -493,4 +493,6 @@ d. 本物の呼び出しは、deploy 後にふじさんが入にしてから、�
 | R10 `recheck_tried_at` の NULL | NULL を対象に含める |
 
 3 回目（v2.1 への Astra high。R1〜R5・R7・R8・R10 は閉じた判定。残り 4 件）への裁定: 完了の batch の受け皿にも P を付けた / 決定の記録と親の引退は「この batch の 1 が書けた印（`done_token`）」を条件にした / 判定の重さを「保存済みと今回の重い方」に決めた / 0 本の時の台帳を確定額に統一した。
+
+実装の報告への裁定（v2.3）: 検査・生成の出力は `tool_choice: auto` + `strict`（強制は今のモデルで 400）/ make の `sources` は 0 / 当日の予定は、出せるお題が 1 本以上ある時に確定する / 引用に `<`・`>`・`&` があれば形の検査で不合格（`quote_markup`）・正規化した後の引用が 20 字未満なら探さずに `not_found`。
 
