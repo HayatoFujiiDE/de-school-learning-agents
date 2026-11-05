@@ -553,6 +553,74 @@ t('U12-d 見送った案を含め同名カードが並ばない', function () {
   eq(list.length, new Set(list).size, 'U12-d 名前は全部ちがう', list);
 });
 
+// ======================================================================
+// §U-12 補足（3 回目の再レビュー 1〜5 / 司令塔の裁定 1〜5）
+// ======================================================================
+t('U12x-1 写真の無い保存時点に戻したら、後から足した写真は見えなくする', function () {
+  var a = sample('mc');
+  var w = M.saveWork([], a, { id: 'x1' }).work;
+  var y = M.addPhoto(M.test(M.setParam(a, 'size', 8)).act, 'photo').act;
+  eq(y.ext.visible.length, 1, 'U12x-1 前提: 写真 1 枚を足した');
+  var r = M.reopenAt(y, w.at, w.snap, w.snapTime);
+  eq(r.act.stage.values.size, 4, 'U12x-1 値は残した時点');
+  eq(r.act.ext.visible, [], 'U12x-1 写真は見えない（vis=null は写真なし）');
+  eq(r.act.ext.photos.length, 1, 'U12x-1 写真の記録は残る');
+});
+t('U12x-2 旧作品の at / snap を移行で補う', function () {
+  // 前版のキャプチャー: 画像 2 枚で変化 1 つ、作品に at / snap が無い。その後に写真を 1 枚足した活動
+  var act = {
+    id: 'oc', title: '塔のある建物', origin: 'works', theme: 'mc', stage: null, base: null, baseTime: '10:20', quote: null,
+    ext: { link: null, photos: [{ id: 'oc-ph1', theme: 'mc', n: 1, kind: 'photo', time: '10:20' }, { id: 'oc-ph2', theme: 'py', n: 0, kind: 'photo', time: '10:20' }, { id: 'oc-ph4', theme: 'mc', n: 2, kind: 'photo', time: '10:24' }] },
+    steps: [['写真を入れる', '写真を入れる'], ['屋根を置く', 'やねをおく']], stepIdx: 1, next: null,
+    changes: [{ id: 'oc-c3', who: 'own', kind: 'photo', time: '10:22', what: { k: 'added_photo' }, snap: null, photoId: 'oc-ph1' },
+      { id: 'oc-c5', who: 'own', kind: 'photo', time: '10:24', what: { k: 'added_photo' }, snap: null, photoId: 'oc-ph4' }],
+    shelf: [], thread: [], state: 'working', pauseCount: 0, declined: 0, offered: false, resumeNote: null, clock: 624, seq: 5, draft: ''
+  };
+  var work = { id: 'ow', actId: 'oc', from: 'capture', title: '塔のある建物', images: ['cap-mc', 'cap-py'], read: { text: 'x', edited: false, declined: false },
+    made: 0, madeLine: null, catalogId: 'mc-build', theme: 'mc', art: { photo: { id: 'oc-ph1', theme: 'mc', n: 1, kind: 'photo', time: '10:20' } }, roles: { own: 1, ai: 0, people: [], lines: [] }, date: '11/2', like: null };
+  var ma = M.migrate(act, function () { return ''; });
+  eq(ma.changes[0].vis, ['oc-ph1', 'oc-ph2'], 'U12x-2 前提: 移行した活動の写真の順（写真の並び順）');
+  var mw = M.migrateWork(work, [ma]);
+  eq(mw.at, 'oc-c3', 'U12x-2 保存時刻以前で最後の変化を at に');
+  eq(mw.snap && mw.snap.vis, ['oc-ph1', 'oc-ph2'], 'U12x-2 その変化の状態を snap に');
+  var r = M.reopenAt(ma, mw.at, mw.snap, mw.atTime);
+  eq(r.act.ext.visible, ['oc-ph1', 'oc-ph2'], 'U12x-2 旧作品から再開 → 入れた時の写真');
+  var mk = { id: 'om', actId: 'oc2', from: 'make', title: 'x', at: null, atTime: null, art: null, roles: null };
+  var a2 = JSON.parse(JSON.stringify(M.test(M.setParam(sample('mc'), 'size', 8)).act)); a2.id = 'oc2';
+  var mw2 = M.migrateWork(mk, [a2]);
+  eq(mw2.snap && mw2.snap.stage && mw2.snap.stage.values.size, 4, 'U12x-2 該当する変化が無ければ活動の最初の状態');
+  eq(M.migrateWork(mw, [ma]), mw, 'U12x-2 補った後はそのまま');
+});
+t('U12x-3 移行の stepsKind は作業対象の主の種類で決める', function () {
+  var old = {
+    id: 'o3', title: 'Python のゲーム', origin: 'talk', theme: 'py', stage: { kind: 'draft', theme: 'py', variant: 'dodge', values: { speed: 3, count: 4 } }, base: null, baseTime: '10:20',
+    quote: { text: 'Python', removed: false },
+    ext: { link: null, photos: [{ id: 'o3-ph1', theme: 'py', n: 0, kind: 'photo', time: '10:24' }] },
+    steps: [['案を選ぶ', '案をえらぶ'], ['速さを変える', 'はやさをかえる'], ['星の数を変える', '星の数をかえる'], ['キャラの色を決める', 'キャラの色をきめる']], stepIdx: 1, next: null,
+    changes: [{ id: 'o3-c1', who: 'ai', kind: 'adopt', time: '10:22', what: { k: 'adopt_rec' }, snap: { kind: 'draft', theme: 'py', variant: 'dodge', values: { speed: 3, count: 4 } } },
+      { id: 'o3-c2', who: 'own', kind: 'photo', time: '10:24', what: { k: 'added_photo' }, snap: { kind: 'draft', theme: 'py', variant: 'dodge', values: { speed: 3, count: 4 } }, photoId: 'o3-ph1' }],
+    shelf: [], thread: [], state: 'working', pauseCount: 0, declined: 0, offered: false, resumeNote: null, clock: 624, seq: 5, draft: ''
+  };
+  var m = M.migrate(old, function () { return ''; });
+  eq(m.stepsKind, 'theme', 'U12x-3 見本・試作が主なら theme（写真があっても）');
+  ok(JSON.stringify(m.steps).indexOf('岩の数') >= 0 && JSON.stringify(m.steps).indexOf('星') < 0, 'U12x-3 手順が今の案（岩）に', m.steps);
+  var extOnly = JSON.parse(JSON.stringify(old)); extOnly.stage = null; extOnly.changes = [extOnly.changes[1]]; extOnly.changes[0].snap = null;
+  extOnly.steps = [['写真を入れる', '写真を入れる'], ['屋根を置く', 'やねをおく']];
+  eq(M.migrate(extOnly, function () { return ''; }).stepsKind, 'ext', 'U12x-3 外の記録だけなら ext');
+});
+t('U12x-4 「作品に残す」の「今」は見えている値（未試行の変更を含む）', function () {
+  var a = M.setParam(M.test(M.setParam(sample('mc'), 'size', 5)).act, 'size', 8);
+  var r = M.saveWork([], a, { id: 'x4' });
+  eq(r.work.snap.stage.values.size, 8, 'U12x-4 作品は見えている大きさ 8');
+  ok(r.act && r.act.changes.length === a.changes.length + 1, 'U12x-4 保存の前に変化を積む');
+  var c = r.act.changes[r.act.changes.length - 1];
+  eq([c.who, c.kind, !!c.res], ['own', 'set', false], 'U12x-4 誰が = 本人、結果 = まだ確かめていない');
+  eq(r.work.at, c.id, 'U12x-4 作品の時点はその変化');
+  eq(M.isDirty(r.act), false, 'U12x-4 積んだ後は「まだ試していない」ではない');
+  var clean = M.test(M.setParam(sample('mc'), 'size', 5)).act;
+  eq(M.saveWork([], clean, { id: 'x4b' }).act.changes.length, clean.changes.length, 'U12x-4 変更が無ければ積まない');
+});
+
 console.log('make-test: ' + pass + ' passed, ' + fail + ' failed');
 console.log('MAKE_TEST=' + (fail === 0 ? 'PASS' : 'FAIL'));
 process.exitCode = fail === 0 ? 0 : 1;

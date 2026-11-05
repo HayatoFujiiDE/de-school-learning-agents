@@ -82,11 +82,11 @@ html[data-mode="es"] .studio .btn.small,html[data-mode="es"] .make-entry .btn.sm
 .pick-hint{font-size:11px;color:var(--muted);line-height:1.7;margin:0 0 8px}
 
 /* 操作領域（§U-12 指摘 22）: 作る・作品・ダイアログの操作は js 44px / es 48px（topbar・話すの composer の .btn は対象外） */
-.make-entry .btn,.works-page .btn,.make-entry .link-btn,.works-page .link-btn,.studio .link-btn,.make-entry input,.make-dialog .field input,.make-dialog .field select,.make-dialog input[type=text]{min-height:44px}
+.make-entry .btn,.works-page .btn,.make-entry .link-btn,.works-page .link-btn,.studio .link-btn,.make-entry input,.make-dialog .btn,.make-dialog .field input,.make-dialog .field select,.make-dialog input[type=text],.make-paused .btn{min-height:44px}
 html[data-mode="es"] .make-entry .btn,html[data-mode="es"] .works-page .btn,html[data-mode="es"] .make-entry .link-btn,html[data-mode="es"] .works-page .link-btn,
 html[data-mode="es"] .make-entry input,html[data-mode="es"] .make-dialog .btn,html[data-mode="es"] .make-dialog .field input,html[data-mode="es"] .make-dialog .field select,
 html[data-mode="es"] .make-dialog input[type=text],html[data-mode="es"] .studio .btn,html[data-mode="es"] .studio .msg-foot .btn.ghost.small,
-html[data-mode="es"] .studio input[type=text],html[data-mode="es"] .paused .btn{min-height:48px}
+html[data-mode="es"] .studio input[type=text],html[data-mode="es"] .make-paused .btn{min-height:48px}
 html[data-mode="es"] .studio-header .icon-btn{width:48px;height:48px}
 .step-line .next-set{min-height:44px;padding:0 4px;font-size:12px}
 html[data-mode="es"] .step-line .next-set{min-height:48px}

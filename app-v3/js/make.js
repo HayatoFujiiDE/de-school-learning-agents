@@ -207,11 +207,14 @@
     return restoreState(a, target, time);
   }
   // 状態（作業対象 + 見えている写真）へ戻し、「{time} のところに戻した」を変化として積む。今と同じなら null
+  // 写真の無い時点（vis が null）へ戻したら、後から足した写真は見えなくする（§U-12 補足 1。記録は消さない）
   function restoreState(a, target, time) {
-    if (!target || target.stage === undefined || same(target, curState(a))) return null;
+    if (!target || target.stage === undefined) return null;
+    var want = { stage: target.stage, vis: a.ext ? (target.vis || []) : null };
+    if (same(want, curState(a))) return null;
     var before = clone(curState(a)), A = clone(a);
-    A.stage = clone(target.stage);
-    if (A.ext && target.vis) A.ext.visible = clone(target.vis);
+    A.stage = clone(want.stage);
+    if (A.ext) A.ext.visible = clone(want.vis);
     var res = commitChange(A, { who: 'own', kind: 'revert', what: { k: 'reverted_rec', v: { time: time } } });
     return { act: res.act, change: res.change, undo: { type: 'revert', changeId: res.change.id, stage: before.stage, vis: before.vis } };
   }
@@ -528,8 +531,15 @@
     return out;
   }
   // 作品に残す（活動は閉じない）。o: { id, at, title, like, date }
+  // 「今」で残す時、まだ試していない値があれば、保存の前に変化として積む（本人・結果はまだ確かめていない。§U-12 補足 4）
+  function withPending(a) {
+    if (!isDirty(a)) return a;
+    var from = committed(a);
+    return commitChange(a, { who: 'own', kind: 'set', what: whatDiff(a.stage.theme, from && from.values, a.stage.values) }).act;
+  }
   function saveWork(works, a, o) {
     o = o || {};
+    if (!o.at) a = withPending(a);
     var k = o.at ? idx(a.changes, o.at) : a.changes.length - 1;
     var ch = k >= 0 ? a.changes[k] : null, snap = ch ? ch.snap : a.stage, photo = null;
     // 写真はその時点で見えていた最後の 1 枚（戻した後なら戻した先の写真。§U-12 回帰 1）
@@ -542,7 +552,22 @@
     var like = String(o.like || '').replace(/^\s+|\s+$/g, '');
     var work = { id: o.id, actId: a.id, at: ch ? ch.id : null, atTime: ch ? ch.time : null, title: title, like: like || null, from: 'make',
       theme: a.theme, art: art, roles: roles(a, ch ? ch.id : null), date: o.date || null, snap: clone(st), snapTime: ch ? ch.time : nowOf(a) };
-    return { works: [work].concat(works || []), work: work };
+    return { works: [work].concat(works || []), work: work, act: a };
+  }
+  // 前の版の作品（at / snap が無い）の移行（§U-12 補足 2）: 保存時刻以前で最後の変化を at に、その変化の状態を snap に。
+  // 保存時刻は 残した時点の時刻、キャプチャーなら活動の最初の変化（入れた時）。該当する変化が無ければ活動の最初の状態
+  function migrateWork(w, acts) {
+    if (!w || w.snap) return w;
+    var a = find(acts, w.actId);
+    if (!a) return w;
+    var W = clone(w), at = W.at ? find(a.changes, W.at) : null;
+    if (!at) {
+      var t = W.atTime || W.snapTime || (W.from === 'capture' && a.changes.length ? a.changes[0].time : null);
+      if (t) a.changes.forEach(function (c) { if (toMin(c.time) <= toMin(t)) at = c; });
+    }
+    if (at) { W.at = at.id; W.atTime = at.time; W.snap = clone(chState(a, at)); }
+    else { W.at = null; W.snap = clone(baseState(a)); W.snapTime = a.baseTime; }
+    return W;
   }
   // 作品に写真・スクショを入れる → 作品 +1 と、外の記録を持つ活動 +1（design-v3 §6-10）
   // o: { workId, actId, images:[captureId], title, made, madeLine, catalogId, read:{ text, edited, declined }, now, date, mode }
@@ -625,19 +650,21 @@
   function migrate(a, resolve) {
     if (a && a.v >= SCHEMA) return a;
     var A = clone(a);
+    // 作業対象の主の種類で決める（§U-12 補足 3）: 見本・バディの試作なら theme（写真があっても）、外の記録だけなら ext / build
     if (!A.stepsKind) {
       var build = A.id === 'act-build' || same(A.steps, MD.EXT_BUILD_STEPS);
-      A.stepsKind = A.ext ? (build ? 'build' : 'ext') : 'theme';
+      var mainStage = A.stage && (A.stage.kind === 'sample' || A.stage.kind === 'draft');
+      A.stepsKind = mainStage || !A.ext ? 'theme' : (build ? 'build' : 'ext');
     }
     if (A.candidate === undefined) A.candidate = !!(A.steps && A.steps[0] && same(A.steps[0], MD.CANDIDATE_STEP));
     if (A.ext) {
-      var ref = {};
+      var ref = {}, order = A.ext.photos.map(function (p) { return p.id; });
       A.changes.forEach(function (c) { if (c.photoId) ref[c.photoId] = true; });
-      // 変化に紐づかない写真は最初から見えていた扱い
-      var vis = A.ext.photos.filter(function (p) { return !ref[p.id]; }).map(function (p) { return p.id; });
+      // 変化に紐づかない写真は最初から見えていた扱い。並びは写真の並び順
+      var vis = order.filter(function (id) { return !ref[id]; });
       if (A.baseVis == null) A.baseVis = vis.slice();
       A.changes.forEach(function (c) {
-        if (c.photoId && vis.indexOf(c.photoId) < 0) vis = vis.concat([c.photoId]);
+        if (c.photoId && vis.indexOf(c.photoId) < 0) vis = order.filter(function (id) { return id === c.photoId || vis.indexOf(id) >= 0; });
         if (c.vis === undefined) c.vis = vis.slice();
       });
       if (!A.ext.visible) A.ext.visible = A.ext.photos.map(function (p) { return p.id; });
@@ -690,7 +717,8 @@
     undoRemoveQuote: undoRemoveQuote, pickSample: pickSample, setNext: setNext, setTitle: setTitle, roles: roles, saveWork: saveWork, addCapture: addCapture,
     demo: demo, cardStage: cardStage, pushMsg: pushMsg, lastWhat: lastWhat, reopenAt: reopenAt, replyTarget: replyTarget,
     finishMaking: finishMaking, cardNames: cardNames, visiblePhotos: visiblePhotos, cardTitle: cardTitle,
-    canRevertTo: canRevertTo, restoreState: restoreState, findMsg: findMsg, declineReply: declineReply, undoDeclineReply: undoDeclineReply, migrate: migrate
+    canRevertTo: canRevertTo, restoreState: restoreState, findMsg: findMsg, declineReply: declineReply, undoDeclineReply: undoDeclineReply, migrate: migrate,
+    migrateWork: migrateWork, withPending: withPending
   };
   Object.keys(pure).forEach(function (k) { M[k] = pure[k]; });
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
@@ -736,6 +764,8 @@
       if (failed) s.saveFailed = true;
       // 前の版の活動は不足欄を補う（§U-12 指摘 6）。返事の文は今の表示で作って固定する
       s.activities = s.activities.map(function (a) { return migrate(a, tx); });
+      // 前の版の作品は 残した時点（at / snap）を補う（§U-12 補足 2）
+      s.works = s.works.map(function (w) { return migrateWork(w, s.activities); });
       // 「作っている」の途中で閉じた・読み込んだ活動は、ここで完了させる（§U-11 指摘 11）。新しいカードが入るので棚は開く
       s.activities = s.activities.map(function (a) {
         var ids = a.shelf.filter(function (c) { return c.state === 'making'; }).map(function (c) { return c.id; });
@@ -1236,7 +1266,7 @@
       if (ch.who === 'ai') ops.push(btn(T('decline'), 'mk-change-decline', { id: a.id, arg: ch.id, kls: 'ghost' }));
       var pt = pickToggle(a, 'changes', ch.id, ch.time);
       if (pt) ops = [pt];
-      var res = ch.kind === 'test' ? MD.result(ch.snap, mode()) : (ch.kind === 'revert' ? null : (ch.kind === 'adopt' || ch.kind === 'photo' || ch.kind === 'shot' ? T('not_checked') : null));
+      var res = ch.kind === 'test' ? MD.result(ch.snap, mode()) : (ch.kind === 'revert' ? null : (ch.kind === 'adopt' || ch.kind === 'set' || ch.kind === 'photo' || ch.kind === 'shot' ? T('not_checked') : null));
       return H('li', { class: 'change-row', 'data-fk': 'change:' + ch.id, tabindex: '-1' }, [
         H('span', { class: 'cr-time' }, ch.time),
         H('div', { class: 'cr-main' }, [
@@ -1800,7 +1830,7 @@
   function openSave(id, opener) {
     var a = act(id), dlg = dlgEl();
     if (!a) return;
-    mk().dlg = { type: 'save', act: id, at: a.changes.length ? a.changes[a.changes.length - 1].id : '', title: a.title, like: '', failed: false, saved: null };
+    mk().dlg = { type: 'save', act: id, at: '', title: a.title, like: '', failed: false, saved: null };
     renderSave();
     DES.app.openDialog(dlg, opener);
     var t = document.getElementById('mk-save-title');
@@ -1818,17 +1848,20 @@
     var d = mk().dlg, a = act(d.act), dlg = dlgEl();
     var putBack = clearDialog(dlg);
     dlg.setAttribute('aria-labelledby', 'mk-dlg-h');
-    var opts = [H('option', { value: '', selected: !d.at }, T('step_now'))];
+    // 「今」= 画面に見えている今の値（まだ試していない変更も含む。§U-12 補足 4）。その後に変化の時刻を新しい順
+    var last = a.changes[a.changes.length - 1], dirty = isDirty(a);
+    var nowLabel = T('step_now') + (dirty ? ' · ' + T('untested') : (last ? ' · ' + last.time + ' ' + tx(last.what) : ''));
+    var opts = [H('option', { value: '', selected: !d.at }, nowLabel)];
     a.changes.slice().reverse().forEach(function (c, i) {
-      opts.push(H('option', { value: c.id, selected: d.at === c.id }, (i === 0 ? T('step_now') + ' · ' : '') + c.time + ' ' + tx(c.what)));
+      if (i === 0 && !dirty) return;
+      opts.push(H('option', { value: c.id, selected: d.at === c.id }, c.time + ' ' + tx(c.what)));
     });
-    if (a.changes.length) opts.shift();
     dlg.appendChild(H('div', { class: 'dialog-head' }, [H('h2', { id: 'mk-dlg-h' }, T('save_work')), H('button', { class: 'icon-btn', type: 'button', 'data-action': 'dialog-close', 'aria-label': T('close') }, [icon('close')])]));
     var body = H('div', { class: 'dialog-body' }, [
       field(T('save_point'), 'mk-save-at', H('select', { id: 'mk-save-at', 'data-ui': 'mk-dlg', 'data-key': 'at' }, opts)),
       field(T('title_label'), 'mk-save-title', H('input', { id: 'mk-save-title', type: 'text', 'data-ui': 'mk-dlg', 'data-key': 'title', value: d.title, autocomplete: 'off' })),
       field(T('like_point'), 'mk-save-like', H('input', { id: 'mk-save-like', type: 'text', 'data-ui': 'mk-dlg', 'data-key': 'like', value: d.like, autocomplete: 'off' })),
-      rolesBox(roles(a, d.at || null))
+      rolesBox(roles(d.at ? a : withPending(a), d.at || null))
     ]);
     if (d.failed) body.appendChild(H('p', { class: 'dlg-error', role: 'alert' }, T('save_work_fail')));
     dlg.appendChild(body);
@@ -1847,6 +1880,8 @@
     var r = saveWork(S().works, a, { id: newId('w'), at: d.at || null, title: d.title, like: d.like, date: today() });
     S().works = r.works;
     d.saved = r.work.id;
+    // 未試行の値を残した時は、積んだ変化を活動にも反映する（保存に失敗してもメモリには残る）
+    if (r.act !== a) setAct(r.act, true);
     var ok = DES.store.save('works');
     if (!ok) { S().saveFailed = true; d.failed = true; DES.app.renderSaveState(); renderSave(); var b = dlgEl().querySelector('[data-action="mk-save-ok"]'); if (b) b.focus(); return; }
     S().saveFailed = false;
@@ -1972,7 +2007,7 @@
         if (k === 'at') {
           u.dlg.at = t.value;
           var a = act(u.dlg.act), box = document.getElementById('mk-roles');
-          if (a && box) box.parentNode.replaceChild(rolesBox(roles(a, u.dlg.at || null)), box);
+          if (a && box) box.parentNode.replaceChild(rolesBox(roles(u.dlg.at ? a : withPending(a), u.dlg.at || null)), box);
         }
         if (k === 'closed') u.dlg.closed = t.value === 'closed';
       }
