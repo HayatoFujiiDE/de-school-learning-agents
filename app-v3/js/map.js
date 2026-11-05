@@ -769,6 +769,12 @@
   function revealNode(page, id, smooth) {
     var frame = page.querySelector('.mp-frame'), L = page._L, b = L && L.nodes[id];
     if (!frame || !b || !page._v) return;
+    // far の作ったものは、逆に拡大した題（絵の下・画面で 150px 幅・2 行）まで入るように
+    var z = page._v.z;
+    if (/^(act|work|past):/.test(id) && MPC.lod(z) === 'far') {
+      var lw = Math.max(b.w, 150 / z);
+      b = { x: b.x + b.w / 2 - lw / 2, y: b.y, w: lw, h: Math.max(b.h, 110 + (2 * 13 * 1.3 + 6) / z) };
+    }
     var fs = frameSize(frame), nv = MPC.reveal(page._v, b, fs.w, fs.h, inset(frame));
     if (Math.abs(nv.x - page._v.x) < 0.5 && Math.abs(nv.y - page._v.y) < 0.5) return;
     applyView(page, nv, smooth);

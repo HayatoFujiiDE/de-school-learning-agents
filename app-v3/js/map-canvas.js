@@ -58,7 +58,8 @@
   MPC.PAN_STEP = 80;
   MPC.attach = function (frame, api) {
     var pts = {}, drag = null, pinch = null, moved = false, suppress = false;
-    function local(e) { var r = frame.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+    // 枠の中の座標（枠線の内側 = 板の原点から）
+    function local(e) { var r = frame.getBoundingClientRect(); return { x: e.clientX - r.left - frame.clientLeft, y: e.clientY - r.top - frame.clientTop }; }
     function ids() { return Object.keys(pts); }
     function dist(a, b) { return Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)); }
     function mid(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
@@ -120,6 +121,8 @@
         frame.classList.remove('is-dragging');
       }
     }
+    // 枠そのものはスクロールさせない（フォーカスしたノードへブラウザが枠をずらすのを戻す。動かすのは板の transform だけ）
+    frame.addEventListener('scroll', function () { if (frame.scrollLeft || frame.scrollTop) { frame.scrollLeft = 0; frame.scrollTop = 0; } });
     frame.addEventListener('pointerdown', down);
     frame.addEventListener('pointermove', move);
     frame.addEventListener('pointerup', up);
@@ -141,7 +144,7 @@
     frame.addEventListener('keydown', function (e) {
       if (e.defaultPrevented || e.altKey || e.metaKey || e.ctrlKey) return;
       if (e.target && e.target.closest && e.target.closest('.mp-detail')) return;
-      var r = frame.getBoundingClientRect(), c = api.keyCenter(e.target) || { x: r.width / 2, y: r.height / 2 }, v = api.view(), k = e.key, nv = null;
+      var c = api.keyCenter(e.target) || { x: frame.clientWidth / 2, y: frame.clientHeight / 2 }, v = api.view(), k = e.key, nv = null;
       if (k === '+' || k === '=') nv = MPC.zoomAt(v, MPC.KEY_STEP, c.x, c.y);
       else if (k === '-' || k === '_') nv = MPC.zoomAt(v, 1 / MPC.KEY_STEP, c.x, c.y);
       else if (k === '0') { e.preventDefault(); api.fit(true); return; }
