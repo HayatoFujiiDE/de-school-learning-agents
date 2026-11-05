@@ -1,7 +1,8 @@
-/* 学びマップ（#map つながり / #map/basics 基礎学習 / #map/u/<code> 単元）。CONTRACT-v3 §Y。
-   部品（.page-head / .segmented / .chip / .btn / .link-btn / .card）は shell.css・make.css・plan.css のものを使い、ここは v3 追加だけ。
-   線は 2 色だけ（選択中の関係 = 墨 / 他 = --line）。マスはオリーブ 1 色。橙は主ボタン（これで作る・基礎学習で見る・基礎学習を始める）だけ。
-   列は minmax(0,1fr) × 3（固定の最小幅を置かない）。操作領域は 44px（es 48px）。 */
+/* 学びマップ（#map 作ったものから / #map/fields 分野で見る / #map/list リスト / #map/basics 基礎学習 / #map/u/<code> 単元）。CONTRACT-v3 §Y / §AB。
+   部品（.page-head / .segmented / .chip / .opt-chip / .btn / .icon-btn / .link-btn / .card）は shell.css・make.css・plan.css のものを使い、ここは v3 追加だけ。
+   地図の線は種類ごとに形で分ける（色だけに頼らない）: 基本 = 細い実線 / 作ったものどうし = 太い実線 / 学ぶ順 = 点線 / 教科をまたぐ = 二重 / これから作れそう = 破線。
+   選んだノードとつながる線は墨。マスはオリーブ 1 色。橙は主ボタン（続きを作る・これで作る・基礎学習で見る・基礎学習を始める）だけ。
+   地図の中の箱の寸法（幅・余白・字の大きさ）は map-layout.js の SZ と同じ値にする（箱の大きさを文字数から見積もるため）。操作領域は 44px（es 48px）。 */
 
 .map-page{max-width:var(--page-max);margin:0 auto;min-width:0}
 /* 開いた時にフォーカスを置く見出し（tabindex=-1）は輪を出さない（today.css / works.css と同じ） */
@@ -16,48 +17,194 @@ html[data-mode="es"] .mp-linked,html[data-mode="es"] .mp-uname,html[data-mode="e
 .mp-tabs .segmented{display:inline-flex;width:min(360px,100%)}
 .mp-tabs .segmented button{flex:1;padding:7px 18px;font-size:12px}
 
-/* ---------- つながり（§Y-2）: 3 列 + 線 + 詳細パネル ---------- */
-.mp-links{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:28px;align-items:start}
-.mp-cols{position:relative;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));column-gap:48px;row-gap:18px;align-items:center;min-width:0}
-.mp-lines{position:absolute;left:0;top:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:0}
-.mp-edge{fill:none;stroke:var(--line);stroke-width:1.5;stroke-linecap:round;transition:stroke .15s ease-out,stroke-width .15s ease-out}
-.mp-edge.on{stroke:var(--ink);stroke-width:2}
-.mp-colhead{font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.04em;line-height:1.6;align-self:end;padding-bottom:6px;border-bottom:1px solid var(--line)}
-.mp-cell{position:relative;z-index:1;display:grid;gap:10px;min-width:0;align-content:center}
+/* ---------- 見出しの下: タブ（つながり / 基礎学習）+ 見方（作ったものから / 分野で見る / リスト） ---------- */
+.mp-bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;margin-bottom:14px}
+.mp-bar .mp-tabs{margin-bottom:0}
+.mp-views .segmented{display:inline-flex}
+.mp-views .segmented button{padding:7px 14px;font-size:12px;min-height:44px}
+html[data-mode="es"] .mp-views .segmented button{min-height:48px}
+
+/* ---------- つながりの種類（チップ = 凡例）---------- */
+.mp-chipbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;margin-bottom:10px}
+.mp-chips{gap:6px}
+.mp-chip{display:inline-flex;align-items:center;gap:8px}
+.mp-chip[aria-pressed="false"] .mp-sw{opacity:.45}
+/* 凡例（基本の線 + ノードのしるし）。1 行に収まらない幅では「しるしの見方」の開閉（既定は閉。map.js の fitLegend） */
+.mp-key{min-width:0;max-width:100%;font-size:12px;color:var(--muted);line-height:1.6}
+.mp-key:not(.is-folded)>.mp-key-sum{display:none}
+.mp-key-sum{display:inline-flex;align-items:center;gap:8px;min-height:44px;cursor:pointer;font-weight:600;color:var(--ink);list-style:none}
+.mp-key-sum::-webkit-details-marker{display:none}
+.mp-key-sum::before{content:'';width:0;height:0;border-left:6px solid currentColor;border-top:4.5px solid transparent;border-bottom:4.5px solid transparent;transition:transform .15s ease-out}
+.mp-key[open]>.mp-key-sum::before{transform:rotate(90deg)}
+html[data-mode="es"] .mp-key-sum{min-height:48px}
+.mp-key-items{display:flex;flex-wrap:nowrap;align-items:center;gap:6px 16px;white-space:nowrap}
+.mp-key.is-folded .mp-key-items{flex-wrap:wrap;white-space:normal;padding:2px 0 6px}
+.mp-lg{display:inline-flex;align-items:center;gap:8px}
+.mp-mk{display:inline-block;flex-shrink:0;width:12px;height:12px;border-radius:50%;box-sizing:border-box}
+.mp-mk.k-learned{background:var(--olive);border:1.5px solid var(--olive)}
+.mp-mk.k-unit{background:var(--white);border:1.5px solid var(--ink)}
+.mp-mk.k-ext{background:var(--white);border:1.5px dashed var(--ink)}
+.mp-mk.k-next{background:var(--ai-soft);border:1.5px dashed var(--ai)}
+.mp-sw{width:32px;height:12px;flex-shrink:0;overflow:visible}
+.mp-sw path{fill:none;stroke-linecap:round}
+
+/* 線の形（凡例の見本と地図で同じ） */
+.mp-sw.k-base path,.mp-e.k-base{stroke:var(--muted);stroke-width:1.3}
+.mp-sw.k-peer path,.mp-e.k-peer{stroke:var(--olive);stroke-width:3}
+.mp-sw.k-order path,.mp-e.k-order{stroke:var(--muted);stroke-width:2.6;stroke-dasharray:0 6}
+.mp-sw.k-cross .o,.mp-e.k-cross .o{stroke:var(--record);stroke-width:6}
+.mp-sw.k-cross .i,.mp-e.k-cross .i{stroke:var(--white);stroke-width:2}
+.mp-sw.k-next path,.mp-e.k-next{stroke:var(--ai);stroke-width:2;stroke-dasharray:7 5}
+
+/* ---------- 地図（§AB-2）: 枠の中だけが動く。ページは横スクロールしない・枠の上のピンチでブラウザ全体を拡大させない ---------- */
+.map-page.is-map{display:flex;flex-direction:column}
+.mp-frame{position:relative;overflow:hidden;overflow:clip;height:520px;min-height:420px;border:1px solid var(--line);border-radius:16px;background:var(--white);touch-action:none;
+  user-select:none;-webkit-user-select:none;cursor:grab;--inv:1}
+.mp-frame.is-dragging{cursor:grabbing}
+.mp-frame:focus-visible{outline:3px solid #a9590b;outline-offset:2px}
+.mp-vp{position:absolute;left:0;top:0;transform-origin:0 0}
+.mp-vp.is-anim{transition:transform .22s ease-out}
+.mp-edges{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+.mp-e,.mp-e path{fill:none;stroke-linecap:round;vector-effect:non-scaling-stroke;transition:opacity .15s ease-out,stroke .15s ease-out}
+.mp-e.k-base{opacity:.55}
+/* チップが off の種類は出さない（選んだノードのつながりは off でも出す = .is-on） */
+.mp-frame:not(.c-peer) .mp-e.k-peer:not(.is-on),.mp-frame:not(.c-order) .mp-e.k-order:not(.is-on),
+.mp-frame:not(.c-cross) .mp-e.k-cross:not(.is-on),.mp-frame:not(.c-next) .mp-e.k-next:not(.is-on){display:none}
+/* 1 つ選ぶと、そこだけ濃く（つながる線は墨・他は薄く） */
+.mp-frame.has-sel .mp-e:not(.is-on){opacity:.1}
+.mp-frame.has-sel .mp-e.is-on{opacity:1;stroke:var(--ink)}
+.mp-frame.has-sel .mp-e.k-cross.is-on .o{stroke:var(--ink)}
+/* far は線を薄く（基本の線はさらに薄く。作ったものどうしの線が読めるように） */
+.mp-frame[data-lod="far"]:not(.has-sel) .mp-e{opacity:.7}
+.mp-frame[data-lod="far"]:not(.has-sel) .mp-e.k-base{opacity:.3}
+
+/* 島（分野で見る）: 教科 × 領域の囲み + 名前 */
+.mp-isl{position:absolute;left:var(--x);top:var(--y);width:var(--w);height:var(--h);border-radius:22px;background:var(--sand)}
+.mp-isl-name{position:absolute;left:calc(var(--x) + 14px);top:calc(var(--y) + 13px);padding:0 4px;border-radius:5px;background:var(--sand);font-size:15px;font-weight:700;line-height:1.4;color:var(--sand-ink);white-space:nowrap;pointer-events:none}
+
+/* ノード（本物の button。位置と大きさは map-layout.js の箱） */
+.mp-n{position:absolute;left:var(--x);top:var(--y);width:var(--w);height:var(--h);box-sizing:border-box;display:flex;flex-direction:column;align-items:stretch;justify-content:center;gap:4px;
+  text-align:left;background:var(--white);border:1px solid var(--line);border-radius:12px;color:var(--ink);overflow:hidden;cursor:pointer;
+  transition:opacity .15s ease-out,border-color .15s ease-out,box-shadow .15s ease-out}
+.mp-n:hover{filter:none;border-color:#cfcabd}
+.mp-n:focus-visible{outline-width:calc(3px * var(--inv));outline-offset:calc(3px * var(--inv))}
+.mp-n.is-on{border-color:var(--ink)}
+.mp-n[aria-pressed="true"]{border-color:var(--ink);box-shadow:0 0 0 calc(2px * var(--inv)) var(--ink)}
+.mp-frame.has-sel .mp-n:not(.is-on){opacity:.3}
+.mp-n.is-made{padding:6px;justify-content:flex-start;gap:0;border-radius:14px;overflow:visible}
+.mp-n.is-learned{padding:9px 11px}
+.mp-n.is-unit{padding:8px 10px;gap:3px}
+.mp-n.is-unit.is-ext{border-style:dashed;border-color:#cfcabd}
+.mp-n.is-next{padding:9px 11px;border:1.5px dashed var(--ai);background:var(--ai-soft)}
+.mp-frame:not(.has-sel) .mp-n.is-next{opacity:.8}
+.mp-n .mp-thumb{display:block;height:100px;flex-shrink:0;border-radius:9px;background:var(--art-bg);overflow:hidden}
+.mp-n .mp-thumb svg{display:block;width:100%;height:100%}
+.mp-n .mp-label{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;margin-top:6px;font-size:13px;font-weight:700;line-height:1.45;overflow-wrap:anywhere}
+.mp-n .mp-t{font-size:13px;font-weight:600;line-height:1.45;overflow-wrap:anywhere}
+.mp-n.is-learned .mp-t{font-size:12.5px;line-height:1.5}
+.mp-n .mp-eb{font-size:10.5px;font-weight:600;line-height:1.6;color:var(--muted);letter-spacing:.04em}
+.mp-n .mp-scene{font-size:11px;line-height:1.55;color:var(--muted);overflow-wrap:anywhere;margin-top:1px}
+.mp-n .mp-scene .chip{margin-right:6px;vertical-align:middle;transform:translateY(-1px)}
+.mp-n .mp-sub{font-size:11px;line-height:1.5;color:var(--muted);overflow-wrap:anywhere}
+.mp-n.is-made .mp-sub{margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-n .mp-chips{display:flex;gap:4px;margin-top:2px}
+.mp-n .mp-bandrow{display:flex;align-items:center;gap:6px;height:13px}
+.mp-n .mp-bandrow .mp-pct{font-size:11px;line-height:13px;min-width:0}
+.mp-band.is-mini{gap:2px;flex-wrap:nowrap}
+.mp-band.is-mini .mp-sq{width:13px;height:10px;border-radius:2px}
+/* mid・near の字は画面で 12px 以上（縮小に合わせて逆に拡大。mid の下限 0.6 で世界の 20px = map-layout.js の MID。箱はこの大きさで見積もる） */
+.mp-frame:not([data-lod="far"]) .mp-n .mp-label,.mp-frame:not([data-lod="far"]) .mp-n .mp-t{font-size:max(13px,calc(12px * var(--inv)))}
+.mp-frame:not([data-lod="far"]) .mp-n.is-learned .mp-t{font-size:max(12.5px,calc(12px * var(--inv)))}
+.mp-frame:not([data-lod="far"]) .mp-n .mp-eb{font-size:max(10.5px,calc(12px * var(--inv)))}
+html[data-mode="es"] .mp-frame:not([data-lod="far"]) .mp-n .mp-label,html[data-mode="es"] .mp-frame:not([data-lod="far"]) .mp-n .mp-t{font-size:max(14px,calc(12px * var(--inv)))}
+html[data-mode="es"] .mp-frame:not([data-lod="far"]) .mp-n.is-learned .mp-t{font-size:max(13.5px,calc(12px * var(--inv)))}
+html[data-mode="es"] .mp-frame:not([data-lod="far"]) .mp-n .mp-eb{font-size:max(11.5px,calc(12px * var(--inv)))}
+/* mid の学んだこと・単元・これからは「短い言葉」= 3 行まで */
+.mp-frame[data-lod="mid"] .mp-n:not(.is-made) .mp-t{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+/* 倍率で出す量（§AB-3-1）。mid（既定）= 作ったもの: 絵 + 題 / 学んだこと: 短い言葉 / 単元: 名前 */
+.mp-n .mp-scene,.mp-n .mp-chips,.mp-n .mp-sub,.mp-n .mp-pct{display:none}
+/* near = + 学んだことの場面・出所チップ・単元の基礎学習の 1 行・作ったものの日付 */
+.mp-frame[data-lod="near"] .mp-n .mp-scene,.mp-frame[data-lod="near"] .mp-n .mp-sub,.mp-frame[data-lod="near"] .mp-n .mp-pct{display:block}
+.mp-frame[data-lod="near"] .mp-n .mp-chips{display:flex}
+.mp-frame[data-lod="near"] .mp-n:not(.is-made){justify-content:flex-start}
+.mp-frame[data-lod="near"] .mp-n.is-next{justify-content:center}
+/* far = 作ったもの（絵 + 題）と島の名前だけ。学んだこと・単元・これからは点。題と島の名前は、縮小に合わせて逆に拡大（画面で 12px 以上） */
+.mp-frame[data-lod="far"] .mp-n:not(.is-made){left:calc(var(--x) + var(--w) / 2 - var(--dot, 14px) * var(--inv) / 2);top:calc(var(--y) + var(--h) / 2 - var(--dot, 14px) * var(--inv) / 2);
+  width:calc(var(--dot, 14px) * var(--inv));height:calc(var(--dot, 14px) * var(--inv));padding:0;border-radius:50%;border-width:calc(1.5px * var(--inv))}
+.mp-frame[data-lod="far"] .mp-n:not(.is-made)>*{display:none}
+.mp-frame[data-lod="far"] .mp-n.is-learned{background:var(--olive);border-color:var(--olive)}
+.mp-frame[data-lod="far"] .mp-n.is-unit{background:var(--white);border-color:var(--ink)}
+.mp-frame[data-lod="far"] .mp-n.is-next{background:var(--ai-soft);border-color:var(--ai)}
+.mp-frame[data-lod="far"] .mp-n.is-made{background:transparent;border-color:transparent}
+.mp-frame[data-lod="far"] .mp-n.is-made .mp-thumb{border:calc(1px * var(--inv)) solid var(--line)}
+.mp-frame[data-lod="far"] .mp-n.is-made[aria-pressed="true"] .mp-thumb,.mp-frame[data-lod="far"] .mp-n.is-made.is-on .mp-thumb{border-color:var(--ink)}
+.mp-frame[data-lod="far"] .mp-n.is-made[aria-pressed="true"]{box-shadow:none}
+.mp-frame[data-lod="far"] .mp-n.is-made .mp-label{position:absolute;left:50%;top:110px;transform:translateX(calc(-50% + var(--lx, 0px)));width:max-content;max-width:calc(150px * var(--inv));margin:0;
+  font-size:calc(12.5px * var(--inv));line-height:1.3;text-align:center;padding:calc(1px * var(--inv)) calc(4px * var(--inv));border-radius:calc(6px * var(--inv));background:#ffffffe0}
+.mp-frame[data-lod="far"] .mp-label.is-thin,.mp-isl-name.is-thin{visibility:hidden}
+.mp-frame[data-lod="far"] .mp-isl-name{z-index:1;left:calc(var(--x) + 14px + var(--lx, 0px));font-size:calc(13px * var(--inv));top:calc(var(--y) + 10px);padding:0 calc(3px * var(--inv));border-radius:calc(4px * var(--inv))}
+
+/* 枠の右下の操作（＋ − 全体を見る）。詳細パネルを開いている時は、パネルにかからない所へ */
+.mp-ctrl{position:absolute;z-index:2;right:12px;bottom:12px;display:flex;gap:6px;cursor:auto}
+.mp-ctrl .btn{min-height:44px;min-width:44px;padding:0 12px;box-shadow:0 2px 8px #292c2914}
+.mp-ctrl .mp-zbtn{font-size:18px;font-weight:600;line-height:1}
+html[data-mode="es"] .mp-ctrl .btn{min-height:48px;min-width:48px}
+
+/* 詳細パネル（§AB-3-4）: ≥ 1024 は地図の右に重ねる / それ未満は下からのシート（高さ 60% まで）。どちらも × で閉じる */
+.mp-frame .mp-detail{position:absolute;z-index:3;top:12px;right:12px;bottom:12px;width:350px;max-width:calc(100% - 24px);overflow-y:auto;overscroll-behavior:contain;
+  background:var(--white);border:1px solid var(--line);border-radius:16px;box-shadow:0 12px 38px #292c2918;padding:14px 16px 18px;cursor:auto;user-select:text;-webkit-user-select:text;touch-action:pan-y}
+.mp-frame.has-sel .mp-ctrl{right:374px}
+.mp-detail[hidden]{display:none}
+.mp-detail{display:grid;align-content:start;gap:10px;min-width:0}
+.mp-dhead{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.mp-dtitle{min-width:0}
+.mp-detail .mp-kind{margin:0 0 4px;min-height:15px}
+.mp-detail h2{font-size:16px;line-height:1.55;overflow-wrap:anywhere}
+.mp-dclose{width:44px;height:44px;flex-shrink:0;margin:-8px -8px 0 0}
+html[data-mode="es"] .mp-dclose{width:48px;height:48px}
+.mp-detail-body{display:grid;gap:12px;min-width:0}
+.mp-dart{border-radius:10px;background:var(--art-bg);overflow:hidden;max-width:240px}
+.mp-dart svg{display:block;width:100%;height:auto}
+.mp-dsec{display:grid;gap:6px;min-width:0}
+.mp-scene-line{display:flex;gap:8px;align-items:flex-start;font-size:12px;line-height:1.7;overflow-wrap:anywhere;margin:0}
+.mp-scene-line .chip{flex-shrink:0;margin-top:1px}
+.mp-rel-h{font-size:12px;font-weight:600;line-height:1.6;margin:0}
+.mp-rel-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.mp-rel-list li{display:grid;gap:4px;min-width:0}
+.mp-rel-list li>.btn{justify-self:start}
+.mp-rel{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:0;text-align:left;width:100%;min-height:44px;padding:6px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;font-size:12px;line-height:1.6;color:var(--ink)}
+.mp-rel:hover{filter:none;border-color:#cfcabd}
+.mp-rel.is-static{background:#fcfbf8;border-style:dashed}
+html[data-mode="es"] .mp-rel{min-height:48px}
+.mp-rel-k{font-size:10px;color:var(--muted);font-weight:600;line-height:1.6;letter-spacing:.04em}
+.mp-rel-t{overflow-wrap:anywhere}
+.mp-rel-d{font-size:11px;color:var(--muted)}
+.mp-same,.mp-nline{font-size:12px;line-height:1.7;color:var(--muted);margin:0;overflow-wrap:anywhere}
+.mp-nline{color:var(--ink)}
+.mp-ord-k{font-size:11px;color:var(--muted);font-weight:600;margin:2px 0 0}
+.mp-detail .mp-where{margin:0}
+.mp-detail .mp-ubar{gap:8px}
+.mp-ops{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
 .mp-none{font-size:12px;color:var(--muted);line-height:1.7}
 
-/* ノード: 選ばれている = 墨の 2px（box-shadow で足すので大きさは変わらない = 線の位置がずれない）/ つながっている = 墨の枠 */
+/* ---------- リスト（§AB-7）: 作ったもの 1 つ = カード 1 枚。全幅で並べる ---------- */
+.map-page[data-view="list"] .mp-cards{grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr));align-items:start}
+.mp-list-next{margin-top:26px}
+.mp-list-next h2{font-size:15px;line-height:1.5;margin-bottom:10px}
+.map-page[data-view="list"] .mp-detail{padding:16px;border:1px solid var(--line);border-radius:16px;background:var(--white)}
+.mp-peers{display:grid;gap:6px;padding-top:4px}
 .mp-node{display:grid;gap:4px;justify-items:start;align-content:start;text-align:left;width:100%;padding:10px 12px;background:#fff;border:1px solid var(--line);border-radius:12px;color:var(--ink);min-width:0;transition:border-color .15s ease-out,box-shadow .15s ease-out,background-color .15s ease-out}
 .mp-node:hover{filter:none;border-color:#cfcabd}
-.mp-node.is-rel{border-color:var(--ink)}
+.mp-node.is-on{border-color:var(--ink)}
 .mp-node[aria-pressed="true"]{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink);background:#fcfbf8}
-/* 教材の無い単元（理科など）は破線の枠 */
 .mp-node.is-ext{border-style:dashed;border-color:#cfcabd}
-.mp-node.is-ext.is-rel,.mp-node.is-ext[aria-pressed="true"]{border-color:var(--ink)}
-.mp-thumb{display:block;width:100%;border-radius:8px;background:var(--art-bg);border:1px solid var(--line);overflow:hidden}
-.mp-thumb svg{display:block;width:100%;height:auto;max-height:96px}
+.mp-node.is-ext.is-on,.mp-node.is-ext[aria-pressed="true"]{border-color:var(--ink)}
+.mp-node.is-next{border:1.5px dashed var(--ai);background:var(--ai-soft)}
+.mp-node .mp-thumb{display:block;width:100%;border-radius:8px;background:var(--art-bg);border:1px solid var(--line);overflow:hidden}
+.mp-node .mp-thumb svg{display:block;width:100%;height:auto;max-height:96px}
 .mp-title{font-size:13px;font-weight:600;line-height:1.6;overflow-wrap:anywhere}
 .mp-sub,.mp-scene{font-size:11px;color:var(--muted);line-height:1.6;overflow-wrap:anywhere}
 .mp-chips{display:flex;gap:4px;flex-wrap:wrap}
-
-/* 詳細パネル（xl: 右 / l・m: 3 列の下 / s: 選んだカードの直下） */
-.mp-detail.card{padding:18px 18px 16px;box-shadow:none;display:grid;gap:8px;min-width:0}
-/* xl: 下の段の作ったものを選んでも見えるように、右の詳細はスクロールについてくる */
-.mp-links>.mp-detail.card{position:sticky;top:20px;max-height:calc(100vh - 40px);overflow-y:auto}
-.mp-detail[hidden]{display:none}
-.mp-detail .mp-kind{margin:0;min-height:15px}
-.mp-detail h2{font-size:16px;line-height:1.55;overflow-wrap:anywhere}
-.mp-detail-body{display:grid;gap:10px;min-width:0}
-.mp-hint{font-size:12px;color:var(--muted);line-height:1.8}
-.mp-scene-line{display:flex;gap:8px;align-items:flex-start;font-size:12px;line-height:1.7;overflow-wrap:anywhere}
-.mp-scene-line .chip{flex-shrink:0;margin-top:1px}
-.mp-rel-h{font-size:12px;font-weight:600;line-height:1.6;margin-top:2px}
-.mp-rel-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
-.mp-rel{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:0;text-align:left;width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;font-size:12px;line-height:1.6;color:var(--ink)}
-.mp-rel:hover{filter:none;border-color:#cfcabd}
-.mp-rel-k{font-size:10px;color:var(--muted);font-weight:600;line-height:1.6;letter-spacing:.04em}
-.mp-rel-t{overflow-wrap:anywhere}
-.mp-ops{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
 
 /* 狭い幅（s）: 作ってきたもの 1 つ = カード 1 枚。カード内に 学んだこと → 単元 を縦に */
 .mp-cards{list-style:none;margin:0;padding:0;display:grid;gap:14px;min-width:0}
@@ -67,7 +214,7 @@ html[data-mode="es"] .mp-linked,html[data-mode="es"] .mp-uname,html[data-mode="e
 .mp-chain-item{display:grid;gap:4px;justify-items:stretch;min-width:0}
 .mp-arrow{display:flex;justify-content:center;color:var(--muted);line-height:0}
 .mp-arrow .ico{width:16px;height:16px}
-.mp-card .mp-thumb svg{max-height:88px}
+.mp-card .mp-node .mp-thumb svg{max-height:88px}
 
 /* 空状態 */
 .mp-empty{display:grid;gap:6px}
@@ -123,22 +270,33 @@ html[data-mode="es"] .mp-linked,html[data-mode="es"] .mp-uname,html[data-mode="e
 
 /* ---------- 小学生向け（es） ---------- */
 html[data-mode="es"] .mp-title,html[data-mode="es"] .mp-uname,html[data-mode="es"] .mp-iname{font-size:14px}
-html[data-mode="es"] .mp-sub,html[data-mode="es"] .mp-scene,html[data-mode="es"] .mp-rel,html[data-mode="es"] .mp-linked,html[data-mode="es"] .mp-colhead,
-html[data-mode="es"] .mp-legend,html[data-mode="es"] .mp-pct,html[data-mode="es"] .mp-overall,html[data-mode="es"] .mp-hint,html[data-mode="es"] .mp-scope{font-size:12px}
-html[data-mode="es"] .mp-scene-line,html[data-mode="es"] .mp-none{font-size:13px}
+html[data-mode="es"] .mp-sub,html[data-mode="es"] .mp-scene,html[data-mode="es"] .mp-rel,html[data-mode="es"] .mp-linked,
+html[data-mode="es"] .mp-legend,html[data-mode="es"] .mp-pct,html[data-mode="es"] .mp-overall,html[data-mode="es"] .mp-scope,
+html[data-mode="es"] .mp-key,html[data-mode="es"] .mp-same,html[data-mode="es"] .mp-rel-h{font-size:12px}
+html[data-mode="es"] .mp-scene-line,html[data-mode="es"] .mp-none,html[data-mode="es"] .mp-nline{font-size:13px}
+/* 地図の中の字（map-layout.js の SZ は es の値で箱を見積もる） */
+html[data-mode="es"] .mp-n .mp-label,html[data-mode="es"] .mp-n .mp-t{font-size:14px}
+html[data-mode="es"] .mp-n.is-learned .mp-t{font-size:13.5px}
+html[data-mode="es"] .mp-n .mp-scene,html[data-mode="es"] .mp-n .mp-sub{font-size:12px}
+html[data-mode="es"] .mp-n .mp-eb{font-size:11.5px}
+html[data-mode="es"] .mp-frame[data-lod="far"] .mp-n.is-made .mp-label{font-size:calc(13px * var(--inv))}
 
 /* ---------- 幅ごと ---------- */
-@media(max-width:1120px){
-.mp-links{grid-template-columns:minmax(0,1fr);gap:20px}
-.mp-links>.mp-detail.card{position:static;max-height:none;overflow:visible}
-.mp-cols{column-gap:36px}
+@media(max-width:1023px){
+.mp-frame .mp-detail{top:auto;left:0;right:0;bottom:0;width:auto;max-width:none;max-height:60%;border-radius:16px 16px 0 0;border-width:1px 0 0;box-shadow:0 -10px 30px #292c2914}
+.mp-frame.has-sel .mp-ctrl{right:12px;bottom:auto;top:12px}
 }
 @media(max-width:950px){
-.mp-cols{column-gap:28px}
 .mp-urow{grid-template-columns:minmax(0,160px) minmax(0,1fr)}
 .mp-linked{grid-column:2;justify-self:start}
 }
 @media(max-width:700px){
+.mp-bar{gap:8px}
+.mp-views,.mp-views .segmented{width:100%}
+.mp-views .segmented button{flex:1;padding:7px 8px}
+.mp-chipbar{gap:6px 12px}
+.mp-chip{padding:0 10px}
+.mp-frame{border-radius:12px}
 .mp-urow{grid-template-columns:minmax(0,1fr);gap:4px;padding:8px 0;border-bottom:1px solid var(--line)}
 .mp-urows li:last-child{border-bottom:0}
 .mp-linked{grid-column:auto}
