@@ -201,3 +201,19 @@ dialog.nav-drawer .sidebar{position:relative;top:auto;transform:none;visibility:
 .breadcrumb strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .top-actions{min-width:0;flex-shrink:0}
 }
+/* 左メニューを閉じる / 開く（§AC-7）。閉じた時は ≤ 950 と同じ 76px のアイコン列。≤ 950 は元から細い列なのでボタンを出さない */
+.nav-toggle{position:absolute;top:20px;right:6px;width:44px;height:44px;color:var(--muted)}
+html[data-mode="es"] .nav-toggle{width:48px;height:48px}
+@media(max-width:950px){.nav-toggle{display:none}}
+@media(min-width:951px){
+html.nav-rail .shell{grid-template-columns:76px 1fr}
+html.nav-rail .sidebar{padding:25px 10px}
+html.nav-rail .brand{padding:0}
+html.nav-rail .brand-word{font-size:13px;letter-spacing:-.06em}
+html.nav-rail .brand-sub,html.nav-rail .nav-label,html.nav-rail .sidebar-bottom .resume-mini,html.nav-rail .profile-text,html.nav-rail .profile button,html.nav-rail .sidebar .reset-link{display:none}
+html.nav-rail .nav button{justify-content:center;padding:12px}
+html.nav-rail .nav button.active:before{left:-10px}
+html.nav-rail .profile{padding:0;justify-content:center}
+html.nav-rail .sb-top{display:flex;flex-direction:column;align-items:center;gap:10px}
+html.nav-rail .nav-toggle{position:static}
+}

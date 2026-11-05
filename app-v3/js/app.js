@@ -33,7 +33,11 @@ window.DES = window.DES || {};
     mic: 'M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3 M5 11a7 7 0 0 0 14 0 M12 18v3',
     send: 'M4 12l16-8-6 16-2-6-8-2z',
     menu: 'M4 7h16 M4 12h16 M4 17h16',
-    sliders: 'M4 6h10 M18 6h2 M14 4v4 M4 12h2 M10 12h10 M6 10v4 M4 18h12 M20 18h2 M16 16v4'
+    sliders: 'M4 6h10 M18 6h2 M14 4v4 M4 12h2 M10 12h10 M6 10v4 M4 18h12 M20 18h2 M16 16v4',
+    // §AC-6 / AC-7: 大きく見る・もとの大きさ・左メニューの開閉
+    expand: 'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
+    shrink: 'M9 4v5H4 M15 4v5h5 M9 20v-5H4 M15 20v-5h5',
+    sidebar: 'M4 4h16v16H4z M9 4v16 M14 10l-2 2 2 2'
   };
   var THICK = { more: 3, drag: 3 };
   DES.icon = function (name) {
@@ -293,13 +297,20 @@ window.DES = window.DES || {};
   }
   function navLabel(k) { var html = DES.tNavHTML(k); return html ? DES.raw(html) : T(k); }
   function renderSidebar(r) { fillSidebar($('#sidebar'), r); }
+  function navRail() { return !!(DES.state && DES.state.ui && DES.state.ui.nav === 'rail'); }
   function fillSidebar(sb, r) {
     var d = DES.data, cur = r === 'plan' ? 'talk' : r;
     // 「続きをする」の中身: 最後に止めたのが作るの活動なら その名前と次にすること（§U-11 指摘 4）
     var ri = DES.make.resumeInfo(), resumeTitle = ri ? ri.title : d.resume.title, resumeNext = ri ? ri.next : d.resume.next;
     sb.textContent = '';
     sb.appendChild(H('button', { class: 'icon-btn mobile-menu mobile-close', type: 'button', 'data-action': 'menu-close', 'aria-label': T('menu_close') }, [icon('close')]));
-    sb.appendChild(H('div', { class: 'brand' }, [H('div', { class: 'brand-word' }, ['DE', H('span', null, '-'), 'SCHOOL']), H('div', { class: 'brand-sub' }, T('brand_sub'))]));
+    // 左メニューを閉じる / 開く（§AC-7。≤ 950 は元から細い列なので CSS で出さない。≤ 700 の引き出しの中にも出さない）
+    var rail = navRail();
+    sb.appendChild(H('div', { class: 'sb-top' }, [
+      H('div', { class: 'brand' }, [H('div', { class: 'brand-word' }, ['DE', H('span', null, '-'), 'SCHOOL']), H('div', { class: 'brand-sub' }, T('brand_sub'))]),
+      sb.id === 'sidebar' ? H('button', { class: 'icon-btn nav-toggle', type: 'button', 'data-action': 'nav-toggle', 'aria-controls': 'sidebar', 'aria-expanded': rail ? 'false' : 'true',
+        'aria-label': T(rail ? 'nav_rail_open' : 'nav_rail_close'), title: T(rail ? 'nav_rail_open' : 'nav_rail_close') }, [icon('sidebar')]) : null
+    ]));
     sb.appendChild(H('nav', { class: 'nav', 'aria-label': T('nav_label') }, NAV.map(function (k) {
       var on = k === cur;
       return H('button', { type: 'button', 'data-action': 'nav', 'data-route': k, 'aria-label': T(k), title: T(k), class: on ? 'active' : '', 'aria-current': on ? 'page' : null },
@@ -355,6 +366,7 @@ window.DES = window.DES || {};
   APP.render = function () {
     var st = DES.state, u = DES.ui, r = route();
     document.documentElement.setAttribute('data-mode', st.mode === 'es' ? 'es' : 'js');
+    document.documentElement.classList.toggle('nav-rail', navRail());
     renderSidebar(r);
     renderTopbar(r);
     renderTabbar(r);
@@ -397,6 +409,10 @@ window.DES = window.DES || {};
     APP.openMode(opener);
   };
   A['reset'] = function () { DES.store.reset(); };
+  // 左メニューを閉じる / 開く（全ページ共通。表示設定 des3.ui.nav に保存。フォーカスは同じボタンに残る）
+  A['nav-toggle'] = function () {
+    APP.change(function () { DES.state.ui = { nav: navRail() ? 'open' : 'rail' }; }, { sel: '[data-action="nav-toggle"]' });
+  };
   A['plan-toggle'] = function (el) {
     var r = route(), b = APP.bp(), st = DES.state;
     if (r === 'plan') { window.location.hash = '#talk'; return; }
