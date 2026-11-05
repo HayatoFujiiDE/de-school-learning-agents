@@ -18,6 +18,13 @@ for r in "$@"; do
     [ -n "$bad" ] && fail=1
   done
 done
+# 今日のお題の純関数テスト（CONTRACT-v3 §X-7）: today のルートを検査する時だけ
+case " $* " in *" today"*)
+  node "$(dirname "$0")/today-test.js" > "$TMP/today-test.log" 2>&1
+  tv=$(grep -o 'TODAY_TEST=[A-Z]*' "$TMP/today-test.log")
+  printf '%-40s %s\n' "today-test" "${tv:-TODAY_TEST=MISSING}"
+  [ "$tv" = "TODAY_TEST=PASS" ] || fail=1
+;; esac
 rm -rf "$TMP"
 printf 'CHECK_RESULT=%s\n' "$([ $fail -eq 0 ] && echo PASS || echo FAIL)"
 exit $fail
