@@ -392,3 +392,8 @@ sup-test.js が見ること: normalize（壊れた形 → 初期値・知らな�
 - `fadeLines(fade, text, names)` → `[ { scene, kind: 'none'|'up'|'flat', line } ]`
 - `childRow({ plan, messages, ideas, joined, now, child, mode, text })` → `{ id, name, mode, now, next, consult, checks: [] }`
 - `reportDraft({ report, fade, lines, plan, text, names, edits, off })` → `[ { id, head, items: [ { id, text, orig, src: 'own'|'record'|'calc', edited, off } ], note? } ]`
+
+### 18-13 2 回目の契約レビュー（REVISE・残り 4 点）への裁定
+- **保存が途中で失敗した時（範囲を限る）**: 記録は「成功した保存 1 回ごと」に確定する。印と記録の保存し直しが失敗した時は `saveFailed` を立てるだけで、状態も記録も巻き戻さない。1 つの操作が複数のキーを順に保存し、後のキーが失敗して既存の処理が巻き戻した場合（写真から作品を残す、など）、先に確定した記録は残る。**このモックでは、保存の途中の失敗で記録と状態が食い違うことを受け入れる**（既存の保存も一部のキーだけ成功することがあり、今回それは直さない）。画面は既存の `save_fail` の表示になる。本番の記録の保存は別に設計する（AD-17 に足す）
+- **見つけた の手伝いの印は記録の上限と分ける**: `des3.sup` に `helped: { odai: { [odaiId]: true } }` を足す（上限なし・追加のみ）。observe が `found+` の時に入っていれば立てる。あしあとの「自分で」（18-7）はこの `helped` を読む（`sup.log` からは作らない）。`normalize` は形が違えば `{ odai: {} }`
+- **レポートを確かめた・送った後の中身**: 「確かめた」を押した時点の中身（節・項目の id と文・載せる / 載せない・補足）を `report.body` に写して保存する。状態が `checked` / `sent` の間、画面と「届く形」は **`report.body` を出す**（元の予定や記録が後で変わっても変わらない）。今の記録から作った中身と `report.body` が違う時は 1 文「確かめたあとに、元の記録が変わっている。下書きに戻すと今の中身になる」（`rp_stale`）を出す。「下書きに戻す」で `report.body = null` になり、今の記録から作り直す。`checked` の間に 直す・載せない・補足 を触ると `draft` に戻る（`body = null`）。`normalize`: `body` は null か配列
