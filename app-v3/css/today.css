@@ -1,0 +1,136 @@
+/* 今日のお題（#today 一覧 / #today/<id> 詳細 / 見つけた写真を残す）。CONTRACT-v3 §X。
+   部品（.page-head / .range-row / .inline-edit / .cap-thumb / .chip / .btn）は shell.css・make.css・plan.css のものを使い、ここは v3 追加だけ。
+   橙は主ボタン（やってみる・この問いで作る）だけ。開いている入口は墨の枠で示す。操作領域は 44px（es 48px）。 */
+
+.today-page{max-width:1180px;margin:0 auto;min-width:0}
+/* 開いた時にフォーカスを置く見出し（tabindex=-1）は輪を出さない（works.css .works-page h1 と同じ） */
+.today-page h1:focus,.today-page h2:focus{outline:none}
+.today-page .btn,.today-page .link-btn{min-height:44px}
+html[data-mode="es"] .today-page .btn,html[data-mode="es"] .today-page .link-btn,html[data-mode="es"] .today-page .td-hint,html[data-mode="es"] .today-page .inline-edit input{min-height:48px}
+
+/* ---------- 一覧（§X-1）: カード 3 枚 ---------- */
+.odai-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:stretch}
+.odai-card{position:relative;display:flex;flex-direction:column;background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden;min-width:0;box-shadow:var(--shadow)}
+/* 別のお題を見る: 150ms のクロスフェード（前の中身 = .odai-ghost が消え、新しい中身が出る。重ねて同時に。reduced-motion では JS が重ねない） */
+@keyframes odaiIn{from{opacity:0}to{opacity:1}}
+@keyframes odaiOut{from{opacity:1}to{opacity:0}}
+.odai-card.swap-in>.odai-art,.odai-card.swap-in>.odai-body{animation:odaiIn .15s ease-out}
+.odai-ghost{position:absolute;inset:0;display:flex;flex-direction:inherit;background:#fff;pointer-events:none;animation:odaiOut .15s ease-out forwards}
+.odai-art,.td-hero,.td-play-art{background:#f1eee4;background-image:radial-gradient(#d7d5ca .7px,transparent .7px);background-size:16px 16px}
+.odai-art{padding:10px 14px;border-bottom:1px solid var(--line)}
+.odai-art svg{width:100%;height:auto;max-height:170px}
+.odai-body{display:flex;flex-direction:column;gap:8px;padding:14px 16px 16px;flex:1;min-width:0}
+.odai-q{font-size:15px;line-height:1.6;overflow-wrap:anywhere}
+.odai-line{font-size:12px;line-height:1.7;overflow-wrap:anywhere;display:grid;gap:0}
+.odai-k{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.04em;line-height:1.7}
+.odai-why{font-size:12px;line-height:1.7;display:flex;gap:6px;align-items:flex-start;overflow-wrap:anywhere;background:var(--ai-soft);border-radius:8px;padding:6px 8px}
+.odai-why .chip{flex-shrink:0;margin-top:1px}
+.odai-marks{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.chip.k-safety{background:var(--sand);color:var(--sand-ink);border-color:#d9d0bf}
+.chip.k-request{background:#fff;color:var(--ink);border-color:var(--ink)}
+.odai-due{font-size:11px;font-weight:600;line-height:1.6;font-variant-numeric:tabular-nums}
+.odai-ops{display:flex;flex-wrap:wrap;gap:6px;margin-top:auto;padding-top:6px}
+.odai-ops>.btn.orange{flex:1 1 100%}
+.odai-ops>.btn.small{flex:1 1 auto}
+.btn.is-on{background:var(--record-soft);border-color:#c9dcd2;color:var(--record)}
+
+/* とっておいたお題 */
+.odai-kept{margin-top:34px;min-width:0}
+.odai-kept .section-head{margin-bottom:12px}
+.odai-kept h2{font-size:15px;line-height:1.6}
+.kept-list{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+.kept-item{display:flex;gap:12px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-width:0}
+.kept-thumb{width:84px;flex-shrink:0;border-radius:8px;background:#f1eee4;overflow:hidden;border:1px solid var(--line)}
+.kept-thumb svg{width:100%;height:auto}
+.kept-text{display:grid;gap:6px;min-width:0}
+.kept-text h3{font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.kept-ops{display:flex;gap:4px;flex-wrap:wrap}
+
+/* ---------- 詳細（§X-2） ---------- */
+.td-back{margin:0 0 4px}
+.td-back .link-btn{font-weight:600;gap:6px}
+.td-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:20px 28px;align-items:start;margin-bottom:24px}
+.td-hero{margin:0;border-radius:16px;padding:12px 18px;border:1px solid var(--line)}
+.td-hero svg{width:100%;height:auto;max-height:300px}
+.td-info{display:grid;gap:10px;min-width:0;align-content:start}
+.td-info h1{font-size:23px;line-height:1.45;overflow-wrap:anywhere}
+.td-head-ops{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+.td-own{max-width:560px;background:#fff;border:1px solid var(--line);border-left:3px solid var(--own);border-radius:0 10px 10px 0;padding:10px 12px}
+.td-own label{font-size:12px;font-weight:600;line-height:1.6}
+.td-own .hint[hidden]{display:none}
+.td-entries{min-width:0}
+.td-entries h2{font-size:15px;line-height:1.6;margin-bottom:10px}
+.td-entry-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.td-entry{display:grid;gap:4px;justify-items:start;align-content:start;text-align:left;padding:14px;border:1px solid var(--line);border-radius:14px;background:#fff;min-height:96px;color:var(--ink);min-width:0}
+.td-entry:hover{filter:none;border-color:#cfcabd}
+.td-entry .ico{width:22px;height:22px;color:var(--olive)}
+.td-entry strong{font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.td-entry span{font-size:11px;color:var(--muted);line-height:1.6;overflow-wrap:anywhere}
+.td-entry.on{border:2px solid var(--ink);padding:13px;background:#fcfbf8}
+.td-panel.card{margin-top:14px;padding:20px 22px;display:grid;grid-template-columns:minmax(0,1fr);gap:12px;min-width:0;box-shadow:none}
+.td-panel:focus{outline:none}
+.td-panel h3{font-size:13px;line-height:1.6}
+
+/* 短い動画を見る（16:9 の枠。外部の埋め込みはしない） */
+.td-video{position:relative;aspect-ratio:16/9;width:100%;max-width:720px;border-radius:12px;background:var(--sand);border:1px solid #d9d0bf;overflow:hidden}
+.td-video-art{position:absolute;inset:0;display:grid;place-items:center;opacity:.45;padding:6% 14%}
+.td-video-art svg{width:100%;height:100%}
+.td-video-cap{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 14px;font-size:12px;font-weight:600;line-height:1.6;text-align:center;width:max-content;max-width:calc(100% - 24px)}
+.td-src{font-size:11px;color:var(--muted);line-height:1.7}
+.td-points{margin:0;padding:0;list-style:none;display:grid;gap:6px}
+.td-points li{display:flex;gap:10px;font-size:13px;line-height:1.7;min-width:0;overflow-wrap:anywhere}
+.td-time{font-weight:600;font-variant-numeric:tabular-nums;flex-shrink:0;min-width:36px}
+
+/* 実物を探す */
+.td-out-note{font-size:12px;line-height:1.7;background:var(--sand);color:var(--sand-ink);border-radius:8px;padding:8px 12px;font-weight:600}
+.td-hints{list-style:none;margin:0;padding:0;display:grid;gap:6px;max-width:720px}
+.td-hint{display:flex;gap:10px;align-items:center;min-height:44px;padding:6px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:13px;line-height:1.6;cursor:pointer;overflow-wrap:anywhere}
+.td-hint input{width:20px;height:20px;accent-color:var(--olive);flex-shrink:0;margin:0}
+.td-hint:has(input:checked){background:#fcfbf8;border-color:#cfcabd}
+.td-found{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;max-width:720px}
+.td-found figure{margin:0;display:grid;gap:4px;min-width:0}
+.td-found svg{border-radius:8px;border:1px solid var(--line);background:#fcfbf8}
+.td-found figcaption{display:grid;gap:0;font-size:11px;line-height:1.6;overflow-wrap:anywhere}
+.td-found li{display:grid;gap:2px;align-content:start;min-width:0}
+.td-found li>.btn{justify-self:start}
+
+/* 試して遊ぶ */
+.td-play-art{border-radius:12px;padding:10px 18px;max-width:560px;border:1px solid var(--line)}
+.td-play-art svg{width:100%;height:auto;max-height:240px}
+.td-play-tools{max-width:560px}
+.td-play-tools .range-row{gap:12px}
+.td-play-tools .range-row label{min-width:104px;font-size:12px}
+.td-play-tools .range-row input{width:auto;flex:1;min-width:0}
+.td-play-tools .range-row output{min-width:72px;text-align:right;width:auto}
+.td-result{font-size:13px;line-height:1.8;max-width:560px;overflow-wrap:anywhere}
+.td-result .rl-label{color:var(--muted);font-weight:600}
+
+/* ダイアログ（見つけた写真を残す） */
+.today-dialog .cap-thumb svg{border-radius:6px}
+
+/* ---------- 小学生向け（es） ---------- */
+html[data-mode="es"] .odai-q{font-size:16px}
+html[data-mode="es"] .odai-line,html[data-mode="es"] .odai-why,html[data-mode="es"] .td-points li,html[data-mode="es"] .td-hint,html[data-mode="es"] .td-result,html[data-mode="es"] .td-out-note{font-size:14px}
+html[data-mode="es"] .odai-k,html[data-mode="es"] .td-entry span,html[data-mode="es"] .td-src,html[data-mode="es"] .td-found figcaption,html[data-mode="es"] .odai-due{font-size:12px}
+html[data-mode="es"] .td-entry strong{font-size:14px}
+
+/* ---------- 幅ごと ---------- */
+@media(max-width:950px){
+.odai-cards{grid-template-columns:minmax(0,1fr)}
+.odai-card{flex-direction:row}
+.odai-art{width:38%;flex-shrink:0;border-bottom:0;border-right:1px solid var(--line);display:grid;place-items:center}
+.td-head{grid-template-columns:minmax(0,1fr)}
+.td-hero{max-width:560px}
+}
+@media(max-width:700px){
+.odai-card{flex-direction:column}
+.odai-art{width:auto;border-right:0;border-bottom:1px solid var(--line)}
+.odai-art svg{max-height:150px}
+.td-entry-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.td-info h1{font-size:20px}
+.td-panel.card{padding:14px}
+.kept-list{grid-template-columns:minmax(0,1fr)}
+.kept-thumb{width:72px}
+.td-play-tools .range-row label{min-width:80px}
+.td-play-tools .range-row output{min-width:56px}
+}
