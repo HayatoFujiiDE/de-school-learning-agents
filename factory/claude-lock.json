@@ -9,9 +9,9 @@
     "./claude/agents/material-maker.md": {
       "kind": "agent",
       "id": "agent_015ajCKLmg7Q8rAAksvBzJ1N",
-      "version": "5",
-      "hash": "4175ebbb3922807bd98bab3bdf886d27",
-      "remote_hash": "640218bbd4c5967c3f5d0a763900649f"
+      "version": "6",
+      "hash": "784f6ea2ea2d3f5db5a19b737aa603b4",
+      "remote_hash": "3f11c247e8d01c3548b1c7672016e68a"
     },
     "./claude/environments/cloud.yaml": {
       "kind": "environment",
