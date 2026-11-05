@@ -20,6 +20,13 @@
   "r2_buckets": [
     { "binding": "R2", "bucket_name": "factory-materials" }
   ],
+  // 画像生成（契約 §O-4 a）。queue は deploy 前に `wrangler queues create factory-image-gen` で作る（本番の変更）
+  "queues": {
+    "producers": [{ "binding": "IMAGE_GEN", "queue": "factory-image-gen" }],
+    "consumers": [
+      { "queue": "factory-image-gen", "max_batch_size": 1, "max_retries": 2, "max_concurrency": 2, "retry_delay": 30 }
+    ]
+  },
   "vars": {
     "FACTORY_AGENT_ID": "agent_015ajCKLmg7Q8rAAksvBzJ1N",
     "FACTORY_ENV_ID": "env_01Mrm4nNyypF4B2pjaxhdXSJ",
@@ -48,6 +55,10 @@
     "MEETING_DAYS": "1,15",
     // 結果不明の外部呼び出し 1 回を cost_ledger に載せる保守的見積り（セント。月次上限をすり抜けないため）
     "SCOUT_XAI_UNCONFIRMED_CENTS": "100",
-    "MEETING_UNCONFIRMED_CENTS": "20"
+    "MEETING_UNCONFIRMED_CENTS": "20",
+    // 画像生成（契約 §O-4 a）。OPENAI_API_KEY は secret（wrangler secret put。ここには書かない）
+    "IMAGE_MODEL_STANDARD": "gpt-image-2.5-flare",
+    "IMAGE_MODEL_SCIENTIFIC": "gpt-image-2.5-sunburst",
+    "IMAGE_MONTHLY_CAP_CENTS": "3000"
   }
 }

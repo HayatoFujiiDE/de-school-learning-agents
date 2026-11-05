@@ -364,6 +364,7 @@ window.DES = window.DES || {};
     else if (r === 'plan') DES.plan.renderPage(main);
     else if (r === 'make') DES.make.render(main, APP.routeArg());
     else if (r === 'works') DES.works.render(main, APP.routeArg());
+    else if (r === 'self') DES.self.render(main);
     else if (rebuild) {
       if (r === 'paused') { if (DES.make.pausedAct()) DES.make.renderPaused(main); else DES.talk.renderPaused(main); }
       else { main.textContent = ''; main.appendChild(H('p', { class: 'empty-line' }, T('not_yet'))); }

@@ -36,3 +36,18 @@ prompt は全件同じ（マイクラ風レッドストーン回路の図、英�
 - 所要時間は最長 83 秒。生成は waitUntil（25 秒）に収まらないので、Queue consumer か cron で実行する計画 v6 の前提どおり
 - sunburst と flare は同じ token 数で、sunburst は約 1.5〜1.6 倍遅い
 - 未確認: xhigh、1024x1536、画像入力つき（edits）
+
+# p5: custom_tool_result の image block を職人が見られるか（2026-11-05、本番 Worker 01294c8d の一時 route）
+
+使い捨ての agent（claude-haiku-5-5、system「返った画像が何を写しているか 1 文で言え。見えなければ NO IMAGE」）に generate_image を 1 回呼ばせ、flare low 1024x1024 で「白地に青い三角 1 つ」を生成して返した。
+
+| mode | 送った content | 送信 | 職人の答え |
+|---|---|---|---|
+| file | Files API に upload（PNG 約 730 KB）→ `{type:"image", source:{type:"file", file_id}}` | 200（生成込み 7.9 秒） | 「A blue triangle pointing upward on a white background.」 |
+| base64 | `{type:"image", source:{type:"base64", media_type:"image/png", data}}`（PNG 約 740 KB、本文約 1 MB） | 200（生成込み 7.6 秒） | 「A blue triangle with its point up and flat base at the bottom, centered on a white background.」 |
+
+両方とも session は requires_action → end_turn まで進んだ。session・agent は archive、file は delete 済み。
+
+## 計画への反映
+- 契約 §O-6 の規則（両方通れば A）により **形 A（base64 直）を採る**。Files・file_id・Files の掃除を持たない
+- 未確認: 1 枚 1.5 MB 級（本文 2 MB 級）の base64 を送れるか。今回は約 1 MB。実装の smoke と本番の 1 枚目で max 品質の 1 枚を確かめる。駄目なら §O-6 の形 B（file）へ切り替える（列 `file_id` は残してある）
