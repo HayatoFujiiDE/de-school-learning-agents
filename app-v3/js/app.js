@@ -37,7 +37,9 @@ window.DES = window.DES || {};
     // §AC-6 / AC-7: 大きく見る・もとの大きさ・左メニューの開閉
     expand: 'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
     shrink: 'M9 4v5H4 M15 4v5h5 M9 20v-5H4 M15 20v-5h5',
-    sidebar: 'M4 4h16v16H4z M9 4v16 M14 10l-2 2 2 2'
+    sidebar: 'M4 4h16v16H4z M9 4v16 M14 10l-2 2 2 2',
+    // §AE-2: 全体で見る・全体の中で見る（格子）
+    grid: 'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z'
   };
   var THICK = { more: 3, drag: 3 };
   DES.icon = function (name) {
