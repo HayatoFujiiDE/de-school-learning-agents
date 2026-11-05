@@ -29,7 +29,22 @@ html[data-mode="es"] .mp-views .segmented button{min-height:48px}
 .mp-chips{gap:6px}
 .mp-chip{display:inline-flex;align-items:center;gap:8px}
 .mp-chip[aria-pressed="false"] .mp-sw{opacity:.45}
-.mp-legend-base{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);line-height:1.6}
+/* 凡例（基本の線 + ノードのしるし）。1 行に収まらない幅では「しるしの見方」の開閉（既定は閉。map.js の fitLegend） */
+.mp-legend{min-width:0;max-width:100%;font-size:12px;color:var(--muted);line-height:1.6}
+.mp-legend:not(.is-folded)>.mp-legend-sum{display:none}
+.mp-legend-sum{display:inline-flex;align-items:center;gap:8px;min-height:44px;cursor:pointer;font-weight:600;color:var(--ink);list-style:none}
+.mp-legend-sum::-webkit-details-marker{display:none}
+.mp-legend-sum::before{content:'';width:0;height:0;border-left:6px solid currentColor;border-top:4.5px solid transparent;border-bottom:4.5px solid transparent;transition:transform .15s ease-out}
+.mp-legend[open]>.mp-legend-sum::before{transform:rotate(90deg)}
+html[data-mode="es"] .mp-legend-sum{min-height:48px}
+.mp-legend-items{display:flex;flex-wrap:nowrap;align-items:center;gap:6px 16px;white-space:nowrap}
+.mp-legend.is-folded .mp-legend-items{flex-wrap:wrap;white-space:normal;padding:2px 0 6px}
+.mp-lg{display:inline-flex;align-items:center;gap:8px}
+.mp-mk{display:inline-block;flex-shrink:0;width:12px;height:12px;border-radius:50%;box-sizing:border-box}
+.mp-mk.k-learned{background:var(--olive);border:1.5px solid var(--olive)}
+.mp-mk.k-unit{background:var(--white);border:1.5px solid var(--ink)}
+.mp-mk.k-ext{background:var(--white);border:1.5px dashed var(--ink)}
+.mp-mk.k-next{background:var(--ai-soft);border:1.5px dashed var(--ai)}
 .mp-sw{width:32px;height:12px;flex-shrink:0;overflow:visible}
 .mp-sw path{fill:none;stroke-linecap:round}
 
@@ -84,7 +99,7 @@ html[data-mode="es"] .mp-views .segmented button{min-height:48px}
 .mp-frame:not(.has-sel) .mp-n.is-next{opacity:.8}
 .mp-n .mp-thumb{display:block;height:100px;flex-shrink:0;border-radius:9px;background:var(--art-bg);overflow:hidden}
 .mp-n .mp-thumb svg{display:block;width:100%;height:100%}
-.mp-n .mp-label{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-top:6px;font-size:13px;font-weight:700;line-height:1.45;overflow-wrap:anywhere}
+.mp-n .mp-label{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;margin-top:6px;font-size:13px;font-weight:700;line-height:1.45;overflow-wrap:anywhere}
 .mp-n .mp-t{font-size:13px;font-weight:600;line-height:1.45;overflow-wrap:anywhere}
 .mp-n.is-learned .mp-t{font-size:12.5px;line-height:1.5}
 .mp-n .mp-eb{font-size:10.5px;font-weight:600;line-height:1.6;color:var(--muted);letter-spacing:.04em}
@@ -97,15 +112,25 @@ html[data-mode="es"] .mp-views .segmented button{min-height:48px}
 .mp-n .mp-bandrow .mp-pct{font-size:11px;line-height:13px;min-width:0}
 .mp-band.is-mini{gap:2px;flex-wrap:nowrap}
 .mp-band.is-mini .mp-sq{width:13px;height:10px;border-radius:2px}
+/* mid・near の字は画面で 12px 以上（縮小に合わせて逆に拡大。mid の下限 0.6 で世界の 20px = map-layout.js の MID。箱はこの大きさで見積もる） */
+.mp-frame:not([data-lod="far"]) .mp-n .mp-label,.mp-frame:not([data-lod="far"]) .mp-n .mp-t{font-size:max(13px,calc(12px * var(--inv)))}
+.mp-frame:not([data-lod="far"]) .mp-n.is-learned .mp-t{font-size:max(12.5px,calc(12px * var(--inv)))}
+.mp-frame:not([data-lod="far"]) .mp-n .mp-eb{font-size:max(10.5px,calc(12px * var(--inv)))}
+html[data-mode="es"] .mp-frame:not([data-lod="far"]) .mp-n .mp-label,html[data-mode="es"] .mp-frame:not([data-lod="far"]) .mp-n .mp-t{font-size:max(14px,calc(12px * var(--inv)))}
+html[data-mode="es"] .mp-frame:not([data-lod="far"]) .mp-n.is-learned .mp-t{font-size:max(13.5px,calc(12px * var(--inv)))}
+html[data-mode="es"] .mp-frame:not([data-lod="far"]) .mp-n .mp-eb{font-size:max(11.5px,calc(12px * var(--inv)))}
+/* mid の学んだこと・単元・これからは「短い言葉」= 3 行まで */
+.mp-frame[data-lod="mid"] .mp-n:not(.is-made) .mp-t{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 /* 倍率で出す量（§AB-3-1）。mid（既定）= 作ったもの: 絵 + 題 / 学んだこと: 短い言葉 / 単元: 名前 */
 .mp-n .mp-scene,.mp-n .mp-chips,.mp-n .mp-sub,.mp-n .mp-pct{display:none}
 /* near = + 学んだことの場面・出所チップ・単元の基礎学習の 1 行・作ったものの日付 */
 .mp-frame[data-lod="near"] .mp-n .mp-scene,.mp-frame[data-lod="near"] .mp-n .mp-sub,.mp-frame[data-lod="near"] .mp-n .mp-pct{display:block}
 .mp-frame[data-lod="near"] .mp-n .mp-chips{display:flex}
 .mp-frame[data-lod="near"] .mp-n:not(.is-made){justify-content:flex-start}
+.mp-frame[data-lod="near"] .mp-n.is-next{justify-content:center}
 /* far = 作ったもの（絵 + 題）と島の名前だけ。学んだこと・単元・これからは点。題と島の名前は、縮小に合わせて逆に拡大（画面で 12px 以上） */
-.mp-frame[data-lod="far"] .mp-n:not(.is-made){left:calc(var(--x) + var(--w) / 2 - 7px * var(--inv));top:calc(var(--y) + var(--h) / 2 - 7px * var(--inv));
-  width:calc(14px * var(--inv));height:calc(14px * var(--inv));padding:0;border-radius:50%;border-width:calc(1.5px * var(--inv))}
+.mp-frame[data-lod="far"] .mp-n:not(.is-made){left:calc(var(--x) + var(--w) / 2 - var(--dot, 14px) * var(--inv) / 2);top:calc(var(--y) + var(--h) / 2 - var(--dot, 14px) * var(--inv) / 2);
+  width:calc(var(--dot, 14px) * var(--inv));height:calc(var(--dot, 14px) * var(--inv));padding:0;border-radius:50%;border-width:calc(1.5px * var(--inv))}
 .mp-frame[data-lod="far"] .mp-n:not(.is-made)>*{display:none}
 .mp-frame[data-lod="far"] .mp-n.is-learned{background:var(--olive);border-color:var(--olive)}
 .mp-frame[data-lod="far"] .mp-n.is-unit{background:var(--white);border-color:var(--ink)}
@@ -114,9 +139,10 @@ html[data-mode="es"] .mp-views .segmented button{min-height:48px}
 .mp-frame[data-lod="far"] .mp-n.is-made .mp-thumb{border:calc(1px * var(--inv)) solid var(--line)}
 .mp-frame[data-lod="far"] .mp-n.is-made[aria-pressed="true"] .mp-thumb,.mp-frame[data-lod="far"] .mp-n.is-made.is-on .mp-thumb{border-color:var(--ink)}
 .mp-frame[data-lod="far"] .mp-n.is-made[aria-pressed="true"]{box-shadow:none}
-.mp-frame[data-lod="far"] .mp-n.is-made .mp-label{position:absolute;left:50%;top:110px;transform:translateX(-50%);width:max-content;max-width:calc(150px * var(--inv));margin:0;
+.mp-frame[data-lod="far"] .mp-n.is-made .mp-label{position:absolute;left:50%;top:110px;transform:translateX(calc(-50% + var(--lx, 0px)));width:max-content;max-width:calc(150px * var(--inv));margin:0;
   font-size:calc(12.5px * var(--inv));line-height:1.3;text-align:center;padding:calc(1px * var(--inv)) calc(4px * var(--inv));border-radius:calc(6px * var(--inv));background:#ffffffe0}
-.mp-frame[data-lod="far"] .mp-isl-name{font-size:calc(13px * var(--inv));top:calc(var(--y) + 10px);padding:0 calc(3px * var(--inv));border-radius:calc(4px * var(--inv))}
+.mp-frame[data-lod="far"] .mp-label.is-thin,.mp-isl-name.is-thin{visibility:hidden}
+.mp-frame[data-lod="far"] .mp-isl-name{z-index:1;left:calc(var(--x) + 14px + var(--lx, 0px));font-size:calc(13px * var(--inv));top:calc(var(--y) + 10px);padding:0 calc(3px * var(--inv));border-radius:calc(4px * var(--inv))}
 
 /* 枠の右下の操作（＋ − 全体を見る）。詳細パネルを開いている時は、パネルにかからない所へ */
 .mp-ctrl{position:absolute;z-index:2;right:12px;bottom:12px;display:flex;gap:6px;cursor:auto}
@@ -246,7 +272,7 @@ html[data-mode="es"] .mp-rel{min-height:48px}
 html[data-mode="es"] .mp-title,html[data-mode="es"] .mp-uname,html[data-mode="es"] .mp-iname{font-size:14px}
 html[data-mode="es"] .mp-sub,html[data-mode="es"] .mp-scene,html[data-mode="es"] .mp-rel,html[data-mode="es"] .mp-linked,
 html[data-mode="es"] .mp-legend,html[data-mode="es"] .mp-pct,html[data-mode="es"] .mp-overall,html[data-mode="es"] .mp-scope,
-html[data-mode="es"] .mp-legend-base,html[data-mode="es"] .mp-same,html[data-mode="es"] .mp-rel-h{font-size:12px}
+html[data-mode="es"] .mp-legend,html[data-mode="es"] .mp-same,html[data-mode="es"] .mp-rel-h{font-size:12px}
 html[data-mode="es"] .mp-scene-line,html[data-mode="es"] .mp-none,html[data-mode="es"] .mp-nline{font-size:13px}
 /* 地図の中の字（map-layout.js の SZ は es の値で箱を見積もる） */
 html[data-mode="es"] .mp-n .mp-label,html[data-mode="es"] .mp-n .mp-t{font-size:14px}
