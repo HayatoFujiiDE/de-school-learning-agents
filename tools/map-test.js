@@ -227,8 +227,11 @@ eq(missing, [], 'Y-7 使う key が i18n.js に [中, 小] である');
 ok(/mp_in_map/.test(fs.readFileSync(path.join(__dirname, '../app-v3/js/works.js'), 'utf8')), 'Y-8 作品の詳細に「学びマップで見る」');
 var mpLines = i18n.split('\n').filter(function (l) { return /^\s+mp_/.test(l); });
 ok(mpLines.length >= 30, 'Y-7 学びマップの key（' + mpLines.length + '）');
-var lastKey = i18n.split('\n').filter(function (l) { return /^\s+[a-z_]+: \[/.test(l); }).slice(-mpLines.length);
-ok(lastKey.every(function (l) { return /^\s+mp_/.test(l); }), 'Y-8 学びマップの key は辞書の末尾にまとまっている');
+// 並行で足した別ページ（あしあと）の key が後ろに続くので、「末尾」でなく「1 か所にまとまっている」を確かめる
+var allKeys = i18n.split('\n').filter(function (l) { return /^\s+[a-z_]+: \[/.test(l); });
+var firstMp = -1; allKeys.forEach(function (l, i) { if (firstMp < 0 && /^\s+mp_/.test(l)) firstMp = i; });
+var mpRun = firstMp < 0 ? [] : allKeys.slice(firstMp, firstMp + mpLines.length);
+ok(mpRun.length === mpLines.length && mpRun.every(function (l) { return /^\s+mp_/.test(l); }), 'Y-8 学びマップの key は辞書の 1 か所にまとまっている');
 var BAD = /点数|ランキング|順位|評価|成績|レベル|集中力|得意|苦手|上手|成長|頑張|すごい|まだ|未|理解した|身についた|版/;
 var bad = mpLines.filter(function (l) { return BAD.test(l); });
 eq(bad, [], 'Y-7 学びマップの文言に禁止語・「まだ」「未」「版」が無い');
