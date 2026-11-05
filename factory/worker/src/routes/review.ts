@@ -103,7 +103,7 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
   );
   const ver = await latestVerification(db, vid);
   const report = ver
-    ? parseJsonField<{ verdicts?: Array<{ claim_id: string; verdict: string; reason: string; opened_urls: string[] }>; overall_note?: string; figures?: unknown }>(ver.result_json, {})
+    ? parseJsonField<{ verdicts?: Array<{ claim_id: string; verdict: string; reason: string; opened_urls: string[] }>; overall_note?: string; figures?: unknown; analogy_gaps?: unknown }>(ver.result_json, {})
     : null;
   const claims = parseJsonField<{ claims?: Array<Record<string, unknown>> }>(v.claims_json, {}).claims ?? [];
   const history = await all<{ id: string; attempt: number; contradicted: number; created_at: string }>(
@@ -182,6 +182,8 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
           overall_note: report?.overall_note ?? null,
           // §O-12 d: 図ごとの判定（result_json に figures が無い古い検証は null）
           figures: figuresOf(report?.figures),
+          // §P c 5: たとえのずれ（result_json に analogy_gaps が無い古い検証は null）
+          analogy_gaps: analogyGapsOf(report?.analogy_gaps),
           cost_cents: ver.cost_cents,
           created_at: ver.created_at,
         }
@@ -200,6 +202,15 @@ function figuresOf(raw: unknown): Array<{ path: string; verdict: string; reason:
   return (raw as Array<Record<string, unknown> | null>)
     .filter((f): f is Record<string, unknown> => !!f && typeof f === 'object' && typeof f.path === 'string')
     .map((f) => ({ path: f.path as string, verdict: typeof f.verdict === 'string' ? f.verdict : '', reason: typeof f.reason === 'string' ? f.reason : '' }));
+}
+
+/** result_json の analogy_gaps → API の形（{claim_id, where, analogy, same, differs}[]）。配列でなければ null（§P c 5） */
+function analogyGapsOf(raw: unknown): Array<{ claim_id: string; where: string; analogy: string; same: string; differs: string }> | null {
+  if (!Array.isArray(raw)) return null;
+  const str = (x: unknown) => (typeof x === 'string' ? x : '');
+  return (raw as unknown[])
+    .filter((g): g is Record<string, unknown> => !!g && typeof g === 'object')
+    .map((g) => ({ claim_id: str(g.claim_id), where: str(g.where), analogy: str(g.analogy), same: str(g.same), differs: str(g.differs) }));
 }
 
 export async function reviewFile(c: RouteCtx, vid: string, rawPath: string): Promise<Response> {

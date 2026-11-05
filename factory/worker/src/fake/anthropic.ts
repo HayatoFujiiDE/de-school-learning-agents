@@ -571,7 +571,7 @@ function verifierReply(model: string, claimsText: string, assistantTurns: number
     role: 'assistant',
     model,
     container: pauseTurns > 0 ? fakeContainer : null,
-    content: [{ type: 'tool_use', id: 'toolu_fake_1', name: 'report_verdicts', input: { verdicts, overall_note: 'fake', figures: figures.map((path) => ({ path, verdict: 'ok', reason: 'fake: 図を確かめた' })) }, caller: { type: 'direct' } }],
+    content: [{ type: 'tool_use', id: 'toolu_fake_1', name: 'report_verdicts', input: { verdicts, overall_note: 'fake', figures: figures.map((path) => ({ path, verdict: 'ok', reason: 'fake: 図を確かめた' })), analogy_gaps: [] }, caller: { type: 'direct' } }],
     stop_reason: 'tool_use',
     stop_sequence: null,
     usage: { input_tokens: 12000, output_tokens: 800, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },

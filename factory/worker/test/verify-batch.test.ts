@@ -284,7 +284,8 @@ describe('§L-7 (l2) Batch 検証の状態遷移', () => {
     expect(vs).toHaveLength(1);
     expect(vs[0]).toMatchObject({ attempt: 1, claims_total: 2, confirmed: 2, cost_cents: 8 });  // 35,800 × 2 = 71,600 μUSD → 8 ¢
     const result = JSON.parse(String(vs[0].result_json)) as { meta: Record<string, unknown>; verdicts: unknown[] };
-    expect(result.meta).toEqual({ mode: 'batch', turns: 2, fetch_errors: { url_not_accessible: 1, max_uses_exceeded: 1 }, fetched_ok: [URL_OK] });
+    // §P b 5: この stub の events は読めない（listEventsPage: no）→ 記録なしの出典 1 件
+    expect(result.meta).toEqual({ mode: 'batch', turns: 2, fetch_errors: { url_not_accessible: 1, max_uses_exceeded: 1 }, fetched_ok: [URL_OK], captures: { used: 0, missing: 1, truncated: 0 } });
   });
 
   it('2 回続けて回収段を回しても記帳は 1 行・batch は 1 件（2 つの cron が同じ ended batch を見ても片方だけ collecting を取る）', async () => {
@@ -964,6 +965,8 @@ describe('§R-53 (b) 同期モードの締め切りは本文の受信まで効�
     const deadline = Date.now() + 61_000; // ターンを始められる残り（60 秒以上）
     const port = {
       ...real,
+      // §P b: 取得記録の events は空（このテストは createMessage の本文の停止だけを見る）
+      listEventsPage: async () => ({ data: [], next: null }),
       // ターンの確認の後、呼び出しまでに 59 秒たったことにする（残り 2 秒で呼ぶ）
       createMessage: (p: Parameters<FactoryPort['createMessage']>[0], o?: Parameters<FactoryPort['createMessage']>[1]) => {
         vi.setSystemTime(new Date(Date.now() + 59_000));
