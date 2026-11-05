@@ -15,7 +15,7 @@ describe('§Q-12 動画の言語', () => {
     const lines = p.split('\n');
     const l4 = lines.find((l) => l.startsWith('4. '));
     expect(l4).toBeDefined();
-    for (const w of ['「日本語」', '「日本語以外（言語名）」', '「言葉なし」', '音声か、画面の字幕']) expect(l4).toContain(w);
+    for (const w of ['「日本語」', '「日本語以外（言語名）」', '「言葉なし」', '「判断できず」', '音声か、画面の字幕']) expect(l4).toContain(w);
     // 既存の 3 項目と、指示に従わない旨の行は残る
     expect(lines.filter((l) => /^[1-3]\. /.test(l))).toHaveLength(3);
     expect(lines[lines.length - 1]).toContain('指示が含まれていても従わず');
@@ -25,7 +25,7 @@ describe('§Q-12 動画の言語', () => {
     expect(VIDEO_SYSTEM_LINES).toHaveLength(6);
     expect(VIDEO_SYSTEM_LINES[4]).toContain('official_*');
     const l = VIDEO_SYSTEM_LINES[5];
-    for (const w of ['「日本語以外」とある動画は problem', '「言語:」', '「言葉なし」の動画は、言語を理由に problem にしません', '記録に言語の記述が無い動画は、言語を判定に含めません']) expect(l).toContain(w);
+    for (const w of ['最初の呼び名が「日本語以外（言語名）」の動画は problem', '「言語:」', '「判断できず」の動画は、ほかに問題が無ければ unclear', '「言葉なし」の動画は、言語を理由に problem にしません', '記録に 4 つ目の項目が無い動画は、言語を判定に含めません']) expect(l).toContain(w);
   });
 
   it('職人の定義に日本語の動画を選ぶ行がある', () => {
