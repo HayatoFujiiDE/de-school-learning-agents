@@ -164,10 +164,17 @@ eq(freeze(TD.normalize([])), freeze(s0), 'normalize 配列 → 初期値');
 var good = TD.addFound(TD.toggleHint(TD.markEntry(TD.keep(TD.swap(s0, 2), SEED), SEED, 'play'), SEED, 1), SEED, { photo: 'p3', line: 'x', time: 't' });
 eq(freeze(TD.normalize(JSON.parse(freeze(good)))), freeze(good), 'normalize 正しい値はそのまま');
 var bad1 = JSON.parse(freeze(good)); bad1.slots = ['od-seed', 'od-seed', 'od-seed'];
-eq(TD.normalize(bad1).slots, TD.swap(s0, 2).slots, 'normalize slots が壊れたら rot から作り直す');
+eq(TD.normalize(bad1).slots, s0.slots, 'normalize slots が壊れたら slots だけ初期値（rot から作り直さない）');
+eq(TD.normalize(bad1).rot, good.rot, 'normalize slots が壊れても rot はそのまま');
+var bad1b = JSON.parse(freeze(good)); bad1b.slots = 'broken'; bad1b.rot = { near: 1, next: 0, new: 0 };
+eq([TD.normalize(bad1b).slots[0], TD.normalize(bad1b).rot.near], ['od-py-leaves', 1], 'normalize 壊れた slots は初期値の先頭（rot が正しくても使わない）');
 eq(TD.normalize(bad1).kept, good.kept, 'normalize slots が壊れても他のキーは残す');
 var bad2 = JSON.parse(freeze(good)); bad2.slots = 'x'; bad2.rot = { near: -1 };
-eq(TD.normalize(bad2).slots, s0.slots, 'normalize slots も rot も壊れたら初期値');
+eq([TD.normalize(bad2).slots, TD.normalize(bad2).rot], [s0.slots, s0.rot], 'normalize slots も rot も壊れたら両方初期値');
+var bad2b = JSON.parse(freeze(good)); bad2b.rot = 'x';
+eq([TD.normalize(bad2b).slots, TD.normalize(bad2b).rot], [good.slots, s0.rot], 'normalize rot だけ壊れたら rot だけ初期値');
+var bad2c = JSON.parse(freeze(good)); bad2c.kept = 'x';
+eq([TD.normalize(bad2c).kept, TD.normalize(bad2c).slots], [[], good.slots], 'normalize kept が壊れたら kept だけ初期値');
 var bad3 = JSON.parse(freeze(good)); bad3.kept = ['od-none', SEED, SEED, 3];
 eq(TD.normalize(bad3).kept, [SEED], 'normalize kept は知っているお題だけ・重複なし');
 var bad4 = JSON.parse(freeze(good)); bad4.tried = { 'od-none': {}, 'od-seed': { entries: { watch: 'yes', play: true }, found: [{ photo: 'zz', time: 't' }, { photo: 'p1', line: 3, time: 't' }, { photo: 'p2', line: null, time: 't' }], checks: [9, 1, 1, 0] } };
@@ -182,6 +189,7 @@ var r1 = M.fromOdai(seed, { id: 'a-od1', mode: 'js', now: '10:20', acts: [], rec
 ok(r1 && r1.created && r1.id === 'a-od1' && r1.act.id === 'a-od1', 'fromOdai 新しい活動を作る');
 eq([r1.act.origin, r1.act.odaiId, r1.act.title], ['today', SEED, seed.title[0]], 'fromOdai origin today・odaiId・問いがタイトル');
 eq([r1.act.stepsKind, r1.act.steps, r1.act.stepIdx], ['ext', seed.makeSteps, 0], 'fromOdai 3 題材に無いお題は ext 活動・手順は makeSteps');
+eq([r1.act.theme, M.isOdaiExt(r1.act)], ['odai', true], 'fromOdai 3 題材に無いお題の題材は odai（マイクラにしない）');
 ok(r1.act.ext && r1.act.ext.photos.length === 0 && r1.act.stage === null, 'fromOdai ext 活動は外の記録（写真 0 枚から）');
 eq(M.stepNow(r1.act), seed.makeSteps[0], 'fromOdai 今の一歩 = makeSteps の 1 つ目');
 eq([r1.act.thread.length, r1.act.thread[0].who, r1.act.thread[0].text], [1, 'record', '記録の 1 行'], 'fromOdai 記録の 1 行（作った時点の文字列）');
@@ -203,12 +211,90 @@ var r5 = M.fromOdai(seed, { id: 'a-x', acts: acts, question: 'もっと大きな
 ok(r5.id === 'a-od1' && !r5.created && r5.changed && r5.act.title === 'もっと大きな羽で' && r5.act !== r1.act, 'fromOdai 既存の活動でも問いを書き換えたら反映（同じ id）');
 eq(r5.act.thread[r5.act.thread.length - 1], { who: 'child', text: 'もっと大きな羽で', id: 'a-od1-m' + r5.act.seq, time: r5.act.thread[r5.act.thread.length - 1].time }, 'fromOdai 書き換えた問いは本人の言葉として残る');
 eq(freeze(acts), frozen, 'fromOdai 書き換えても元の活動は変えない');
+// 書き換えた問いを元のお題の問いに戻す（指摘 2）: タイトルは元の問いへ・本人の言葉は足さない
+var r5b = M.fromOdai(seed, { id: 'a-x', acts: [r5.act], question: seed.title[0] });
+ok(r5b.id === 'a-od1' && r5b.changed && r5b.act.title === seed.title[0] && r5b.act.thread.length === r5.act.thread.length, 'fromOdai 元の問いに戻したらタイトルも戻る（本人の言葉は足さない）');
+var r5c = M.fromOdai(seed, { id: 'a-x', acts: [r5b.act], question: seed.title[0] });
+ok(!r5c.changed && r5c.act === r5b.act, 'fromOdai 今のタイトルと同じ問いなら何もしない');
 var r6 = M.fromOdai(seed, { id: 'a-od6', acts: [], question: seed.title[0] });
 eq([r6.act.title, r6.act.thread.length], [seed.title[0], 1], 'fromOdai 問いが元のままなら自分の案として扱わない');
 eq(M.fromOdai(null, {}), null, 'fromOdai お題なしは null');
 var other = M.fromSample('mc', { id: 'a-s', now: '10:20', mode: 'js' });
 ok(M.fromOdai(seed, { id: 'a-od7', acts: [other] }).created, 'fromOdai お題から作っていない活動は使わない');
 ok(M.migrate(r1.act, function () { return ''; }) === r1.act && M.migrate(r2.act, function () { return ''; }) === r2.act, 'fromOdai の活動は読み込み時の移行で変わらない');
+
+// ---------- お題の作業台に 3 題材の中身を出さない（指摘 1）: 写真・任せる候補・作り直し・頼みごと・どこが違う ----------
+var MC = /マイクラ|minecraft|屋根|ブロック|コマンド|寸法|塔|星|電球|Python/i;
+var ex = r1.act, seedOd = TDD.get(SEED);
+eq(M.leaveOptions(ex), ['osteps', 'oneed'], '指摘 1 任せる候補は 手順を整理して / 必要な物をまとめて（お題から）');
+eq([global.DES.make.OPT_KEY.osteps, global.DES.make.OPT_KEY.oneed], [['leave_opts_odai', 0], ['leave_opts_odai', 1]], '指摘 1 候補の文言 key');
+eq(M.requestOpt(ex), 'osteps', '指摘 1 言葉で頼む → 手順');
+var lv = M.leave(ex, 'osteps');
+eq(lv.ids.length, 1, '指摘 1 手順を整理して → メモ 1 枚');
+var c1 = lv.act.shelf[0];
+eq([c1.kind, c1.theme, c1.opt, c1.state], ['note', 'odai', 'osteps', 'making'], '指摘 1 メモはお題の題材');
+eq(c1.lines, seedOd.makeSteps.map(function (s, i) { return [(i + 1) + '. ' + s[0], (i + 1) + '. ' + s[1]]; }), '指摘 1 手順のメモ = お題の makeSteps');
+var settled = M.settle(lv.act, lv.ids), ad = M.adopt(settled, c1.id);
+eq([ad.act.stage.kind, ad.act.theme, ad.change.who], ['note', 'odai', 'ai'], '指摘 1 これにする → 作業対象はメモ・題材は odai のまま');
+var rm = M.remake(ad.act, c1.id, 'osteps');
+eq([rm.act.shelf[0].alt, rm.act.shelf[0].lines[0]], [true, ['1. ' + seedOd.firstStep[0], '1. ' + seedOd.firstStep[1]]], '指摘 1 同じ種類で作り直す → もう一方の形（最初の一歩から）');
+eq(M.remakeOptions(ex, c1), ['osteps', 'oneed'], '指摘 1 作り直しの候補もお題から');
+var nd = M.leave(ex, 'oneed').act.shelf[0];
+ok(nd.lines[0][0] === '用意する物: 紙・はさみ・クリップ' && nd.lines[1][0] === '場所: 少し高い場所' && nd.lines.length === 3, '指摘 1 必要な物のメモ = お題の必要な物・場所（safety なら確認の 1 行）');
+eq(M.leave(ex, 'aspect', { aspect: 2 }).act.shelf[0].opt, 'oneed', '指摘 1 どこが違う？ 材料・色 → 必要な物');
+eq(M.leave(ex, 'aspect', { aspect: 0 }).act.shelf[0].opt, 'osteps', '指摘 1 どこが違う？ 形 → 手順');
+['calc', 'cmd', 'redo', 'one', 'fix', 'two', 'find'].forEach(function (o) { eq(M.leave(ex, o).ids, [], '指摘 1 3 題材の候補 ' + o + ' はお題の活動では作らない'); });
+var p1 = M.addPhoto(ex, 'photo'), p2 = M.addPhoto(p1.act, 'shot'), p3 = M.addPhoto(p2.act, 'photo'), p4 = M.addPhoto(p3.act, 'photo');
+eq([p1.photo.theme, p1.photo.odai, p1.photo.n, p2.photo.n, p3.photo.n, p4.photo.n], ['odai', SEED, 0, 1, 2, 0], '指摘 1 写真の題材は odai・お題の 3 枚を順に');
+eq(MD.photoArt(p1.photo), TDD.photoArt(seedOd, 'p1'), '指摘 1 写真のダミー = お題の線画（探す写真と同じ）');
+eq(MD.photoArt(p2.photo), TDD.photoArt(seedOd, 'p2'), '指摘 1 2 枚目は 2 つ目の線画');
+ok(MD.photoArt({ theme: 'odai', odai: 'od-none' }) === TDDframe() && !/<rect/.test(TDDframe()), '指摘 1 知らないお題の写真は枠だけ（3 題材の絵を出さない）');
+function TDDframe() { return TDD.frameOnly(); }
+var all = [lv, ad, rm, M.leave(ex, 'oneed'), M.leave(M.leave(ex, 'oneed').act, 'oneed', { card: nd.id }), p4].map(function (r) { return r.act; });
+eq(all.filter(function (x) { return MC.test(JSON.stringify(x)); }).length, 0, '指摘 1 お題の活動に 3 題材の語（マイクラ・屋根・コマンド等）が出ない');
+topics.filter(function (t) { return !t.makeTheme; }).forEach(function (t) {
+  var a = M.fromOdai(t, { id: 'a-' + t.id, acts: [] }).act, x = M.addPhoto(M.leave(M.leave(a, 'osteps').act, 'oneed').act, 'photo').act;
+  ok(!MC.test(JSON.stringify(x).replace(new RegExp(JSON.stringify(t.title[0]).slice(1, -1) + '|' + JSON.stringify(t.title[1]).slice(1, -1), 'g'), '').replace(/"reason"[^\]]*\]/g, '')) || /マイクラ|ブロック/.test(t.title[0]), '指摘 1 ' + t.id + ' の作業台の中身に 3 題材の語が出ない');
+  ok(/td-art/.test(MD.photoArt(x.ext.photos[0])) && !/mk-art is-photo/.test(MD.photoArt(x.ext.photos[0])), '指摘 1 ' + t.id + ' の写真はお題の線画');
+});
+var plain = M.fromExt('photo', { id: 'a-ext', now: '10:20', mode: 'js' });
+eq([M.leaveOptions(plain), plain.ext.photos[0].theme], [['calc', 'steps', 'cmd'], 'mc'], '指摘 1 既存の外で作る活動（作るの入口から）は今までどおり');
+eq(M.leaveOptions(M.fromOdai(TDD.get('od-py-leaves'), { id: 'a-pyl', acts: [] }).act), ['find', 'one'], '指摘 1 3 題材のお題は作るの候補のまま（見本）');
+
+// ---------- 線画は 1 枚 2 色（指摘 4）: 墨 + 橙 か 墨 + オリーブ。none / 白は数えない。全お題 × 全スライダーの組 + ダミー写真 ----------
+var INKc = TDD.COLORS.ink, ACC = [TDD.COLORS.orange, TDD.COLORS.olive];
+function colorsOf(svg) {
+  var set = {};
+  svg.replace(/(?:stroke|fill)="([^"]+)"/g, function (all, c) { c = c.toLowerCase(); if (c !== 'none' && c !== '#fff' && c !== '#ffffff' && c !== 'white') set[c] = true; return all; });
+  return Object.keys(set).sort();
+}
+function twoColor(svg) { var c = colorsOf(svg); return c.length <= 2 && c.indexOf(INKc) >= 0 && c.filter(function (x) { return x !== INKc; }).every(function (x) { return ACC.indexOf(x) >= 0; }) && c.length >= 1; }
+var badColor = [];
+topics.forEach(function (t) {
+  var s1 = t.play.sliders[0], s2 = t.play.sliders[1] || { key: '_', min: 0, max: 0 }, accent = {};
+  for (var x1 = s1.min; x1 <= s1.max; x1++) for (var x2 = s2.min; x2 <= s2.max; x2++) {
+    var v = TDD.defaults(t); v[s1.key] = x1; if (t.play.sliders[1]) v[s2.key] = x2;
+    var svg = TDD.drawArt(t.art, v);
+    if (!twoColor(svg)) badColor.push(t.id + ' ' + JSON.stringify(v) + ' ' + colorsOf(svg).join(','));
+    colorsOf(svg).forEach(function (c) { if (c !== INKc) accent[c] = true; });
+  }
+  t.find.photos.forEach(function (p) { var svg = TDD.photoArt(t, p.id); if (!twoColor(svg)) badColor.push(t.id + ' photo ' + p.id + ' ' + colorsOf(svg).join(',')); colorsOf(svg).forEach(function (c) { if (c !== INKc) accent[c] = true; }); });
+  ok(Object.keys(accent).length === 1, '指摘 4 ' + t.id + ' の線画は 1 つのお題の中で同じ 2 色（' + Object.keys(accent).join(',') + '）');
+});
+eq(badColor.slice(0, 5), [], '指摘 4 全お題 × 全スライダーの組・ダミー写真が 2 色');
+ok(twoColor(TDD.frameOnly()), '指摘 4 枠だけの写真も墨だけ');
+
+// ---------- 残した写真を消す / 元に戻す（指摘 7） ----------
+var fx = TD.addFound(TD.addFound(TD.addFound(s0, SEED, { photo: 'p1', line: 'a', time: 't' }), SEED, { photo: 'p2', line: 'b', time: 't' }), SEED, { photo: 'p3', line: 'c', time: 't' });
+var rf = TD.removeFound(fx, SEED, 1);
+eq(rf.state.tried[SEED].found.map(function (f) { return f.line; }), ['a', 'c'], 'removeFound 消す');
+eq(fx.tried[SEED].found.length, 3, 'removeFound 元を変えない');
+eq(rf.undo, { id: SEED, index: 1, item: { photo: 'p2', line: 'b', time: 't' } }, 'removeFound 元に戻す情報（位置と中身）');
+eq(TD.restoreFound(rf.state, rf.undo).tried[SEED].found.map(function (f) { return f.line; }), ['a', 'b', 'c'], 'restoreFound 元の位置に戻る');
+eq(TD.removeFound(fx, SEED, 3), null, 'removeFound 範囲外は null');
+eq(TD.removeFound(s0, SEED, 0), null, 'removeFound 記録が無いお題は null');
+eq(TD.restoreFound(s0, { id: SEED, index: 0, item: { photo: 'zz', time: 't' } }), s0, 'restoreFound 知らない写真は同じ state');
+eq(TD.restoreFound(rf.state, { id: SEED, index: 9, item: { photo: 'p2', line: 'b', time: 't' } }).tried[SEED].found.map(function (f) { return f.line; }), ['a', 'c', 'b'], 'restoreFound 位置が範囲外なら末尾');
 
 // ---------- 画面の文言 key が i18n.js にある（console.warn を出さない） ----------
 var i18n = fs.readFileSync(path.join(__dirname, '../app-v3/js/i18n.js'), 'utf8');
