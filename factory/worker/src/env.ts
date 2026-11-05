@@ -39,6 +39,12 @@ export interface Env {
   IMAGE_MODEL_STANDARD?: string;
   IMAGE_MODEL_SCIENTIFIC?: string;
   IMAGE_MONTHLY_CAP_CENTS?: string;
+  // 動画の確認（§Q-4）。wrangler.jsonc に既定値がある。無い時は cfg() の既定を使う
+  GEMINI_VIDEO_MODEL?: string;
+  /** 1 動画の Gemini の呼び出し 1 回を取り置く額（セント。上界の見積り。精算しない） */
+  VIDEO_U_CENTS?: string;
+  /** 動画（ref_id vv:*）の月の記帳の上限（セント） */
+  VIDEO_MONTHLY_CAP_CENTS?: string;
 
   // secrets
   ANTHROPIC_API_KEY?: string;
@@ -47,6 +53,8 @@ export interface Env {
   XAI_API_KEY?: string;
   /** 画像生成（§O-0）。読むのは src/openai.ts だけ。D1・R2・ログ・作業場・custom_tool_result に出さない */
   OPENAI_API_KEY?: string;
+  /** 動画の確認（§Q-3 1）。読むのは src/gemini.ts だけ。D1・R2・ログに出さない。無ければ呼ばない（取り置きもしない） */
+  GEMINI_API_KEY?: string;
 
   // .dev.vars のみ（hostname が localhost / 127.0.0.1 の時だけ効く）
   ACCESS_DEV_BYPASS_EMAIL?: string;
@@ -87,6 +95,10 @@ export const cfg = (env: Env) => ({
   imageModelStandard: (env.IMAGE_MODEL_STANDARD || 'gpt-image-2.5-flare').trim(),
   imageModelScientific: (env.IMAGE_MODEL_SCIENTIFIC || 'gpt-image-2.5-sunburst').trim(),
   imageMonthlyCapCents: intVar(env.IMAGE_MONTHLY_CAP_CENTS, 3000),
+  // §Q-4（U_video は 0 にしない: 0 だと月・日の上限が効かない）
+  videoModel: (env.GEMINI_VIDEO_MODEL || 'gemini-3.6-flash').trim(),
+  videoUCents: Math.max(1, intVar(env.VIDEO_U_CENTS, 10)),
+  videoMonthlyCapCents: intVar(env.VIDEO_MONTHLY_CAP_CENTS, 1000),
 });
 
 /** SCOUT_MAX_TURNS を var で大きくしても 1 run の X 検索がこれ以上の turn を使わない（外部コストの有限化） */

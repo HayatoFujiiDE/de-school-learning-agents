@@ -6,6 +6,8 @@ import { todayCostCents } from '../jobs';
 import { monthCostCents } from '../ledger';
 import { scoutRunning } from '../scout';
 import { imageStatusSummary } from './images';
+import { getGeminiPort } from '../anthropic';
+import { videoStatusSummary } from './videos';
 
 export async function getStatus(c: RouteCtx): Promise<Response> {
   const db = c.env.DB;
@@ -55,6 +57,8 @@ export async function getStatus(c: RouteCtx): Promise<Response> {
     },
     // 画像生成（§O-5 e）。金額は U で数えた記帳（読み取り専用の表示）
     images: await imageStatusSummary(c.env),
+    // 動画の確認（§Q-9.5）。configured は鍵があるか（値は返さない）
+    videos: await videoStatusSummary(c.env, await getGeminiPort(c.env, { hostname: c.url.hostname })),
   });
 }
 

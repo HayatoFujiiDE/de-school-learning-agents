@@ -8,6 +8,7 @@ import { AUTO_ITEMS, type AutoItem } from '../checks/triage';
 import { computeTriage, latestVerificationOf } from '../triage-step';
 import { generatedImagesOf } from './images';
 import { serveVersionFile } from './library';
+import { VIDEO_NOTES_FILE, parseVideoNotesFile, type VideoNotesFile } from '../videos';
 
 export const CHECKLIST_KEYS = [
   'content_and_evidence',
@@ -103,17 +104,24 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
   );
   const ver = await latestVerification(db, vid);
   const report = ver
-    ? parseJsonField<{ verdicts?: Array<{ claim_id: string; verdict: string; reason: string; opened_urls: string[] }>; overall_note?: string; figures?: unknown; analogy_gaps?: unknown }>(ver.result_json, {})
+    ? parseJsonField<{
+        verdicts?: Array<{ claim_id: string; verdict: string; reason: string; opened_urls: string[] }>;
+        overall_note?: string;
+        figures?: unknown;
+        analogy_gaps?: unknown;
+        videos?: unknown;
+      }>(ver.result_json, {})
     : null;
   const claims = parseJsonField<{ claims?: Array<Record<string, unknown>> }>(v.claims_json, {}).claims ?? [];
   const history = await all<{ id: string; attempt: number; contradicted: number; created_at: string }>(
     db,
     stmt('SELECT id, attempt, contradicted, created_at FROM verifications WHERE material_version_id = ? ORDER BY attempt ASC', vid),
   );
-  // 同期の記帳（ref_id = 版の id）と Batch のターンごとの記帳・見積り（ref_id = vb:{版の id}:…）の両方（§L-5）
+  // 同期の記帳（ref_id = 版の id）と Batch のターンごとの記帳・見積り（ref_id = vb:{版の id}:…）の両方（§L-5）、
+  // 動画の記録の取り置き（ref_id = vv:{版の id}:{動画 id}。§Q-9.7）
   const verifyCost = await first<{ c: number | null }>(
     db,
-    stmt("SELECT SUM(cents) AS c FROM cost_ledger WHERE kind = 'verify' AND (ref_id = ? OR ref_id GLOB 'vb:' || ? || ':*')", vid, vid),
+    stmt("SELECT SUM(cents) AS c FROM cost_ledger WHERE kind = 'verify' AND (ref_id = ? OR ref_id GLOB 'vb:' || ? || ':*' OR ref_id GLOB 'vv:' || ? || ':*')", vid, vid, vid),
   );
   const triage = await computeTriage(db, v, ver ? { id: ver.id, result_json: ver.result_json } : null);
   // 検証待ちの理由（§L-6 1.・§L-2 3-2）。読んだ時点の停止・飛行中・日次で決める表示用の値（判定は提出段の 1 文が正本）
@@ -138,6 +146,8 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
   const material = parseJsonField<unknown>(v.material_json, null);
   // 生成した画像の情報（§O-7 6。prompt は認証済みの運営にだけ返す）
   const generatedImages = await generatedImagesOf(db, v.job_id, material);
+  // §Q-5: R2 の video-notes.json（無い・読めなければ null）
+  const videoNotes = await readVideoNotes(c.env.R2, v.r2_prefix);
   return json(200, {
     version: {
       id: v.id,
@@ -184,6 +194,8 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
           figures: figuresOf(report?.figures),
           // §P c 5: たとえのずれ（result_json に analogy_gaps が無い古い検証は null）
           analogy_gaps: analogyGapsOf(report?.analogy_gaps),
+          // §Q-5: 動画ごとの判定（result_json に videos が無い古い検証は null）
+          videos: videoVerdictsOf(report?.videos),
           cost_cents: ver.cost_cents,
           created_at: ver.created_at,
         }
@@ -193,7 +205,26 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
     verify_cost_cents: Number(verifyCost?.c ?? 0),
     triage,
     generated_images: generatedImages,
+    video_notes: videoNotes,
   });
+}
+
+/** result_json の videos → API の形（{id, verdict, reason}[]）。配列でなければ null（§Q-5） */
+function videoVerdictsOf(raw: unknown): Array<{ id: string; verdict: string; reason: string }> | null {
+  if (!Array.isArray(raw)) return null;
+  return (raw as Array<Record<string, unknown> | null>)
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object' && typeof x.id === 'string')
+    .map((x) => ({ id: x.id as string, verdict: typeof x.verdict === 'string' ? x.verdict : '', reason: typeof x.reason === 'string' ? x.reason : '' }));
+}
+
+/** R2 の {r2_prefix}video-notes.json（§Q-3 3）。無い・読めない・形が違えば null */
+async function readVideoNotes(r2: R2Bucket, prefix: string): Promise<VideoNotesFile | null> {
+  try {
+    const o = await r2.get(prefix + VIDEO_NOTES_FILE);
+    return o ? parseVideoNotesFile(await o.text()) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** result_json の figures → API の形（{path, verdict, reason}[]）。配列でなければ null（§O-12 d） */

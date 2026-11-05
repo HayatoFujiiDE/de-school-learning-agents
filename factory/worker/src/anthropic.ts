@@ -10,6 +10,7 @@ import type { BatchCreateParams, MessageBatchIndividualResponse } from '@anthrop
 import { MAX_FILE_BYTES } from './checks/schema';
 import { isLocalHostname, type Env } from './env';
 import { openAiPort, type ImagePort } from './openai';
+import { geminiPort, type GeminiPort } from './gemini';
 import { XaiError, xaiResponses, type XaiRequest, type XaiResult } from './xai';
 
 export const MANAGED_AGENTS_BETA = 'managed-agents-2026-04-01';
@@ -394,6 +395,12 @@ export async function getPort(env: Env, ctx: PortContext): Promise<FactoryPort> 
 export async function getImagePort(env: Env, ctx: PortContext): Promise<ImagePort> {
   const fake = await loadFake(env, ctx);
   return fake ? fake.createFakeImagePort(env) : openAiPort(env);
+}
+
+/** 動画の記録の port（§Q-3 1）。fake が許可される時だけ fake の Gemini（src/fake/gemini.ts を src/fake/anthropic.ts 経由で。動的 import は loadFake の 1 箇所） */
+export async function getGeminiPort(env: Env, ctx: PortContext): Promise<GeminiPort> {
+  const fake = await loadFake(env, ctx);
+  return fake ? fake.createFakeGeminiPort(env) : geminiPort(env);
 }
 
 /** 収集部隊の RSS 取得に使う fetch（§K-8: FactoryPort でなく fetch を差し替える）。fake が許可される時だけ fixture を返す fetch */
