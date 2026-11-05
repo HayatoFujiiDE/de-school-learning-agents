@@ -7,6 +7,7 @@ import { MAX_VIDEOS, VIDEO_ID_RE, VIDEO_MAX_RANGE_SEC, YOUTUBE_ID_RE, youtubeWat
 import { normalizeUrl } from './checks/citations';
 import type { SqlValue, Stmt } from './db';
 import type { GeminiUsage } from './gemini';
+import { channelMatch, sanitizeOEmbedFields, type ChannelMatch, type OEmbedOutcome } from './youtube-oembed';
 
 /** settings の key（§Q-9.5）。'1' の時だけ通常の経路で Gemini を呼ぶ */
 export const VIDEO_ENABLED_KEY = 'video_gen_enabled';
@@ -71,6 +72,11 @@ export function versionVideosOf(materialJson: string | null | undefined): Versio
   } catch {
     return [];
   }
+  return versionVideosOfMaterial(m);
+}
+
+/** 読んだ後の material（parse 済みの値）→ 版の動画。versionVideosOf と同じ読み方（triage は parse 済みの material を持つ） */
+export function versionVideosOfMaterial(m: unknown): VersionVideo[] {
   const out: VersionVideo[] = [];
   const seen = new Set<string>();
   const parts = isObj(m) && Array.isArray(m.parts) ? (m.parts as unknown[]) : [];
@@ -339,8 +345,25 @@ export function neutralizeInputText(t: string): string {
 
 const oneLine = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
-/** <videos> の節（§Q-9.3）: 開始・1 動画 1 block（職人が書いた値。無害化する）・終了。動画が無ければ [] */
-export function videosMetaBlocks(videos: VersionVideo[]): string[] {
+/**
+ * 公式の情報（§Q-11 7）の行: ok なら official_title・official_channel・official_channel_url・channel_match の 4 行、
+ * 無ければ「公式の情報なし（{outcome}）」の 1 行。値は YouTube が返した公開の情報（投稿者が書いた文を含む）なので 1 行にする（無害化は block ごと）
+ */
+function officialLines(v: VersionVideo, m: VideoMetaState | undefined): string[] {
+  if (!m || m.outcome !== 'ok') return [`公式の情報なし（${m?.outcome ?? 'unknown'}）`];
+  return [
+    `official_title: ${oneLine(m.title)}`,
+    `official_channel: ${oneLine(m.author_name)}`,
+    `official_channel_url: ${oneLine(m.author_url)}`,
+    `channel_match: ${channelMatch(v.channel, m.author_name)}`,
+  ];
+}
+
+/**
+ * <videos> の節（§Q-9.3）: 開始・1 動画 1 block（職人が書いた値。無害化する）・終了。動画が無ければ []。
+ * meta（§Q-11 7。この試行で使う公式の情報）を渡した時は、各 block の最後に公式の情報の行を足す（渡さなければ従来の 9 行）
+ */
+export function videosMetaBlocks(videos: VersionVideo[], meta?: ReadonlyMap<string, VideoMetaState>): string[] {
   if (videos.length === 0) return [];
   const block = (v: VersionVideo) =>
     neutralizeInputText(
@@ -354,6 +377,7 @@ export function videosMetaBlocks(videos: VersionVideo[]): string[] {
         `why: ${oneLine(v.why)}`,
         `rights_note: ${oneLine(v.rights_note)}`,
         `source_id: ${oneLine(v.source_id)}`,
+        ...(meta ? officialLines(v, meta.get(v.id)) : []),
       ].join('\n'),
     );
   return [VIDEOS_OPEN, ...videos.map(block), VIDEOS_CLOSE];
@@ -399,6 +423,115 @@ export function videoNotesSection(
   }
   if (blocksLength(blocks) > available) return { blocks: [], shown: [], notSeen: videos.map((v) => v.id) };
   return { blocks, shown: videos.filter((_, i) => kinds[i] === 'used').map((v) => v.id), notSeen: videos.filter((_, i) => kinds[i] !== 'used').map((v) => v.id) };
+}
+
+// ---------------------------------------------------------------------------------------------
+// 動画の公式の情報（§Q-11。YouTube の oEmbed）: 呼び出しの権利（settings の 1 文）・記録（ok / not_found だけ）・照合
+
+/** 版 × 動画ごとの oEmbed の呼び出しの生涯の上限（§Q-11 1） */
+export const VIDEO_META_MAX_CALLS = 5;
+/** 呼び出しの数の settings の key（§Q-11 3）。settings の一覧を返す API は無い（実装時に確かめた） */
+export const videoMetaCountKey = (versionId: string, videoId: string): string => `vmeta:${versionId}:${videoId}`;
+
+/**
+ * 呼び出しの権利（§Q-11 3 の 1 文。verbatim。?key・?now は位置の ? に、5 は VIDEO_META_MAX_CALLS に置き換えた）。changes = 1 の側だけが呼ぶ。
+ * 行が無ければ '1' で入れる。あれば値が上限未満の時だけ 1 増やす（上限なら 0 行）
+ */
+export function videoMetaClaimStmt(key: string, now: string): Stmt {
+  return {
+    sql: `INSERT INTO settings (key, value, updated_at) VALUES (?, '1', ?)
+ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT), updated_at = ?
+WHERE CAST(value AS INTEGER) < ${VIDEO_META_MAX_CALLS}`,
+    params: [key, now, now],
+  };
+}
+
+/** 記録の R2 の key（§Q-11 4） */
+export const videoMetaKey = (r2Prefix: string, videoId: string): string => `${r2Prefix}video-meta/${videoId}.json`;
+
+/** {r2_prefix}video-meta/{video_id}.json の中身（§Q-11 4）。ok と not_found の時だけ書く（最終） */
+export interface VideoMetaRecord {
+  v: 1;
+  video_id: string;
+  youtube_id: string;
+  outcome: 'ok' | 'not_found';
+  title?: string;
+  author_name?: string;
+  author_url?: string;
+  at: string;
+}
+
+/** 試行で使う公式の情報（§Q-11 5・7）。unknown = 記録が無く、この試行で呼ばなかった（回数切れ・port 無し・時間・読めない） */
+export type VideoMetaOutcome = OEmbedOutcome | 'unknown';
+export interface VideoMetaState {
+  outcome: VideoMetaOutcome;
+  /** ok の時だけ（sanitizeOEmbedFields を通した値） */
+  title?: string;
+  author_name?: string;
+  author_url?: string;
+}
+
+/** 記録を作る（ok は 3 つの値を整えて入れる） */
+export function videoMetaRecordOf(v: VersionVideo, s: { outcome: 'ok' | 'not_found'; title?: unknown; author_name?: unknown; author_url?: unknown }, at: string): VideoMetaRecord {
+  const base = { v: 1 as const, video_id: v.id, youtube_id: v.youtube_id, at };
+  return s.outcome === 'ok' ? { ...base, outcome: 'ok', ...sanitizeOEmbedFields(s) } : { ...base, outcome: 'not_found' };
+}
+
+/**
+ * 保存済みの記録を読む（形が違う・video_id / youtube_id が版の動画と合わない・ok なのに題名かチャンネル名が無い → null = 記録が無い扱い）。
+ * ok の値は読む時にも整え直す（記録は投稿者が書ける文）
+ */
+export function parseVideoMetaRecord(text: string, v: VersionVideo): VideoMetaRecord | null {
+  try {
+    const o = JSON.parse(text) as unknown;
+    if (!isObj(o) || o.v !== 1 || o.video_id !== v.id || o.youtube_id !== v.youtube_id) return null;
+    const at = isStr(o.at) ? o.at : '';
+    if (o.outcome === 'not_found') return videoMetaRecordOf(v, { outcome: 'not_found' }, at);
+    if (o.outcome !== 'ok' || !isStr(o.title) || !o.title || !isStr(o.author_name) || !o.author_name) return null;
+    return videoMetaRecordOf(v, { outcome: 'ok', title: o.title, author_name: o.author_name, author_url: o.author_url }, at);
+  } catch {
+    return null;
+  }
+}
+
+/** 記録 → 試行で使う公式の情報 */
+export const videoMetaStateOfRecord = (r: VideoMetaRecord): VideoMetaState =>
+  r.outcome === 'ok' ? { outcome: 'ok', title: r.title ?? '', author_name: r.author_name ?? '', author_url: r.author_url ?? '' } : { outcome: 'not_found' };
+
+/** 1 動画の記録を読む（無い・形が違う → null）。R2 の読み出しの例外はそのまま投げる */
+export async function readVideoMetaRecord(r2: R2Bucket, r2Prefix: string, v: VersionVideo): Promise<VideoMetaRecord | null> {
+  const o = await r2.get(videoMetaKey(r2Prefix, v.id));
+  if (!o) return null;
+  return parseVideoMetaRecord(await o.text(), v);
+}
+
+/** review API の video_meta の 1 行（§Q-11 8）。記録の無い動画は outcome unknown。値の無いフィールドは null */
+export interface VideoMetaView {
+  video_id: string;
+  outcome: 'ok' | 'not_found' | 'unknown';
+  title: string | null;
+  author_name: string | null;
+  author_url: string | null;
+  channel_match: ChannelMatch;
+}
+
+/** 版の動画ごとの video_meta（§Q-11 8。記録を読むだけ。oEmbed を呼ばず、呼び出しの数も増やさない）。読めない記録は unknown */
+export async function readVideoMetaViews(r2: R2Bucket, r2Prefix: string, videos: VersionVideo[]): Promise<VideoMetaView[]> {
+  const out: VideoMetaView[] = [];
+  for (const v of videos) {
+    let r: VideoMetaRecord | null = null;
+    try {
+      r = await readVideoMetaRecord(r2, r2Prefix, v);
+    } catch {
+      r = null;
+    }
+    out.push(
+      r?.outcome === 'ok'
+        ? { video_id: v.id, outcome: 'ok', title: r.title ?? '', author_name: r.author_name ?? '', author_url: r.author_url ?? '', channel_match: channelMatch(v.channel, r.author_name) }
+        : { video_id: v.id, outcome: r ? 'not_found' : 'unknown', title: null, author_name: null, author_url: null, channel_match: 'unknown' },
+    );
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------

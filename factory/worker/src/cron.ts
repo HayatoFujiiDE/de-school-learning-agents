@@ -1,6 +1,6 @@
 // 10 分ごとの照合・起動・検証（契約 §B-5）。scheduled handler は最長 15 分。
 
-import { getFeedFetch, getGeminiPort, getPort } from './anthropic';
+import { getFeedFetch, getGeminiPort, getOEmbedPort, getPort } from './anthropic';
 import { all, getSetting, isoPlus, nowIso, setSetting, stmt, tokyoDay } from './db';
 import { cfg, type Env } from './env';
 import { IMAGE_CRON_BUDGET_MS, imageCronStep } from './images';
@@ -67,7 +67,12 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
   // 3. 検証（1 件）
   try {
     // §Q-3 1: 動画の記録の port（鍵が無ければ呼ばない。settings video_gen_enabled が '1' の時だけ呼ぶ §Q-9.5）
-    out.verify = await runVerificationStep(env, port, { deadline: cronStart + CRON_LIMIT_MS - INTAKE_END_MARGIN_MS, gemini: await getGeminiPort(env, portCtx) });
+    // §Q-11 2: 動画の公式の情報（YouTube の oEmbed）の port（video_gen_enabled に関係なく呼ぶ）
+    out.verify = await runVerificationStep(env, port, {
+      deadline: cronStart + CRON_LIMIT_MS - INTAKE_END_MARGIN_MS,
+      gemini: await getGeminiPort(env, portCtx),
+      oembed: await getOEmbedPort(env, portCtx),
+    });
   } catch (e) {
     out.verify_error = e instanceof Error ? e.name : 'error';
   }

@@ -495,6 +495,8 @@ describe('§Q-7 3・§Q-9.3 入力の <videos> と <video_notes>', () => {
         'why: 粉の上を信号が進む様子が見える',
         'rights_note: チャンネルの概要欄に本人の制作とある',
         'source_id: s9',
+        // §Q-11 7: 公式の情報（oEmbed の port を渡していないので、記録なし・呼ばない → unknown）
+        '公式の情報なし（unknown）',
       ].join('\n'),
       expect.stringContaining('id: v2'),
       '</videos>',
