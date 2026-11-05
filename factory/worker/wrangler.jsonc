@@ -59,6 +59,10 @@
     // 画像生成（契約 §O-4 a）。OPENAI_API_KEY は secret（wrangler secret put。ここには書かない）
     "IMAGE_MODEL_STANDARD": "gpt-image-2.5-flare",
     "IMAGE_MODEL_SCIENTIFIC": "gpt-image-2.5-sunburst",
-    "IMAGE_MONTHLY_CAP_CENTS": "3000"
+    "IMAGE_MONTHLY_CAP_CENTS": "3000",
+    // 動画の確認（契約 §Q-4）。GEMINI_API_KEY は secret（ふじさんがセッションの外で wrangler secret put。ここには書かない）
+    "GEMINI_VIDEO_MODEL": "gemini-3.6-flash",
+    "VIDEO_U_CENTS": "10",
+    "VIDEO_MONTHLY_CAP_CENTS": "1000"
   }
 }

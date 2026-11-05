@@ -17,6 +17,7 @@ import {
   verifyPlanKey,
   VERDICT_SCHEMA,
   VERIFIER_SYSTEM,
+  VIDEO_SYSTEM_LINES,
   VERIFY_INPUT_CHAR_LIMIT,
   runVerificationStep,
   validateVerdicts,
@@ -423,7 +424,8 @@ describe('§P d3 analogy_gaps', () => {
   });
 
   it('VERDICT_SCHEMA: analogy_gaps は required・strict（additionalProperties: false）', () => {
-    expect(VERDICT_SCHEMA.required).toEqual(['verdicts', 'overall_note', 'figures', 'analogy_gaps']);
+    // §Q-3 6 で videos が足された（test/video-q2.test.ts が中身を見る）
+    expect(VERDICT_SCHEMA.required).toEqual(['verdicts', 'overall_note', 'figures', 'analogy_gaps', 'videos']);
     expect(VERDICT_SCHEMA.properties.analogy_gaps).toEqual({
       type: 'array',
       items: {
@@ -471,8 +473,10 @@ describe('§P d4 system の新しい 2 段落（既存の文は変えない）',
     expect(lines.slice(i4 + 1, i4 + 1 + ANALOGY.length)).toEqual(ANALOGY);
     const ir = lines.indexOf(OLD[7]);
     expect(lines.slice(ir + 1, ir + 1 + CAPTURE.length)).toEqual(CAPTURE);
-    expect(lines.filter((l) => !CAPTURE.includes(l) && !ANALOGY.includes(l))).toEqual(OLD);
-    expect(lines).toHaveLength(OLD.length + CAPTURE.length + ANALOGY.length);
+    // §Q-3 5 の動画の段落（たとえの段落の直後。test/video-q2.test.ts が中身を見る）は除いて比べる
+    const VIDEO: readonly string[] = VIDEO_SYSTEM_LINES;
+    expect(lines.filter((l) => !CAPTURE.includes(l) && !ANALOGY.includes(l) && !VIDEO.includes(l))).toEqual(OLD);
+    expect(lines).toHaveLength(OLD.length + CAPTURE.length + ANALOGY.length + VIDEO.length);
   });
 });
 

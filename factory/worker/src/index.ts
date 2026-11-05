@@ -26,6 +26,7 @@ import { addStandard, getStandards } from './routes/standards';
 import { getStatus, setPause } from './routes/status';
 import { handleWebhook } from './routes/webhook';
 import { getImagesStatus, haltImages, imageRequestFile, unhaltImages } from './routes/images';
+import { enableVideos, getVideosStatus, probeVideo } from './routes/videos';
 
 type Handler = (c: RouteCtx, ...params: string[]) => Promise<Response>;
 const ID = '([A-Za-z0-9-]{1,64})';
@@ -35,6 +36,10 @@ const ROUTES: Array<[string, RegExp, Handler]> = [
   ['POST', /^\/api\/images\/halt$/, haltImages],
   ['POST', /^\/api\/images\/unhalt$/, unhaltImages],
   ['GET', /^\/api\/images\/requests\/(img_[0-9a-f]{32})\/file$/, imageRequestFile],
+  // 動画の確認（§Q-9.5）と probe（§Q-6。一時 route。結果を確かめた後の PR で消す）
+  ['GET', /^\/api\/videos\/status$/, (c) => getVideosStatus(c)],
+  ['POST', /^\/api\/videos\/enable$/, (c) => enableVideos(c)],
+  ['POST', /^\/api\/probe\/video$/, (c) => probeVideo(c)],
   ['POST', /^\/api\/materials$/, createMaterial],
   ['GET', /^\/api\/materials$/, listMaterials],
   ['GET', new RegExp(`^/api/materials/${ID}$`), getMaterialDetail],

@@ -65,7 +65,10 @@
     invalid_add_cents: '増やす額は $5 / $10 / $20 のどれかです',
     invalid_note: 'メモは 200 字までです',
     dispatched_remain: '生成中の画像が残っているため、まだ再開できません。生成が終わってから（10 分ごとの定期処理で進みます）押し直してください',
-    not_halted: '画像の生成は止まっていません'
+    not_halted: '画像の生成は止まっていません',
+    not_configured: 'Gemini の鍵が設定されていません（鍵の投入はセッションの外で行います）',
+    already_probed: '同じ動画・区間の probe は実行済みです',
+    cap_reached: '動画の記帳が月または日の上限に届いています'
   };
 
   var $ = function (sel, root) { return (root || document).querySelector(sel); };
@@ -223,7 +226,7 @@
         '<span class="item">職人 ' + (s.agent_configured ? pill('設定済み', 'green') : pill('未設定', 'red')) + '</span>' +
         '<span class="item muted">cron 最終 ' + esc(fmtTime(s.last_cron_at)) + '</span>' +
         '<button type="button" class="btn small" id="pause-btn">' + (s.paused ? '再開' : '止める') + '</button>' +
-        intakeStatusHtml(s) + imagesBandHtml(s.images);
+        intakeStatusHtml(s) + imagesBandHtml(s.images) + videosBandHtml(s.videos);
       bindIntakeButtons(s);
       var btn = $('#pause-btn');
       btn.addEventListener('click', function () {
@@ -391,6 +394,56 @@
       if (location.hash !== here) return;
       view.innerHTML = imagesErrorHtml(e.message);
       var b = $('#img-retry');
+      if (b) b.addEventListener('click', route);
+    });
+  }
+
+  // ---- 画面: 動画の確認（Gemini。§Q-9.5）----
+  /** 状況帯の 1 行。videos が無い応答（古い Worker）では何も出さない */
+  function videosBandHtml(vi) {
+    if (!vi || typeof vi !== 'object') return '';
+    return '<a class="item" href="#/videos" data-video-band="1">動画の確認 ' + (vi.enabled ? pill('有効', 'green') : pill('無効', 'gray')) + '</a>';
+  }
+  function videosLoadingHtml() { return '<h1>動画の確認（Gemini）</h1><p class="loading" data-video-loading="1">読み込み中…</p>'; }
+  function videosErrorHtml(msg) {
+    return '<h1>動画の確認（Gemini）</h1><div class="card" data-video-error="1"><p class="err">読み込めませんでした: ' + esc(msg) + '</p><p><button type="button" class="btn" id="video-retry">もう一度読み込む</button></p></div>';
+  }
+  /** #/videos の本体（GET /api/videos/status の応答から描く純関数） */
+  function videosAdminHtml(d) {
+    var enabled = !!(d && d.enabled), configured = !!(d && d.configured);
+    var stateHtml = enabled
+      ? '<p>' + pill('有効', 'green') + ' 検証のたびに、版の動画 1 本につき 1 回だけ（その版で 1 回きり）Gemini に区間を見せて記録を作ります。</p>'
+      : '<p>' + pill('無効', 'gray') + ' Gemini は呼びません（版の動画は「未確認（記録なし）」になります）。</p>' +
+        '<p class="muted">probe（POST /api/probe/video）の結果で、区間の指定が中身に効いていると確かめてから有効にしてください。</p>' +
+        (configured ? '' : '<p class="err" data-video-nokey="1">Gemini の鍵が設定されていないため、有効にできません。</p>');
+    return '<h1>動画の確認（Gemini）</h1>' +
+      '<div class="card" data-video-state="' + (enabled ? 'enabled' : 'disabled') + '"><h2>状態</h2>' + stateHtml +
+        '<div class="row"><button type="button" class="btn primary" id="video-enable-btn"' + (enabled || !configured ? ' disabled' : '') + '>動画の確認を有効にする</button></div></div>' +
+      '<div class="card"><h2>今月の動画の記帳</h2>' +
+        '<p><b>' + cents(d && d.month_cents) + '</b> / ' + cents(d && d.month_cap_cents) + ' <span class="muted">（1 回 ' + cents(d && d.u_cents) + ' の取り置きで数えた記帳。Gemini の実際の請求とは違うことがあります）</span></p>' +
+        '<p class="muted">モデル ' + esc((d && d.model) || '—') + '</p></div>';
+  }
+  function viewVideos(view) {
+    view.innerHTML = videosLoadingHtml();
+    var here = location.hash;
+    api('GET', '/api/videos/status').then(function (d) {
+      if (location.hash !== here) return;
+      view.innerHTML = videosAdminHtml(d);
+      var eb = $('#video-enable-btn');
+      eb.addEventListener('click', function () {
+        action(eb, {
+          title: '動画の確認を有効にします',
+          body: 'これから検証する版の動画を、1 本につき 1 回だけ Gemini に見せます（1 回 ' + String(d.u_cents) + '¢ を取り置き、月 ' + String(d.month_cap_cents) + '¢ まで）。ここからは無効に戻せません。',
+          okText: '有効にする', busyText: '処理中…',
+          run: function () { return api('POST', '/api/videos/enable'); },
+          success: '動画の確認を有効にしました',
+          fail: function () { route(); }
+        });
+      });
+    }, function (e) {
+      if (location.hash !== here) return;
+      view.innerHTML = videosErrorHtml(e.message);
+      var b = $('#video-retry');
       if (b) b.addEventListener('click', route);
     });
   }
@@ -1737,6 +1790,60 @@
   var VIDEO_CHECK_TEXT = '動画: 本人のアップか・区間が再生できて内容が合うかを見てください';
   var VIDEO_NOTE_TEXT = '区間の指定と rel=0 は、区間の外への移動や関連動画を止めません。youtube-nocookie も、広告・追跡が無いことを保証しません。';
   var VIDEO_NO_RECORD = '動画の記録はまだありません';
+  /** §Q-5: Gemini の記録（video-notes.json はあるが、この動画の記録が無い）・検証係の判定（figures と同じ 4 種の pill） */
+  var VIDEO_NOTE_MISSING = 'Gemini の記録はありません（呼ばなかった・失敗した・上限のため。検証係もこの動画は見ていません）';
+  var VIDEO_OLD_VERIFY = 'この版の検証係は動画を見ていません';
+  var VIDEO_NO_VERDICT = '判定がありません';
+  var VIDEO_VERDICT = { ok: ['検証係: 問題なし', 'green'], problem: ['検証係: 指摘あり', 'red'], unclear: ['検証係: 判断できず', 'yellow'], not_seen: ['検証係: 未確認（記録なし）', 'gray'] };
+  var vhas = function (o, k) { return !!o && Object.prototype.hasOwnProperty.call(o, k); };
+  /** 確認画面の動画の欄の材料: notes = video_id → 記録（video_notes が無ければ null）、verdicts = id → 判定（検証が無ければ null、古い検証は 'old'） */
+  function videoCtxOf(d) {
+    var vn = d && d.video_notes;
+    var notes = null;
+    if (vn && typeof vn === 'object' && Array.isArray(vn.notes)) {
+      notes = Object.create(null); // id が __proto__ でもプロトタイプを踏まない
+      vn.notes.forEach(function (n) { if (n && typeof n.video_id === 'string' && typeof n.text === 'string' && !vhas(notes, n.video_id)) notes[n.video_id] = n; });
+    }
+    var ver = d && d.verification;
+    var verdicts = null;
+    if (ver && typeof ver === 'object') {
+      if (!Array.isArray(ver.videos)) verdicts = 'old';
+      else {
+        verdicts = Object.create(null);
+        ver.videos.forEach(function (x) { if (x && typeof x.id === 'string' && !vhas(verdicts, x.id)) verdicts[x.id] = x; });
+      }
+    }
+    return { notes: notes, verdicts: verdicts };
+  }
+  function usageText(u) {
+    if (!u || typeof u !== 'object') return '';
+    var parts = [];
+    if (typeof u.total_input_tokens === 'number') parts.push('入力 ' + u.total_input_tokens);
+    if (typeof u.total_output_tokens === 'number') parts.push('出力 ' + u.total_output_tokens);
+    if (typeof u.total_thought_tokens === 'number') parts.push('思考 ' + u.total_thought_tokens);
+    return parts.length ? ' ・ tokens ' + parts.join(' / ') : '';
+  }
+  function videoNotesHtml(v, vc) {
+    var n = vc && vc.notes && typeof v.id === 'string' && vhas(vc.notes, v.id) ? vc.notes[v.id] : null;
+    var body = n
+      ? '<p class="muted"><small>' + esc(n.model || '') + esc(usageText(n.usage)) + '</small></p><div class="rv-video-note" data-video-note="1">' + esc(n.text) + '</div>'
+      : '<p class="muted">' + esc(vc && vc.notes ? VIDEO_NOTE_MISSING : VIDEO_NO_RECORD) + '</p>';
+    return '<details data-video-notes="1"><summary>Gemini の記録</summary>' + body + '</details>';
+  }
+  function videoVerdictHtml(v, vc) {
+    var vs = vc ? vc.verdicts : null;
+    var inner;
+    if (vs === null || vs === undefined) inner = '<span class="muted">' + esc(VIDEO_NO_RECORD) + '</span>';
+    else if (vs === 'old') inner = '<span class="muted">' + esc(VIDEO_OLD_VERIFY) + '</span>';
+    else {
+      var x = typeof v.id === 'string' && vhas(vs, v.id) ? vs[v.id] : null;
+      if (x && vhas(VIDEO_VERDICT, x.verdict)) {
+        var t = VIDEO_VERDICT[x.verdict];
+        inner = '<span data-video-pill="' + esc(x.verdict) + '">' + pill(t[0], t[1]) + '</span>' + (x.reason ? ' <span class="muted">' + esc(x.reason) + '</span>' : '');
+      } else inner = '<span class="muted">' + esc(VIDEO_NO_VERDICT) + '</span>';
+    }
+    return '<p data-video-verdict="1">検証係の判定: ' + inner + '</p>';
+  }
   /** material.parts[].videos[] を出現順に（形の違う要素は飛ばさず残し、表示側で埋め込まない） */
   function videosOf(mat) {
     var out = [];
@@ -1748,7 +1855,7 @@
   function isSec(n) { return typeof n === 'number' && isFinite(n) && n >= 0 && Math.floor(n) === n; }
   /** 秒 → 分:秒（例 80 → 1:20） */
   function fmtSec(n) { var s = n % 60; return Math.floor(n / 60) + ':' + (s < 10 ? '0' : '') + s; }
-  function videoHtml(v) {
+  function videoHtml(v, vc) {
     var s = v.start_sec, e = v.end_sec;
     var okId = typeof v.youtube_id === 'string' && YT_ID_RE.test(v.youtube_id);
     var okRange = isSec(s) && isSec(e) && s < e;
@@ -1760,14 +1867,14 @@
       '<p>区間 ' + (okRange ? esc(fmtSec(s)) + '〜' + esc(fmtSec(e)) : '<span class="muted">不明</span>') + ' ・ チャンネル ' + esc(v.channel) + '</p>' +
       '<p>見どころ: ' + esc(v.why) + '</p>' +
       '<p>本人のアップと言える理由: ' + esc(v.rights_note) + '</p>' +
-      '<details data-video-notes="1"><summary>Gemini の記録</summary><p class="muted">' + esc(VIDEO_NO_RECORD) + '</p></details>' +
-      '<p data-video-verdict="1">検証係の判定: <span class="muted">' + esc(VIDEO_NO_RECORD) + '</span></p></div>';
+      videoNotesHtml(v, vc) + videoVerdictHtml(v, vc) + '</div>';
   }
-  /** 「説明と表現」の下の動画（0 本なら出さない） */
-  function videosHtml(vids) {
+  /** 「説明と表現」の下の動画（0 本なら出さない）。d は review API の応答（video_notes・verification.videos を読む） */
+  function videosHtml(vids, d) {
     if (!vids.length) return '';
+    var vc = videoCtxOf(d);
     return '<div class="rv-videos" data-videos="' + vids.length + '"><p><span class="muted">動画 ' + vids.length + ' 本</span> ' + esc(VIDEO_CHECK_TEXT) + '</p>' +
-      '<p class="muted"><small>' + esc(VIDEO_NOTE_TEXT) + '</small></p>' + vids.map(videoHtml).join('') + '</div>';
+      '<p class="muted"><small>' + esc(VIDEO_NOTE_TEXT) + '</small></p>' + vids.map(function (v) { return videoHtml(v, vc); }).join('') + '</div>';
   }
   /** サムネイルの下の判定の pill と reason（判定の無い path は空） */
   function figVerdictHtml(f) {
@@ -1929,7 +2036,7 @@
           if (!g && !f) return a;
           // 生成した絵はサムネイルの下に「生成: 正確さ・prompt の先頭 80 字」（§O-7 6）、その下に検証係の判定（§O-12 d）
           return '<div class="thumb-gen"' + (g ? ' data-gen="1"' : '') + '>' + a + (g ? '<p class="thumb-cap">' + esc(genCaption(g)) + '</p>' : '') + figVerdictHtml(f) + '</div>';
-        }).join('') + '</div>' : '') + '</div>' + videosHtml(vids) + analogyGapsHtml(d);
+        }).join('') + '</div>' : '') + '</div>' + videosHtml(vids, d) + analogyGapsHtml(d);
     }
     // §Q-9.6: 動画のある版の「利用条件」は自動 OK にならない。理由の文を動画の文にする（出典の利用条件が分からない時は従来の文も残す）
     var tuVideos = k === 'terms_of_use' && videosOf(d.version && d.version.material).length > 0;
@@ -2376,8 +2483,10 @@
     if (p[0] === 'standards') return viewStandards(view);
     if (p[0] === 'proposals') return viewProposals(view, r.q);
     if (p[0] === 'images') return viewImages(view);
+    if (p[0] === 'videos') return viewVideos(view);
     view.innerHTML = '<p class="muted">ページが見つかりません。<a href="#/materials">素材へ</a></p>';
   }
+  window.FactoryAdminVideos = { videosBandHtml: videosBandHtml, videosAdminHtml: videosAdminHtml, videosLoadingHtml: videosLoadingHtml, videosErrorHtml: videosErrorHtml };
   window.FactoryAdminImages = {
     HALT_TEXT: HALT_TEXT, haltText: haltText, imagesBandHtml: imagesBandHtml, imagesHtml: imagesHtml,
     imagesLoadingHtml: imagesLoadingHtml, imagesErrorHtml: imagesErrorHtml, genCaption: genCaption
