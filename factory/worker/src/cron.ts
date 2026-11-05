@@ -1,6 +1,6 @@
 // 10 分ごとの照合・起動・検証（契約 §B-5）。scheduled handler は最長 15 分。
 
-import { getFeedFetch, getGeminiPort, getOEmbedPort, getPort } from './anthropic';
+import { getFeedFetch, getGeminiPort, getOEmbedPort, getPort, getTopicFetch } from './anthropic';
 import { all, getSetting, isoPlus, nowIso, setSetting, stmt, tokyoDay } from './db';
 import { cfg, type Env } from './env';
 import { IMAGE_CRON_BUDGET_MS, imageCronStep } from './images';
@@ -9,6 +9,7 @@ import { runScout, scoutDueOn } from './scout';
 import { getJob, markWebhookProcessed, reconcileJob, recoverCreating, startJob, type JobRow } from './jobs';
 import { runVerificationStep } from './verify';
 import { triageStep } from './triage-step';
+import { topicsTick } from './topics/tick';
 
 // cron 経由の reconcile は開始から 10 分を締め切りにする（scheduled handler は最長 15 分。検証の時間を残す）
 const CRON_RECONCILE_BUDGET_MS = 10 * 60_000;
@@ -114,6 +115,13 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
     }
   } catch (e) {
     out.scout_error = e instanceof Error ? e.name : 'error';
+  }
+
+  // お題のストック（contract-T T-13）。入口の段の後に 1 回。各段の残り時間は topicsTick が見る（(1) 予定の確定と (2) 片付けは常に行う）
+  try {
+    out.topics = await topicsTick(env, port, { deadline: intakeDeadline, fetchImpl: await getTopicFetch(env, portCtx) });
+  } catch (e) {
+    out.topics_error = e instanceof Error ? e.name : 'error';
   }
 
   // 4.

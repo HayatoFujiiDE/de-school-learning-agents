@@ -1,0 +1,2 @@
+// 生成ファイル。手で編集しない（scripts/sync-claude-assets.sh が factory/topics/sources.json から生成する）
+export const TOPIC_FEEDS: string[] = ["https://www3.nhk.or.jp/rss/news/cat1.xml","https://www3.nhk.or.jp/rss/news/cat2.xml","https://www3.nhk.or.jp/rss/news/cat3.xml","https://www3.nhk.or.jp/rss/news/cat4.xml","https://www3.nhk.or.jp/rss/news/cat6.xml","https://www.jaxa.jp/rss/press_j.rdf","https://www.nao.ac.jp/atom.xml","https://www.mext.go.jp/b_menu/news/index.rdf"];

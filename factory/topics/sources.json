@@ -1,0 +1,13 @@
+{
+  "note": "お題の news の資料（contract-T T-4・T-13）。RSS / Atom / RDF の https の URL を 8 件まで。開けた日と件数は README.md。",
+  "feeds": [
+    { "url": "https://www3.nhk.or.jp/rss/news/cat1.xml", "name": "NHK ニュース 社会" },
+    { "url": "https://www3.nhk.or.jp/rss/news/cat2.xml", "name": "NHK ニュース 文化・エンタメ" },
+    { "url": "https://www3.nhk.or.jp/rss/news/cat3.xml", "name": "NHK ニュース 科学・医療" },
+    { "url": "https://www3.nhk.or.jp/rss/news/cat4.xml", "name": "NHK ニュース 政治" },
+    { "url": "https://www3.nhk.or.jp/rss/news/cat6.xml", "name": "NHK ニュース 国際" },
+    { "url": "https://www.jaxa.jp/rss/press_j.rdf", "name": "JAXA プレスリリース" },
+    { "url": "https://www.nao.ac.jp/atom.xml", "name": "国立天文台 新着" },
+    { "url": "https://www.mext.go.jp/b_menu/news/index.rdf", "name": "文部科学省 新着情報" }
+  ]
+}

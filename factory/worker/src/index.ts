@@ -9,7 +9,7 @@ import { json, makeCtx, type RouteCtx } from './http';
 import { runImage } from './images';
 import { getFloor } from './routes/floor';
 import { answerJobRoute, cancelJobRoute, createJob, getJobDetail, raiseBudgetRoute, reconcileJobRoute, reingestJobRoute, startJobRoute } from './routes/jobs';
-import { libraryAvailable, libraryFile } from './routes/library';
+import { libraryAvailable, libraryFile, libraryTopicStock, libraryTopics } from './routes/library';
 import { createMaterial, getMaterialDetail, listMaterials, rollbackMaterial, stopMaterial } from './routes/materials';
 import {
   adoptProposal,
@@ -27,9 +27,12 @@ import { getStatus, setPause } from './routes/status';
 import { handleWebhook } from './routes/webhook';
 import { getImagesStatus, haltImages, imageRequestFile, unhaltImages } from './routes/images';
 import { enableVideos, getVideosStatus, probeVideo } from './routes/videos';
+import { createTopic, decideTopic, deriveTopicRoute, getTopic, listTopicRuns, listTopics, runTopicsRoute, topicSchedule, topicSettings, topicsMeta } from './routes/topics';
 
 type Handler = (c: RouteCtx, ...params: string[]) => Promise<Response>;
 const ID = '([A-Za-z0-9-]{1,64})';
+/** お題の id（tp_<run_id>_<n> / tp_m_<uuid>。contract-T T-2） */
+const TOPIC_ID = '(tp_[A-Za-z0-9_-]{1,100})';
 
 const ROUTES: Array<[string, RegExp, Handler]> = [
   ['GET', /^\/api\/images\/status$/, getImagesStatus],
@@ -72,6 +75,17 @@ const ROUTES: Array<[string, RegExp, Handler]> = [
   ['POST', /^\/api\/scout\/run$/, runScoutRoute],
   ['POST', /^\/api\/meeting\/run$/, runMeetingRoute],
   ['GET', /^\/api\/meeting\/latest$/, latestMeeting],
+  // お題のストック（contract-T T-10）
+  ['GET', /^\/api\/topics\/meta$/, topicsMeta],
+  ['GET', /^\/api\/topics\/runs$/, listTopicRuns],
+  ['POST', /^\/api\/topics\/runs$/, runTopicsRoute],
+  ['GET', /^\/api\/topics\/schedule$/, topicSchedule],
+  ['POST', /^\/api\/topics\/settings$/, topicSettings],
+  ['GET', /^\/api\/topics$/, listTopics],
+  ['POST', /^\/api\/topics$/, createTopic],
+  ['GET', new RegExp(`^/api/topics/${TOPIC_ID}$`), getTopic],
+  ['POST', new RegExp(`^/api/topics/${TOPIC_ID}/decide$`), decideTopic],
+  ['POST', new RegExp(`^/api/topics/${TOPIC_ID}/derive$`), deriveTopicRoute],
 ];
 
 // 管理画面に付ける CSP（同一 origin の /api/* だけを読む。確認用 iframe は sandbox 付きで同一 origin から読む）。
@@ -103,6 +117,8 @@ export default {
       if (path.startsWith('/api/library/')) {
         if (request.method !== 'GET') return jsonError(405, 'method_not_allowed');
         if (path === '/api/library/available') return await libraryAvailable(env);
+        if (path === '/api/library/topics') return await libraryTopics(env, url);
+        if (path === '/api/library/topics/stock') return await libraryTopicStock(env, url);
         const m = new RegExp(`^/api/library/files/${ID}/(.*)$`).exec(path);
         if (m) return await libraryFile(env, m[1], m[2]);
         return jsonError(404, 'not_found');

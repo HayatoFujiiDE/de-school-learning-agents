@@ -13,7 +13,7 @@
 
 import type { Message, MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { MessageBatchIndividualResponse } from '@anthropic-ai/sdk/resources/messages/batches';
-import { BATCH_LIST_LIMIT, BATCH_RESULTS_MAX_BYTES, PortError, type BatchView, type FactoryPort, type FileMeta, type SessionView } from '../anthropic';
+import { BATCH_LIST_LIMIT, BATCH_RESULTS_MAX_BYTES, PortError, type BatchView, type CallOpts, type FactoryPort, type FileMeta, type SessionView } from '../anthropic';
 import { getSetting, nowIso, setSetting } from '../db';
 import type { Env } from '../env';
 import { SCOUT_FEEDS } from '../generated/scout-sources';
@@ -21,6 +21,7 @@ import { SCOUT_MODEL } from '../scout';
 import { parseXaiResponse } from '../xai';
 import { FIXTURE_FILES } from './fixtures.generated';
 import { handleFakeOpenAiControl } from './openai';
+import { fakeTopicCheckReply, fakeTopicGenReply, handleTopicsFakeControl, isTopicCheckParams, isTopicGenParams } from './topics';
 
 // 画像生成の fake（§O-4 e）。src/anthropic.ts の getImagePort が loadFake（動的 import 1 箇所）経由でここから取る
 export { createFakeImagePort } from './openai';
@@ -28,6 +29,8 @@ export { createFakeImagePort } from './openai';
 export { createFakeGeminiPort } from './gemini';
 // YouTube の oEmbed の fake（§Q-11 2）。src/anthropic.ts の getOEmbedPort が loadFake 経由でここから取る
 export { createFakeOEmbedPort } from './youtube-oembed';
+// お題の RSS と出典の fetch の fake（contract-T）。src/anthropic.ts の getTopicFetch が loadFake 経由でここから取る
+export { topicFetch } from './topics';
 
 /** 入口（§K-8）の fixture。job の scenario ではない */
 const INTAKE_FIXTURE_DIRS = ['scout', 'meeting'];
@@ -46,6 +49,8 @@ interface Call {
   verify?: { claims_text: string; assistant_turns: number; figures?: string[]; videos?: string[] };
   /** smoke の制御 /__fake/session-append（§O-8 smoke）だけ: 足すファイル（本文は記録に持つ）・status・list_cost・識別子 */
   append?: { key: string; files: Array<{ filename: string; content: string }>; status?: string; list_cost?: string };
+  /** お題の呼び出し（contract-T）だけ: 呼び出しごとに渡った再送の回数と締め切りの有無 */
+  opts?: { max_retries: number | null; has_deadline: boolean; max_timeout_ms: number | null };
 }
 
 interface Staged<T> {
@@ -357,8 +362,26 @@ export function createFakePort(env: Env): FactoryPort {
       if (text === undefined) throw notFound();
       return enc.encode(text);
     },
-    async createMessage(params: MessageCreateParamsNonStreaming): Promise<Message> {
+    async createMessage(params: MessageCreateParamsNonStreaming, o?: CallOpts): Promise<Message> {
       if (params.model === SCOUT_MODEL) return scoutMessage(db, params);
+      if (isTopicGenParams(params) || isTopicCheckParams(params)) {
+        // お題（contract-T）: 生成は「それまでのお題の生成の回数」で本文が決まる（決定論）。呼び出しの引数と再送・締め切りを記録する
+        const gen = isTopicGenParams(params);
+        const n = gen ? (await readCalls(db)).filter((x) => x.op === 'messages.create' && x.params?.kind === 'topic_gen').length : 0;
+        await appendCall(db, {
+          op: 'messages.create',
+          at: nowIso(),
+          params: {
+            kind: gen ? 'topic_gen' : 'topic_check',
+            model: params.model,
+            max_tokens: params.max_tokens,
+            tool_choice: params.tool_choice,
+            tools: toolSummary(params.tools),
+          },
+          opts: { max_retries: o?.maxRetries ?? null, has_deadline: typeof o?.deadline === 'number', max_timeout_ms: o?.maxTimeoutMs ?? null },
+        });
+        return gen ? fakeTopicGenReply(params, n) : fakeTopicCheckReply(params);
+      }
       const content = userText(params.messages[0]?.content);
       await appendCall(db, {
         op: 'messages.create',
@@ -637,6 +660,8 @@ export async function handleFakeControl(request: Request, env: Env): Promise<Res
   const url = new URL(request.url);
   const openai = await handleFakeOpenAiControl(request, env);
   if (openai) return openai;
+  const topics = await handleTopicsFakeControl(request, env);
+  if (topics) return topics;
   const j = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
   if (url.pathname === '/__fake/settings' && request.method === 'POST') {
