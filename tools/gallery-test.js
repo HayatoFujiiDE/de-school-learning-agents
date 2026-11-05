@@ -322,6 +322,27 @@ t('契約 AF-4: ひとことの字数は入力欄も保存もコードポイン�
   var ns = gsrc.slice(gsrc.indexOf('function notesSec'), gsrc.indexOf('function callSec'));
   ok(!/maxlength/.test(ns) && /fitNote\(t\.value\)/.test(gsrc), 'AF-4 入力欄は UTF-16 の maxlength を使わず、入力のたびにコードポイントで切る');
 });
+t('確認レビュー 2 展示の種類: projectId の無い作品は actId の活動の projectId から', function () {
+  var a = M.fromProject(MD.project('pj-novel-3'), { id: 'a-r2', mode: 'js', now: '10:20', acts: [] }).act;
+  var w = JSON.parse(JSON.stringify(M.saveWork([], a, { id: 'w-r2', date: '11/6', status: 'done' }).work));
+  delete w.projectId;
+  var before = JSON.stringify(w);
+  eq([w.actId, G.catOf(w, [a]), G.catOf(w)], ['a-r2', 'writing', 'craft'], '確認 2 活動があれば提案のカテゴリ・無ければ今までどおり');
+  eq(G.catOf(w, [{ id: 'other', projectId: 'pj-novel-3' }]), 'craft', '確認 2 actId の違う活動は見ない');
+  var st = G.put(G.initial(), 'w-r2', '11/6 10:30');
+  eq(G.filter(G.items(st, [w], [], [a]), 'writing').map(function (it) { return it.id; }), ['my-w-r2'], '確認 2 「文章」で絞ると出る');
+  eq(JSON.stringify(w), before, '確認 2 保存データは書き換えない');
+});
+t('確認レビュー 3 約束の id: 既にある別の約束と重なったら -2, -3 … で足す', function () {
+  var s = G.initial();
+  s.inbox = [{ id: 'in-seed', workId: 'wa', from: 'そらまめ', kind: 'together', state: 'new', time: 't' }];
+  s.promises = [{ id: 'p-in-seed', with: 'fixture', title: '別の約束', actId: null, time: 't' }];
+  var a1 = G.answer(s, 'in-seed', 'ok', { title: '新しい約束', time: 't2' });
+  eq([a1.inbox[0].state, a1.promises.map(function (p) { return p.id + ':' + p.title; })], ['ok', ['p-in-seed-2:新しい約束', 'p-in-seed:別の約束']], '確認 3 重なったら -2 で足す');
+  eq(G.answer(a1, 'in-seed', 'ok', { title: 'x', time: 't3' }), a1, '確認 3 同じ声かけを 2 回 OK にしても約束は 1 件のまま');
+  s.promises.push({ id: 'p-in-seed-2', with: 'fixture', title: '別の約束 2', actId: null, time: 't' });
+  eq(G.answer(s, 'in-seed', 'ok', { title: '新', time: 't2' }).promises[0].id, 'p-in-seed-3', '確認 3 -2 も重なったら -3');
+});
 
 console.log('gallery-test: ' + pass + ' passed, ' + fail + ' failed');
 console.log('GALLERY_TEST=' + (fail === 0 ? 'PASS' : 'FAIL'));

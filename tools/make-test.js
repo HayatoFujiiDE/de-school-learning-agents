@@ -1331,6 +1331,39 @@ t('裁定 11 gen-thumbs.mjs: エラーの時に出すのは決まった分類の
   ok(/const WHY = \{[^}]*\}/.test(code) && !/WHY = \{[^}]*\+/.test(code), '裁定 11 分類の文は定数だけ');
   ok(!/'status ' \+ res\.status \+ \(code/.test(g) && !/\+ code\b/.test(g), '裁定 11 API が返した code の文字列をそのまま出さない');
 });
+// 偽物の保存（巻き戻しも失敗）: failKey の保存が偽を返した後は、どのキーの保存も偽（巻き戻しのための保存し直しも失敗する）
+function brokenStore(st, failKey) {
+  var s = { log: [], disk: {}, broken: false };
+  s.save = function (k) { s.log.push(k); if (s.broken || k === failKey) { s.broken = true; return false; } s.disk[k] = JSON.stringify(st[k]); return true; };
+  return s;
+}
+t('確認レビュー 1 M.trySave: 巻き戻しの保存し直しも失敗したら、そのキーのメモリは保存側と同じ新しい値のまま', function () {
+  var st = { activities: [{ id: 'x' }], works: [{ id: 'w' }], saveFailed: false }, b = brokenStore(st, 'works');
+  var r = M.trySave(st, ['activities', 'works'], function (s) { s.activities = [{ id: 'y' }].concat(s.activities); s.works = []; }, b.save);
+  eq([r, st.saveFailed, st.activities.map(function (a) { return a.id; }), st.works.map(function (w) { return w.id; })], [false, true, ['y', 'x'], ['w']], '確認 1 失敗のまま・保存し直せなかったキーは新しい値・保存していないキーは前の値');
+  eq([b.log, freeze(st.activities) === b.disk.activities], [['activities', 'works', 'activities'], true], '確認 1 メモリの値 = 保存されている値');
+});
+t('確認レビュー 1 見本の作品の追加: 巻き戻しも失敗した時、メモリ = 保存・番号は進めない', function () {
+  var acts = MD.seedActivities(), s = { activities: acts, works: MD.seedWorks(acts), makeSide: { seedV: 0 }, saveFailed: false }, b = brokenStore(s, 'works');
+  var r = M.applySeeds(s, b.save);
+  eq([r, s.saveFailed, s.makeSide.seedV, s.works.length], [false, true, 0, 4], '確認 1 失敗・番号は 0・作品は前の値');
+  ok(freeze(s.activities) === b.disk.activities && s.activities.length > 3 && !('makeSide' in b.disk), '確認 1 保存できた活動はメモリも同じ（' + s.activities.length + ' 件）');
+});
+t('確認レビュー 4 3 題材: stage.values そのものが無い時も、図は結果文と同じ題材の既定値', function () {
+  ['stop', 'ath', 'story'].forEach(function (th) {
+    var def = {}; MD.theme(th).params.forEach(function (p) { def[p.key] = p.def; });
+    MD.theme(th).variants.forEach(function (vk) {
+      var none = { kind: 'sample', theme: th, variant: vk }, good = { kind: 'sample', theme: th, variant: vk, values: def };
+      eq([MD.result(none, 'js'), MD.artMarks(none), MD.art(none) === MD.art(good)], [MD.result(good, 'js'), MD.artMarks(good), true], '確認 4 ' + th + '.' + vk + ' values 無し → 題材の既定値');
+    });
+  });
+  ['mc', 'py', 'circuit', 'tool'].forEach(function (th) {
+    MD.theme(th).variants.forEach(function (vk) {
+      var none = { kind: 'sample', theme: th, variant: vk }, vv = { kind: 'sample', theme: th, variant: vk, values: MD.variantValues(th, vk) };
+      eq([MD.artMarks(none), MD.art(none) === MD.art(vv)], [MD.artMarks(vv), true], '確認 4 既存 ' + th + '.' + vk + ' は案の既定値のまま');
+    });
+  });
+});
 
 console.log('make-test: ' + pass + ' passed, ' + fail + ' failed');
 console.log('MAKE_TEST=' + (fail === 0 ? 'PASS' : 'FAIL'));

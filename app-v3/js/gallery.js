@@ -111,15 +111,17 @@
     d.catalog.forEach(function (c) { (c.items || []).forEach(function (it) { if (it.id === id) hit = c.id; }); });
     return hit && GD.CATS.indexOf(hit) >= 0 ? hit : null;
   }
-  // 提案から作った作品（§AD-4。theme 'project'）の種類: 提案のカテゴリ（作品の projectId → 無ければ写真のカテゴリ）。レビューへの裁定
-  function projectCat(w) {
+  // 提案から作った作品（§AD-4。theme 'project'）の種類: 提案のカテゴリ（作品の projectId → 無ければ acts の中の作品の actId の活動の projectId
+  // → 無ければ写真のカテゴリ）。保存データは書き換えない。レビューへの裁定
+  function projectCat(w, acts) {
     if (!w || w.theme !== 'project') return null;
-    var MD = DES.makeData, p = isStr(w.projectId) && MD && MD.project ? MD.project(w.projectId) : null;
+    var a = !isStr(w.projectId) && isStr(w.actId) ? find(acts, w.actId) : null, pid = isStr(w.projectId) ? w.projectId : (a && isStr(a.projectId) ? a.projectId : null);
+    var MD = DES.makeData, p = pid && MD && MD.project ? MD.project(pid) : null;
     var c = p ? p.cat : (isObj(w.art) && isObj(w.art.photo) ? w.art.photo.cat : null);
     return GD.CATS.indexOf(c) >= 0 ? c : null;
   }
-  // 自分の作品の種類: 提案のカテゴリ → catalog の id → 題材 → ものづくり
-  function catOf(w) { return projectCat(w) || catalogCat(w && w.catalogId) || GD.THEME_CAT[w && w.theme] || 'craft'; }
+  // 自分の作品の種類: 提案のカテゴリ → catalog の id → 題材 → ものづくり（acts = 活動の一覧。省略可）
+  function catOf(w, acts) { return projectCat(w, acts) || catalogCat(w && w.catalogId) || GD.THEME_CAT[w && w.theme] || 'craft'; }
   // 出している = 1 つずつ出した（in）か、自動が入で完成の作品（外した out は出さない）。
   // 写真から入れた作品（from 'capture'）は自動では出さない（顔や名前が写っていないかを本人が見てから 1 つずつ。§AF-2）
   function isIn(state, w) {
@@ -135,17 +137,17 @@
     return w.date ? (w.date + (w.atTime ? ' ' + w.atTime : '')) : '';
   }
   function itemId(workId) { return MY + workId; }
-  function ownItem(state, w) {
-    return { id: itemId(w.id), mine: true, workId: w.id, name: state.name, cat: catOf(w), title: w.title, like: w.like || null, craft: w.craft || null,
+  function ownItem(state, w, acts) {
+    return { id: itemId(w.id), mine: true, workId: w.id, name: state.name, cat: catOf(w, acts), title: w.title, like: w.like || null, craft: w.craft || null,
       buddy: !!(w.roles && w.roles.ai > 0), photo: w.from === 'capture', art: clone(w.art || null), time: inTime(state, w), answers: null };
   }
   function seedItem(s) {
     return { id: s.id, mine: false, workId: null, name: s.name, cat: s.cat, title: s.title, like: s.like || null, craft: s.craft || null,
       buddy: false, photo: false, art: s.art, time: s.time, answers: s.answers || null };
   }
-  function items(state, works, seed) {
+  function items(state, works, seed, acts) {
     var out = [];
-    (works || []).forEach(function (w) { if (w && isStr(w.id) && isIn(state, w)) out.push(ownItem(state, w)); });
+    (works || []).forEach(function (w) { if (w && isStr(w.id) && isIn(state, w)) out.push(ownItem(state, w, acts)); });
     (seed || GD.items).forEach(function (s) { out.push(seedItem(s)); });
     return newestFirst(out);
   }
@@ -265,8 +267,11 @@
     S.calls.splice(Math.max(0, Math.min(u.index | 0, S.calls.length)), 0, clone(u.call));
     return S;
   }
+  // 約束を足す。id が既にある別の約束と重なったら、重ならない id（末尾に -2、-3 …）で足す（確認レビューへの裁定）
   function addPromise(S, p) {
-    if (find(S.promises, p.id)) return false;
+    var id = p.id, k = 1;
+    while (find(S.promises, id)) { k += 1; id = p.id + '-' + k; }
+    p.id = id;
     S.promises.unshift(p);
     return true;
   }
@@ -314,10 +319,10 @@
     return S;
   }
   // 約束の種類（先に準備する活動の題材）: 声かけからなら見本の作品、届いた声かけからなら自分の作品
-  function promiseCat(state, p, works, seed) {
+  function promiseCat(state, p, works, seed, acts) {
     var rest = p && isStr(p.id) ? p.id.slice(2) : '', c = find(state.calls, rest), inb = find(state.inbox, rest);
     if (c) { var it = find(seed || GD.items, c.itemId); return it ? it.cat : null; }
-    if (inb) { var w = find(works, inb.workId); return w ? catOf(w) : null; }
+    if (inb) { var w = find(works, inb.workId); return w ? catOf(w, acts) : null; }
     return null;
   }
 
@@ -402,7 +407,7 @@
   function stamp() { var p = DES.data.today.split('-'); return (+p[1]) + '/' + (+p[2]) + ' ' + DES.data.now; }
   function newId(p) { return DES.plan.newId(p); }
   function refocus(sel) { var n = sel ? document.querySelector(sel) : null; if (n) n.focus(); }
-  function allItems() { return items(S().gallery, S().works, GD.items); }
+  function allItems() { return items(S().gallery, S().works, GD.items, S().activities); }
   function btn(label, action, o) {
     o = o || {};
     var at = { class: 'btn small' + (o.kls ? ' ' + o.kls : ''), type: 'button', 'data-action': action };
@@ -880,7 +885,7 @@
     var pid = el.getAttribute('data-id'), st = S().gallery, p = find(st.promises, pid), M = DES.make, MD = DES.makeData;
     if (!p) return;
     if (p.actId && act(p.actId)) { M.openAct(p.actId); return; }
-    var cat = promiseCat(st, p, S().works, GD.items), th = GD.CAT_THEME[cat];
+    var cat = promiseCat(st, p, S().works, GD.items, S().activities), th = GD.CAT_THEME[cat];
     var r = M.fromPromise(p, { id: newId('a'), title: T('gl_prep_title', { title: p.title }), steps: GD.PREP_STEPS,
       theme: th && MD.THEMES.indexOf(th) >= 0 ? th : 'mc', now: DES.data.now, acts: S().activities });
     if (!r) return;

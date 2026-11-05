@@ -903,16 +903,21 @@
   }
 
   // ---------- 保存の失敗を戻す（contract-app 共通の約束「失敗は save_fail + 画面状態を戻す」。作る・お題・話す・展示で同じ約束）----------
-  // keys の今の値を写してから fn(st) で書き換え、keys を順に save(key) する。1 つでも偽なら、全部のキーを書き換える前の値に戻し
-  // （先に保存できたキーは前の値で保存し直す）、st.saveFailed を立てて false。全部保存できたら true（saveFailed を下げるかは呼ぶ側）
+  // keys の今の値を写してから fn(st) で書き換え、keys を順に save(key) する。1 つでも偽なら、保存していないキーは書き換える前の値に戻し、
+  // 先に保存できたキーは前の値で保存し直せた時だけ前の値に戻す（保存し直せなければ新しい値のまま = キーごとに「メモリ = 保存」）。
+  // st.saveFailed を立てて false。全部保存できたら true（saveFailed を下げるかは呼ぶ側）
   function trySave(st, keys, fn, save) {
     var before = {}, done = [], ok = true;
     keys.forEach(function (k) { before[k] = clone(st[k]); });
     fn(st);
     keys.forEach(function (k) { if (!ok) return; if (save(k)) done.push(k); else ok = false; });
     if (ok) return true;
-    keys.forEach(function (k) { st[k] = before[k]; });
-    done.forEach(function (k) { save(k); });
+    keys.forEach(function (k) {
+      if (done.indexOf(k) < 0) { st[k] = before[k]; return; }
+      var now = st[k];
+      st[k] = before[k];
+      if (!save(k)) st[k] = now;
+    });
     st.saveFailed = true;
     return false;
   }

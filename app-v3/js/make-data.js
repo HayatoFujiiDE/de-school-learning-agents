@@ -730,8 +730,8 @@
   MD.art = function (stage) {
     if (!stage) return '';
     if (stage.kind === 'note') return '';
-    var v = stage.values || MD.variantValues(stage.theme, stage.variant);
-    if (AD_THEMES[stage.theme]) v = adVals(stage.theme, v);
+    // 3 題材は MD.result と同じ値（values が無ければ題材の既定値）。既存 4 題材は今までどおり案の既定値
+    var v = AD_THEMES[stage.theme] ? adVals(stage.theme, stage.values || {}) : (stage.values || MD.variantValues(stage.theme, stage.variant));
     if (stage.theme === 'py') return pyArt(stage.variant, v);
     if (stage.theme === 'circuit') return circuitArt(stage.variant, v);
     if (stage.theme === 'tool') return toolArt(stage.variant, v);
@@ -743,8 +743,7 @@
   // 図に出している量（テスト用。線画と同じ計算）
   MD.artMarks = function (stage) {
     if (!stage || stage.kind === 'note') return '';
-    var v = stage.values || MD.variantValues(stage.theme, stage.variant);
-    if (AD_THEMES[stage.theme]) v = adVals(stage.theme, v);
+    var v = AD_THEMES[stage.theme] ? adVals(stage.theme, stage.values || {}) : (stage.values || MD.variantValues(stage.theme, stage.variant));
     if (stage.theme === 'py') return JSON.stringify(pyMarks(v));
     if (stage.theme === 'circuit') return JSON.stringify(circuitMarks(stage.variant, v));
     if (stage.theme === 'tool') return JSON.stringify(toolMarks(v));
