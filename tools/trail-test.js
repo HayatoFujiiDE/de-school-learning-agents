@@ -100,7 +100,21 @@ var plan = clone(D.plan).concat([
   { id: 'ph', start: '9:00', end: '9:30', title: '隠した行', kind: 'mine', activity: 'mc-build', hidden: true },
   { id: 'pfh', start: '9:00', end: '9:30', title: '隠したまま終わった行', kind: 'mine', activity: 'mc-build', gone: 'finished', hidden: true }
 ]);
-var msgs = D.talk.concat([{ id: 'rec-1', who: 'record', time: '10:20', text: '15:15 に「建築」を入れた' }]);
+// 記録行のテンプレートは i18n.js の DES.text（会話の記録行は種類を持たないので、テンプレートで見分ける）
+var I18N_SRC = fs.readFileSync(path.join(JS, 'i18n.js'), 'utf8');
+function tpl(k) { var m = new RegExp('\\n\\s+' + k + ": '([^']*)'").exec(I18N_SRC); return m ? m[1] : null; }
+var FIN = tpl('rec_finish'), HIDE = ['rec_decline', 'rec_remove', 'rec_skip'].map(tpl);
+eq([FIN, HIDE], ['「{title}」が終わった（{start}〜{end}）', ['「{title}」の提案は見送った', '「{title}」を予定から外した', '運動は今日は見送ることにした']], 'テンプレートを i18n.js から読む');
+var msgs = D.talk.concat([
+  { id: 'rec-1', who: 'record', time: '10:20', text: '15:15 に「建築」を入れた' },
+  { id: 'rec-fin', who: 'record', time: '10:20', text: '「終わった行」が終わった（9:00〜9:30）' },
+  { id: 'rec-fin2', who: 'record', time: '10:21', text: '「終わった行」が終わった（9:00〜9:30）' },
+  { id: 'rec-dec', who: 'record', time: '10:20', text: '「ゲーム作り: Python」の提案は見送った' },
+  { id: 'rec-rem', who: 'record', time: '10:20', text: '「建築」を予定から外した' },
+  { id: 'rec-skip', who: 'record', time: '10:20', text: '運動は今日は見送ることにした' },
+  { id: 'rec-undo', who: 'record', time: '10:20', text: '「建築」を戻した' },
+  { id: 'rec-old', who: 'record', time: '10:19', text: '「戻した行」が終わった（9:00〜9:30）' }
+]);
 var odai = { slots: [], kept: ['od-seed'], rot: {}, tried: {
   'od-seed': { entries: { watch: true, find: true, play: true, make: false }, checks: [0], found: [{ photo: TDD.get('od-seed').find.photos[0].id, line: '公園で見つけた', time: '11/1 15:40' }, { photo: TDD.get('od-seed').find.photos[1].id, line: null, time: '11/2 10:20' }] },
   'od-sign': { entries: { watch: true, find: false, play: false, make: false }, checks: [], found: [] }
@@ -110,7 +124,7 @@ var stoppedCh = M.test(M.setParam(stopped, 'size', 6)).act;
 stoppedCh.state = 'stopped';
 var empty = M.fromSample('py', { id: 'a-empty', now: '10:20', mode: 'js' });
 var acts = [empty, stoppedCh].concat(seed);
-var input = { acts: acts, works: works, messages: msgs, plan: plan, odai: odai, today: TODAY }, inBefore = freeze(input);
+var input = { acts: acts, works: works, messages: msgs, plan: plan, odai: odai, today: TODAY, finishTpl: FIN, hideRec: HIDE }, inBefore = freeze(input);
 var es = TR.entries(input);
 eq(freeze(input), inBefore, 'entries 元を変えない');
 var eids = ids(es);
@@ -137,14 +151,20 @@ eq([wpy.day, wpy.time, wpy.status, wpy.like, !!wpy.art], ['10/30', '10:31', 'don
 eq(es.filter(function (e) { return e.id === 'work:w-seed-build'; })[0].status, 'trial', 'Z-4 作品: 試作');
 eq(of('talk').map(function (e) { return e.msgId; }), ['talk-4', 'talk-2', 'talk-0'], 'Z-4 話した: 新しい順');
 var pl = of('plan');
-eq(pl.map(function (e) { return e.id; }), ['rec:rec-1', 'plan:pf'], 'Z-4 予定の記録: 終わった行 + 会話の記録行（見送り・外した・非表示は出さない）');
-eq([pl[1].sub, pl[1].title, pl[1].start, pl[1].end, pl[1].catalogId], ['finished', '終わった行', '9:00', '9:30', 'mc-build'], 'Z-4 終わった行: タイトル・時間・取り組み');
-eq([pl[0].sub, pl[0].text], ['record', '15:15 に「建築」を入れた'], 'Z-4 記録行の文はそのまま');
+eq(pl.map(function (e) { return e.id; }), ['rec:rec-undo', 'rec:rec-1', 'rec:rec-old', 'plan:pf'], 'Z-4 予定の記録: 終わった行 + 会話の記録行（見送り・外した・非表示の行とその記録行は出さない）');
+eq(pl[3].recId, 'rec-fin', 'Z-4 終わった行と同じ終わりの記録行は 1 回だけ（行にまとめ、記録行の id を持つ）');
+ok(!es.some(function (e) { return /^rec:rec-(fin|fin2|dec|rem|skip)$/.test(e.id); }), 'Z-4 見送った・外した・運動を見送った・終わった行と重なる 記録行は出さない');
+var raw = ids(TR.entries({ messages: msgs, plan: plan, today: TODAY }).filter(function (e) { return e.kind === 'plan'; }));
+eq(raw.length, 9, 'entries テンプレートを渡さなければ記録行はすべて出る（8 + 終わった行 1）');
+eq([pl[3].sub, pl[3].title, pl[3].start, pl[3].end, pl[3].catalogId], ['finished', '終わった行', '9:00', '9:30', 'mc-build'], 'Z-4 終わった行: タイトル・時間・取り組み');
+eq([pl[1].sub, pl[1].text], ['record', '15:15 に「建築」を入れた'], 'Z-4 記録行の文はそのまま');
 var fd = of('found');
 eq(fd.map(function (e) { return [e.id, e.day, e.time, e.line]; }), [['found:od-seed:1', '11/2', '10:20', null], ['found:od-seed:0', '11/1', '15:40', '公園で見つけた']], 'Z-4 見つけた: odai.tried[id].found[]・日と時刻・本人の 1 行');
 ok(!es.some(function (e) { return e.odaiId === 'od-sign'; }), 'Z-4 入口を開いただけ・とっておいたは出さない');
 ok(!es.some(function (e) { return /declined|pauseCount|offered/.test(JSON.stringify(e)); }), 'Z-4 断った回数・背中押しは出さない');
 eq(TR.entries({}), [], 'entries 空');
+eq(TR.entries({ messages: [{ id: 'r', who: 'record', time: '1:00', text: '「a.b*c」の提案は見送った' }], hideRec: HIDE, today: TODAY }), [], 'hideRec はテンプレートの記号をそのまま文字として扱う');
+eq(ids(TR.entries({ messages: [{ id: 'r', who: 'record', time: '1:00', text: '前に「a」の提案は見送った' }], hideRec: HIDE, today: TODAY })), ['rec:r'], 'hideRec は行全体が一致する時だけ');
 eq(TR.entries({ acts: [empty], today: TODAY }), [], 'entries 変化 0 の活動だけなら 0 件');
 // 同じ時刻は新しく足されたものが先
 var same = TR.entries({ messages: [{ id: 'x1', who: 'record', time: '10:20', text: 'a' }, { id: 'x2', who: 'record', time: '10:20', text: 'b' }], today: TODAY });
@@ -160,7 +180,7 @@ eq(ids(TR.filter(es, 'all')), eids, 'filter all = すべて');
 eq(TR.filter(es, 'make').map(function (e) { return e.kind; }).filter(function (k, i, a) { return a.indexOf(k) === i; }).sort(), ['make', 'work'], 'filter 作った = 作った + 作品に残した');
 eq(TR.filter(es, 'talk').every(function (e) { return e.kind === 'talk'; }) && TR.filter(es, 'talk').length, 3, 'filter 話した');
 eq(TR.filter(es, 'found').length, 2, 'filter 見つけた');
-eq(TR.filter(es, 'plan').length, 2, 'filter 予定');
+eq(TR.filter(es, 'plan').length, 4, 'filter 予定');
 eq(TR.filter(es, 'zzz').length, es.length, 'filter 知らない値 = すべて');
 eq(TR.filter(TR.entries({ messages: D.talk, today: TODAY }), 'found'), [], 'filter 0 件');
 

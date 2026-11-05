@@ -27,6 +27,9 @@
     return m ? { day: m[1], time: m[2] } : { day: today, time: String(s == null ? '' : s) };
   }
   function firstLine(s) { return String(s == null ? '' : s).split('\n')[0]; }
+  function fmt(s, vars) { return String(s).replace(/\{(\w+)\}/g, function (all, k) { return vars && vars[k] != null ? String(vars[k]) : all; }); }
+  // 記録行のテンプレート（i18n の DES.text。{title} 等は任意の文字）に一致するか。会話の記録行は種類を持たないので、テンプレートで見分ける
+  function tplRe(t) { return new RegExp('^' + String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\{\w+\\\}/g, '.+') + '$'); }
   // 文言の値（[中, 小] / { text }）が本人の文 s と同じか
   function sameText(x, s) {
     if (!x || !s) return false;
@@ -75,8 +78,10 @@
   }
 
   // ---------- 時系列「たどる」（§Z-4）: day 降順 → time 降順（同じ時刻は新しく足されたものが先）。id は重ならない ----------
-  // o: { acts, works, messages, plan, odai, today }
-  // 出さないもの: 予定の見送り・外した・非表示の行 / 入口を開いただけ・とっておいた（odai）/ 背中押し・断った回数 / 変化の無い活動
+  // o: { acts, works, messages, plan, odai, today, finishTpl, hideRec }
+  //   finishTpl = 終わった の記録行のテンプレート（DES.text.rec_finish）。終わった行と同じ終わりを書いた記録行は出さず、行の recId にする（1 回だけ出す）
+  //   hideRec   = 見送り・外した を書いた記録行のテンプレート（DES.text.rec_decline / rec_remove / rec_skip）。一致する記録行は出さない
+  // 出さないもの: 予定の見送り・外した・非表示の行とその記録行 / 入口を開いただけ・とっておいた（odai）/ 背中押し・断った回数 / 変化の無い活動
   function stoppedRec(a) {
     for (var i = (a.thread || []).length - 1; i >= 0; i--) {
       var m = a.thread[i];
@@ -93,15 +98,23 @@
       out.push({ e: e, ord: ord, dk: dayKey(e.day), tm: toMin(e.time) });
     }
     // 予定の記録: 終わった行だけ（見送り・外した・非表示は出さない）
+    var fin = {};
     (o.plan || []).forEach(function (r, i) {
       if (!r || r.gone !== 'finished' || r.hidden) return;
-      add({ id: 'plan:' + r.id, kind: 'plan', sub: 'finished', day: today, time: r.start, rowId: r.id, title: r.title, start: r.start, end: r.end,
-        catalogId: r.activity || null }, i);
+      var e = { id: 'plan:' + r.id, kind: 'plan', sub: 'finished', day: today, time: r.start, rowId: r.id, title: r.title, start: r.start, end: r.end,
+        catalogId: r.activity || null, recId: null };
+      if (o.finishTpl) fin[fmt(o.finishTpl, { title: r.title, start: r.start, end: r.end })] = e;
+      add(e, i);
     });
-    // 会話: 記録行は「予定の記録」、本人の発言 + 直後の返事は「話した」
-    var ms = o.messages || [];
+    // 会話: 記録行は「予定の記録」、本人の発言 + 直後の返事は「話した」。
+    // 終わった行と同じ終わりの記録行はその行にまとめ、見送り・外した の記録行は出さない
+    var hide = (o.hideRec || []).filter(Boolean).map(tplRe), ms = o.messages || [];
     ms.forEach(function (m, i) {
-      if (m && m.who === 'record') add({ id: 'rec:' + m.id, kind: 'plan', sub: 'record', day: today, time: m.time, msgId: m.id, text: String(m.text == null ? '' : m.text) }, 1000 + i);
+      if (!m || m.who !== 'record') return;
+      var text = String(m.text == null ? '' : m.text), f = fin[text];
+      if (f) { if (!f.recId) f.recId = m.id; return; }
+      if (hide.some(function (re) { return re.test(text); })) return;
+      add({ id: 'rec:' + m.id, kind: 'plan', sub: 'record', day: today, time: m.time, msgId: m.id, text: text }, 1000 + i);
     });
     talkTopics(ms).forEach(function (t) {
       add({ id: t.id, kind: 'talk', day: today, time: t.time, msgId: t.msgId, text: t.text, reply: t.reply, replyId: t.replyId }, 1000 + t.seq);
@@ -311,12 +324,17 @@
     kids.push(H('div', { class: 'tr-ops' }, [btn(T('tr_see_talk'), 'tr-talk', { arg: e.msgId, icon: 'chat' })]));
     return H('div', { class: 'tr-body' }, kids);
   }
+  // 記録行の操作は 1 つ: 話すで見る（会話のその記録行へ）
+  function seeTalkBtn(msgId) { return btn(T('tr_see_talk'), 'tr-talk', { arg: msgId, icon: 'chat' }); }
   function planBody(e) {
-    if (e.sub === 'record') return H('div', { class: 'tr-body' }, [H('p', { class: 'tr-text' }, [kindMark(e), recChip(), H('span', null, e.text)])]);
+    if (e.sub === 'record') {
+      return H('div', { class: 'tr-body' }, [H('p', { class: 'tr-text' }, [kindMark(e), recChip(), H('span', null, e.text)]), H('div', { class: 'tr-ops' }, [seeTalkBtn(e.msgId)])]);
+    }
     var kids = [H('div', { class: 'tr-line1' }, [kindMark(e), recChip(),
       H('strong', { class: 'tr-title' }, e.title + ' ' + DES.plan.range(e.start, e.end)), H('span', { class: 'tr-done' }, T('finished'))])];
-    var pb = planBtn(e.catalogId, 'row:' + e.rowId, e.title);
-    if (pb) kids.push(H('div', { class: 'tr-ops' }, [pb]));
+    // 終わった行の操作も 1 つ: 予定に入れる（取り組みがある時）→ 無ければ まとめた記録行を話すで見る → それも無ければ 今日の予定
+    var op = planBtn(e.catalogId, 'row:' + e.rowId, e.title) || (e.recId ? seeTalkBtn(e.recId) : H('a', { class: 'btn small', href: '#plan' }, [icon('calendar'), H('span', null, T('plan'))]));
+    kids.push(H('div', { class: 'tr-ops' }, [op]));
     return H('div', { class: 'tr-body' }, kids);
   }
   function foundBody(e) {
@@ -356,10 +374,13 @@
     return H('section', { class: 'tr-flow', 'aria-labelledby': 'tr-flow-h' }, kids);
   }
 
+  // 見送り・外した を書いた記録行（plan.js の 提案を断る / 外す / 運動を見送る）
+  var HIDE_REC = ['rec_decline', 'rec_remove', 'rec_skip'];
   function view() {
     var st = S(), today = todayStr();
     var cards = resumeCards(st.activities, st.makeSide && st.makeSide.lastStop, today);
-    var list = entries({ acts: st.activities, works: st.works, messages: DES.talk.messages(), plan: st.plan, odai: st.odai, today: today });
+    var list = entries({ acts: st.activities, works: st.works, messages: DES.talk.messages(), plan: st.plan, odai: st.odai, today: today,
+      finishTpl: DES.text.rec_finish, hideRec: HIDE_REC.map(function (k) { return DES.text[k]; }) });
     // お題の定義が無い「見つけた」は出さない（today.js の normalize と同じ扱い）
     list = list.filter(function (e) { if (e.kind !== 'found') return true; var o = TDD && TDD.get(e.odaiId); return !!(o && TDD.photo(o, e.photo)); });
     return { today: today, cards: cards, list: list };
@@ -407,7 +428,9 @@
       var st = S();
       st.activities = st.activities.filter(function (x) { return x.id !== n.id; });
       if (st.makeSide && st.makeSide.lastStop === 'make:' + n.id) st.makeSide.lastStop = prevStop;
-      if (!DES.store.save()) st.saveFailed = true;
+      var saved = DES.store.save('activities');
+      if (st.makeSide && !DES.store.save('makeSide')) saved = false;
+      if (!saved) st.saveFailed = true;
       ui().pendingFocus = '[data-action="tr-retry"][data-id="' + esc(origId) + '"]';
       go('#trail');
     } });
@@ -422,7 +445,12 @@
   A['tr-filter'] = function (el) {
     var f = el.getAttribute('data-arg');
     if (FILTERS.indexOf(f) < 0 || (S().trail && S().trail.filter === f)) return;
-    DES.app.change(function () { S().trail = { filter: f }; });
+    // 保存するのは des3.trail だけ（§Z-1。DES.app.change の全キー保存を通さず、他のストアを書き直さない）
+    S().trail = { filter: f };
+    if (!DES.store.save('trail')) S().saveFailed = true;
+    DES.app.render();
+    var n = document.querySelector('[data-action="tr-filter"][data-arg="' + esc(f) + '"]');
+    if (n) n.focus();
   };
   // 話すで見る（§Z-4）: #talk へ移り、その発言へ（talk.js の renderPage が DES.ui.focusMsg を 1 回だけ使う）
   A['tr-talk'] = function (el) {
