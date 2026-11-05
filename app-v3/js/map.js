@@ -620,7 +620,7 @@
     (view === 'fields' ? [] : [['learned', 'mp_kind_learned']]).concat([['unit', 'mp_kind_unit'], ['ext', 'mp_lg_unit_ext'], ['next', 'mp_kind_next']]).forEach(function (p) {
       items.push(H('span', { class: 'mp-lg' }, [H('span', { class: 'mp-mk k-' + p[0], 'aria-hidden': 'true' }), H('span', null, T(p[1]))]));
     });
-    return H('details', { class: 'mp-legend', open: true }, [H('summary', { class: 'mp-legend-sum' }, T('mp_lg_toggle')), H('div', { class: 'mp-legend-items' }, items)]);
+    return H('details', { class: 'mp-key', open: true }, [H('summary', { class: 'mp-key-sum' }, T('mp_lg_toggle')), H('div', { class: 'mp-key-items' }, items)]);
   }
   function chipsBar(view) {
     var u = mapUi();
@@ -632,9 +632,9 @@
     ]);
   }
   function fitLegend(page) {
-    var d = page && page.querySelector('.mp-legend'), bar = page && page.querySelector('.mp-chipbar');
+    var d = page && page.querySelector('.mp-key'), bar = page && page.querySelector('.mp-chipbar');
     if (!d || !bar || !d.isConnected) return;
-    var items = d.querySelector('.mp-legend-items');
+    var items = d.querySelector('.mp-key-items');
     d.classList.remove('is-folded');
     d.open = true;
     var fits = items.scrollWidth <= bar.clientWidth + 0.5;
