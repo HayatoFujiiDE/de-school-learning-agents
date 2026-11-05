@@ -4,6 +4,8 @@
    0.3 より小さい倍率では、逆に拡大した題どうしが重なる分を決定論で間引く（MPC.thin。先に並べたもの = 新しいものを残す）。
    純関数（MPC.clampZoom / minZoom / zoomAt / fit / lod / pan / clampView / reveal / center / thin）は DOM に触れず、node から読める（tools/map-test.js）。
    ブラウザでは MPC.attach(frame, api) が ドラッグ・2 本指のピンチ・ホイール（ctrlKey 付き = トラックパッドのピンチ）・キー（+ − 0 と矢印）を受ける。
+   作ったもののノードの上から 6px 以上動かした時は、地図ではなくそのノードを動かす（§AD-5。api.grab / nodeStart / nodeMove / nodeEnd）。
+   ピンチ（2 本目の指）に変わったら、動かしかけたノードは元の場所へ戻す。Shift + 矢印は api.keyMove（地図の座標で 24px）。
    枠の中だけが動く（touch-action:none は map.css）。ドラッグの後のクリックは、ノードを選ばないように捨てる。 */
 (function (root) {
   'use strict';
@@ -12,6 +14,8 @@
   MPC.MIN = 0.3;     // ふだんの下限（地図が枠より小さくなる時だけ、全体が入る倍率まで下げる）
   MPC.FLOOR = 0.1;   // それでも下げない床
   MPC.MAX = 2;
+  // 作ったものを Shift + 矢印で動かす幅（地図の座標・§AD-5）
+  MPC.MOVE_STEP = 24;
   // 倍率で出す量（§AB-3-1）: far < 0.6 ≦ mid < 1.1 ≦ near
   MPC.FAR = 0.6;
   MPC.NEAR = 1.1;
@@ -116,6 +120,8 @@
       window.removeEventListener('pointercancel', cancel, true);
     }
     function startPinch() {
+      // ノードを動かしかけていたら元の場所へ（ピンチ中は動かさない）
+      if (drag && drag.lifted && api.nodeEnd) api.nodeEnd(drag.node, false);
       var k = ids(), a = pts[k[0]], b = pts[k[1]];
       pinch = { d0: Math.max(1, dist(a, b)), c0: mid(a, b), v: api.view() };
       drag = null;
@@ -130,7 +136,8 @@
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       pts[String(e.pointerId)] = local(e);
       hook();
-      if (ids().length === 1) { drag = { id: String(e.pointerId), s: local(e), v: api.view() }; moved = false; pinch = null; }
+      // 作ったもののノードの上から押した時は、動かし始めたらそのノードを動かす（何も無い所からは地図の移動）
+      if (ids().length === 1) { drag = { id: String(e.pointerId), s: local(e), v: api.view(), node: api.grab ? api.grab(e.target) : null, lifted: false }; moved = false; pinch = null; }
       else if (ids().length === 2) startPinch();
     }
     function move(e) {
@@ -151,7 +158,14 @@
       if (!drag || drag.id !== k) return;
       var dx = pts[k].x - drag.s.x, dy = pts[k].y - drag.s.y;
       if (!moved && Math.abs(dx) + Math.abs(dy) < 6) return;
-      if (!moved) { moved = true; frame.classList.add('is-dragging'); try { frame.setPointerCapture(e.pointerId); } catch (x) { /* 取れなくても動かせる */ } }
+      if (!moved) {
+        moved = true;
+        frame.classList.add('is-dragging');
+        try { frame.setPointerCapture(e.pointerId); } catch (x) { /* 取れなくても動かせる */ }
+        if (drag.node && api.nodeStart) drag.lifted = api.nodeStart(drag.node) !== false;
+      }
+      // ノード: 画面の動き ÷ 倍率 = 地図の座標の動き
+      if (drag.lifted) { api.nodeMove(drag.node, dx / drag.v.z, dy / drag.v.z); return; }
       api.apply(MPC.pan(drag.v, dx, dy));
     }
     // 終わり。離した（up）時だけ、動かした後のクリックを捨てる。取り消し（cancel）ではクリックが来ないので捨てない
@@ -175,7 +189,8 @@
         return;
       }
       if (drag && drag.id === k) {
-        if (moved) { if (!cancelled) suppress = true; api.commit(); }
+        // ノードを動かしていたら、離した所に置く（保存）。地図の移動なら表示位置を保存
+        if (moved) { if (!cancelled) suppress = true; if (drag.lifted) api.nodeEnd(drag.node, true); else api.commit(); }
         drag = null;
         moved = false;
         frame.classList.remove('is-dragging');
@@ -209,6 +224,9 @@
       if (dead || e.defaultPrevented || e.altKey || e.metaKey || e.ctrlKey) return;
       if (e.target && e.target.closest && e.target.closest('.mp-detail')) return;
       var c = api.keyCenter(e.target) || { x: frame.clientWidth / 2, y: frame.clientHeight / 2 }, v = api.view(), k = e.key, nv = null;
+      // Shift + 矢印: 作ったもののノードにフォーカスがある時はそのノードを動かす（§AD-5）。それ以外は今までどおり地図の移動
+      var dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[k];
+      if (dir && e.shiftKey && api.keyMove && api.keyMove(e.target, dir[0], dir[1])) { e.preventDefault(); return; }
       if (k === '+' || k === '=') nv = MPC.zoomAt(v, MPC.KEY_STEP, c.x, c.y, minZ());
       else if (k === '-' || k === '_') nv = MPC.zoomAt(v, 1 / MPC.KEY_STEP, c.x, c.y, minZ());
       else if (k === '0') { e.preventDefault(); api.fit(true); return; }

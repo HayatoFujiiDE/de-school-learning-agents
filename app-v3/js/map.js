@@ -1,8 +1,10 @@
-/* 学びマップ（#map 作ったものから / #map/flow 流れで見る / #map/fields 分野で見る / #map/list リスト / #map/basics 基礎学習 / #map/u/<code> 単元）:
+/* 学びマップ（#map 作ったものから / #map/flow 流れで見る / #map/fields 分野で見る / #map/concepts 概念で見る / #map/list リスト /
+   #map/basics 基礎学習 / #map/u/<code> 単元）:
    CONTRACT-v3 §Y（基礎学習・単元・手がかりの約束）+ §AB（つながりを拡大縮小できる 1 枚の地図に）+ §AC（画面の使い方: 見出しの右に切替・
-   枠の中にチップ・大きく見る・流れで見る = §Y-2 の 3 列を 1 つの見方として戻す・作ったものだけ）。
+   枠の中にチップ・大きく見る・流れで見る = §Y-2 の 3 列を 1 つの見方として戻す・作ったものだけ）+ §AD（教科をまたぐ・学ぶ順の線をやめる・
+   概念で見る = 参考の見方・作ったものをつかんで動かす）。
    主役は「作ったもの」。作ったもの → そこで学んだこと（手がかり。記録 1 つを場面として必ず伴う）→ つながる単元 を基本の線に、
-   学ぶ順・教科をまたぐ・これから作れそう の 3 種のつながりを、チップで選んで重ねる（作ったものどうしの線は §AC-13 でやめた）。
+   これから作れそう をチップで重ねる（作ったものどうし §AC-13・教科をまたぐ §AD-1・学ぶ順 §AD-9 の線はやめた。学ぶ順は単元の詳細の 前 / 後 に残す）。
    多くても読めるように: 倍率で出す量を変える（far / mid / near）/ 種類を選ぶ / 1 つ選ぶとそこだけ濃く / 詳細パネル。
    学んだことは判定ではなく手がかり。数・達成・順位・おすすめ度は出さない。
    純関数（MP.progress / overall / graph / related / peers / normalizeUi / select / decline …）は DOM と DES.t に触れず、
@@ -17,10 +19,14 @@
   var MPC = DES.mapCanvas || (typeof require === 'function' ? require('./map-canvas.js') : null);
   var MP = DES.map = DES.map || {};
   var SRC = ['own', 'person', 'buddy'];
-  // 見方は 4 つ（§AC-3 の順）。流れで見る = §Y-2 の左 → 右の 3 列（§AC-8）
-  var VIEWS = ['made', 'flow', 'fields', 'list'];
-  // つながりのチップは 3 つ（§AC-13: 作ったものどうしの線とチップはやめた。保存済みの chips.peer は読み捨てる）
-  var CHIPS = ['order', 'cross', 'next'];
+  // 見方は 5 つ（§AD-2 の順）。流れで見る = §Y-2 の左 → 右の 3 列（§AC-8）/ 概念で見る = 参考の見方（§AD-2）
+  var VIEWS = ['made', 'flow', 'fields', 'concepts', 'list'];
+  // つながりのチップは 1 つ（§AC-13 / AD-1 / AD-9: 作ったものどうし・教科をまたぐ・学ぶ順はやめた。保存済みの chips.peer / cross / order は読み捨てる）
+  var CHIPS = ['next'];
+  // 本人が動かせる見方（§AD-5）と、動かした分の上限（地図の座標で ±4000）
+  var MOVE_VIEWS = ['made', 'fields'];
+  var MOVE_MAX = 4000;
+  var PAD = 60;
   var MADE = { act: 1, work: 1, past: 1 };
 
   // ---------- 小道具 ----------
@@ -97,7 +103,8 @@
   // ---------- つながり（§AB-12）----------
   // nodes = { made（今の活動 act: / 活動の無い作品 work: / 前に作ったもの past:。新しい順）, learned（ln:）, units（unit:。全教科）, next（next:）}
   // edges = { id, kind, from, to, views }: kind = base（作ったもの → 学んだこと → 単元）/ mu（分野で見る: 作ったもの → 単元）/
-  //   peer（作ったものどうし = 同じ単元につながる。データに持たず導く）/ order（学ぶ順）/ cross（教科をまたぐ）/ next（これから作れそう）。
+  //   peer（作ったものどうし = 同じ単元につながる。データに持たず導く）/ order（学ぶ順。線には描かず単元の詳細の 前 / 後 だけ §AD-9）/ next（これから作れそう）。
+  //   教科をまたぐ（cross）は §AD-1 でやめた（渡されても落とす）。
   // 存在しない活動・作品・記録・単元を指すものは線ごと落とす。外した（declined）見立てと next も落とす。
   function graph(learned, acts, works, declined, opts) {
     opts = opts || {};
@@ -180,10 +187,10 @@
         if (shared.length) edge({ id: 'peer:' + made[i].id + '|' + made[j].id, kind: 'peer', from: made[i].id, to: made[j].id, units: shared, views: ['made', 'fields'] });
       }
     }
-    // 学ぶ順・教科をまたぐ（無い単元を指すものは落とす）
+    // 学ぶ順（無い単元を指すものは落とす。教科をまたぐ = cross は §AD-1 でやめたので落とす）
     links.forEach(function (k) {
-      if (!k || (k.kind !== 'order' && k.kind !== 'cross') || !MPD.anyUnit(k.from) || !MPD.anyUnit(k.to) || k.from === k.to) return;
-      edge({ id: 'ul:' + (typeof k.id === 'string' ? k.id : k.from + '>' + k.to), kind: k.kind, from: 'unit:' + k.from, to: 'unit:' + k.to, why: k.why ? clone(k.why) : null, views: ['made', 'fields'] });
+      if (!k || k.kind !== 'order' || !MPD.anyUnit(k.from) || !MPD.anyUnit(k.to) || k.from === k.to) return;
+      edge({ id: 'ul:' + (typeof k.id === 'string' ? k.id : k.from + '>' + k.to), kind: k.kind, from: 'unit:' + k.from, to: 'unit:' + k.to, views: ['made', 'fields'] });
     });
     // これから作れそうなもの: 元の学んだことが 1 つも残っていなければ出さない
     nexts.forEach(function (x) {
@@ -216,24 +223,26 @@
   function nodeById(g, id) { return g && typeof id === 'string' ? (index(g)[id] || null) : null; }
   function hasNode(g, id) { return !!nodeById(g, id); }
   function isMade(n) { return !!n && !!MADE[n.kind]; }
-  // その見方に出すノード: 作ったものから / 流れで見る / リスト = 作ったもの・学んだこと・作ったものとつながる単元・これから / 分野で見る = 作ったもの・全単元・これから
+  // その見方に出すノード: 作ったものから / 流れで見る / リスト = 作ったもの・学んだこと・作ったものとつながる単元・これから / 分野で見る = 作ったもの・全単元・これから /
+  // 概念で見る = 作ったもの・学んだこと・全単元・これから（いま選んでいる考え方に出るものは conceptNodes で絞る）
   function viewNodes(g, view) {
     var out = {};
     if (!g) return out;
     g.nodes.made.forEach(function (n) { out[n.id] = true; });
     g.nodes.next.forEach(function (n) { out[n.id] = true; });
-    g.nodes.units.forEach(function (u) { if (view === 'fields' || u.made.length) out[u.id] = true; });
+    g.nodes.units.forEach(function (u) { if (view === 'fields' || view === 'concepts' || u.made.length) out[u.id] = true; });
     if (view !== 'fields') g.nodes.learned.forEach(function (n) { out[n.id] = true; });
     return out;
   }
-  // その見方に描く線。作ったものどうし（peer）はどの見方にも描かない（§AC-13）
+  // その見方に描く線。作ったものどうし（peer §AC-13）・学ぶ順（order §AD-9）はどの見方にも描かない
   function edgesIn(g, view) {
     var vn = viewNodes(g, view), v = view === 'fields' ? 'fields' : 'made';
-    return g ? g.edges.filter(function (e) { return e.kind !== 'peer' && e.views.indexOf(v) >= 0 && vn[e.from] && vn[e.to]; }) : [];
+    return g ? g.edges.filter(function (e) { return e.kind !== 'peer' && e.kind !== 'order' && e.views.indexOf(v) >= 0 && vn[e.from] && vn[e.to]; }) : [];
   }
-  // 選んだノードとつながるもの（種類ごと）。選んだノードのつながりは、チップが off の種類も含めて全部（§AB-3-3）。自分は含めない
+  // 選んだノードとつながるもの（種類ごと）。選んだノードのつながりは、チップが off の種類も含めて全部（§AB-3-3）。自分は含めない。
+  // 学ぶ順は線を描かないので含めない（§AD-9。単元の詳細の 前 / 後 で読む）
   function related(g, id) {
-    var out = { nodes: [], edges: [], kinds: { base: [], mu: [], order: [], cross: [], next: [] } };
+    var out = { nodes: [], edges: [], kinds: { base: [], mu: [], next: [] } };
     var n = nodeById(g, id);
     if (!n) return out;
     var E = g.edges, nodes = {}, seen = {};
@@ -246,7 +255,6 @@
     }
     function from(x, k) { return E.filter(function (e) { return e.from === x && e.kind === k; }); }
     function to(x, k) { return E.filter(function (e) { return e.to === x && e.kind === k; }); }
-    function touch(x, k) { return E.filter(function (e) { return (e.from === x || e.to === x) && e.kind === k; }); }
     if (isMade(n)) {
       from(id, 'base').forEach(function (e) { add(e); from(e.to, 'base').forEach(add); });
       from(id, 'mu').forEach(add);
@@ -266,8 +274,6 @@
     } else if (n.kind === 'unit') {
       to(id, 'base').forEach(function (e) { add(e); to(e.from, 'base').forEach(add); });
       to(id, 'mu').forEach(add);
-      touch(id, 'order').forEach(add);
-      touch(id, 'cross').forEach(add);
       from(id, 'next').forEach(add);
     } else if (n.kind === 'next') {
       to(id, 'next').forEach(function (e) { add(e); if (e.from.indexOf('ln:') === 0) to(e.from, 'base').forEach(add); });
@@ -291,12 +297,28 @@
   }
   // des3.mapUi を整える（§AB-13）。壊れた値はその欄だけ初期値。
   // 選択は見方ごと（その見方に無いノードは null）。外せるのはバディの見立てと これから作れそうなもの だけ。表示位置は 作ったものから / 分野で見る ごと
+  // 概念で見る（§AD-2）: concept = 選んでいる考え方の id（無ければ null）。動かした分（§AD-5）: moved = { made: { 作ったものの id: { dx, dy } }, fields: {…} }
   function defaultUi() {
-    return { view: 'made', sel: { made: null, flow: null, fields: null, list: null }, chips: { order: false, cross: false, next: false }, declined: [], declinedNext: [], pos: { made: null, fields: null }, big: false, only: false };
+    return { view: 'made', sel: { made: null, flow: null, fields: null, concepts: null, list: null }, chips: { next: false }, declined: [], declinedNext: [], pos: { made: null, fields: null },
+      big: false, only: false, concept: null, moved: { made: {}, fields: {} } };
+  }
+  // 動かした分を整える: 作ったものの id（グラフがあればグラフにあるものだけ）・数だけ・±4000 に収めて 0.1 にまるめる・動いていないものは捨てる
+  function normalizeMoved(raw, g) {
+    var out = {};
+    if (!isObj(raw)) return out;
+    Object.keys(raw).forEach(function (id) {
+      var d = raw[id];
+      if (!/^(act|work|past):/.test(id) || !isObj(d) || !fin(d.dx) || !fin(d.dy)) return;
+      if (g && !isMade(nodeById(g, id))) return;
+      var dx = Math.round(Math.max(-MOVE_MAX, Math.min(MOVE_MAX, d.dx)) * 10) / 10, dy = Math.round(Math.max(-MOVE_MAX, Math.min(MOVE_MAX, d.dy)) * 10) / 10;
+      if (dx || dy) out[id] = { dx: dx, dy: dy };
+    });
+    return out;
   }
   function normalizeUi(raw, g, opt) {
     opt = opt || {};
     var table = Array.isArray(opt.learned) ? opt.learned : MPD.learned, ntable = Array.isArray(opt.next) ? opt.next : MPD.next, out = defaultUi();
+    var ctable = Array.isArray(opt.concepts) ? opt.concepts : MPD.concepts;
     if (isObj(raw)) {
       if (VIEWS.indexOf(raw.view) >= 0) out.view = raw.view;
       // 選択: 見方ごと。§Y の形（文字列 1 つ）は「作ったものから」の選択として読む
@@ -314,9 +336,15 @@
       // 大きく見る（§AC-6）・作ったものだけ（§AC-14）: 真偽値だけ
       if (typeof raw.big === 'boolean') out.big = raw.big;
       if (typeof raw.only === 'boolean') out.only = raw.only;
+      // 概念で見る（§AD-4）: 見本にある考え方の id だけ
+      if (typeof raw.concept === 'string' && find(ctable, raw.concept)) out.concept = raw.concept;
+      // 動かした分（§AD-5）
+      if (isObj(raw.moved)) MOVE_VIEWS.forEach(function (v) { out.moved[v] = normalizeMoved(raw.moved[v], g); });
     }
     if (g) {
       VIEWS.forEach(function (v) { if (out.sel[v] != null && !viewNodes(g, v)[out.sel[v]]) out.sel[v] = null; });
+      // 概念で見るの選択は、いま選んでいる考え方に出ているものだけ（考え方が無ければ選択なし）
+      if (out.sel.concepts != null && !conceptNodes(g, ctable, out.concept)[out.sel.concepts]) out.sel.concepts = null;
     }
     return out;
   }
@@ -375,6 +403,86 @@
     });
     return out;
   }
+  // ---------- 概念で見る（§AD-2 / AD-4）: 考え方 1 つを「やったこと → 近いところ → 遠いところ」に ----------
+  // did = その考え方が表れた学んだこと（グラフに残っているもの。グラフの順）/ near = やったことの教科と同じ教科の単元 / far = 別の教科の単元（考え方のデータの順）。
+  // やったことが無い = mixed（教科で分けられないので near にまとめ、far は空）。next = mixed の時だけ、その考え方の単元につながるこれから作れそうなもの
+  function conceptView(g, concepts, cid) {
+    var out = { did: [], near: [], far: [], mixed: false, next: [] }, c = find(Array.isArray(concepts) ? concepts : MPD.concepts, cid);
+    if (!g || !c) return out;
+    var want = {}, seen = {}, units = [], subs = {};
+    (c.learned || []).forEach(function (id) { if (typeof id === 'string') want['ln:' + id] = true; });
+    out.did = g.nodes.learned.filter(function (l) { return want[l.id]; }).map(function (l) { return l.id; });
+    (c.units || []).forEach(function (u) { if (u && typeof u.id === 'string' && MPD.anyUnit(u.id) && !seen[u.id]) { seen[u.id] = true; units.push(u.id); } });
+    out.did.forEach(function (lid) { nodeById(g, lid).units.forEach(function (code) { subs[MPD.anyUnit(code).sub] = true; }); });
+    if (!out.did.length) {
+      out.mixed = true;
+      out.near = units.map(function (code) { return 'unit:' + code; });
+      out.next = g.nodes.next.filter(function (x) {
+        var codes = x.units.slice();
+        x.learned.forEach(function (lid) { var l = nodeById(g, lid); if (l) codes = codes.concat(l.units); });
+        return codes.some(function (code) { return seen[code]; });
+      }).map(function (x) { return x.id; });
+      return out;
+    }
+    units.forEach(function (code) { (subs[MPD.anyUnit(code).sub] ? out.near : out.far).push('unit:' + code); });
+    return out;
+  }
+  // その考え方の帯に出すもの（やったことの作ったものも含む）。選べるのはこれだけ
+  function conceptNodes(g, concepts, cid) {
+    var cv = conceptView(g, concepts, cid), out = {};
+    cv.did.forEach(function (lid) { out[lid] = true; out[nodeById(g, lid).madeId] = true; });
+    cv.near.concat(cv.far, cv.next).forEach(function (id) { out[id] = true; });
+    return out;
+  }
+  // 帯の線（左 → 右）: やったこと → その学んだことがつながる単元（近いところ・遠いところ）/ 近いところ → 遠いところ（考え方のデータの via）/
+  // やったことが無い時は これから作れそう → その単元。{ id, from, to }（決定論・重なりなし）
+  function conceptLines(g, concepts, cid) {
+    var cv = conceptView(g, concepts, cid), c = find(Array.isArray(concepts) ? concepts : MPD.concepts, cid), out = [], seen = {}, near = {}, shown = {};
+    if (!c) return out;
+    cv.near.forEach(function (id) { near[id] = true; shown[id] = true; });
+    cv.far.forEach(function (id) { shown[id] = true; });
+    function add(a, b) { var id = 'c:' + a + '>' + b; if (!seen[id] && a !== b) { seen[id] = true; out.push({ id: id, from: a, to: b }); } }
+    cv.did.forEach(function (lid) { nodeById(g, lid).units.forEach(function (code) { if (shown['unit:' + code]) add(lid, 'unit:' + code); }); });
+    if (!cv.mixed) (c.units || []).forEach(function (u) {
+      if (u && typeof u.via === 'string' && cv.far.indexOf('unit:' + u.id) >= 0 && near['unit:' + u.via]) add('unit:' + u.via, 'unit:' + u.id);
+    });
+    cv.next.forEach(function (nid) {
+      var x = nodeById(g, nid), codes = x.units.slice();
+      x.learned.forEach(function (lid) { var l = nodeById(g, lid); if (l) codes = codes.concat(l.units); });
+      codes.forEach(function (code) { if (shown['unit:' + code]) add(nid, 'unit:' + code); });
+    });
+    return out;
+  }
+
+  // ---------- 作ったものを自分で並べる（§AD-5）----------
+  // 一緒に動くもの: その作ったもの + その作ったものだけにつながる学んだこと（並びにあるものだけ。分野で見るでは学んだことが無いので作ったものだけ）。
+  // 単元・これから作れそう（2 つ以上の作ったものにつながりうる）は動かさない
+  function moveTargets(g, id, L) {
+    var n = nodeById(g, id);
+    if (!L || !L.nodes || !L.nodes[id] || (g && !isMade(n))) return [];
+    var out = [id];
+    if (n) n.learned.forEach(function (lid) { var l = nodeById(g, lid); if (l && l.madeId === id && L.nodes[lid]) out.push(lid); });
+    return out;
+  }
+  // 並び（MPL.layout の結果）に動かした分を足す。並びの計算は変えない。全体の範囲（bounds）は動かした後のノードまで広げる（「全体を見る」用）
+  function applyMoved(L, moved, g) {
+    if (!L || !L.nodes) return L;
+    var out = { nodes: {}, islands: (L.islands || []).map(function (s) { return clone(s); }), bounds: clone(L.bounds) };
+    Object.keys(L.nodes).forEach(function (id) { out.nodes[id] = clone(L.nodes[id]); });
+    var m = normalizeMoved(moved, g), any = false;
+    Object.keys(m).forEach(function (id) {
+      moveTargets(g, id, L).forEach(function (t) { out.nodes[t].x += m[id].dx; out.nodes[t].y += m[id].dy; any = true; });
+    });
+    if (!any) return out;
+    var b = L.bounds, x0 = b.x, y0 = b.y, x1 = b.x + b.w, y1 = b.y + b.h;
+    Object.keys(out.nodes).forEach(function (id) {
+      var n = out.nodes[id];
+      x0 = Math.min(x0, n.x - PAD); y0 = Math.min(y0, n.y - PAD); x1 = Math.max(x1, n.x + n.w + PAD); y1 = Math.max(y1, n.y + n.h + PAD);
+    });
+    out.bounds = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    return out;
+  }
+
   // 単元につながる 学んだこと + 作ったもの（単元の詳細の「作ったものとのつながり」）
   function unitLinks(g, code) {
     var out = [];
@@ -404,7 +512,7 @@
     return out;
   }
   // 流れで見るで濃くするもの: 選んだノードの つながり のうち、作ったもの → 学んだこと → 単元 の線（base）と これから作れそう（next）でたどれる相手。
-  // 学ぶ順・教科をまたぐ（チップの種類）はこの見方では線を出さないので含めない。edges は描く線（base）だけ
+  // 学ぶ順は線を描かない（§AD-9）ので related にも含めない。edges は描く線（base）だけ
   function flowRel(g, sel) {
     if (!sel || !viewNodes(g, 'flow')[sel]) return null;
     var r = related(g, sel), nodes = {}, out = { nodes: [], edges: [] };
@@ -461,6 +569,7 @@
 
   var pure = {
     flowCols: flowCols, flowRel: flowRel, flowOrder: flowOrder, visible: visible,
+    conceptView: conceptView, conceptNodes: conceptNodes, conceptLines: conceptLines, moveTargets: moveTargets, applyMoved: applyMoved, normalizeMoved: normalizeMoved,
     progress: progress, overall: overall, isBlank: isBlank, lastDate: lastDate, dayNum: dayNum, graph: graph, related: related, peers: peers,
     viewNodes: viewNodes, edgesIn: edgesIn, defaultUi: defaultUi, normalizeUi: normalizeUi, selIn: selIn, select: select, deselect: deselect,
     decline: decline, undecline: undecline, declineNext: declineNext, undeclineNext: undeclineNext, unitLinks: unitLinks, nodeById: nodeById, hasNode: hasNode, posSettle: posSettle
@@ -690,7 +799,7 @@
 
   // ---------- 見出しの行（§AC-2）: 左に h1 + 説明 1 文、同じ行の右端にタブ（つながり / 基礎学習）と見方の切替（下端ぞろえ）。
   // 幅が足りない時（< 1024）は見出しの下に折り返す。基礎学習・単元詳細ではタブだけ ----------
-  function viewHash(v) { return v === 'flow' || v === 'fields' || v === 'list' ? '#map/' + v : '#map'; }
+  function viewHash(v) { return v === 'flow' || v === 'fields' || v === 'concepts' || v === 'list' ? '#map/' + v : '#map'; }
   function isMapView(v) { return v === 'made' || v === 'fields'; }
   function switches(tab, view) {
     var tabs = H('div', { class: 'studio-tabs mp-tabs' }, [H('div', { class: 'segmented', role: 'group', 'aria-label': T('mp_tabs_label') }, ['links', 'basics'].map(function (k) {
@@ -705,17 +814,18 @@
   }
   function head(tab, view) {
     return [H('div', { class: 'mp-headrow' }, [
-      H('div', { class: 'page-head mp-head' }, [H('div', null, [H('h1', { tabindex: '-1', 'data-fk': 'mp-h' }, T('map')), H('p', null, T('mp_head_sub'))])]),
+      // 概念で見るは参考の見方（§AD-2）: 説明の位置に小さく印
+      H('div', { class: 'page-head mp-head' }, [H('div', null, [H('h1', { tabindex: '-1', 'data-fk': 'mp-h' }, T('map')),
+        H('p', null, view === 'concepts' && tab === 'links' ? [H('span', { class: 'mp-ref' }, T('mp_ref_view')), H('span', null, T('mp_head_sub'))] : T('mp_head_sub'))])]),
       switches(tab, view)
     ])];
   }
 
-  // ---------- 線の見本（凡例とチップの中。色だけに頼らず形で分ける: 実線 細 / 点線 / 二重 / 破線） ----------
+  // ---------- 線の見本（凡例とチップの中。色だけに頼らず形で分ける: 基本 = 細い実線 / これから作れそう = 破線） ----------
   function swatch(k) {
-    var d = 'M2 6H30', body = k === 'cross' ? '<path class="o" d="' + d + '"/><path class="i" d="' + d + '"/>' : '<path d="' + d + '"/>';
-    return DES.raw('<svg class="mp-sw k-' + k + '" viewBox="0 0 32 12" aria-hidden="true" focusable="false">' + body + '</svg>');
+    return DES.raw('<svg class="mp-sw k-' + k + '" viewBox="0 0 32 12" aria-hidden="true" focusable="false"><path d="M2 6H30"/></svg>');
   }
-  // 枠の左上: 切替「作ったものだけ」（§AC-14。線の見本なし・間を空ける）+ つながりのチップ 3 つ（§AC-4 / AC-13）
+  // 枠の左上: 切替「作ったものだけ」（§AC-14。線の見本なし・間を空ける）+ つながりのチップ「これから作れそう」（§AD-9 で 1 つ。間の仕切り線は残す）
   function chipPanel() {
     var u = mapUi();
     return H('div', { class: 'mp-chippanel mp-ovl-top' }, [
@@ -758,8 +868,8 @@
 
   // ---------- 地図（§AB-2）: 枠 > 動く板（線の SVG・島・ノード）+ 右下の操作 + 詳細パネル ----------
   function svgEl(tag, at) { var e = document.createElementNS(SVGNS, tag); Object.keys(at).forEach(function (k) { e.setAttribute(k, at[k]); }); return e; }
-  var EDGE_RANK = { base: 0, mu: 0, order: 1, next: 2, cross: 4 };
-  var BEND = { order: -0.12, cross: 0.12, next: -0.14 };
+  var EDGE_RANK = { base: 0, mu: 0, next: 2 };
+  var BEND = { next: -0.14 };
   function pathD(e, a, b) {
     var x1 = a.x + a.w / 2, y1 = a.y + a.h / 2, x2 = b.x + b.w / 2, y2 = b.y + b.h / 2;
     if (!BEND[e.kind]) return 'M' + x1 + ' ' + y1 + 'L' + x2 + ' ' + y2;
@@ -771,13 +881,7 @@
     edgesIn(g, view).slice().sort(function (x, y) { return EDGE_RANK[x.kind] - EDGE_RANK[y.kind]; }).forEach(function (e) {
       var a = L.nodes[e.from], c = L.nodes[e.to];
       if (!a || !c) return;
-      var d = pathD(e, a, c);
-      if (e.kind === 'cross') {
-        var gr = svgEl('g', { class: 'mp-e k-cross', 'data-edge': e.id });
-        gr.appendChild(svgEl('path', { class: 'o', d: d }));
-        gr.appendChild(svgEl('path', { class: 'i', d: d }));
-        svg.appendChild(gr);
-      } else svg.appendChild(svgEl('path', { class: 'mp-e k-' + (e.kind === 'mu' ? 'base' : e.kind), 'data-edge': e.id, d: d }));
+      svg.appendChild(svgEl('path', { class: 'mp-e k-' + (e.kind === 'mu' ? 'base' : e.kind), 'data-edge': e.id, d: pathD(e, a, c) }));
     });
     return svg;
   }
@@ -856,7 +960,9 @@
       H('div', { class: 'mp-ctrl', role: 'group', 'aria-label': T('mp_ctrl_label') }, [
         H('button', { type: 'button', class: 'btn mp-zbtn', 'data-action': 'mp-zoom', 'data-arg': 'in', 'aria-label': T('mp_zoom_in') }, [H('span', { 'aria-hidden': 'true' }, '＋')]),
         H('button', { type: 'button', class: 'btn mp-zbtn', 'data-action': 'mp-zoom', 'data-arg': 'out', 'aria-label': T('mp_zoom_out') }, [H('span', { 'aria-hidden': 'true' }, '−')]),
-        H('button', { type: 'button', class: 'btn mp-fit', 'data-action': 'mp-zoom', 'data-arg': 'fit' }, T('mp_fit'))
+        H('button', { type: 'button', class: 'btn mp-fit', 'data-action': 'mp-zoom', 'data-arg': 'fit' }, T('mp_fit')),
+        // ならびを元に戻す（§AD-5）: 1 つでも動かした時だけ出す（applyState が hidden を切り替える）
+        H('button', { type: 'button', class: 'btn mp-mvreset', 'data-action': 'mp-moved-reset', hidden: !hasMoved(view) }, T('mp_moved_reset'))
       ]),
       detailSection()
     ]);
@@ -865,6 +971,9 @@
     kids.push(H('div', { class: 'mp-stage', 'data-view': view }, [chipPanel(), H('div', { class: 'mp-stage-in' }, [bigBtn(), frame, legend(view)])]), H('p', { id: 'mp-frame-hint', class: 'sr-only' }, T('mp_frame_hint')));
     var page = H('div', { class: 'map-page is-map', 'data-view': view }, kids);
     page._labels = labelItems(g, L, view, vp);
+    // 線の引き直し（動かした時）用
+    page._E = {};
+    edgesIn(g, view).forEach(function (e) { page._E[e.id] = e; });
     return page;
   }
   // 逆に拡大した札（far）の大きさの見積もり（map.css の far の題: 12.5px・es 13px・行の高さ 1.3・幅 150px まで / 島の名前: 13px・1.4）。
@@ -887,11 +996,12 @@
   // far の札: 地図の端で切れないよう、札を地図の中へずらす（--lx・世界の px）。倍率 0.3 より小さい時だけ、
   // 重なる札を間引く（先に並べたもの = 島の名前・新しい題を残す。間引いた題はノードの絵・点だけ残る）
   function thinLabels(page, z) {
-    var items = page._labels || [], far = MPC.lod(z) === 'far', W = page._L ? page._L.bounds.w : 0, placed = [];
+    // 地図の範囲（本人が動かした後は左・上へも広がる = bounds.x / y が負になりうる）
+    var items = page._labels || [], far = MPC.lod(z) === 'far', X0 = page._L ? page._L.bounds.x : 0, W = page._L ? page._L.bounds.w : 0, placed = [];
     items.forEach(function (it) {
       var w = it.w / z, dx = 0;
-      if (far && it.align === 'center') { var hw = w / 2; dx = w >= W ? W / 2 - it.ax : Math.min(Math.max(it.ax, hw), W - hw) - it.ax; }
-      else if (far) dx = Math.min(0, Math.max(-it.ax, W - w - it.ax));
+      if (far && it.align === 'center') { var hw = w / 2; dx = w >= W ? X0 + W / 2 - it.ax : Math.min(Math.max(it.ax, X0 + hw), X0 + W - hw) - it.ax; }
+      else if (far) dx = Math.min(0, Math.max(X0 - it.ax, X0 + W - w - it.ax));
       placed.push({ id: it.id, ax: it.ax + dx, ay: it.ay, w: it.w, h: it.h, align: it.align });
       var lx = Math.round(dx * 10) / 10;
       if (it._lx !== lx) { it._lx = lx; it.el.style.setProperty('--lx', lx + 'px'); }
@@ -1022,11 +1132,121 @@
     var p = root && root.querySelector ? root.querySelector('.map-page.is-map') : null;
     if (p && p._detach) { p._detach(); p._detach = null; }
   }
+  // ---------- 作ったものを自分で並べる（§AD-5）: 動かしている間は DOM だけ書き換え、離したら des3.mapUi.moved へ保存 ----------
+  function movedOf(view) { var m = mapUi().moved; return isObj(m) && isObj(m[view]) ? m[view] : {}; }
+  function hasMoved(view) { return MOVE_VIEWS.indexOf(view) >= 0 && Object.keys(movedOf(view)).length > 0; }
+  function nodeEl(page, id) { return page.querySelector('.mp-vp .mp-n[data-id="' + esc(id) + '"]'); }
+  function setNodePos(page, id) {
+    var el = nodeEl(page, id), b = page._L.nodes[id];
+    if (el && b) { el.style.setProperty('--x', b.x + 'px'); el.style.setProperty('--y', b.y + 'px'); }
+  }
+  // 線を引き直す（only = その id に触れる線だけ。無ければ全部）
+  function redrawEdges(page, only) {
+    var L = page._L, E = page._E || {};
+    Array.prototype.forEach.call(page.querySelectorAll('.mp-vp .mp-e[data-edge]'), function (p) {
+      var e = E[p.getAttribute('data-edge')];
+      if (!e || (only && !only[e.from] && !only[e.to])) return;
+      var a = L.nodes[e.from], c = L.nodes[e.to];
+      if (a && c) p.setAttribute('d', pathD(e, a, c));
+    });
+  }
+  // 全部のノード・線・板の大きさ・far の札を page._L に合わせる
+  function placeAll(page, view) {
+    var L = page._L, vp = page.querySelector('.mp-vp'), svg = vp && vp.querySelector('.mp-edges');
+    if (!vp) return;
+    Object.keys(L.nodes).forEach(function (id) { setNodePos(page, id); });
+    redrawEdges(page, null);
+    var w = Math.max(1, Math.round(L.bounds.x + L.bounds.w)), h = Math.max(1, Math.round(L.bounds.y + L.bounds.h));
+    vp.style.width = w + 'px';
+    vp.style.height = h + 'px';
+    if (svg) { svg.setAttribute('width', w); svg.setAttribute('height', h); svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h); }
+    page._labels = labelItems(graphNow(), L, view, vp);
+    page._thin = null;
+    if (page._v) thinLabels(page, page._v.z);
+  }
+  // 保存した動かした分を並びに足して置き直す。page._L（位置の正）はすぐに新しい並びにする。
+  // ui().animMove（元に戻す・その取り消し）の時だけ、見た目を 220ms で動かす（reduced-motion では動かさない。rAF が来なくても時間で必ず終える）
+  function syncMoved(page, view) {
+    var mk = JSON.stringify(movedOf(view));
+    if (page._mk === mk) return;
+    page._mk = mk;
+    var from = page._L, to = applyMoved(page._L0, movedOf(view), graphFull()), anim = !!ui().animMove && motionOK() && from;
+    ui().animMove = false;
+    if (page._mvRaf) { cancelAnimationFrame(page._mvRaf); page._mvRaf = null; }
+    clearTimeout(page._mvT);
+    page._L = to;
+    if (!anim) { placeAll(page, view); return; }
+    var t0 = null, D = 220, done = false;
+    function finish() { if (done) return; done = true; if (page._mvRaf) cancelAnimationFrame(page._mvRaf); page._mvRaf = null; if (page.isConnected && page._L === to) placeAll(page, view); }
+    function step(ts) {
+      if (done || !page.isConnected || page._L !== to) return;
+      if (t0 == null) t0 = ts;
+      var k = Math.min(1, (ts - t0) / D), e = 1 - Math.pow(1 - k, 3), mid = { nodes: {}, islands: to.islands, bounds: to.bounds };
+      if (k >= 1) { finish(); return; }
+      Object.keys(to.nodes).forEach(function (id) {
+        var a = from.nodes[id] || to.nodes[id], b = to.nodes[id];
+        mid.nodes[id] = { x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e, w: b.w, h: b.h };
+      });
+      // 途中の見た目だけ描く（位置の正は to のまま）
+      page._L = mid;
+      Object.keys(mid.nodes).forEach(function (id) { setNodePos(page, id); });
+      redrawEdges(page, null);
+      page._L = to;
+      page._mvRaf = requestAnimationFrame(step);
+    }
+    page._mvRaf = requestAnimationFrame(step);
+    page._mvT = setTimeout(finish, D + 120);
+  }
+  function saveMoved(view, map, o) {
+    var next = normalizeUi(mapUi(), null);
+    next.moved[view] = map;
+    next = normalizeUi(next, graphNow());
+    var page = document.querySelector('.map-page.is-map');
+    // 保存に失敗して元の値に戻った時も、画面を保存値から置き直す
+    if (page) page._mk = null;
+    return setUi(next, o || {});
+  }
+  function addMoved(view, id, dx, dy) {
+    var cur = clone(movedOf(view)), p = cur[id] || { dx: 0, dy: 0 };
+    cur[id] = { dx: p.dx + dx, dy: p.dy + dy };
+    return saveMoved(view, cur);
+  }
+  // つかんだ: 一緒に動くもの（作ったもの + その学んだこと）の元の位置を覚えて、浮いた見た目に
+  function startNodeDrag(page, id) {
+    var targets = moveTargets(graphFull(), id, page._L);
+    if (!targets.length) return false;
+    page._drag = { id: id, base: targets.map(function (t) { return clone(page._L.nodes[t]); }), ids: targets, dx: 0, dy: 0 };
+    var el = nodeEl(page, id);
+    if (el) el.classList.add('is-lifting');
+    return true;
+  }
+  function moveNodeDrag(page, dx, dy) {
+    var d = page._drag, only = {};
+    if (!d) return;
+    d.dx = dx; d.dy = dy;
+    d.ids.forEach(function (t, k) { var b = d.base[k]; page._L.nodes[t] = { x: b.x + dx, y: b.y + dy, w: b.w, h: b.h }; only[t] = true; setNodePos(page, t); });
+    redrawEdges(page, only);
+  }
+  // 離した（keep）= 保存 / ピンチに変わった = 元の位置へ
+  function endNodeDrag(page, view, keep) {
+    var d = page._drag;
+    if (!d) return;
+    page._drag = null;
+    var el = nodeEl(page, d.id);
+    if (el) el.classList.remove('is-lifting');
+    if (!keep || (Math.abs(d.dx) < 0.5 && Math.abs(d.dy) < 0.5)) {
+      d.ids.forEach(function (t, k) { page._L.nodes[t] = d.base[k]; setNodePos(page, t); });
+      redrawEdges(page, null);
+      return;
+    }
+    addMoved(view, d.id, d.dx, d.dy);
+  }
+
   function mountMap(page, view, keepV) {
-    var frame = page.querySelector('.mp-frame'), L = page._L;
+    var frame = page.querySelector('.mp-frame');
     sizeFrame(frame);
     var fs = frameSize(frame), saved = keepV || mapUi().pos[view];
-    applyView(page, saved ? MPC.clampView(saved, L.bounds, fs.w, fs.h, null, minOf(page)) : fitView(page), false);
+    applyView(page, saved ? MPC.clampView(saved, page._L.bounds, fs.w, fs.h, null, minOf(page)) : fitView(page), false);
     var api = {
       view: function () { return page._v; },
       apply: function (v, smooth) { applyView(page, v, smooth); },
@@ -1034,8 +1254,24 @@
       fit: function (smooth) { applyView(page, fitView(page), smooth); savePos(view, page._v); },
       minZoom: function () { return minOf(page); },
       keyCenter: function (el) {
-        var n = el && el.closest ? el.closest('.mp-n') : null, b = n ? L.nodes[n.getAttribute('data-id')] : null, v = page._v;
+        var n = el && el.closest ? el.closest('.mp-n') : null, b = n ? page._L.nodes[n.getAttribute('data-id')] : null, v = page._v;
         return b ? { x: (b.x + b.w / 2) * v.z + v.x, y: (b.y + b.h / 2) * v.z + v.y } : null;
+      },
+      // つかめるのは見えている作ったもののノードだけ（§AD-5）
+      grab: function (el) {
+        var n = el && el.closest ? el.closest('.mp-n.is-made') : null;
+        if (!n || !frame.contains(n) || n.classList.contains('is-hid')) return null;
+        return n.getAttribute('data-id');
+      },
+      nodeStart: function (id) { return startNodeDrag(page, id); },
+      nodeMove: function (id, dx, dy) { moveNodeDrag(page, dx, dy); },
+      nodeEnd: function (id, keep) { endNodeDrag(page, view, keep); },
+      // Shift + 矢印: 地図の座標で 24px ずつ（倍率に関わらず）
+      keyMove: function (el, dx, dy) {
+        var id = api.grab(el);
+        if (!id) return false;
+        if (addMoved(view, id, dx * MPC.MOVE_STEP, dy * MPC.MOVE_STEP)) revealNode(page, id, true);
+        return true;
       }
     };
     page._api = api;
@@ -1059,18 +1295,20 @@
         var s = frameSize(frame);
         if (!frame.isConnected || (s.w === last.w && s.h === last.h)) return;
         last = s;
-        applyView(page, MPC.clampView(page._v, L.bounds, s.w, s.h, null, minOf(page)), false);
+        applyView(page, MPC.clampView(page._v, page._L.bounds, s.w, s.h, null, minOf(page)), false);
       });
       u.ro.observe(frame);
     }
   }
 
   // ---------- 詳細パネル（§AB-6）。見出しは aria-live。フォーカスは奪わない ----------
+  // その見方でいま選べるもの（概念で見るは、選んでいる考え方の帯に出ているものだけ）
+  function viewSet(g, view) { return view === 'concepts' ? conceptNodes(g, MPD.concepts, mapUi().concept) : viewNodes(g, view); }
   function relBtn(g, id, view, extra) {
     var n = nodeById(g, id);
     if (!n) return null;
     var label = [H('span', { class: 'mp-rel-k' }, kindLabel(n.kind)), H('span', { class: 'mp-rel-t' }, words(n))].concat(extra || []);
-    if (!viewNodes(g, view)[id]) return H('span', { class: 'mp-rel is-static' }, label);
+    if (!viewSet(g, view)[id]) return H('span', { class: 'mp-rel is-static' }, label);
     return H('button', { type: 'button', class: 'mp-rel', 'data-action': 'mp-sel', 'data-id': id, 'data-arg': 'rel' }, label);
   }
   function sec(title, kids) { return H('section', { class: 'mp-dsec' }, [H('h3', { class: 'mp-rel-h' }, title)].concat(kids)); }
@@ -1097,6 +1335,8 @@
       // 活動のある作ってきたものは「続きを作る」、活動の無いもの（作品だけ）は今のまま「これで作る」（§AA-4）。前に作ったものは「バディと話す」だけ（§AB-9）
       if (n.kind === 'act' || n.kind === 'work') ops.push(btn(T(n.kind === 'act' ? 'resume_make' : 'mp_make_this'), 'mp-make', { id: n.id, kls: 'orange', icon: 'make', disabled: n.kind === 'work', title: T('story_lost') }));
       ops.push(btn(T('mp_talk'), 'mp-talk', { id: n.id, icon: 'chat' }));
+      // 場所を元に戻す（§AD-5）: その見方で動かしたものだけ
+      if (MOVE_VIEWS.indexOf(view) >= 0 && movedOf(view)[n.id]) ops.push(btn(T('mp_unmove'), 'mp-unmove', { id: n.id, kls: 'ghost' }));
     } else if (n.kind === 'learned') {
       kids.push(H('p', { class: 'mp-scene-line' }, [srcChip(n.src), H('span', null, sceneText(n.scene))]));
       kids.push(sec(T('mp_d_from'), [relList([relBtn(g, n.madeId, view)])]));
@@ -1108,11 +1348,11 @@
       if (n.material) { var u = MPD.unit(n.code); kids.push(H('div', { class: 'mp-ubar' }, [band(u), H('span', { class: 'mp-pct' }, progress(u, MPD.progress).pct + '%')])); }
       kids.push(H('p', { class: 'mp-sub' }, basicLine(n)));
       kids.push(sec(T('mp_d_from'), n.made.length ? [relList(n.made.map(function (id) { return relBtn(g, id, view); }))] : [H('p', { class: 'mp-none' }, T('mp_links_none'))]));
-      var before = [], after = [], cross = [];
+      // 学ぶ順の 前 / 後（§AD-9: 線はやめたが、ここには残す）。教科をまたぐ欄は §AD-1 でやめた
+      var before = [], after = [];
       g.edges.forEach(function (e) {
         if (e.kind === 'order' && e.to === n.id) before.push(e.from);
         if (e.kind === 'order' && e.from === n.id) after.push(e.to);
-        if (e.kind === 'cross' && (e.from === n.id || e.to === n.id)) cross.push(e);
       });
       if (before.length || after.length) {
         var ord = [];
@@ -1120,9 +1360,6 @@
         if (after.length) ord.push(H('p', { class: 'mp-ord-k' }, T('mp_d_after')), relList(after.map(function (id) { return relBtn(g, id, view); })));
         kids.push(sec(T('mp_k_order'), ord));
       }
-      if (cross.length) kids.push(sec(T('mp_k_cross'), [relList(cross.map(function (e) {
-        return [relBtn(g, e.from === n.id ? e.to : e.from, view), e.why ? H('p', { class: 'mp-same' }, pick(e.why)) : null];
-      }))]));
       // 算数は「基礎学習で見る」、他教科は教材がこれからの 1 文（リンクなし）
       if (n.material) ops.push(H('a', { class: 'btn small orange', href: '#map/u/' + n.code, 'data-action': 'mp-unit', 'data-id': n.code }, [H('span', null, T('mp_see_basic'))]));
       ops.push(btn(T('mp_talk'), 'mp-talk', { id: n.id, icon: 'chat' }));
@@ -1143,9 +1380,25 @@
 
   // ---------- 選択・チップの反映（作り直さずに書き換える: 濃淡は 150ms で入れ替わり、フォーカスと見出しの aria-live を保つ） ----------
   function cardMode(view) { return view === 'list' || (view === 'flow' && narrow()); }
+  // 概念で見るで濃くするもの: 選んだノードに触れる帯の線とその相手。学んだこと ⇄ その作ったもの（同じ左の列）も
+  function conceptRel(page, g, sel) {
+    var out = { nodes: [], edges: [] }, n = nodeById(g, sel), ids = [sel], nodes = {};
+    if (!n) return out;
+    if (n.kind === 'learned') nodes[n.madeId] = true;
+    if (isMade(n)) n.learned.forEach(function (lid) { if (page.querySelector('.mp-fcols .mp-node[data-id="' + esc(lid) + '"]')) { nodes[lid] = true; ids.push(lid); } });
+    (page._edges || []).forEach(function (e) {
+      if (ids.indexOf(e.from) < 0 && ids.indexOf(e.to) < 0) return;
+      out.edges.push(e.id);
+      nodes[e.from] = true; nodes[e.to] = true;
+    });
+    delete nodes[sel];
+    out.nodes = Object.keys(nodes);
+    return out;
+  }
   function applyState(page, g, view) {
     var u = mapUi(), sel = selIn(u, g, view), only = isMapView(view) && !!u.only;
-    var rel = sel ? (view === 'flow' ? flowRel(g, sel) : related(g, sel)) : null, rn = {}, re = {};
+    if (sel && view === 'concepts' && !viewSet(g, view)[sel]) sel = null;
+    var rel = sel ? (view === 'flow' ? flowRel(g, sel) : (view === 'concepts' ? conceptRel(page, g, sel) : related(g, sel))) : null, rn = {}, re = {};
     if (rel) { rel.nodes.forEach(function (id) { rn[id] = true; }); rel.edges.forEach(function (id) { re[id] = true; }); }
     // 作ったものだけ（§AC-14）: 出すものだけ残す（濃淡は付けない）。隠したノードは Tab の順にも入らない（display:none）
     var vis = null, vn = {}, ve = {};
@@ -1186,7 +1439,16 @@
     }
     if (stage) stage.classList.toggle('has-panel', !!sel);
     var flow = page.querySelector('.mp-flow');
-    if (flow) { flow.classList.toggle('has-sel', !!sel); placeFlow(page, g, sel); }
+    if (flow) {
+      flow.classList.toggle('has-sel', !!sel);
+      // 流れで見るは並べ替えてから線を引く。概念で見るは並べ替えない（線だけ引き直す）
+      if (view === 'concepts') drawFlow(page); else placeFlow(page, g, sel);
+    }
+    // ならびを元に戻す（§AD-5）は 1 つでも動かした時だけ
+    var mr = page.querySelector('[data-action="mp-moved-reset"]');
+    if (mr) mr.hidden = !hasMoved(view);
+    // 本人が動かした作ったものは、他のノードより上に重ねる（動かした先で隠れない。自動の並びは重ならないので他は変わらない）
+    if (isMapView(view)) { var mv = movedOf(view); Array.prototype.forEach.call(page.querySelectorAll('.mp-vp .mp-n.is-made'), function (b) { b.classList.toggle('is-moved', !!mv[b.getAttribute('data-id')]); }); }
     var d = page.querySelector('.mp-detail');
     if (!d) return;
     var n = sel ? nodeById(g, sel) : null, card = null, cards = cardMode(view);
@@ -1195,7 +1457,8 @@
       for (i = 0; i < cs.length && !card; i++) if (cs[i].getAttribute('data-card') === ui().selCard && cs[i].querySelector('.mp-node[data-id="' + esc(sel) + '"]')) card = cs[i];
       for (i = 0; i < cs.length && !card; i++) if (cs[i].querySelector('.mp-node[data-id="' + esc(sel) + '"]')) card = cs[i];
     }
-    var dk = (sel || '') + '|' + (card ? card.getAttribute('data-card') : '');
+    // 詳細の中身は、選択・カード・その作ったものを動かしたか（場所を元に戻す が出るか）で書き直す
+    var dk = (sel || '') + '|' + (card ? card.getAttribute('data-card') : '') + '|' + (sel && isMapView(view) && movedOf(view)[sel] ? 'm' : '');
     if (page._dk !== dk) {
       page._dk = dk;
       if (n) fillDetail(d, g, n, view);
@@ -1209,7 +1472,7 @@
 
   // ---------- リスト（§AB-7）: 作ったもの 1 つ = カード 1 枚（学んだこと → 単元、前に作ったものとのつながり）+ これから作れそうなもの。
   // 流れで見るの ≤ 700 も同じカード一覧（§AC-8）----------
-  function listNode(g, n, arg) {
+  function listNode(g, n, arg, extra) {
     var kids = [H('span', { class: 'sr-only' }, kindLabel(n.kind) + ': ')];
     if (isMade(n)) {
       var art = nodeArt(n);
@@ -1223,6 +1486,7 @@
     } else {
       kids.push(H('span', { class: 'mp-title' }, pick(n.title)), H('span', { class: 'mp-chips' }, [srcChip('buddy')]));
     }
+    if (extra) kids = kids.concat(extra);
     var cls = 'mp-node is-' + (isMade(n) ? 'act' : n.kind) + (n.kind === 'unit' && !n.material ? ' is-ext' : '') + (n.kind === 'next' ? ' is-next' : '');
     return H('button', { type: 'button', class: cls, 'data-action': 'mp-sel', 'data-id': n.id, 'data-arg': arg, 'aria-pressed': 'false' }, kids);
   }
@@ -1344,9 +1608,83 @@
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { if (fc.isConnected) drawFlow(page); });
   }
 
-  // ---------- つながりの 4 つの見方の描画 ----------
+  // ---------- 概念で見る（§AD-2・参考の見方）: 考え方のカード → 1 つ選ぶと「やったこと / 近いところ / 遠いところ」の左 → 右 3 列と線。
+  // 3 列・線・詳細（≥ 1024 = 右の貼り付く列 / それ未満 = 下からのシート）は流れで見るの部品（.mp-flow / drawFlow / listNode / detailBody）を使う。
+  // ≤ 700 はカード 1 列・選んだカードのすぐ下に 3 つの段を縦に（線は出さない）。数・割合・達成は出さない ----------
+  function conceptSubjects(c) {
+    var have = {};
+    (c.units || []).forEach(function (u) { var x = u && MPD.anyUnit(u.id); if (x) have[x.sub] = true; });
+    return MPD.subjects.filter(function (sj) { return have[sj.id]; });
+  }
+  function conceptMade(g, cv) {
+    var out = [];
+    g.nodes.made.forEach(function (m) { if (cv.did.some(function (lid) { return nodeById(g, lid).madeId === m.id; })) out.push(m.id); });
+    return out;
+  }
+  function conceptCard(g, c, on) {
+    var cv = conceptView(g, MPD.concepts, c.id), arts = conceptMade(g, cv).slice(0, 3).map(function (id) { var a = nodeArt(nodeById(g, id)); return a ? H('span', { class: 'mp-cthumb' }, [DES.raw(a)]) : null; }).filter(Boolean);
+    return H('button', { type: 'button', class: 'mp-ccard', 'data-action': 'mp-concept', 'data-id': c.id, 'aria-pressed': on ? 'true' : 'false', 'aria-controls': on ? 'mp-cband' : null }, [
+      H('span', { class: 'mp-cname' }, pick(c.name)),
+      H('span', { class: 'mp-cline' }, pick(c.line)),
+      H('span', { class: 'mp-ctags' }, conceptSubjects(c).map(function (sj) { return H('span', { class: 'mp-ctag' }, pick(sj.name)); })),
+      arts.length ? H('span', { class: 'mp-cthumbs', 'aria-hidden': 'true' }, arts) : null
+    ]);
+  }
+  function whyOf(c, uid) {
+    var code = uid.slice(5), u = null;
+    (c.units || []).forEach(function (x) { if (x && x.id === code && !u) u = x; });
+    return u && u.why ? [H('span', { class: 'mp-why' }, pick(u.why))] : null;
+  }
+  function conceptBand(g, c) {
+    var cv = conceptView(g, MPD.concepts, c.id), cid = c.id;
+    function colHead(k, d) { return H('div', { class: 'mp-colhead' }, [H('span', null, T(k)), d ? H('span', { class: 'mp-coldesc' }, T(d)) : null]); }
+    function col(key, head, desc, list) {
+      return H('div', { class: 'mp-fcol', 'data-col': key }, [H('h3', { class: 'mp-ccolh' }, [H('span', null, T(head)), desc ? H('span', { class: 'mp-coldesc' }, T(desc)) : null])].concat(list));
+    }
+    var left = [];
+    if (cv.mixed) {
+      left.push(H('p', { class: 'mp-none mp-cnone' }, T('mp_cc_none')));
+      cv.next.forEach(function (id) { left.push(listNode(g, nodeById(g, id), 'concepts')); });
+    } else conceptMade(g, cv).forEach(function (mid) {
+      var m = nodeById(g, mid);
+      left.push(H('div', { class: 'mp-cgroup' }, [listNode(g, m, 'concepts')].concat(cv.did.filter(function (lid) { return nodeById(g, lid).madeId === mid; }).map(function (lid) { return listNode(g, nodeById(g, lid), 'concepts'); }))));
+    });
+    var units = function (list) { return list.map(function (id) { return listNode(g, nodeById(g, id), 'concepts', whyOf(c, id)); }); };
+    var svg = svgEl('svg', { class: 'mp-flines', 'aria-hidden': 'true', focusable: 'false' });
+    var cols = cv.mixed ? [col('did', 'mp_cc_did', null, left), col('mixed', 'mp_cc_mixed', null, units(cv.near))]
+      : [col('did', 'mp_cc_did', null, left), col('near', 'mp_cc_near', 'mp_cc_near_d', units(cv.near)), col('far', 'mp_cc_far', 'mp_cc_far_d', units(cv.far))];
+    var fcols = H('div', { class: 'mp-fcols' + (cv.mixed ? ' is-mixed' : '') }, cols);
+    fcols.insertBefore(svg, fcols.firstChild);
+    var fhead = H('div', { class: 'mp-fhead' + (cv.mixed ? ' is-mixed' : ''), 'aria-hidden': 'true' }, cv.mixed ? [colHead('mp_cc_did'), colHead('mp_cc_mixed')]
+      : [colHead('mp_cc_did'), colHead('mp_cc_near', 'mp_cc_near_d'), colHead('mp_cc_far', 'mp_cc_far_d')]);
+    return H('section', { class: 'mp-cband', id: 'mp-cband', 'aria-labelledby': 'mp-cband-h' }, [
+      H('div', { class: 'mp-chead' }, [H('div', { class: 'mp-chead-t' }, [H('h2', { id: 'mp-cband-h' }, pick(c.name)), H('p', null, pick(c.line))]),
+        btn(T('mp_cc_talk'), 'mp-talk-concept', { id: cid, icon: 'chat' })]),
+      H('div', { class: 'mp-flow mp-cflow' }, [H('div', { class: 'mp-fmain' }, [fhead, fcols]), detailSection()])
+    ]);
+  }
+  function buildConcepts(g) {
+    var kids = head('links', 'concepts'), cid = mapUi().concept, c = cid ? MPD.conceptDef(cid) : null, nar = narrow();
+    var band = c ? conceptBand(g, c) : null;
+    kids.push(H('p', { class: 'mp-cintro' }, T('mp_cc_pick')));
+    var lis = [];
+    MPD.concepts.forEach(function (x) {
+      lis.push(H('li', { class: 'mp-ccard-li', 'data-concept': x.id }, [conceptCard(g, x, x.id === cid)]));
+      // ≤ 700: 選んだカードのすぐ下に
+      if (nar && band && x.id === cid) lis.push(H('li', { class: 'mp-cband-li' }, [band]));
+    });
+    kids.push(H('ul', { class: 'mp-ccards', 'aria-label': T('mp_cc_label') }, lis));
+    if (!nar && band) kids.push(band);
+    var page = H('div', { class: 'map-page is-flow is-concepts', 'data-view': 'concepts' }, kids);
+    page._nar = nar;
+    page._edges = c ? conceptLines(g, MPD.concepts, c.id) : [];
+    return page;
+  }
+
+  // ---------- つながりの 5 つの見方の描画 ----------
   function renderLinks(main, view) {
-    var g = graphNow(), cards = cardMode(view), key = [view, DES.mode(), shape(g), view === 'flow' ? (cards ? 's' : 'w') : ''].join('|');
+    var g = graphNow(), cards = cardMode(view), key = [view, DES.mode(), shape(g), view === 'flow' ? (cards ? 's' : 'w') : '',
+      view === 'concepts' ? (mapUi().concept || '') + (narrow() ? '|s' : '|w') : ''].join('|');
     var page = main.querySelector('.map-page[data-view="' + view + '"]');
     if (!page || page._key !== key) {
       var keepV = page && page._v ? page._v : null;
@@ -1355,16 +1693,20 @@
       main.textContent = '';
       if (cards) page = buildList(g, view);
       else if (view === 'flow') page = buildFlow(g);
+      else if (view === 'concepts') page = buildConcepts(g);
       else {
-        var L = layoutOf(view);
+        // 並び（MPL.layout・決定論）に本人が動かした分を足す（§AD-5）
+        var L0 = layoutOf(view), L = applyMoved(L0, movedOf(view), graphFull());
         page = buildMapPage(view, g, L);
+        page._L0 = L0;
         page._L = L;
+        page._mk = JSON.stringify(movedOf(view));
       }
       page._key = key;
       main.appendChild(page);
       if (isMapView(view)) mountMap(page, view, keepV);
-      else if (view === 'flow' && !cards) watchFlow(page);
-    } else if (isMapView(view)) sizeFrame(page.querySelector('.mp-frame'));
+      else if ((view === 'flow' && !cards) || view === 'concepts') watchFlow(page);
+    } else if (isMapView(view)) { sizeFrame(page.querySelector('.mp-frame')); syncMoved(page, view); }
     applyState(page, g, view);
     var u = ui();
     if (u.reveal && isMapView(view)) { var id = u.reveal; u.reveal = null; centerNode(page, id, false); }
@@ -1491,7 +1833,7 @@
       if (t) t.focus();
     }
   };
-  function viewOfArg(arg) { return !arg ? 'made' : (arg === 'flow' || arg === 'fields' || arg === 'list' ? arg : null); }
+  function viewOfArg(arg) { return !arg ? 'made' : (arg === 'flow' || arg === 'fields' || arg === 'concepts' || arg === 'list' ? arg : null); }
   function renderView(main, arg) {
     var u = ui(), m = /^u\/(.+)$/.exec(arg || ''), view = viewOfArg(arg);
     if (m) {
@@ -1566,7 +1908,7 @@
   // 選ぶ / もう一度で外す。詳細の中のつながりから選んだ時は、そのノードへフォーカスを移して枠の中へ
   A['mp-sel'] = function (el) {
     var view = curView(), id = el.getAttribute('data-id'), arg = el.getAttribute('data-arg') || '', g = graphNow();
-    if (!view || !viewNodes(g, view)[id]) return;
+    if (!view || !viewSet(g, view)[id]) return;
     ui().selCard = arg.indexOf('c:') === 0 ? arg.slice(2).split('|')[0] : null;
     var next = select(mapUi(), g, view, id);
     if (arg === 'rel') next.sel[view] = id;
@@ -1582,6 +1924,39 @@
     setUi(next, { sel: '[data-action="mp-only"]' });
   };
   A['mp-legend'] = function () { setLegend(!ui().legendOpen, false); };
+  // 概念で見る（§AD-2）: 考え方を選ぶ / もう一度で閉じる。考え方を変えたら帯の中の選択は外す
+  A['mp-concept'] = function (el) {
+    var id = el.getAttribute('data-id'), next = normalizeUi(mapUi(), null);
+    if (!MPD.conceptDef(id)) return;
+    next.concept = next.concept === id ? null : id;
+    next.sel.concepts = null;
+    setUi(next, { sel: '[data-action="mp-concept"][data-id="' + esc(id) + '"]' });
+  };
+  // この考え方をバディと話す（talk の入力に下書き）
+  A['mp-talk-concept'] = function (el) { var c = MPD.conceptDef(el.getAttribute('data-id')); if (c) DES.talk.prefill(pick(c.name)); };
+  // 場所を元に戻す（§AD-5）: その作ったもの（と一緒に動く学んだこと）を元の場所へ → トースト + 元に戻す
+  A['mp-unmove'] = function (el) {
+    var view = curView(), id = el.getAttribute('data-id');
+    if (!isMapView(view) || !movedOf(view)[id]) return;
+    var all = clone(movedOf(view)), prev = all[id];
+    delete all[id];
+    ui().animMove = true;
+    if (!saveMoved(view, all)) return;
+    var f = firstShown(document.getElementById('main'), '.mp-detail:not([hidden]) .mp-ops button');
+    if (f) f.focus();
+    DES.app.toast(T('mp_unmove_toast'), { label: T('undo_restore'), fn: function () { var cur = clone(movedOf(view)); cur[id] = prev; ui().animMove = true; saveMoved(view, cur); } });
+  };
+  // ならびを元に戻す（§AD-5）: その見方の全部を元の場所へ → トースト + 元に戻す。ボタンが消えるのでフォーカスは「全体を見る」へ
+  A['mp-moved-reset'] = function () {
+    var view = curView();
+    if (!hasMoved(view)) return;
+    var prev = clone(movedOf(view));
+    ui().animMove = true;
+    if (!saveMoved(view, {})) return;
+    var f = firstShown(document.getElementById('main'), '[data-action="mp-zoom"][data-arg="fit"]');
+    if (f) f.focus();
+    DES.app.toast(T('mp_moved_reset_toast'), { label: T('undo_restore'), fn: function () { ui().animMove = true; saveMoved(view, prev); } });
+  };
   // 大きく見る / もとの大きさ（§AC-6）: 切替の前後で地図の中心（世界の点）を保つ。フォーカスは同じボタンに残る
   A['mp-big'] = function () {
     var view = curView(), page = document.querySelector('.map-page.is-map'), c = null;
@@ -1672,5 +2047,15 @@
       if (isMapView(v)) sizeFrame(document.querySelector('.mp-frame'));
       if (v === 'flow') drawFlow(document.querySelector('.map-page.is-flow'));
     });
+    // 概念で見る（§AD-2）: 700px をまたいだら、帯の置き場所（≤ 700 = 選んだカードのすぐ下）を作り直す。
+    // resize の時点では breakpoint が古いことがあるので、メディアクエリの変化で受ける
+    var mq = window.matchMedia && window.matchMedia('(max-width:700px)');
+    if (mq) {
+      var onMq = function () {
+        var p = curView() === 'concepts' ? document.querySelector('.map-page.is-concepts') : null;
+        if (p && p._nar !== narrow()) DES.app.render();
+      };
+      if (mq.addEventListener) mq.addEventListener('change', onMq); else if (mq.addListener) mq.addListener(onMq);
+    }
   };
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : this));
