@@ -1712,6 +1712,25 @@
     var f = d && d.verification && d.verification.figures;
     return Array.isArray(f) ? f : null;
   }
+  /** verification.analogy_gaps（無い・古い検証は null。§P c 6） */
+  function analogyGapsOf(d) {
+    var g = d && d.verification && d.verification.analogy_gaps;
+    return Array.isArray(g) ? g : null;
+  }
+  /** 「説明と表現」の下のたとえのずれ（0 件・null は出さない。§P c 6） */
+  function analogyGapsHtml(d) {
+    var gaps = (analogyGapsOf(d) || []).filter(function (g) { return g && typeof g === 'object'; });
+    if (!gaps.length) return '';
+    var str = function (x) { return typeof x === 'string' ? x : ''; };
+    return '<details class="rv-gaps" data-analogy-gaps="' + gaps.length + '"><summary>たとえのずれ ' + gaps.length + ' 件（学びマップに残す記録）</summary><ul>' +
+      gaps.map(function (g) {
+        var sub = [];
+        if (str(g.claim_id)) sub.push(esc(str(g.claim_id)));
+        if (str(g.where)) sub.push(esc(str(g.where)));
+        return '<li data-analogy-gap="1">' + esc(str(g.analogy)) + ': 同じ = ' + esc(str(g.same)) + ' / 違う = ' + esc(str(g.differs)) +
+          (sub.length ? ' <small class="muted">' + sub.join(' ・ ') + '</small>' : '') + '</li>';
+      }).join('') + '</ul></details>';
+  }
   /** サムネイルの下の判定の pill と reason（判定の無い path は空） */
   function figVerdictHtml(f) {
     if (!f || !Object.prototype.hasOwnProperty.call(FIG_VERDICT, f.verdict)) return '';
@@ -1871,7 +1890,7 @@
           if (!g && !f) return a;
           // 生成した絵はサムネイルの下に「生成: 正確さ・prompt の先頭 80 字」（§O-7 6）、その下に検証係の判定（§O-12 d）
           return '<div class="thumb-gen"' + (g ? ' data-gen="1"' : '') + '>' + a + (g ? '<p class="thumb-cap">' + esc(genCaption(g)) + '</p>' : '') + figVerdictHtml(f) + '</div>';
-        }).join('') + '</div>' : '') + '</div>';
+        }).join('') + '</div>' : '') + '</div>' + analogyGapsHtml(d);
     }
     if (tri.present && AUTO_KEYS.indexOf(k) >= 0 && AUTO_HINT[k]) extra += '<p class="muted">' + esc(AUTO_HINT[k]) + '</p>';
     return '<div class="rv-item" id="ck-' + k + '" data-ck="' + k + '"><div class="rv-item-head">' +

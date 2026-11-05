@@ -38,7 +38,7 @@ export function normalizeSpace(s: string): string {
 
 type AnyEvent = { id?: unknown; type?: unknown; name?: unknown; input?: unknown; tool_use_id?: unknown; content?: unknown };
 
-function resultText(ev: AnyEvent): string | null {
+export function resultText(ev: AnyEvent): string | null {
   if (!Array.isArray(ev.content)) return null;
   const texts: string[] = [];
   for (const b of ev.content as Array<Record<string, unknown>>) {
@@ -52,7 +52,7 @@ function resultText(ev: AnyEvent): string | null {
 }
 
 /** 大きな結果がサンドボックスのファイルへ offload された（本文の代わりにファイルパスだけ）とみなせるか */
-function looksOffloaded(text: string): boolean {
+export function looksOffloaded(text: string): boolean {
   return /\/(mnt|tmp|workspace)\/[^\s]+/.test(text) && text.length < 4000;
 }
 
