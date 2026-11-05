@@ -323,6 +323,11 @@
     - 回収（collect）と review の GET は oEmbed を呼ばず、settings の数も増えない。review API が video_meta を返す（動画なしは `[]`、記録なしは unknown）。確認画面は escape して出し、リンクの属性が付く。
     - 引用と triage: 動画の出典だけ・`quoted_excerpt=""`・5 claims すべて confirmed・Gemini の記録 shown の版で、`action` が `auto_return` にならない。動画に紐づかない YouTube の URL の出典と、YouTube でない未取得の出典は、従来どおり検査される（混在の版で確かめる）。上の「1/1 で auto_return」の例と、その時の差し戻し文に動画の例外の一言が入ることも確かめる。
     - 動画の確認が無効（video_gen_enabled 無し）でも oEmbed は呼ばれる。
+    - triage の groups: 動画 1 本・claim 1 件が未確認の版で、原因に `maker_url_not_fetched`・`quote_mismatch` が出ない（action だけでなく原因の組も見る）。
+    - 取り込みの配線: session の events に watch URL の取得成功の履歴がある動画を取り込んでも、citations のその行が `url_was_fetched: 0`・`quote_found: 0` になる（動画の渡し忘れを検出する）。
+    - author_url の長さの境界: ハンドルが ASCII 300 文字なら保存・301 文字なら空。「あ」33 文字なら保存・34 文字なら空。
     - 既存のテストが green。新しいテストが変更前のコードで落ちる（mutation）。
 13. **範囲**: 触るのは `src/youtube-oembed.ts`（新規）・`src/fake/`（fake の port）・`src/anthropic.ts`（port の取得。既存の getGeminiPort と同じ形）・`src/verify.ts`・`src/videos.ts`・`src/routes/review.ts`・`src/checks/citations.ts`・`src/checks/triage.ts`・`src/jobs.ts`（citations の呼び出し元に版の動画を渡すところだけ）・`public/admin/admin.js`（と必要なら admin.css）・test/。migration・wrangler.jsonc・職人の定義・rubric は触らない（定義と rubric は司令塔）。
 14. **確認済みと未確認**: 手元の curl で、oEmbed は実在の id に 200、存在しない 11 文字の id に 404 を返し、応答の key は `author_name`・`author_url`・`html`・`title` などだった（2026-11-05）。Cloudflare Workers からの到達（YouTube が Workers の IP を断らないか）と、非公開・埋め込み不可の動画の status は未確認。届かない時は `unavailable` として従来どおり進む（fail-soft）ので、deploy 後に実注文で確かめる。
+
+凍結（Q-11）: 2026-11-05（Astra high R3 GO）。
