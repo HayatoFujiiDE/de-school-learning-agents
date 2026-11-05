@@ -13,14 +13,19 @@ import { GEMINI_TEXT_MAX_CHARS, GeminiError, capChars, type GeminiPort } from '.
 import { todayCostCents } from './jobs';
 import {
   VIDEO_ENABLED_KEY,
-  VIDEO_NOTES_FILE,
+  VIDEO_FALLBACK_ENABLED_KEY,
+  VIDEO_MAX_CALLS,
+  VIDEO_RETRYABLE_ERRORS,
   byVideoId,
   enforceVideoConfirmations,
   isYoutubeHost,
   maskYoutubeExcerpts,
   neutralizeInputText,
-  parseVideoNotesFile,
-  videoLedgerRef,
+  readVersionVideoNotes,
+  videoCallDecision,
+  videoCallKey,
+  videoCallRef,
+  videoNoteOfRecord,
   videoNotesSection,
   videoPrompt,
   videoReserveStmt,
@@ -29,6 +34,9 @@ import {
   videosMetaBlocks,
   youtubeSourceIdsOf,
   type VersionVideo,
+  type VideoCallOutcome,
+  type VideoCallRecord,
+  type VideoModelRole,
   type VideoNote,
   type VideoNotesFile,
 } from './videos';
@@ -626,44 +634,83 @@ export async function versionVideos(env: { DB?: D1Database }, versionId: string)
   return versionVideosOf(row?.material_json);
 }
 
-const VIDEO_LOG_CODES = new Set(['capture_timeout', 'no_text']);
+/** 1 回の試行の中の呼び出しの上限（§Q-10 1） */
+export const VIDEO_MAX_CALLS_PER_ATTEMPT = 2;
+/** 試行の中でやり直す前に待つ時間（§Q-10 6） */
+export const VIDEO_RETRY_WAIT_MS = 20_000;
+/** 待つ関数（テストでは差し替える。§Q-10 13 の fake の時計） */
+export type VideoSleep = (ms: number) => Promise<void>;
+const realVideoSleep: VideoSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 失敗の種類（記録の error・ログの値）。外側の締め切り（beforeDeadline の capture_timeout）は 'deadline' */
+function videoErrorKind(e: unknown): string {
+  if (e instanceof GeminiError) return e.kind;
+  if (e instanceof Error && e.message === 'capture_timeout') return 'deadline';
+  if (e instanceof Error && e.message === 'no_text') return 'no_text';
+  return 'unknown';
+}
 
 /**
- * 版の動画の記録（§Q-3 3・§Q-9.1）: R2 の {r2_prefix}video-notes.json があれば読む（呼ばない・書き直さない）。無ければ:
- * - gemini が無い・settings video_gen_enabled が '1' でない・時間が足りない（o.deadline まで VIDEO_CALL_MIN_MS 未満）→ 呼ばず・取り置かず・書かず、全動画 missing
- * - 動画ごとに: 鍵が無ければ missing（取り置きもしない）。§Q-9.1 の 1 文で取り置けた（changes = 1）動画だけを並行に 1 回ずつ呼ぶ。
- *   取り置けない（生涯 1 回の権利を使用済み・月・日の上限）動画は missing
- * - 呼んだ後に 1 回だけ書く（成功は notes、失敗・上限・鍵なしは missing）。書けなければこの試行も全動画 missing（呼び直さない）
+ * 版の動画の記録（§Q-3 3・§Q-10）。状態は毎試行、src/videos.ts の readVersionVideoNotes（R2 の呼び出しの記録）と D1 の呼び出しの行から組み立てる:
+ * - v1 の {r2_prefix}video-notes.json がある版 → そのファイルを使い、呼ばない（§Q-10 9）。新しい版では video-notes.json を書かない
+ * - ok の記録がある動画 → note（n がいちばん小さい ok）。呼ばない
+ * - videoCallDecision で呼んでよい動画（n = 1、または いちばん大きい n の行の記録が retryable で n < 3）だけを、
+ *   gemini があり・settings video_gen_enabled が '1'・鍵がある・締め切りまで VIDEO_CALL_MIN_MS 以上の時に、並行に呼ぶ
+ * - 1 回の呼び出し: §Q-9.1 の 1 文で n の行を取り置けた時だけ呼ぶ（負けた・上限 → この試行では not_seen）。呼んだ後に記録を「まだ無い時だけ」の
+ *   条件つき put で書く（null・例外 → この試行では not_seen）。retryable で、締め切りまで VIDEO_RETRY_WAIT_MS + VIDEO_CALL_MIN_MS 以上ある時だけ、
+ *   待ってから次の n をもう 1 回（試行の中で VIDEO_MAX_CALLS_PER_ATTEMPT 回まで）
+ * - n ≥ 2 は settings video_fallback_enabled が '1' で予備のモデルが設定されていれば予備のモデル、そうでなければ主のモデル（§Q-10 7）
  * 呼び出しが失敗しても取り置きの行は残す（精算しない）。この関数は throw しない
  */
-export async function loadVideoNotes(env: Env, gemini: GeminiPort | undefined, v: VersionForVerify, videos: VersionVideo[], o: { deadline: number }): Promise<VideoNotesFile> {
+export async function loadVideoNotes(
+  env: Env,
+  gemini: GeminiPort | undefined,
+  v: VersionForVerify,
+  videos: VersionVideo[],
+  o: { deadline: number; sleep?: VideoSleep },
+): Promise<VideoNotesFile> {
   const none = (): VideoNotesFile => ({ v: 1, notes: [], missing: videos.map((x) => x.id) });
   if (videos.length === 0) return { v: 1, notes: [], missing: [] };
-  const log = (videoId: string, result: string) => console.log(JSON.stringify({ at: 'video_notes', version_id: v.id, video_id: videoId, result }));
+  // ログは数とラベルだけ（本文・鍵・応答は出さない §Q-10 11）
+  const log = (videoId: string, f: Record<string, string | number>) => console.log(JSON.stringify({ at: 'video_notes', version_id: v.id, video_id: videoId, ...f }));
   try {
-    const key = v.r2_prefix + VIDEO_NOTES_FILE;
-    const existing = await env.R2.get(key);
-    if (existing) return parseVideoNotesFile(await existing.text()) ?? none(); // 書き直さない・呼ばない
-    if (!env.DB || !gemini) return none();
-    if ((await getSetting(env.DB, VIDEO_ENABLED_KEY)) !== '1') return none();
-    if (o.deadline - Date.now() < VIDEO_CALL_MIN_MS) return none();
-    const c = cfg(env);
-    const missing = new Set<string>();
-    const toCall: VersionVideo[] = [];
+    const read = await readVersionVideoNotes(env.R2, v.r2_prefix, videos);
+    if (read.v1) return read.file ?? none(); // 書き直さない・呼ばない
+    const notes = new Map<string, VideoNote>();
+    for (const n of read.file?.notes ?? []) notes.set(n.video_id, n);
+    const result = (): VideoNotesFile => ({
+      v: 1,
+      notes: videos.filter((x) => notes.has(x.id)).map((x) => notes.get(x.id)!),
+      missing: videos.filter((x) => !notes.has(x.id)).map((x) => x.id),
+    });
+    if (!env.DB || !gemini) return result();
+    // D1 の呼び出しの行（n = 1..VIDEO_MAX_CALLS）
+    const refs = videos.flatMap((x) => Array.from({ length: VIDEO_MAX_CALLS }, (_, i) => videoCallRef(v.id, x.id, i + 1)));
+    const have = new Set((await all<{ ref_id: string }>(env.DB, stmt(`SELECT ref_id FROM cost_ledger WHERE ref_id IN (${refs.map(() => '?').join(', ')})`, ...refs))).map((r) => r.ref_id));
+    const toCall: Array<{ vid: VersionVideo; n: number }> = [];
     for (const vid of videos) {
-      if (!gemini.configured) {
-        missing.add(vid.id);
-        log(vid.id, 'no_key');
-        continue;
-      }
+      if (notes.has(vid.id)) continue;
+      const rowNs = Array.from({ length: VIDEO_MAX_CALLS }, (_, i) => i + 1).filter((n) => have.has(videoCallRef(v.id, vid.id, n)));
+      const d = videoCallDecision(rowNs, read.records.get(vid.id) ?? new Map());
+      if (d.kind === 'call') toCall.push({ vid, n: d.n });
+    }
+    if (toCall.length === 0) return result();
+    if ((await getSetting(env.DB, VIDEO_ENABLED_KEY)) !== '1') return result();
+    if (o.deadline - Date.now() < VIDEO_CALL_MIN_MS) return result();
+    const c = cfg(env);
+    const fallbackOn = (await getSetting(env.DB, VIDEO_FALLBACK_ENABLED_KEY)) === '1' && c.videoFallbackModel.length > 0;
+    const sleep = o.sleep ?? realVideoSleep;
+    const db = env.DB;
+
+    const reserve = async (ref: string): Promise<boolean> => {
       const at = new Date();
       const day = tokyoDay(at);
-      const reserved = await cas(
-        env.DB,
+      return cas(
+        db,
         videoReserveStmt({
           ledgerId: crypto.randomUUID(),
           day,
-          ref: videoLedgerRef(v.id, vid.id),
+          ref,
           u: c.videoUCents,
           now: nowIso(at),
           monthCap: c.videoMonthlyCapCents,
@@ -671,46 +718,90 @@ export async function loadVideoNotes(env: Env, gemini: GeminiPort | undefined, v
           daily: dailyReservedSql(day, c.verifyTurnReserveCents),
         }),
       );
-      if (reserved) toCall.push(vid);
-      else {
-        missing.add(vid.id);
-        log(vid.id, 'not_reserved');
-      }
-    }
-    const results = await Promise.all(
-      toCall.map(async (vid): Promise<VideoNote | null> => {
+    };
+
+    /** 1 動画の呼び出し（試行の中で VIDEO_MAX_CALLS_PER_ATTEMPT 回まで）。ok の記録を書けた時だけ note */
+    const callVideo = async (vid: VersionVideo, firstN: number): Promise<VideoNote | null> => {
+      let n = firstN;
+      for (let made = 0; ; ) {
+        if (o.deadline - Date.now() < VIDEO_CALL_MIN_MS) return null;
+        const role: VideoModelRole = n >= 2 && fallbackOn ? 'fallback' : 'primary';
+        const model = role === 'fallback' ? c.videoFallbackModel : gemini.model;
+        if (!(await reserve(videoCallRef(v.id, vid.id, n)))) {
+          // 同じ n を別の試行が取った・月・日の上限 → この試行では呼ばない（行は増えない）
+          log(vid.id, { call: n, model_role: role, result: 'not_reserved' });
+          return null;
+        }
+        made++;
+        let outcome: VideoCallOutcome;
+        let error: string | null = null;
+        let text = '';
+        let usage: ReturnType<typeof videoUsageOf>;
         try {
-          // port が締め切りを守らなくても待ち続けない
+          // port が締め切りを守らなくても待ち続けない（外側の締め切りは retryable）
           const r = await beforeDeadline(
-            gemini.watch({ youtubeId: vid.youtube_id, startSec: vid.start_sec, endSec: vid.end_sec, prompt: videoPrompt(vid.start_sec, vid.end_sec) }, { deadline: o.deadline }),
+            gemini.watch(
+              { youtubeId: vid.youtube_id, startSec: vid.start_sec, endSec: vid.end_sec, prompt: videoPrompt(vid.start_sec, vid.end_sec), ...(role === 'fallback' ? { model } : {}) },
+              { deadline: o.deadline },
+            ),
             o.deadline,
           );
-          const text = typeof r?.text === 'string' ? capChars(r.text, GEMINI_TEXT_MAX_CHARS) : '';
+          text = typeof r?.text === 'string' ? capChars(r.text, GEMINI_TEXT_MAX_CHARS) : '';
           if (!text.trim()) throw new Error('no_text');
-          const usage = videoUsageOf(r.usage);
-          log(vid.id, 'ok');
-          return { video_id: vid.id, youtube_id: vid.youtube_id, start_sec: vid.start_sec, end_sec: vid.end_sec, model: gemini.model, text, ...(usage ? { usage } : {}) };
+          usage = videoUsageOf(r.usage);
+          outcome = 'ok';
         } catch (e) {
-          log(vid.id, `error:${e instanceof GeminiError ? e.kind : e instanceof Error && VIDEO_LOG_CODES.has(e.message) ? e.message : 'unknown'}`);
+          error = videoErrorKind(e);
+          outcome = VIDEO_RETRYABLE_ERRORS.has(error) ? 'retryable' : 'final';
+        }
+        const record: VideoCallRecord = {
+          v: 1,
+          video_id: vid.id,
+          n,
+          model,
+          model_role: role,
+          outcome,
+          error,
+          ...(outcome === 'ok' ? { text, ...(usage ? { usage } : {}) } : {}),
+          at: nowIso(),
+        };
+        // 1 呼び出し 1 ファイル・書き直さない（まだ無い時だけ）。null・例外 → この呼び出しの結果はこの試行に出さない
+        let written = false;
+        try {
+          written = (await env.R2.put(videoCallKey(v.r2_prefix, vid.id, n), JSON.stringify(record), { onlyIf: { etagDoesNotMatch: '*' } })) !== null;
+        } catch {
+          written = false;
+        }
+        log(vid.id, { call: n, model_role: role, result: outcome === 'ok' ? 'ok' : `error:${error}`, ...(written ? {} : { record: 'not_written' }) });
+        if (!written) return null;
+        if (outcome === 'ok') return videoNoteOfRecord(vid, record);
+        if (outcome === 'final') return null;
+        if (made >= VIDEO_MAX_CALLS_PER_ATTEMPT || n >= VIDEO_MAX_CALLS) return null;
+        if (o.deadline - Date.now() < VIDEO_RETRY_WAIT_MS + VIDEO_CALL_MIN_MS) return null;
+        await sleep(VIDEO_RETRY_WAIT_MS);
+        n++;
+      }
+    };
+
+    const results = await Promise.all(
+      toCall.map(async ({ vid, n }) => {
+        if (!gemini.configured) {
+          // 鍵が無い → 呼ばず、取り置きもしない（§Q-4）
+          log(vid.id, { call: n, result: 'no_key' });
+          return null;
+        }
+        try {
+          return await callVideo(vid, n);
+        } catch {
           return null;
         }
       }),
     );
-    const notes: VideoNote[] = [];
-    toCall.forEach((vid, i) => {
-      const n = results[i];
-      if (n) notes.push(n);
-      else missing.add(vid.id);
+    toCall.forEach(({ vid }, i) => {
+      const note = results[i];
+      if (note) notes.set(vid.id, note);
     });
-    const file: VideoNotesFile = { v: 1, notes, missing: videos.filter((x) => missing.has(x.id)).map((x) => x.id) };
-    try {
-      await env.R2.put(key, JSON.stringify(file));
-    } catch {
-      // 呼び出しの権利は使ったので呼び直さない。記録は R2 に無いので、この試行でも記録なし（not_seen）にする（§Q-9.1）
-      log('*', 'r2_write_failed');
-      return none();
-    }
-    return file;
+    return result();
   } catch {
     return none();
   }
@@ -1231,13 +1322,13 @@ type AttemptResult =
   /** cron の期限が近くて次のターンを始めなかった（試行は確定させない）。unstarted=true は最初のターンも始めていない（API を 1 度も呼んでいない） */
   | { ok: false; reason: 'deadline'; microDollars: number; abandoned: true; unstarted?: true };
 
-async function runAttempt(env: Env, port: FactoryPort, v: VersionForVerify, deadline: number | undefined, gemini?: GeminiPort): Promise<AttemptResult> {
+async function runAttempt(env: Env, port: FactoryPort, v: VersionForVerify, deadline: number | undefined, gemini?: GeminiPort, videoSleep?: VideoSleep): Promise<AttemptResult> {
   const claimIds = claimIdsOf(v.claims_json);
   const videos = await versionVideos(env, v.id);
   // §P b 1: 取得記録（失敗・締め切りでも記録なしで進む）。読む時間は最初のターンの分（SYNC_MIN_TURN_MS + 余裕）を必ず残す。YouTube の出典は作らない（§Q-9.10）
   const captures = await loadSourceCaptures(env, port, v, { deadline: captureDeadlineOf(deadline, CAPTURE_SYNC_RESERVE_MS), videos });
   // §Q-3 3: 動画の記録（同じく最初のターンの分を残す。無い・呼べない動画は記録なし）
-  const videoNotes = await loadVideoNotes(env, gemini, v, videos, { deadline: videoDeadlineOf(deadline, CAPTURE_SYNC_RESERVE_MS) });
+  const videoNotes = await loadVideoNotes(env, gemini, v, videos, { deadline: videoDeadlineOf(deadline, CAPTURE_SYNC_RESERVE_MS), sleep: videoSleep });
   const input = await buildVerifyInput(env, v, { captures, videos, videoNotes });
   if (input === null) return { ok: false, reason: 'input_too_large', microDollars: 0, terminal: true };
   if ('error' in input) return { ok: false, reason: input.error, microDollars: 0, terminal: true };
@@ -1300,7 +1391,7 @@ async function runAttempt(env: Env, port: FactoryPort, v: VersionForVerify, dead
  * 同期モードの 1 件（§B-5-3 / §F-3）。deadline（cron の絶対期限）があれば各呼び出しの timeout を min(残り, SYNC_CALL_MAX_MS) にし、
  * 残りが SYNC_MIN_TURN_MS 未満なら lease も新しいターンもしない（§R-50 (h)）
  */
-async function runSyncStep(env: Env, port: FactoryPort, deadline: number | undefined, gemini?: GeminiPort): Promise<string> {
+async function runSyncStep(env: Env, port: FactoryPort, deadline: number | undefined, gemini?: GeminiPort, videoSleep?: VideoSleep): Promise<string> {
   const db = env.DB;
   const max = cfg(env).verifyMaxAttempts;
   // running（phase NULL = 同期の試行・migration 前の行）で 30 分超 → pending（attempts は増やさない）。
@@ -1338,7 +1429,7 @@ async function runSyncStep(env: Env, port: FactoryPort, deadline: number | undef
 
   let result: AttemptResult;
   try {
-    result = await runAttempt(env, port, v, deadline, gemini);
+    result = await runAttempt(env, port, v, deadline, gemini, videoSleep);
   } catch (e) {
     result = { ok: false, reason: errorKind(e), microDollars: 0 };
   }
@@ -1665,7 +1756,7 @@ async function stalePlanForYoutube(env: Env, r: BatchRow): Promise<boolean> {
 }
 
 /** 3. 提出（1 件） */
-export async function submitOne(env: Env, port: FactoryPort, r: BatchRow, deadline: number, gemini?: GeminiPort): Promise<string> {
+export async function submitOne(env: Env, port: FactoryPort, r: BatchRow, deadline: number, gemini?: GeminiPort, videoSleep?: VideoSleep): Promise<string> {
   const c = cfg(env);
   // 3-1 試行の累計の上限（terminal）
   if (microDollarsToCents(r.verify_micro) + c.verifyTurnReserveCents > c.verifyAttemptCapCents) {
@@ -1685,7 +1776,7 @@ export async function submitOne(env: Env, port: FactoryPort, r: BatchRow, deadli
       const videos = await versionVideos(env, r.id);
       const captures = await loadSourceCaptures(env, port, r, { deadline: captureDeadlineOf(deadline, CAPTURE_SUBMIT_RESERVE_MS), videos });
       // §Q-3 3: 動画の記録も最初のターンの送信の時だけ（提出の分を残す。回収では Gemini を呼ばない §Q-9.4）
-      const videoNotes = await loadVideoNotes(env, gemini, r, videos, { deadline: videoDeadlineOf(deadline, CAPTURE_SUBMIT_RESERVE_MS) });
+      const videoNotes = await loadVideoNotes(env, gemini, r, videos, { deadline: videoDeadlineOf(deadline, CAPTURE_SUBMIT_RESERVE_MS), sleep: videoSleep });
       const input = await buildVerifyInput(env, r, { captures, videos, videoNotes });
       if (input === null) return failAttempt(env, l, r.material_id, { reason: 'input_too_large', terminal: true });
       if ('error' in input) return failAttempt(env, l, r.material_id, { reason: input.error, terminal: true });
@@ -1896,7 +1987,7 @@ export async function collectOne(env: Env, port: FactoryPort, r: BatchRow, deadl
   return out;
 }
 
-async function runBatchStep(env: Env, port: FactoryPort, deadline: number, o: { lease: boolean; gemini?: GeminiPort } = { lease: true }): Promise<string> {
+async function runBatchStep(env: Env, port: FactoryPort, deadline: number, o: { lease: boolean; gemini?: GeminiPort; videoSleep?: VideoSleep } = { lease: true }): Promise<string> {
   const db = env.DB;
   const parts: string[] = [];
   const step = async (name: string, f: () => Promise<string | string[]>) => {
@@ -1916,7 +2007,7 @@ async function runBatchStep(env: Env, port: FactoryPort, deadline: number, o: { 
       stmt(`SELECT ${BATCH_COLS} FROM material_versions WHERE verification_status = 'running' AND verify_phase = 'to_submit' ORDER BY verify_phase_at ASC, id ASC LIMIT ?`, SUBMIT_PER_CRON),
     );
     const out: string[] = [];
-    for (const r of rows) out.push(await submitOne(env, port, r, deadline, o.gemini));
+    for (const r of rows) out.push(await submitOne(env, port, r, deadline, o.gemini, o.videoSleep));
     return out;
   });
   await step('collect', async () => {
@@ -1941,15 +2032,15 @@ async function runBatchStep(env: Env, port: FactoryPort, deadline: number, o: { 
  * cron の verify 段（§B-5-3 / §L-2）。既定の batch は 掃除 → lease → 提出（≤2）→ 回収（≤3）。
  * VERIFY_MODE=sync は、先に phase を持つ行（切替前の Batch の試行）を Batch の段（lease なし）で回してから、§F-3 の同期ループで 1 件。
  * opts.deadline は cron の絶対期限（両モードとも全呼び出しに渡す）。渡されなければ batch は今から DEFAULT_BATCH_BUDGET_MS、sync は期限なし。
- * opts.gemini は動画の記録の port（§Q-3 1）。渡されなければ Gemini を呼ばない（版の動画は not_seen）。
+ * opts.gemini は動画の記録の port（§Q-3 1）。渡されなければ Gemini を呼ばない（版の動画は not_seen）。opts.videoSleep は §Q-10 6 の待ち（テスト用。既定は setTimeout）。
  * 戻り値はログ用の文字列
  */
-export async function runVerificationStep(env: Env, port: FactoryPort, opts: { deadline?: number; gemini?: GeminiPort } = {}): Promise<string> {
+export async function runVerificationStep(env: Env, port: FactoryPort, opts: { deadline?: number; gemini?: GeminiPort; videoSleep?: VideoSleep } = {}): Promise<string> {
   const batchDeadline = opts.deadline ?? Date.now() + DEFAULT_BATCH_BUDGET_MS;
   if (cfg(env).verifyMode === 'sync') {
-    const drain = await runBatchStep(env, port, batchDeadline, { lease: false, gemini: opts.gemini });
-    const sync = await runSyncStep(env, port, opts.deadline, opts.gemini);
+    const drain = await runBatchStep(env, port, batchDeadline, { lease: false, gemini: opts.gemini, videoSleep: opts.videoSleep });
+    const sync = await runSyncStep(env, port, opts.deadline, opts.gemini, opts.videoSleep);
     return drain === 'idle' ? sync : `${sync} drain:${drain}`;
   }
-  return runBatchStep(env, port, batchDeadline, { lease: true, gemini: opts.gemini });
+  return runBatchStep(env, port, batchDeadline, { lease: true, gemini: opts.gemini, videoSleep: opts.videoSleep });
 }

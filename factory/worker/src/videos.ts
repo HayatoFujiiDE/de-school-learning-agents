@@ -1,4 +1,5 @@
-// 動画（YouTube）の検証の部品（契約 §Q-3・§Q-4・§Q-9）。純関数と SQL の組み立てだけ（D1・R2・port の呼び出しは src/verify.ts と src/routes/videos.ts）。
+// 動画（YouTube）の検証の部品（契約 §Q-3・§Q-4・§Q-9・§Q-10）。純関数と SQL の組み立てと、記録の読み出し（readVersionVideoNotes。R2 を読むだけ）。
+// D1 の取り置き・Gemini の呼び出し・記録の書き込みは src/verify.ts と src/routes/videos.ts。
 // 版の動画は material_versions.material_json（取り込みの §Q-1 検査を通ったもの）から読み、形をもう一度確かめる。
 // 記録（video notes）の本文は Gemini が動画を見て書いた文 = 信頼できない入力。<videos> の値は職人が書いた値 = 資料であって指示ではない。
 
@@ -9,8 +10,12 @@ import type { GeminiUsage } from './gemini';
 
 /** settings の key（§Q-9.5）。'1' の時だけ通常の経路で Gemini を呼ぶ */
 export const VIDEO_ENABLED_KEY = 'video_gen_enabled';
-/** R2 の {r2_prefix}video-notes.json（§Q-3 3・§Q-9.1） */
+/** R2 の {r2_prefix}video-notes.json（§Q-3 3・§Q-9.1）。§Q-10 9 の後は新しい版では書かない（既にある版だけ読む） */
 export const VIDEO_NOTES_FILE = 'video-notes.json';
+/** settings の key（§Q-10 10）。'1' の時だけ n ≥ 2 の呼び出しに予備のモデルを使う */
+export const VIDEO_FALLBACK_ENABLED_KEY = 'video_fallback_enabled';
+/** 版 × 動画ごとの Gemini の呼び出しの生涯の上限（§Q-10 1） */
+export const VIDEO_MAX_CALLS = 3;
 
 /** 版の動画 1 本（part_id 付き） */
 export interface VersionVideo {
@@ -131,8 +136,10 @@ export function parseVideoNotesFile(text: string): VideoNotesFile | null {
   }
 }
 
-/** 版 × 動画の呼び出しの権利の行（§Q-9.1。生涯 1 回） */
+/** 版 × 動画の 1 回目の呼び出しの権利の行（§Q-9.1。§Q-10 2 の n = 1） */
 export const videoLedgerRef = (versionId: string, videoId: string): string => `vv:${versionId}:${videoId}`;
+/** n 回目の呼び出しの権利の行（§Q-10 2）: n = 1 は videoLedgerRef（既存の行と互換）、n ≥ 2 は `…:r{n}` */
+export const videoCallRef = (versionId: string, videoId: string, n: number): string => (n === 1 ? videoLedgerRef(versionId, videoId) : `${videoLedgerRef(versionId, videoId)}:r${n}`);
 /** probe の行（§Q-9.1） */
 export const probeLedgerRef = (youtubeId: string, startSec: number, endSec: number): string => `vv:probe:${youtubeId}:${startSec}:${endSec}`;
 
@@ -158,6 +165,138 @@ WHERE NOT EXISTS (SELECT 1 FROM cost_ledger WHERE ref_id = ?)
   AND (${p.daily.sql}) + ? <= ?`,
     params: [p.ledgerId, p.day, p.ref, p.u, p.now, p.ref, p.day.slice(0, 7), p.u, p.monthCap, ...p.daily.params, p.u, p.dailyCap],
   };
+}
+
+// ---------------------------------------------------------------------------------------------
+// 呼び出しの記録（§Q-10 3・4・9）: 1 呼び出し 1 ファイル・書き直さない。状態は毎試行この記録と D1 の行から組み立てる
+
+export type VideoModelRole = 'primary' | 'fallback';
+export type VideoCallOutcome = 'ok' | 'retryable' | 'final';
+
+/** {r2_prefix}video-calls/{video_id}/{n}.json の中身（§Q-10 3）。text は ok の時だけ（8,000 字まで） */
+export interface VideoCallRecord {
+  v: 1;
+  video_id: string;
+  n: number;
+  model: string;
+  model_role: VideoModelRole;
+  outcome: VideoCallOutcome;
+  error: string | null;
+  text?: string;
+  usage?: GeminiUsage;
+  at: string;
+}
+
+/** 呼び出しの記録の R2 の key（§Q-10 3） */
+export const videoCallKey = (r2Prefix: string, videoId: string, n: number): string => `${r2Prefix}video-calls/${videoId}/${n}.json`;
+
+/**
+ * やり直す失敗（§Q-10 5）: GeminiErrorKind の server・rate_limited・timeout・connection と、外側の締め切り（beforeDeadline）で待ちきれなかったもの（'deadline'）。
+ * それ以外は final
+ */
+export const VIDEO_RETRYABLE_ERRORS: ReadonlySet<string> = new Set(['server', 'rate_limited', 'timeout', 'connection', 'deadline']);
+
+/** 保存済みの呼び出しの記録を読む（形が違う・video_id / n が key と合わない・ok なのに本文が無い → null = 記録が無い扱い） */
+export function parseVideoCallRecord(text: string, videoId: string, n: number): VideoCallRecord | null {
+  try {
+    const o = JSON.parse(text) as unknown;
+    if (!isObj(o) || o.v !== 1 || o.video_id !== videoId || o.n !== n || !isStr(o.model)) return null;
+    if (o.model_role !== 'primary' && o.model_role !== 'fallback') return null;
+    if (o.outcome !== 'ok' && o.outcome !== 'retryable' && o.outcome !== 'final') return null;
+    const usage = videoUsageOf(o.usage);
+    const base: VideoCallRecord = {
+      v: 1,
+      video_id: videoId,
+      n,
+      model: o.model,
+      model_role: o.model_role as VideoModelRole,
+      outcome: o.outcome as VideoCallOutcome,
+      error: isStr(o.error) ? o.error : null,
+      at: isStr(o.at) ? o.at : '',
+    };
+    if (o.outcome !== 'ok') return base;
+    if (!isStr(o.text) || !o.text.trim()) return null;
+    return { ...base, text: Array.from(o.text).slice(0, 8000).join(''), ...(usage ? { usage } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+/** 呼び出しの記録から note を作る（区間などは版の動画から。model は実際に答えたモデル §Q-10 11） */
+export function videoNoteOfRecord(v: VersionVideo, r: VideoCallRecord): VideoNote {
+  return { video_id: v.id, youtube_id: v.youtube_id, start_sec: v.start_sec, end_sec: v.end_sec, model: r.model, text: r.text ?? '', ...(r.usage ? { usage: r.usage } : {}) };
+}
+
+/** n がいちばん小さい ok の記録（無ければ undefined） */
+export function firstOkRecord(records: ReadonlyMap<number, VideoCallRecord>): VideoCallRecord | undefined {
+  return [...records.entries()].filter(([, r]) => r.outcome === 'ok').sort((a, b) => a[0] - b[0])[0]?.[1];
+}
+
+/** 動画の状態（§Q-10 4）: note にする記録 / 次に呼んでよい n / 呼ばない */
+export type VideoCallDecision = { kind: 'note'; record: VideoCallRecord } | { kind: 'call'; n: number } | { kind: 'none' };
+
+/**
+ * §Q-10 4 の規則（純関数）。rowNs = D1 にある呼び出しの行の n（1..3）、records = R2 の呼び出しの記録（n → 記録）。
+ * - ok の記録が 1 つでもある → n がいちばん小さい ok を note にする（以後は呼ばない）
+ * - final の記録がある → 呼ばない
+ * - 行が無い → n = 1 を呼んでよい
+ * - いちばん大きい n の行に記録があり、その outcome が retryable で、n < VIDEO_MAX_CALLS の時だけ n + 1 を呼んでよい
+ * - それ以外（行があるのに記録が無い = 呼び出し中・結果不明・put 失敗、n が上限）→ 呼ばない。時間で格上げしない
+ */
+export function videoCallDecision(rowNs: readonly number[], records: ReadonlyMap<number, VideoCallRecord>): VideoCallDecision {
+  const ok = firstOkRecord(records);
+  if (ok) return { kind: 'note', record: ok };
+  if ([...records.values()].some((r) => r.outcome === 'final')) return { kind: 'none' };
+  const maxN = rowNs.reduce((m, n) => Math.max(m, n), 0);
+  if (maxN === 0) return { kind: 'call', n: 1 };
+  if (maxN >= VIDEO_MAX_CALLS) return { kind: 'none' };
+  return records.get(maxN)?.outcome === 'retryable' ? { kind: 'call', n: maxN + 1 } : { kind: 'none' };
+}
+
+/** 版の動画ごとの呼び出しの記録（n = 1..VIDEO_MAX_CALLS を key で読む）。R2 の読み出しの例外はそのまま投げる */
+async function readVideoCallRecords(r2: R2Bucket, r2Prefix: string, videos: VersionVideo[]): Promise<Map<string, Map<number, VideoCallRecord>>> {
+  const out = new Map<string, Map<number, VideoCallRecord>>();
+  for (const v of videos) {
+    const m = new Map<number, VideoCallRecord>();
+    for (let n = 1; n <= VIDEO_MAX_CALLS; n++) {
+      const o = await r2.get(videoCallKey(r2Prefix, v.id, n));
+      if (!o) continue;
+      const rec = parseVideoCallRecord(await o.text(), v.id, n);
+      if (rec) m.set(n, rec);
+    }
+    out.set(v.id, m);
+  }
+  return out;
+}
+
+export interface VersionVideoNotesRead {
+  /** 検証係の入力と review API に出す記録。v1 のファイル（形が違えば null）か、呼び出しの記録から組み立てたもの（記録が 1 つも無ければ null） */
+  file: VideoNotesFile | null;
+  /** v1 の video-notes.json がある版（呼ばない。§Q-10 9） */
+  v1: boolean;
+  /** 動画 id → n → 呼び出しの記録（v1 の版では空） */
+  records: Map<string, Map<number, VideoCallRecord>>;
+}
+
+/**
+ * 版の動画の記録を読む 1 つの関数（§Q-10 9。検証係の入力 = src/verify.ts の loadVideoNotes と review API の video_notes が使う）。
+ * v1 の {r2_prefix}video-notes.json があればそれ（既存の missing は救わない）。無ければ呼び出しの記録から §Q-10 4 の規則で組み立てた
+ * {v:1, notes, missing}（notes は版の動画の順、各動画は n がいちばん小さい ok だけ）。呼び出しの記録が 1 つも無ければ file は null。
+ * R2 の読み出しの例外はそのまま投げる（呼ぶ側で「記録なし」にする）
+ */
+export async function readVersionVideoNotes(r2: R2Bucket, r2Prefix: string, videos: VersionVideo[]): Promise<VersionVideoNotesRead> {
+  const legacy = await r2.get(r2Prefix + VIDEO_NOTES_FILE);
+  if (legacy) return { file: parseVideoNotesFile(await legacy.text()), v1: true, records: new Map() };
+  const records = await readVideoCallRecords(r2, r2Prefix, videos);
+  if (![...records.values()].some((m) => m.size > 0)) return { file: null, v1: false, records };
+  const notes: VideoNote[] = [];
+  const missing: string[] = [];
+  for (const v of videos) {
+    const ok = firstOkRecord(records.get(v.id) ?? new Map());
+    if (ok) notes.push(videoNoteOfRecord(v, ok));
+    else missing.push(v.id);
+  }
+  return { file: { v: 1, notes, missing }, v1: false, records };
 }
 
 const mmss = (n: number) => `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;

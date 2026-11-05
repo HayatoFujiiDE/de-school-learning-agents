@@ -1,4 +1,4 @@
-// §Q PR-Q2: Gemini の区間の記録（video-notes.json）・検証係の動画の判定・費用の取り置き（§Q-9.1 の 1 文）・probe・有効化。
+// §Q PR-Q2: Gemini の区間の記録（§Q-10 の後は呼び出しの記録 video-calls/{動画}/{n}.json。v1 の video-notes.json は読むだけ）・検証係の動画の判定・費用の取り置き（§Q-9.1 の 1 文）・probe・有効化。
 // node:sqlite の実 DB + R2 の Map + stub の port（同期・Batch）+ fake の GeminiPort（§Q-7）。
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -67,6 +67,8 @@ import { goodMaterial } from './helpers';
 const T0 = '2026-11-05T00:00:00.000Z';
 const PREFIX = 'materials/m1/j1/';
 const NOTES_KEY = `${PREFIX}video-notes.json`;
+/** 呼び出しの記録の key（§Q-10 3） */
+const callKey = (vid: string, n: number) => `${PREFIX}video-calls/${vid}/${n}.json`;
 const YT1 = 'dQw4w9WgXcQ';
 const YT2 = 'abcdefghij_';
 const watch = (id: string) => `https://www.youtube.com/watch?v=${id}`;
@@ -102,10 +104,13 @@ function makeEnv(vars: Record<string, string> = {}): Env {
   return {
     DB: d1(db),
     R2: {
-      async put(k: string, v: string) {
+      // R2 の put（onlyIf.etagDoesNotMatch '*' = まだ無い時だけ。条件で書けなければ null §Q-10 3）
+      async put(k: string, v: string, o?: { onlyIf?: { etagDoesNotMatch?: string } }) {
         if (failPut.has(k)) throw new Error('r2_down');
+        if (o?.onlyIf?.etagDoesNotMatch === '*' && r2.has(k)) return null;
         puts.push(k);
         r2.set(k, String(v));
+        return { key: k };
       },
       async get(k: string) {
         const b = r2.get(k);
@@ -154,7 +159,7 @@ function seed(videos: unknown[] | undefined, o: { body?: string; claims?: unknow
 
 const enable = () => db.prepare("INSERT INTO settings (key, value, updated_at) VALUES ('video_gen_enabled', '1', ?)").run(T0);
 
-/** fake の GeminiPort（呼び出しを数える）。fail に入れた youtube_id は失敗、text は youtube_id ごとに差し替えられる */
+/** fake の GeminiPort（呼び出しを数える）。fail に入れた youtube_id は final の失敗（400 bad_request。§Q-10 5 でやり直さない）、text は youtube_id ごとに差し替えられる */
 function gemini(o: { configured?: boolean; fail?: string[]; text?: Record<string, string>; noUsage?: boolean } = {}) {
   const calls: GeminiWatchRequest[] = [];
   const port: GeminiPort = {
@@ -163,7 +168,7 @@ function gemini(o: { configured?: boolean; fail?: string[]; text?: Record<string
     model: 'gemini-3.6-flash',
     async watch(req) {
       calls.push(req);
-      if (o.fail?.includes(req.youtubeId)) throw new GeminiError(true, 500, 'server', false);
+      if (o.fail?.includes(req.youtubeId)) throw new GeminiError(true, 400, 'bad_request', false);
       const text = o.text?.[req.youtubeId] ?? `- 1:20 ${req.youtubeId} の区間で信号が進む`;
       return o.noUsage ? { text, httpStatus: 200 } : { text, usage: { total_input_tokens: 1000, total_output_tokens: 50 }, httpStatus: 200 };
     },
@@ -231,6 +236,8 @@ const ver = () => one(db, "SELECT * FROM material_versions WHERE id = 'v1'");
 const verifs = () => rows(db, "SELECT * FROM verifications WHERE material_version_id = 'v1' ORDER BY attempt");
 const saved = (i = 0) => JSON.parse(String(verifs()[i].result_json)) as { videos: unknown; verdicts: Array<{ claim_id: string; verdict: string; reason: string }> };
 const notesFile = () => JSON.parse(String(r2.get(NOTES_KEY))) as VideoNotesFile;
+const callRecord = (vid: string, n: number) => JSON.parse(String(r2.get(callKey(vid, n)))) as Obj;
+const callKeys = () => [...r2.keys()].filter((k) => k.includes('/video-calls/')).sort();
 const vvRows = () => rows(db, "SELECT ref_id, cents, kind FROM cost_ledger WHERE ref_id GLOB 'vv:*' ORDER BY ref_id");
 const reverifyNow = () => db.prepare("UPDATE material_versions SET verification_status = 'pending', verification_attempts = 0, verification_token = NULL WHERE id = 'v1'").run();
 const texts = (p: Params) => p.messages[0].content.filter((b) => b.type === 'text').map((b) => String(b.text));
@@ -247,7 +254,7 @@ const OK_VIDEOS = { videos: [{ id: 'v1', verdict: 'ok', reason: '記録と見ど
 
 // ---------------------------------------------------------------------------------------------
 describe('§Q-7 2 video notes（同期）', () => {
-  it('作られて R2 に書かれ（notes に usage の数字）、取り置きは vv:{版}:{動画} に U ずつ。2 回目の試行では呼ばず、書き直さない', async () => {
+  it('呼び出しの記録が R2 に書かれ（usage の数字）、取り置きは vv:{版}:{動画} に U ずつ。2 回目の試行では呼ばず、書き直さない（video-notes.json は書かない §Q-10 9）', async () => {
     seed([video(), V2()]);
     enable();
     const g = gemini();
@@ -258,21 +265,27 @@ describe('§Q-7 2 video notes（同期）', () => {
       [YT1, 80, 185],
       [YT2, 0, 60],
     ]);
-    expect(notesFile()).toEqual({
-      v: 1,
-      notes: [
-        { video_id: 'v1', youtube_id: YT1, start_sec: 80, end_sec: 185, model: 'gemini-3.6-flash', text: `- 1:20 ${YT1} の区間で信号が進む`, usage: { total_input_tokens: 1000, total_output_tokens: 50 } },
-        { video_id: 'v2', youtube_id: YT2, start_sec: 0, end_sec: 60, model: 'gemini-3.6-flash', text: `- 1:20 ${YT2} の区間で信号が進む`, usage: { total_input_tokens: 1000, total_output_tokens: 50 } },
-      ],
-      missing: [],
-    });
+    expect(r2.has(NOTES_KEY)).toBe(false);
+    for (const [vid, yt] of [['v1', YT1], ['v2', YT2]]) {
+      expect(callRecord(vid, 1)).toMatchObject({
+        v: 1,
+        video_id: vid,
+        n: 1,
+        model: 'gemini-3.6-flash',
+        model_role: 'primary',
+        outcome: 'ok',
+        error: null,
+        text: `- 1:20 ${yt} の区間で信号が進む`,
+        usage: { total_input_tokens: 1000, total_output_tokens: 50 },
+      });
+    }
     expect(vvRows()).toEqual([
       { ref_id: 'vv:v1:v1', cents: 10, kind: 'verify' },
       { ref_id: 'vv:v1:v2', cents: 10, kind: 'verify' },
     ]);
     expect(await runVerificationStep(env, port, { gemini: g.port })).toBe('done');
     expect(g.calls).toHaveLength(2);
-    expect(puts.filter((k) => k === NOTES_KEY)).toHaveLength(1);
+    expect(puts.filter((k) => k.includes('/video-calls/'))).toHaveLength(2);
     expect(vvRows()).toHaveLength(2);
     // 2 回目の試行も同じ記録を入力に入れる
     expect(texts(seen[1]).filter((t) => t.startsWith('## 動画 '))).toEqual(texts(seen[0]).filter((t) => t.startsWith('## 動画 ')));
@@ -282,15 +295,16 @@ describe('§Q-7 2 video notes（同期）', () => {
     ]);
   });
 
-  it('呼び出しが失敗した動画は notes に入れず missing。取り置きは消さず、次の試行・再検証でも呼ばない（not_seen）', async () => {
+  it('final の失敗（400）の動画は note にせず not_seen。取り置きは消さず、次の試行・再検証でも呼ばない', async () => {
     seed([video(), V2()]);
     enable();
     const g = gemini({ fail: [YT2] });
     const { port } = syncPort([reportMsg({ videos: [{ id: 'v1', verdict: 'ok', reason: 'x' }] })]);
     const env = makeEnv(SYNC);
     expect(await runVerificationStep(env, port, { gemini: g.port })).toBe('done');
-    expect(notesFile().notes.map((n) => n.video_id)).toEqual(['v1']);
-    expect(notesFile().missing).toEqual(['v2']);
+    expect(callRecord('v1', 1).outcome).toBe('ok');
+    expect(callRecord('v2', 1)).toMatchObject({ outcome: 'final', error: 'bad_request' });
+    expect(callRecord('v2', 1)).not.toHaveProperty('text');
     expect(vvRows().map((r) => [r.ref_id, r.cents])).toEqual([
       ['vv:v1:v1', 10],
       ['vv:v1:v2', 10],
@@ -305,7 +319,7 @@ describe('§Q-7 2 video notes（同期）', () => {
     expect(vvRows()).toHaveLength(2);
   });
 
-  it('鍵が無い → 呼ばず、取り置きもしない（記録は missing で残す §Q-9.1）。port が無い時は書きもしない', async () => {
+  it('鍵が無い → 呼ばず、取り置きもしない（記録も書かない §Q-10 3）', async () => {
     seed([video()]);
     enable();
     const g = gemini({ configured: false });
@@ -313,7 +327,8 @@ describe('§Q-7 2 video notes（同期）', () => {
     expect(await runVerificationStep(makeEnv(SYNC), port, { gemini: g.port })).toBe('done');
     expect(g.calls).toHaveLength(0);
     expect(vvRows()).toHaveLength(0);
-    expect(notesFile()).toEqual({ v: 1, notes: [], missing: ['v1'] });
+    expect(r2.has(NOTES_KEY)).toBe(false);
+    expect(callKeys()).toEqual([]);
     expect(saved().videos).toEqual([{ id: 'v1', verdict: 'not_seen', reason: '' }]);
   });
 
@@ -351,7 +366,7 @@ describe('§Q-7 2 video notes（同期）', () => {
     expect(await runVerificationStep(makeEnv(SYNC), port, { gemini: g.port })).toBe('done');
     expect(g.calls).toHaveLength(0);
     expect(vvRows()).toHaveLength(1);
-    expect(notesFile().missing).toEqual(['v1']);
+    expect(callKeys()).toEqual([]);
   });
 
   it('月の上限は vv:* だけを数える（画像や検証の記帳は月の上限に入らない）', async () => {
@@ -387,10 +402,10 @@ describe('§Q-7 2 video notes（同期）', () => {
     expect(saved().videos).toEqual([{ id: 'v1', verdict: 'not_seen', reason: '' }]);
   });
 
-  it('R2 の書き込みに失敗 → この試行も not_seen。権利は使ったので、次の試行で呼び直さない', async () => {
+  it('R2 の書き込み（呼び出しの記録）に失敗 → この試行も not_seen。行に記録が無いので、次の試行で呼び直さない（§Q-10 4）', async () => {
     seed([video()]);
     enable();
-    failPut.add(NOTES_KEY);
+    failPut.add(callKey('v1', 1));
     const g = gemini();
     const { port, seen } = syncPort([reportMsg()]);
     const env = makeEnv(SYNC);
@@ -402,7 +417,9 @@ describe('§Q-7 2 video notes（同期）', () => {
     reverifyNow();
     expect(await runVerificationStep(env, port, { gemini: g.port })).toBe('done');
     expect(g.calls).toHaveLength(1);
-    expect(notesFile()).toEqual({ v: 1, notes: [], missing: ['v1'] });
+    expect(vvRows()).toHaveLength(1);
+    expect(callKeys()).toEqual([]);
+    expect(saved(1).videos).toEqual([{ id: 'v1', verdict: 'not_seen', reason: '' }]);
   });
 });
 
@@ -635,8 +652,8 @@ describe('§Q-7 4 videos の判定', () => {
     const key = verifyPlanKey('v1', token);
     const plan = JSON.parse(String(r2.get(key))) as Obj;
     if (o.mutatePlan) r2.set(key, JSON.stringify(o.mutatePlan(plan)));
-    // 回収は Gemini を呼ばず、video-notes.json からも数え直さない
-    r2.delete(NOTES_KEY);
+    // 回収は Gemini を呼ばず、呼び出しの記録からも数え直さない（§Q-9.4・§Q-10 8）
+    for (const k of callKeys()) r2.delete(k);
     s.status = 'ended';
     const out = await runVerificationStep(env, port, { deadline: Date.now() + 120_000, gemini: g.port });
     return { out, plan, created, g };
@@ -818,7 +835,11 @@ describe('§Q-7 5 review API と確認画面', () => {
       { id: 'v1', verdict: 'problem', reason: '区間に別の場面' },
       { id: 'v2', verdict: 'not_seen', reason: '' },
     ]);
-    expect(b.video_notes).toEqual(notesFile());
+    expect(b.video_notes).toEqual({
+      v: 1,
+      notes: [{ video_id: 'v1', youtube_id: YT1, start_sec: 80, end_sec: 185, model: 'gemini-3.6-flash', text: `- 1:20 ${YT1} の区間で信号が進む`, usage: { total_input_tokens: 1000, total_output_tokens: 50 } }],
+      missing: ['v2'],
+    });
     expect((b.version.material.parts as Obj[])[0].videos).toEqual([video(), V2()]);
     // 同期の記帳 1¢（10 + 1 tokens の切り上げ）+ 取り置き 2 × 10¢（probe の 10¢ は入らない）
     expect(b.verify_cost_cents).toBe(1 + 20);
@@ -1323,8 +1344,10 @@ describe('NB cron の時間: 提出の段は締め切りの中で返る', () => 
     expect(Date.now() - t0).toBeLessThanOrEqual(CAPTURE_READ_MAX_MS + VIDEO_NOTES_MAX_MS + 2_000);
     expect(deadlines).toHaveLength(2);
     for (const d of deadlines) expect(d - t0).toBeLessThanOrEqual(CAPTURE_READ_MAX_MS + VIDEO_NOTES_MAX_MS + 1_000);
-    // 呼んだが記録は返らなかった → missing（権利は使った）
-    expect(notesFile()).toEqual({ v: 1, notes: [], missing: ['v1', 'v2'] });
+    // 呼んだが返らなかった → 外側の締め切り（retryable の記録。権利は使った）。締め切りが無いので試行の中ではやり直さない（§Q-10 5・6）
+    expect(r2.has(NOTES_KEY)).toBe(false);
+    for (const vid of ['v1', 'v2']) expect(callRecord(vid, 1)).toMatchObject({ outcome: 'retryable', error: 'deadline' });
+    expect(vvRows().map((r) => r.ref_id)).toEqual(['vv:v1:v1', 'vv:v1:v2']);
   });
 });
 
