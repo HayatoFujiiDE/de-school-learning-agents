@@ -11,6 +11,7 @@ import { MAX_FILE_BYTES } from './checks/schema';
 import { isLocalHostname, type Env } from './env';
 import { openAiPort, type ImagePort } from './openai';
 import { geminiPort, type GeminiPort } from './gemini';
+import { youtubeOEmbedPort, type OEmbedPort } from './youtube-oembed';
 import { XaiError, xaiResponses, type XaiRequest, type XaiResult } from './xai';
 
 export const MANAGED_AGENTS_BETA = 'managed-agents-2026-04-01';
@@ -401,6 +402,12 @@ export async function getImagePort(env: Env, ctx: PortContext): Promise<ImagePor
 export async function getGeminiPort(env: Env, ctx: PortContext): Promise<GeminiPort> {
   const fake = await loadFake(env, ctx);
   return fake ? fake.createFakeGeminiPort(env) : geminiPort(env);
+}
+
+/** 動画の公式の情報の port（§Q-11 2）。fake が許可される時だけ fake の oEmbed（src/fake/youtube-oembed.ts を src/fake/anthropic.ts 経由で。動的 import は loadFake の 1 箇所） */
+export async function getOEmbedPort(env: Env, ctx: PortContext): Promise<OEmbedPort> {
+  const fake = await loadFake(env, ctx);
+  return fake ? fake.createFakeOEmbedPort(env) : youtubeOEmbedPort();
 }
 
 /** 収集部隊の RSS 取得に使う fetch（§K-8: FactoryPort でなく fetch を差し替える）。fake が許可される時だけ fixture を返す fetch */

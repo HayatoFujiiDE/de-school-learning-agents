@@ -26,6 +26,8 @@ import { handleFakeOpenAiControl } from './openai';
 export { createFakeImagePort } from './openai';
 // 動画の記録の fake（§Q-7）。src/anthropic.ts の getGeminiPort が loadFake 経由でここから取る
 export { createFakeGeminiPort } from './gemini';
+// YouTube の oEmbed の fake（§Q-11 2）。src/anthropic.ts の getOEmbedPort が loadFake 経由でここから取る
+export { createFakeOEmbedPort } from './youtube-oembed';
 
 /** 入口（§K-8）の fixture。job の scenario ではない */
 const INTAKE_FIXTURE_DIRS = ['scout', 'meeting'];
