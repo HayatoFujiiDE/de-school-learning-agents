@@ -11,7 +11,8 @@
   var INK = '#292c29', OLIVE = '#524e44', ORANGE = '#ed922c', SAND = '#f1ece3', PAPER = '#ffffff', SOFT = '#fbecd7', MID = '#e4ded1';
 
   // ---------- 題材 ----------
-  MD.THEMES = ['mc', 'py', 'circuit', 'tool'];
+  // §AD-1: コマ撮りの動画（stop）/ マイクラのアスレチック（ath）/ 物語（story）を足して 7 つ
+  MD.THEMES = ['mc', 'py', 'circuit', 'tool', 'stop', 'ath', 'story'];
   var THEME = {
     mc: {
       sample: 'cube', ideas: ['tower', 'bridge', 'roof'], capIdea: 'roof', variants: ['cube', 'tower', 'bridge', 'roof'],
@@ -66,6 +67,49 @@
       stepBase: [['まとめる数を変える', 'まとめる数をかえる'], ['間かくを決める', 'あいだをきめる'], ['サークル対話で使ってみる', 'サークル対話でつかってみる']],
       extSteps: [['写真を入れる', '写真を入れる'], ['使った場面を書く', 'つかった場面を書く']],
       find: [{ count: 2, every: 1 }, { count: 4, every: 3 }]
+    },
+    // ---- §AD-1（contract-app verbatim。「小」は既存の書き方で起こした） ----
+    stop: {
+      sample: 'walk', ideas: ['clay', 'brick', 'draw'], capIdea: 'clay', variants: ['walk', 'clay', 'brick', 'draw'],
+      topic: ['コマ撮りの動画', 'コマどりの動画'],
+      effect: ['動画の動き', '動画のうごき'], aim: ['動き', 'うごき'],
+      changeable: [['コマの数', 'コマの数'], ['1 秒のコマ数', '1 びょうのコマ数']],
+      params: [
+        { key: 'frames', label: ['コマの数', 'コマの数'], min: 0, max: 4, def: 2, vals: [6, 8, 12, 18, 24],
+          names: ['6 コマ', '8 コマ', '12 コマ', '18 コマ', '24 コマ'] },
+        { key: 'fps', label: ['1 秒のコマ数', '1 びょうのコマ数'], min: 0, max: 3, def: 1, vals: [4, 6, 8, 12],
+          names: [['1 秒に 4 コマ', '1 びょうに 4 コマ'], ['1 秒に 6 コマ', '1 びょうに 6 コマ'], ['1 秒に 8 コマ', '1 びょうに 8 コマ'], ['1 秒に 12 コマ', '1 びょうに 12 コマ']] }
+      ],
+      stepBase: [['コマの数を変える', 'コマの数をかえる'], ['1 秒のコマ数を変える', '1 びょうのコマ数をかえる'], ['撮る物を決める', 'とる物をきめる']],
+      extSteps: [['写真を入れる', '写真を入れる'], ['コマを足す', 'コマをたす']],
+      find: [{ frames: 3, fps: 1 }, { frames: 1, fps: 2 }]
+    },
+    ath: {
+      sample: 'jump', ideas: ['slime', 'piston', 'ice'], capIdea: 'slime', variants: ['jump', 'slime', 'piston', 'ice'],
+      topic: ['マイクラのアスレチック', 'マイクラのアスレチック'],
+      effect: ['コースの手ごたえ', 'コースの手ごたえ'], aim: ['手ごたえ', '手ごたえ'],
+      changeable: [['足場のあいだ', '足場のあいだ'], ['足場の数', '足場の数']],
+      params: [
+        { key: 'gap', label: ['足場のあいだ', '足場のあいだ'], min: 1, max: 4, def: 2 },
+        { key: 'count', label: ['足場の数', '足場の数'], min: 3, max: 8, def: 5 }
+      ],
+      stepBase: [['足場のあいだを変える', '足場のあいだをかえる'], ['足場の数を変える', '足場の数をかえる'], ['ゴールを置く', 'ゴールをおく']],
+      extSteps: [['写真を入れる', '写真を入れる'], ['ギミックを足す', 'ギミックをたす']],
+      find: [{ gap: 3, count: 6 }, { gap: 1, count: 8 }]
+    },
+    story: {
+      sample: 'short', ideas: ['mystery', 'future', 'letter'], capIdea: 'mystery', variants: ['short', 'mystery', 'future', 'letter'],
+      topic: ['物語', 'ものがたり'],
+      effect: ['話の流れ', '話のながれ'], aim: ['流れ', 'ながれ'],
+      changeable: [['場面の数', '場めんの数'], ['語り手', 'かたり手']],
+      params: [
+        { key: 'scenes', label: ['場面の数', '場めんの数'], min: 3, max: 7, def: 4 },
+        { key: 'voice', label: ['語り手', 'かたり手'], min: 0, max: 2, def: 0,
+          names: [['「わたし」が語る', '「わたし」がかたる'], ['外から語る', '外からかたる'], ['手紙で語る', '手紙でかたる']] }
+      ],
+      stepBase: [['場面の数を変える', '場めんの数をかえる'], ['語り手を選ぶ', 'かたり手をえらぶ'], ['最初の 1 文を書く', 'さいしょの 1 文を書く']],
+      extSteps: [['写真を入れる', '写真を入れる'], ['次の場面を書く', 'つぎの場めんを書く']],
+      find: [{ scenes: 5, voice: 1 }, { scenes: 3, voice: 2 }]
     }
   };
   MD.theme = function (id) { return THEME[id] || THEME.mc; };
@@ -73,8 +117,11 @@
   MD.STEP_MIN = 5;
   MD.EXT_BUILD_STEPS = [['塔を建てる', 'とうをたてる'], ['塔を 2 倍にする', 'とうを 2 倍にする'], ['屋根を置く', 'やねをおく']];
 
-  // 見本 3 枚（入口の順。確定 Q2）
+  // 見本 6 枚（§AD-3 の順。入口には 3 枚ずつ出す。tool は入れない）
   MD.samples = [
+    { id: 'stop', theme: 'stop', variant: 'walk' },
+    { id: 'ath', theme: 'ath', variant: 'jump' },
+    { id: 'story', theme: 'story', variant: 'short' },
     { id: 'mc', theme: 'mc', variant: 'cube' },
     { id: 'py', theme: 'py', variant: 'catch' },
     { id: 'circuit', theme: 'circuit', variant: 'single' }
@@ -97,7 +144,20 @@
     'tool.memo':  { title: ['論点メモ', 'ろんてんメモ'], values: { count: 3, every: 2 } },
     'tool.nudge': { title: ['ひとこと合図', 'ひとことの合図'], values: { count: 1, every: 1 }, step3: ['合図の言葉を決める', 'あいずのことばをきめる'] },
     'tool.oneby': { title: ['ひとつずつリスト', 'ひとつずつリスト'], values: { count: 1, every: 4 }, step3: ['次を出す合図を決める', 'つぎを出すあいずをきめる'] },
-    'tool.board': { title: ['話の地図', '話のちず'], values: { count: 4, every: 2 }, step3: ['真ん中に書くことを決める', 'まん中に書くことをきめる'] }
+    'tool.board': { title: ['話の地図', '話のちず'], values: { count: 4, every: 2 }, step3: ['真ん中に書くことを決める', 'まん中に書くことをきめる'] },
+    // §AD-1。subj = 結果の主語（stop）/ gim = ギミックの足場・block = ブロック id（ath）
+    'stop.walk': { title: ['コマ撮りの短い動画', 'コマどりのみじかい動画'], values: { frames: 2, fps: 1 }, subj: ['人形が歩く動画', '人形があるく動画'] },
+    'stop.clay': { title: ['粘土が形を変える動画', 'ねん土が形をかえる動画'], values: { frames: 2, fps: 1 }, step3: ['粘土の色を決める', 'ねん土の色をきめる'], subj: ['粘土が形を変える動画', 'ねん土が形をかえる動画'] },
+    'stop.brick': { title: ['ブロックの車が走る動画', 'ブロックの車が走る動画'], values: { frames: 3, fps: 2 }, step3: ['道を作る', '道をつくる'], subj: ['ブロックの車が走る動画', 'ブロックの車が走る動画'] },
+    'stop.draw': { title: ['絵が動き出す動画', '絵がうごき出す動画'], values: { frames: 1, fps: 1 }, step3: ['最初の絵を描く', 'さいしょの絵をかく'], subj: ['絵が動き出す動画', '絵がうごき出す動画'] },
+    'ath.jump': { title: ['マイクラのアスレチック', 'マイクラのアスレチック'], values: { gap: 2, count: 5 }, gim: null, block: 'stone' },
+    'ath.slime': { title: ['スライムで跳ねるコース', 'スライムではねるコース'], values: { gap: 3, count: 5 }, step3: ['跳ねる高さを試す', 'はねる高さをためす'], gim: ['跳ねる足場', 'はねる足場'], block: 'slime_block' },
+    'ath.piston': { title: ['ピストンで動く足場のコース', 'ピストンでうごく足場のコース'], values: { gap: 2, count: 6 }, step3: ['動くタイミングを決める', 'うごくタイミングをきめる'], gim: ['動く足場', 'うごく足場'], block: 'piston' },
+    'ath.ice': { title: ['氷ですべるコース', 'こおりですべるコース'], values: { gap: 2, count: 4 }, step3: ['止まる場所を作る', 'とまる場所をつくる'], gim: ['すべる足場', 'すべる足場'], block: 'packed_ice' },
+    'story.short': { title: ['短い物語', 'みじかいものがたり'], values: { scenes: 4, voice: 0 } },
+    'story.mystery': { title: ['なぞ解きの物語', 'なぞときのものがたり'], values: { scenes: 5, voice: 1 }, step3: ['なぞの答えを先に決める', 'なぞの答えを先にきめる'] },
+    'story.future': { title: ['100 年後の町の物語', '100 年後の町のものがたり'], values: { scenes: 4, voice: 1 }, step3: ['今とちがう所を 1 つ決める', '今とちがう所を 1 つきめる'] },
+    'story.letter': { title: ['手紙でつづる物語', '手紙でつづるものがたり'], values: { scenes: 3, voice: 2 }, step3: ['だれからだれへの手紙か決める', 'だれからだれへの手紙かきめる'] }
   };
   MD.variant = function (theme, v) { return VARIANT[theme + '.' + v] || VARIANT[theme + '.' + MD.theme(theme).sample]; };
   MD.variantValues = function (theme, v) { return JSON.parse(JSON.stringify(MD.variant(theme, v).values)); };
@@ -138,6 +198,28 @@
       steps: { title: ['論点メモの使い方', 'ろんてんメモのつかいかた'], lines: [['1. 聞いたことを 1 行ずつメモに入れる', '1. 聞いたことを 1 行ずつメモに入れる'], ['2. 5 分たったら AI が論点に分ける', '2. 5 分たったら AI がカードに分ける'], ['3. 気になるカードに印を付ける', '3. 気になるカードにしるしをつける']],
         alt: { title: ['論点メモの使い方（話の地図）', 'ろんてんメモのつかいかた（話のちず）'], lines: [['1. 聞いたことを 1 行ずつメモに入れる', '1. 聞いたことを 1 行ずつメモに入れる'], ['2. AI が真ん中の問いから枝を伸ばす', '2. AI がまん中の問いから枝をのばす'], ['3. 自分の考えを枝に足す', '3. 自分の考えを枝にたす']] } },
       cmd: { variant: 'board', values: { count: 4, every: 2 } }
+    },
+    // ---- §AD-1 ----
+    stop: {
+      calc: { title: ['コマの計算', 'コマの計算'], lines: [['12 コマ ÷ 1 秒に 6 コマ = 2 秒', '12 コマ ÷ 1 びょうに 6 コマ = 2 びょう'], ['10 秒にするには 60 コマ', '10 びょうにするには 60 コマ'], ['1 コマで 5 mm 動かすと、60 コマで 30 cm', '1 コマで 5 mm うごかすと、60 コマで 30 cm']],
+        alt: { title: ['コマの計算（1 秒に 12 コマ）', 'コマの計算（1 びょうに 12 コマ）'], lines: [['12 コマ ÷ 1 秒に 12 コマ = 1 秒', '12 コマ ÷ 1 びょうに 12 コマ = 1 びょう'], ['10 秒にするには 120 コマ', '10 びょうにするには 120 コマ'], ['1 コマで 2.5 mm 動かすと、120 コマで 30 cm', '1 コマで 2.5 mm うごかすと、120 コマで 30 cm']] } },
+      steps: { title: ['撮り方の手順', 'とりかたの手じゅん'], lines: [['1. カメラを動かないように固定する', '1. カメラをうごかないようにおく'], ['2. 少し動かして 1 枚撮る', '2. 少しうごかして 1 まいとる'], ['3. 12 回くり返して、つなげて見る', '3. 12 回くりかえして、つなげて見る']],
+        alt: { title: ['撮り方の手順（形を変える）', 'とりかたの手じゅん（形をかえる）'], lines: [['1. カメラを動かないように固定する', '1. カメラをうごかないようにおく'], ['2. 粘土を少しつまんで 1 枚撮る', '2. ねん土を少しつまんで 1 まいとる'], ['3. 12 回くり返して、つなげて見る', '3. 12 回くりかえして、つなげて見る']] } },
+      cmd: { variant: 'clay', values: { frames: 2, fps: 2 } }
+    },
+    ath: {
+      calc: { title: ['コースの長さ', 'コースの長さ'], lines: [['足場 5 個 · あいだ 2 ブロック', '足場 5 こ · あいだ 2 ブロック'], ['5 + 2 × 4 = 13 ブロックの長さ', '5 + 2 × 4 = 13 ブロックの長さ'], ['足場を 8 個にすると 22 ブロック', '足場を 8 こにすると 22 ブロック']],
+        alt: { title: ['コースの長さ（あいだ 3）', 'コースの長さ（あいだ 3）'], lines: [['足場 5 個 · あいだ 3 ブロック', '足場 5 こ · あいだ 3 ブロック'], ['5 + 3 × 4 = 17 ブロックの長さ', '5 + 3 × 4 = 17 ブロックの長さ'], ['足場を 8 個にすると 29 ブロック', '足場を 8 こにすると 29 ブロック']] } },
+      steps: { title: ['コースの手順', 'コースの手じゅん'], lines: [['1. スタートの足場を置く', '1. スタートの足場をおく'], ['2. あいだをあけて、次の足場を置く', '2. あいだをあけて、つぎの足場をおく'], ['3. 最後にゴールの目印を置く', '3. さいごにゴールの目じるしをおく']],
+        alt: { title: ['コースの手順（ギミック）', 'コースの手じゅん（ギミック）'], lines: [['1. スタートの足場を置く', '1. スタートの足場をおく'], ['2. 2 個目ごとにスライムブロックを置く', '2. 2 こ目ごとにスライムブロックをおく'], ['3. だれかに遊んでもらって、手ごたえを聞く', '3. だれかにあそんでもらって、手ごたえを聞く']] } },
+      cmd: { variant: 'slime', values: { gap: 3, count: 5 } }
+    },
+    story: {
+      calc: { title: ['場面の割りふり', '場めんのわりふり'], lines: [['4 場面: はじまり 1 · できごと 2 · おわり 1', '4 場めん: はじまり 1 · できごと 2 · おわり 1'], ['1 場面 200 字なら、全部で 800 字', '1 場めん 200 字なら、ぜんぶで 800 字'], ['山場は 3 場面目', '山場は 3 場めん目']],
+        alt: { title: ['場面の割りふり（6 場面）', '場めんのわりふり（6 場めん）'], lines: [['6 場面: はじまり 1 · できごと 4 · おわり 1', '6 場めん: はじまり 1 · できごと 4 · おわり 1'], ['1 場面 200 字なら、全部で 1200 字', '1 場めん 200 字なら、ぜんぶで 1200 字'], ['山場は 5 場面目', '山場は 5 場めん目']] } },
+      steps: { title: ['書き進める手順', '書きすすめる手じゅん'], lines: [['1. 主人公がほしいものを 1 つ決める', '1. しゅじんこうがほしいものを 1 つきめる'], ['2. じゃまをするできごとを 1 つ置く', '2. じゃまをするできごとを 1 つおく'], ['3. 最初の 1 文を書く', '3. さいしょの 1 文を書く']],
+        alt: { title: ['書き進める手順（なぞ解き）', '書きすすめる手じゅん（なぞとき）'], lines: [['1. なぞの答えを先に決める', '1. なぞの答えを先にきめる'], ['2. 手がかりを 3 つ置く', '2. 手がかりを 3 つおく'], ['3. 最初の 1 文を書く', '3. さいしょの 1 文を書く']] } },
+      cmd: { variant: 'mystery', values: { scenes: 5, voice: 1 } }
     }
   };
 
@@ -210,6 +292,20 @@
   var TOOL_CODE = { memo: 'メモ → AI → 論点 × {count}（{Es}）', nudge: '時計 → 合図「いまの話を {count} 行で」（{Es}）', oneby: 'リスト → {count} 件ずつ表示（{Es}）', board: 'メモ → AI → 枝 × {count}（{Es}）' };
   var TOOL_DESC = { memo: '論点 {count}', nudge: '{count} 行', oneby: '{count} 件ずつ', board: '枝 {count}' };
   function toolVariant(va) { return TOOL_RESULT[va] ? va : THEME.tool.sample; }
+  // ---- §AD-1 の計算（知らない案は題材の最初の案として読む。別の題材には落とさない） ----
+  function adVariant(theme, va) { return VARIANT[theme + '.' + va] ? va : THEME[theme].sample; }
+  // コマ撮り: F = コマの数 / P = 1 秒のコマ数 / S = 秒（小数 1 けた）
+  function stopNums(v) { var F = num('stop', 'frames', v.frames), P = num('stop', 'fps', v.fps); return { F: F, P: P, S: Math.round(F / P * 10) / 10 }; }
+  MD.stopNums = stopNums;
+  // アスレチック: n = 足場の数 / g = あいだ / k = ギミックの足場（2 個目・4 個目…。jump は 0）/ L = コースの長さ
+  function athNums(va, v) { var n = v.count, g = v.gap, gim = !!VARIANT['ath.' + adVariant('ath', va)].gim; return { n: n, g: g, k: gim ? Math.floor(n / 2) : 0, L: n + g * (n - 1) }; }
+  MD.athNums = athNums;
+  // 手ごたえ（このモックでの目安。ゲームの事実としては書かない）
+  var ATH_FEEL = [['かんたん', 'かんたん'], ['ふつう', 'ふつう'], ['むずかしい', 'むずかしい'], ['とてもむずかしい', 'とてもむずかしい']];
+  function athFeel(g, mode) { return pick(ATH_FEEL[Math.max(1, Math.min(4, g)) - 1], mode); }
+  // 物語: n = 場面の数 / k = 山場（最後の 1 つ前の場面）
+  function storyNums(v) { return { n: v.scenes, k: v.scenes - 1 }; }
+  MD.storyNums = storyNums;
 
   // 結果 1 行（「試す」で確かめたこと）
   MD.result = function (stage, mode) {
@@ -235,6 +331,23 @@
       var m = toolMin(v.every), E = m === 0 ? MD.valueLabel('tool', 'every', v.every, mode) : m + ' 分ごとに';
       return fmt(pick(TOOL_RESULT[toolVariant(va)], mode), { E: E, count: v.count });
     }
+    // §AD-1
+    if (t === 'stop') {
+      var sn = stopNums(v);
+      return fmt(pick(['{subj} · {F} コマ ÷ 1 秒に {P} コマ = {S} 秒', '{subj} · {F} コマ ÷ 1 びょうに {P} コマ = {S} びょう'], mode),
+        { subj: pick(VARIANT['stop.' + adVariant('stop', va)].subj, mode), F: sn.F, P: sn.P, S: sn.S });
+    }
+    if (t === 'ath') {
+      var an = athNums(va, v), gim = VARIANT['ath.' + adVariant('ath', va)].gim;
+      if (!gim) return fmt(pick(['足場 {n} 個 · あいだ {g} ブロック · {feel}', '足場 {n} こ · あいだ {g} ブロック · {feel}'], mode), { n: an.n, g: an.g, feel: athFeel(an.g, mode) });
+      return fmt(pick(['足場 {n} 個（{gim} {k} 個）· あいだ {g} ブロック · {feel}', '足場 {n} こ（{gim} {k} こ）· あいだ {g} ブロック · {feel}'], mode),
+        { n: an.n, gim: pick(gim, mode), k: an.k, g: an.g, feel: athFeel(an.g, mode) });
+    }
+    if (t === 'story') {
+      var stn = storyNums(v);
+      return fmt(pick(['{n} 場面の物語 · {name} · 山場は {k} 場面目', '{n} 場めんのものがたり · {name} · 山場は {k} 場めん目'], mode),
+        { n: stn.n, k: stn.k, name: MD.valueLabel('story', 'voice', v.voice, mode) });
+    }
     var c = circuitNums(va, v);
     return fmt(pick(['電流 {I} mA · 明るさ {B}%', 'でんりゅう {I} mA · 明るさ {B}%'], mode), c);
   };
@@ -259,6 +372,15 @@
       return 'speed = ' + v.speed + '\n' + name + ' = ' + v.count + '\nplayer.move(speed)';
     }
     if (t === 'tool') return fmt(TOOL_CODE[toolVariant(va)], { count: v.count, Es: toolEs(v.every) });
+    // §AD-1
+    if (t === 'stop') { var sn = stopNums(v); return sn.F + ' コマ ÷ ' + sn.P + ' コマ/秒 = ' + sn.S + ' 秒'; }
+    if (t === 'ath') {
+      var an = athNums(va, v), vd = VARIANT['ath.' + adVariant('ath', va)], lines = [];
+      for (var ai = 0; ai < Math.min(an.n, 3); ai++) lines.push('/setblock ~' + (ai * (an.g + 1)) + ' ~ ~ minecraft:' + (vd.gim && ai % 2 === 1 ? vd.block : 'stone'));
+      if (an.n > 3) lines.push('…');
+      return lines.join('\n');
+    }
+    if (t === 'story') return 'はじまり → できごと × ' + (v.scenes - 2) + ' → おわり（' + MD.valueLabel('story', 'voice', v.voice, 'js') + '）';
     var c = circuitNums(va, v);
     return c.V + ' V ÷ ' + c.R + ' Ω = ' + c.I + ' mA';
   };
@@ -276,6 +398,10 @@
     }
     if (t === 'py') return fmt(pick(['速さ {sp}・数 {c}', 'はやさ {sp}・数 {c}'], mode), { sp: v.speed, c: v.count });
     if (t === 'tool') return fmt(TOOL_DESC[toolVariant(va)], { count: v.count }) + ' · ' + toolEs(v.every);
+    // §AD-1
+    if (t === 'stop') { var sn = stopNums(v); return fmt(pick(['{F} コマ · 1 秒に {P} コマ', '{F} コマ · 1 びょうに {P} コマ'], mode), sn); }
+    if (t === 'ath') return fmt('足場 {n} · あいだ {g}', { n: v.count, g: v.gap });
+    if (t === 'story') return fmt(pick(['{n} 場面 · {name}', '{n} 場めん · {name}'], mode), { n: v.scenes, name: MD.valueLabel('story', 'voice', v.voice, mode) });
     return MD.valueLabel('circuit', 'volt', v.volt, mode) + ' · ' + MD.valueLabel('circuit', 'ohm', v.ohm, mode);
   };
 
@@ -489,6 +615,104 @@
     out += toolClock(mk.every);
     return wrap(out);
   }
+  // ---- §AD-1 の線画（墨 + オリーブ、強調だけ橙。文字は入れない） ----
+  // コマ撮り: 上にコマの枠が F 個（1 行に入らなければ 2〜3 行。主役の位置や形がコマごとに少しずつ変わる）、下に時間の線（長さ ∝ S・1 秒ごとの目盛り）
+  var STOP_SEC_PX = 33;
+  function stopMarks(v) { var sn = stopNums(v); return { frames: sn.F, secs: sn.S }; }
+  function stopSubject(va, x, y, w, h, t, i) {
+    var cx, cy = y + h * 0.55;
+    if (va === 'clay') {
+      // 粘土: 丸 → 横長へ少しずつ形が変わる
+      return '<ellipse cx="' + r1(x + w / 2) + '" cy="' + r1(y + h * 0.62) + '" rx="' + r1(w * (0.16 + 0.16 * t)) + '" ry="' + r1(h * (0.3 - 0.13 * t)) + '" fill="' + SAND + '" stroke="' + INK + '" stroke-width="0.9"/>';
+    }
+    if (va === 'brick') {
+      // ブロックの車: 左から右へ進む
+      cx = x + w * (0.22 + 0.5 * t);
+      var bw = w * 0.32, bh = h * 0.22;
+      return rect(cx - bw / 2, cy - bh / 2, bw, bh, MID) + rect(cx - bw * 0.25, cy - bh * 1.2, bw * 0.5, bh * 0.7, SAND) +
+        '<circle cx="' + r1(cx - bw * 0.28) + '" cy="' + r1(cy + bh * 0.6) + '" r="' + r1(Math.max(1, h * 0.07)) + '" fill="' + INK + '"/>' +
+        '<circle cx="' + r1(cx + bw * 0.28) + '" cy="' + r1(cy + bh * 0.6) + '" r="' + r1(Math.max(1, h * 0.07)) + '" fill="' + INK + '"/>';
+    }
+    if (va === 'draw') {
+      // 絵が動き出す: 描いた線が少しずつ伸びる
+      var x1 = x + w * 0.18, y1 = y + h * 0.75, len = w * (0.12 + 0.58 * t);
+      return '<path d="M' + r1(x1) + ' ' + r1(y1) + ' q' + r1(len / 2) + ' ' + r1(-h * 0.5) + ' ' + r1(len) + ' 0" stroke="' + OLIVE + '" stroke-width="1.2" fill="none" stroke-linecap="round"/>' +
+        '<circle cx="' + r1(x1 + len) + '" cy="' + r1(y1) + '" r="' + r1(Math.max(1, h * 0.06)) + '" fill="' + INK + '"/>';
+    }
+    // walk: 人形（顔は描かない）が左から右へ。足を交互に出す
+    cx = x + w * (0.25 + 0.5 * t);
+    var hr = Math.max(1.2, h * 0.1), top = y + h * 0.2, hip = y + h * 0.62, foot = y + h * 0.88, step = w * (i % 2 ? 0.08 : 0.14);
+    return '<circle cx="' + r1(cx) + '" cy="' + r1(top + hr) + '" r="' + r1(hr) + '" fill="' + PAPER + '" stroke="' + INK + '" stroke-width="0.9"/>' +
+      line(cx, top + hr * 2, cx, hip, INK, 1) + line(cx, hip, cx - step, foot, INK, 1) + line(cx, hip, cx + step, foot, INK, 1);
+  }
+  function stopArt(va, v) {
+    var mk = stopMarks(v), F = mk.frames, S = mk.secs, out = '', i;
+    var rows = F <= 8 ? 1 : (F <= 16 ? 2 : 3), per = Math.ceil(F / rows), gap = 4;
+    var fw = Math.min(30, (216 - (per - 1) * gap) / per), fh = fw * 0.75;
+    var totalW = per * fw + (per - 1) * gap, totalH = rows * fh + (rows - 1) * gap;
+    var x0 = (240 - totalW) / 2, y0 = 10 + (88 - totalH) / 2;
+    for (i = 0; i < F; i++) {
+      var row = Math.floor(i / per), col = i % per, x = x0 + col * (fw + gap), y = y0 + row * (fh + gap);
+      out += rect(x, y, fw, fh, PAPER, ' rx="2"') + stopSubject(va, x, y, fw, fh, F > 1 ? i / (F - 1) : 0, i);
+    }
+    // 時間の線（1 秒 = 33px）。始まりに再生の三角、終わりに橙の丸
+    var tx = 22, ty = 124, len = S * STOP_SEC_PX;
+    out += poly([[tx - 10, ty - 5], [tx - 3, ty], [tx - 10, ty + 5]], OLIVE);
+    out += line(tx, ty, tx + len, ty, INK, 1.6);
+    for (i = 0; i <= Math.floor(S); i++) out += line(tx + i * STOP_SEC_PX, ty - 5, tx + i * STOP_SEC_PX, ty + 5, OLIVE, 1.2);
+    out += '<circle cx="' + r1(tx + len) + '" cy="' + ty + '" r="3.2" fill="' + ORANGE + '" stroke="' + INK + '" stroke-width="1"/>';
+    return wrap(out);
+  }
+  // アスレチック: 横から見たコース。左にスタート・右にゴールの旗。足場 n 個が g に比例した間隔。ギミックの足場は橙で形を変える
+  function athMarks(va, v) { var an = athNums(va, v); return { count: an.n, gap: an.g, gimmick: an.k }; }
+  function flag(x, yb, fill) { return line(x, yb, x, yb - 34, INK, 1.4) + poly([[x, yb - 34], [x + 14, yb - 29], [x, yb - 24]], fill); }
+  function athArt(va, v) {
+    var an = athNums(va, v), vk = adVariant('ath', va), gim = !!VARIANT['ath.' + vk].gim, out = '', i;
+    var u = Math.min(14, 172 / an.L), total = an.L * u, x0 = 120 - total / 2, base = 104, ph = Math.max(5, Math.min(9, u * 0.7));
+    out += '<path d="M10 138 q8 -4 16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0" stroke="' + OLIVE + '" stroke-width="1" fill="none"/>';
+    out += flag(16, base + 30, SAND) + line(10, base + 30, 30, base + 30, INK, 1.2);
+    out += flag(218, base + 30, SAND) + line(212, base + 30, 232, base + 30, INK, 1.2) + line(218, base - 4, 232, base - 4, OLIVE, 0.8);
+    var prev = null;
+    for (i = 0; i < an.n; i++) {
+      var x = x0 + i * (an.g + 1) * u, y = base - (i % 3) * 9, isG = gim && i % 2 === 1;
+      // とぶ線（前の足場から）
+      if (prev) out += '<path d="M' + r1(prev[0]) + ' ' + r1(prev[1]) + ' Q' + r1((prev[0] + x) / 2) + ' ' + r1(Math.min(prev[1], y) - 10 - an.g * 3) + ' ' + r1(x + u / 2) + ' ' + r1(y) + '" stroke="' + OLIVE + '" stroke-width="0.9" stroke-dasharray="2 2" fill="none"/>';
+      out += rect(x, y, u, ph, isG ? ORANGE : MID);
+      if (isG) {
+        var cx = x + u / 2, ty = y - 4;
+        if (vk === 'slime') out += line(cx, ty, cx, ty - 9, INK, 1.2) + poly([[cx - 3, ty - 7], [cx, ty - 11], [cx + 3, ty - 7]], INK);
+        else if (vk === 'piston') out += line(cx - 6, ty - 4, cx + 6, ty - 4, INK, 1.2) + poly([[cx - 6, ty - 6.5], [cx - 9, ty - 4], [cx - 6, ty - 1.5]], INK) + poly([[cx + 6, ty - 6.5], [cx + 9, ty - 4], [cx + 6, ty - 1.5]], INK);
+        else out += line(x + 1, y + ph - 1, x + u - 1, y + 1, INK, 1) + line(x + 1 + u * 0.4, y + ph - 1, x + u - 1, y + 1 + ph * 0.4, INK, 0.8);
+      }
+      prev = [x + u / 2, y];
+    }
+    return wrap(out);
+  }
+  // 物語: 場面のカード n 枚が山なりの線の上に左から右へ。山場のカードだけ橙。左上に語り手の印（吹き出し / 目 / 封筒）
+  function storyMarks(v) { var sn = storyNums(v); return { scenes: sn.n, voice: v.voice, peak: sn.k }; }
+  function voiceMark(voice) {
+    if (voice === 1) {
+      return '<path d="M14 22 Q30 8 46 22 Q30 36 14 22 Z" fill="' + PAPER + '" stroke="' + INK + '" stroke-width="1.2"/><circle cx="30" cy="22" r="4.5" fill="' + OLIVE + '"/>';
+    }
+    if (voice === 2) return rect(14, 12, 32, 21, PAPER, ' rx="2"') + '<path d="M14.5 12.5 L30 24 L45.5 12.5" stroke="' + INK + '" stroke-width="1.1" fill="none"/>';
+    return rect(14, 10, 32, 20, PAPER, ' rx="7"') + poly([[21, 29], [18, 37], [28, 29]], PAPER) + line(21.5, 29, 27.5, 29, PAPER, 1.6);
+  }
+  function storyArt(va, v) {
+    var sn = storyNums(v), n = sn.n, p = n - 2, out = voiceMark(v.voice), i;
+    var cw = Math.min(26, (196 - (n - 1) * 6) / n), ch = cw * 1.3, left = 28 + cw / 2, right = 226 - cw / 2;
+    var pts = [];
+    for (i = 0; i < n; i++) {
+      // 山場（p 番目）まで上がり、最後は少し下がる
+      var x = left + i * (right - left) / (n - 1), y = i <= p ? 118 - (i / p) * 62 : 118 - 62 * 0.45;
+      pts.push([x, y]);
+    }
+    out += '<path d="M' + pts.map(function (q) { return r1(q[0]) + ' ' + r1(q[1]); }).join(' L') + '" stroke="' + OLIVE + '" stroke-width="1.2" fill="none" stroke-linejoin="round"/>';
+    pts.forEach(function (q, k) {
+      var x = q[0] - cw / 2, y = q[1] - ch / 2;
+      out += rect(x, y, cw, ch, k === p ? ORANGE : PAPER, ' rx="2"') + line(x + cw * 0.2, y + ch * 0.38, x + cw * 0.8, y + ch * 0.38, k === p ? INK : OLIVE, 0.9) + line(x + cw * 0.2, y + ch * 0.6, x + cw * 0.62, y + ch * 0.6, k === p ? INK : OLIVE, 0.9);
+    });
+    return wrap(out);
+  }
   MD.art = function (stage) {
     if (!stage) return '';
     if (stage.kind === 'note') return '';
@@ -496,6 +720,9 @@
     if (stage.theme === 'py') return pyArt(stage.variant, v);
     if (stage.theme === 'circuit') return circuitArt(stage.variant, v);
     if (stage.theme === 'tool') return toolArt(stage.variant, v);
+    if (stage.theme === 'stop') return stopArt(stage.variant, v);
+    if (stage.theme === 'ath') return athArt(stage.variant, v);
+    if (stage.theme === 'story') return storyArt(stage.variant, v);
     return mcArt(stage.variant, v);
   };
   // 図に出している量（テスト用。線画と同じ計算）
@@ -505,6 +732,9 @@
     if (stage.theme === 'py') return JSON.stringify(pyMarks(v));
     if (stage.theme === 'circuit') return JSON.stringify(circuitMarks(stage.variant, v));
     if (stage.theme === 'tool') return JSON.stringify(toolMarks(v));
+    if (stage.theme === 'stop') return JSON.stringify(stopMarks(v));
+    if (stage.theme === 'ath') return JSON.stringify(athMarks(stage.variant, v));
+    if (stage.theme === 'story') return JSON.stringify(storyMarks(v));
     return JSON.stringify({ blocks: mcCount(stage.variant, v.size), kind: v.block });
   };
   // 「本人が試して結果が出た」の返事（§7 の型。題材で変わる名詞・動詞だけ差し込む）。key = 変えた値、from = 変える前の値
@@ -525,6 +755,16 @@
     } else if (t === 'tool') {
       var noun = stage.variant === 'board' ? '枝' : (stage.variant === 'nudge' ? '行' : 'カード');
       vars.effect = 'まとめる数'; vars.aim = '数'; vars.how = noun + (up ? 'がふえた' : 'がへった');
+    }
+    // §AD-1（contract-app verbatim）
+    else if (t === 'stop' && key === 'frames') { vars.effect = '動画の長さ'; vars.aim = '長さ'; vars.how = up ? '動画が長くなった' : '動画がみじかくなった'; }
+    else if (t === 'stop') { vars.effect = '動きのなめらかさ'; vars.aim = 'なめらかさ'; vars.how = up ? 'なめらかに動いた' : 'カクカク動いた'; }
+    else if (t === 'ath' && key === 'gap') { vars.effect = 'とぶ距離'; vars.aim = '距離'; vars.how = up ? '足場がはなれた' : '足場が近くなった'; }
+    else if (t === 'ath') { vars.effect = 'コースの長さ'; vars.aim = '長さ'; vars.how = up ? 'コースが長くなった' : 'コースがみじかくなった'; }
+    else if (t === 'story' && key === 'scenes') { vars.effect = '話の長さ'; vars.aim = '長さ'; vars.how = up ? '場面がふえた' : '場面がへった'; }
+    else if (t === 'story') {
+      vars.effect = '語り方'; vars.aim = '語り方';
+      vars.how = ['「わたし」の気持ちが近くなった', '外から見わたせるようになった', '手紙を読んでいる感じになった'][to] || '語り方がかわった';
     }
     else {
       var before = JSON.parse(JSON.stringify(v));
@@ -561,10 +801,132 @@
     } else if (photo.theme === 'tool') {
       // 写真から tool を作る経路は無い（§Y-7）。万一来ても道具の線画にする（マイクラの写真に落とさない）
       inner = toolArt(['memo', 'nudge', 'oneby', 'board'][n % 4], { count: 3, every: 2 });
+    } else if (photo.theme === 'stop' || photo.theme === 'ath' || photo.theme === 'story') {
+      // §AD-1: 題材の線画（案を順に。値は案の既定）
+      var vk = THEME[photo.theme].variants[n % 4];
+      inner = MD.art({ kind: 'sample', theme: photo.theme, variant: vk, values: MD.variantValues(photo.theme, vk) });
+    } else if (photo.theme === 'project') {
+      // §AD-4: 提案から作った活動の写真は提案のカテゴリの線画（マイクラの写真に落とさない）
+      inner = MD.catArt(photo.cat);
     } else {
       return wrap(mcShot(n % MD.PHOTO_COUNT) + corners(), 'is-photo');
     }
     return inner.replace('</svg>', corners() + '</svg>').replace('class="mk-art"', 'class="mk-art is-photo"');
+  };
+
+  // ---------- §AD-5 カテゴリの線画（7 種。墨 + オリーブ、強調だけ橙）。知らないカテゴリは空の枠 ----------
+  MD.CATS = ['minecraft', 'programming', 'craft', 'digital', 'media', 'drawing', 'writing'];
+  MD.catArt = function (cat) {
+    var out = '', i;
+    if (cat === 'minecraft') {
+      out += line(30, 132, 210, 132, OLIVE, 1.2);
+      for (i = 0; i < 4; i++) out += block(72 + i * 24, 108, 24, 0);
+      for (i = 0; i < 2; i++) out += block(96 + i * 24, 84, 24, 2);
+      out += rect(108, 60, 24, 24, ORANGE);
+      out += block(176, 108, 24, 1);
+    } else if (cat === 'programming') {
+      out += screen();
+      out += line(44, 50, 84, 50, OLIVE, 2) + line(56, 66, 120, 66, OLIVE, 2) + line(56, 82, 104, 82, OLIVE, 2) + line(44, 98, 76, 98, OLIVE, 2);
+      out += '<path d="M150 58 l-10 14 10 14 M176 58 l10 14 -10 14" stroke="' + ORANGE + '" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>';
+      out += rect(84, 108, 8, 14, ORANGE);
+    } else if (cat === 'craft') {
+      out += line(20, 136, 220, 136, OLIVE, 1.2);
+      out += poly([[30, 52], [150, 92], [150, 100], [30, 60]], SAND) + poly([[200, 104], [80, 128], [80, 136], [200, 112]], SAND);
+      out += line(150, 96, 150, 136, INK, 1.2) + line(30, 56, 30, 136, INK, 1.2) + line(200, 108, 200, 136, INK, 1.2);
+      out += '<circle cx="58" cy="54" r="7" fill="' + ORANGE + '" stroke="' + INK + '" stroke-width="1.2"/>';
+    } else if (cat === 'digital') {
+      out += rect(60, 20, 120, 112, PAPER, ' rx="4"') + line(60, 40, 180, 40, INK, 1.2) + rect(108, 40, 24, 14, MID);
+      out += poly([[114, 54], [126, 54], [120, 62]], ORANGE);
+      out += poly([[98, 116], [142, 116], [132, 92], [108, 92]], SAND) + line(76, 116, 164, 116, INK, 1.4);
+    } else if (cat === 'media') {
+      out += rect(46, 46, 112, 70, PAPER, ' rx="8"') + rect(64, 36, 34, 12, MID, ' rx="3"');
+      out += '<circle cx="102" cy="81" r="22" fill="' + SAND + '" stroke="' + INK + '" stroke-width="1.4"/><circle cx="102" cy="81" r="11" fill="' + PAPER + '" stroke="' + OLIVE + '" stroke-width="1.2"/>';
+      out += '<circle cx="144" cy="58" r="5" fill="' + ORANGE + '"/>';
+      for (i = 0; i < 4; i++) out += rect(172, 30 + i * 24, 34, 20, PAPER, ' rx="2"');
+      out += line(168, 26, 168, 128, OLIVE, 1) + line(210, 26, 210, 128, OLIVE, 1);
+    } else if (cat === 'drawing') {
+      out += rect(40, 20, 120, 112, PAPER, ' rx="3"');
+      out += '<path d="M60 96 q20 -40 40 -10 t40 -16" stroke="' + ORANGE + '" stroke-width="3" fill="none" stroke-linecap="round"/>';
+      out += line(60, 60, 96, 52, OLIVE, 1.4);
+      out += poly([[168, 40], [178, 46], [138, 116], [128, 110]], SAND) + poly([[128, 110], [138, 116], [130, 124]], INK);
+    } else if (cat === 'writing') {
+      out += poly([[30, 34], [118, 40], [118, 130], [30, 124]], PAPER) + poly([[122, 40], [210, 34], [210, 124], [122, 130]], PAPER);
+      for (i = 0; i < 5; i++) { out += line(42, 56 + i * 14, 106, 60 + i * 14, OLIVE, 1); out += line(134, 60 + i * 14, 198, 56 + i * 14, OLIVE, 1); }
+      out += poly([[176, 26], [188, 26], [188, 58], [182, 52], [176, 58]], ORANGE);
+    }
+    return wrap(out);
+  };
+
+  // ---------- §AD-4「こんなのも作れる」の提案 12 件（contract-app verbatim。「小」は既存の書き方で起こした）----------
+  // cat = data.js の catalog のカテゴリ id（writing だけはこの一覧専用）。catalogId は catalog に対応する項目がある時だけ
+  function pj(id, cat, style, safety, catalogId, title, what, first, need, min, steps) {
+    return { id: id, cat: cat, style: style, safety: safety, catalogId: catalogId, title: title, what: what, first: first, need: need, min: min, steps: steps };
+  }
+  MD.projects = [
+    pj('pj-stop-moon', 'media', 'photo', true, 'media-stopmotion', ['月の満ち欠けをコマ撮りで 10 秒に', '月のみちかけをコマどりで 10 びょうに'],
+      ['紙の月を少しずつ取りかえて撮る', '紙の月を少しずつとりかえてとる'], ['黒い紙と、丸く切った白い紙を用意する', '黒い紙と、丸く切った白い紙をよういする'],
+      ['タブレット · 黒と白の紙 · はさみ', 'タブレット · 黒と白の紙 · はさみ'], 40,
+      [['月の形を 8 枚切る', '月の形を 8 まい切る'], ['カメラを固定する', 'カメラをうごかないようにおく'], ['1 枚ずつ置きかえて撮る', '1 まいずつおきかえてとる'], ['つなげて見る', 'つなげて見る']]),
+    pj('pj-mc-ath', 'minecraft', 'photo', false, 'mc-game', ['3 回めでクリアできるアスレチック', '3 回めでクリアできるアスレチック'],
+      ['むずかしすぎず、かんたんすぎないコースを作って遊んでもらう', 'むずかしすぎず、かんたんすぎないコースをつくってあそんでもらう'], ['スタートとゴールの場所を決める', 'スタートとゴールの場所をきめる'],
+      ['マイクラ（いつものワールド）', 'マイクラ（いつものワールド）'], 50,
+      [['スタートとゴールを置く', 'スタートとゴールをおく'], ['足場を 5 個置く', '足場を 5 こおく'], ['ギミックを 1 つ足す', 'ギミックを 1 つたす'], ['だれかに遊んでもらう', 'だれかにあそんでもらう']]),
+    pj('pj-novel-3', 'writing', 'illust', false, null, ['3 場面の短い小説に、表紙をつける', '3 場めんのみじかい小説に、ひょうしをつける'],
+      ['はじまり・できごと・おわりの 3 場面で 1 つの話にする', 'はじまり・できごと・おわりの 3 場めんで 1 つの話にする'], ['主人公がほしいものを 1 つ決める', 'しゅじんこうがほしいものを 1 つきめる'],
+      ['ノートかパソコン · 表紙の紙', 'ノートかパソコン · ひょうしの紙'], 60,
+      [['主人公を決める', 'しゅじんこうをきめる'], ['3 場面を書く', '3 場めんを書く'], ['題を決める', 'だいをきめる'], ['表紙を描く', 'ひょうしをかく']]),
+    pj('pj-trailer', 'media', 'photo', false, 'media-movie', ['好きな本の予告編を 30 秒で', '好きな本のよこくへんを 30 びょうで'],
+      ['見た人が読みたくなる 30 秒の動画を作る', '見た人が読みたくなる 30 びょうの動画をつくる'], ['本の中で見せたい場面を 3 つ選ぶ', '本の中で見せたい場めんを 3 つえらぶ'],
+      ['タブレット · 好きな本', 'タブレット · 好きな本'], 45,
+      [['見せたい場面を 3 つ選ぶ', '見せたい場めんを 3 つえらぶ'], ['1 場面ずつ撮る', '1 場めんずつとる'], ['題と一言を入れる', 'だいとひとことを入れる'], ['つなげて見る', 'つなげて見る']]),
+    pj('pj-mc-door', 'minecraft', 'line', false, 'mc-redstone', ['合図で開くかくし扉', 'あいずでひらくかくしとびら'],
+      ['レッドストーン回路で、ボタンを押すと壁が開く仕組みを作る', 'レッドストーン回路で、ボタンをおすとかべがひらくしくみをつくる'], ['扉にする壁の場所を決める', 'とびらにするかべの場所をきめる'],
+      ['マイクラ（いつものワールド）', 'マイクラ（いつものワールド）'], 50,
+      [['壁を作る', 'かべをつくる'], ['ピストンを置く', 'ピストンをおく'], ['ボタンから回路をつなぐ', 'ボタンから回路をつなぐ'], ['外から見えないようにかくす', '外から見えないようにかくす']]),
+    pj('pj-scratch-quiz', 'programming', 'photo', false, 'prog-scratch', ['おうちの人に出すクイズゲーム', 'おうちの人に出すクイズゲーム'],
+      ['スクラッチで 3 問のクイズを作る', 'スクラッチで 3 もんのクイズをつくる'], ['クイズを 3 問、紙に書く', 'クイズを 3 もん、紙に書く'],
+      ['スクラッチが動くパソコン', 'スクラッチがうごくパソコン'], 45,
+      [['クイズを 3 問書く', 'クイズを 3 もん書く'], ['1 問目を作る', '1 もん目をつくる'], ['正解の時の動きを作る', 'せいかいの時のうごきをつくる'], ['3 問つなげる', '3 もんつなげる']]),
+    pj('pj-marble', 'craft', 'photo', true, 'craft-cardboard', ['ダンボールのビー玉コースター', 'ダンボールのビーだまコースター'],
+      ['ビー玉が最後まで転がるコースを作る', 'ビーだまがさいごまでころがるコースをつくる'], ['ビー玉が転がる坂を 1 本作る', 'ビーだまがころがるさかを 1 本つくる'],
+      ['ダンボール · テープ · ビー玉 · カッター', 'ダンボール · テープ · ビーだま · カッター'], 60,
+      [['坂を 1 本作る', 'さかを 1 本つくる'], ['曲がり角を足す', 'まがりかどをたす'], ['落ちないようにへりを付ける', 'おちないようにへりをつける'], ['最後まで転がるか試す', 'さいごまでころがるかためす']]),
+    pj('pj-3d-key', 'digital', 'photo', false, 'dig-3dprint', ['好きな形のキーホルダーを 3D で', '好きな形のキーホルダーを 3D で'],
+      ['3D モデリングで形を作り、プリンターで出す', '3D モデリングで形をつくり、プリンターで出す'], ['作りたい形を紙に描く', 'つくりたい形を紙にかく'],
+      ['3D モデリングのソフト · 3D プリンター', '3D モデリングのソフト · 3D プリンター'], 60,
+      [['形を紙に描く', '形を紙にかく'], ['画面で形を作る', '画面で形をつくる'], ['穴をあける', 'あなをあける'], ['プリンターで出す', 'プリンターで出す']]),
+    pj('pj-stamp', 'drawing', 'illust', false, 'draw-stamp', ['気持ちを伝えるスタンプ 4 個', 'きもちをつたえるスタンプ 4 こ'],
+      ['「ありがとう」「あとでね」などを絵で伝えるスタンプを描く', '「ありがとう」「あとでね」などを絵でつたえるスタンプをかく'], ['伝えたい言葉を 4 つ決める', 'つたえたいことばを 4 つきめる'],
+      ['iPad かペンと紙', 'iPad かペンと紙'], 40,
+      [['言葉を 4 つ決める', 'ことばを 4 つきめる'], ['キャラを 1 人決める', 'キャラを 1 人きめる'], ['4 個描く', '4 こかく'], ['だれかに送って試す', 'だれかにおくってためす']]),
+    pj('pj-manga', 'drawing', 'line', false, 'draw-manga', ['今日あったことを 4 コマ漫画に', 'きょうあったことを 4 コマまんがに'],
+      ['今日のできごとを 1 つ選んで 4 コマにする', 'きょうのできごとを 1 つえらんで 4 コマにする'], ['今日のできごとを 1 つ選ぶ', 'きょうのできごとを 1 つえらぶ'],
+      ['紙とペン', '紙とペン'], 30,
+      [['できごとを 1 つ選ぶ', 'できごとを 1 つえらぶ'], ['4 コマに分ける', '4 コマに分ける'], ['絵とせりふを描く', '絵とせりふをかく'], ['だれかに読んでもらう', 'だれかに読んでもらう']]),
+    pj('pj-sugoroku', 'craft', 'photo', false, null, ['自分のルールのすごろく', '自分のルールのすごろく'],
+      ['マスとルールを自分で決めたすごろくを作る', 'マスとルールを自分できめたすごろくをつくる'], ['マスの数とゴールを決める', 'マスの数とゴールをきめる'],
+      ['大きい紙 · ペン · サイコロ', '大きい紙 · ペン · サイコロ'], 50,
+      [['マスとゴールを描く', 'マスとゴールをかく'], ['特別なマスを 3 つ作る', 'とくべつなマスを 3 つつくる'], ['ルールを書く', 'ルールを書く'], ['遊んで直す', 'あそんでなおす']]),
+    pj('pj-tokusatsu', 'media', 'photo', false, 'media-tokusatsu', ['ミニチュアの町で特撮の 1 シーン', 'ミニチュアの町でとくさつの 1 シーン'],
+      ['小さな町を作り、下から撮って大きく見せる', '小さな町をつくり、下からとって大きく見せる'], ['町に置く建物を 3 つ決める', '町におくたてものを 3 つきめる'],
+      ['箱や紙の建物 · タブレット', '箱や紙のたてもの · タブレット'], 60,
+      [['建物を 3 つ作る', 'たてものを 3 つつくる'], ['町に並べる', '町にならべる'], ['下から撮る', '下からとる'], ['見てもらう', '見てもらう']])
+  ];
+  MD.project = function (id) { for (var i = 0; i < MD.projects.length; i++) if (MD.projects[i].id === id) return MD.projects[i]; return null; };
+  // 提案から作った活動の「バディに任せる」のメモ（お題から作った活動と同じ 2 つ: 手順を整理して / 必要な物をまとめて）。alt = 同じ種類で作り直した時のもう一方の形
+  MD.projectNote = function (p, opt, alt) {
+    if (!p) return null;
+    if (opt === 'osteps') {
+      var list = alt ? [p.first].concat(p.steps.slice(1)) : p.steps;
+      return { title: alt ? ['作り方の手順（最初の一歩から）', 'つくりかたの手じゅん（さいしょの一歩から）'] : ['作り方の手順', 'つくりかたの手じゅん'],
+        lines: list.map(function (s, i) { return [(i + 1) + '. ' + s[0], (i + 1) + '. ' + s[1]]; }) };
+    }
+    if (opt === 'oneed') {
+      var js = String(p.need[0]).split(/\s*·\s*/), es = String(p.need[1]).split(/\s*·\s*/);
+      if (alt) return { title: ['持ち物チェック', 'もちものチェック'], lines: js.map(function (s, i) { return ['□ ' + s, '□ ' + (es[i] || s)]; }) };
+      return { title: ['必要な物', 'ひつようなもの'], lines: js.map(function (s, i) { return [s, es[i] || s]; }).concat([['目安 ' + p.min + ' 分くらい', 'めやす ' + p.min + ' 分くらい']]) };
+    }
+    return null;
   };
 
   // ---------- 最初からある制作中 1 件（design-v3 §8 C: 予定表 p1「建築（大きく）」の外の記録） ----------
@@ -662,9 +1024,10 @@
     }
     return out;
   }
-  MD.seedWorks = function (acts) {
+  MD.seedWorks = function (acts) { return buildWorks(SEED_WORKS, acts); };
+  function buildWorks(defs, acts) {
     var out = [];
-    SEED_WORKS.forEach(function (d) {
+    defs.forEach(function (d) {
       var a = findIn(acts, d.actId), ch = a ? findIn(a.changes, d.at) : null;
       if (!ch) return;
       var st = { stage: cp(ch.snap), vis: ch.vis == null ? null : cp(ch.vis) };
@@ -680,6 +1043,71 @@
       out.push(w);
     });
     return out;
+  }
+
+  // ---------- §AD-6 見本を足した回 2: 作品の見本 3 件（完成 2 + 試作 1）と結び付く活動 3 件 ----------
+  // 回 1（上の seedActivities / seedWorks）は変えない。読み込み時に make.js が MD.addSeeds で「足した回」が古い保存データにだけ足す
+  MD.SEED_V = 2;
+  function adStage(theme, variant, values) { return { kind: 'sample', theme: theme, variant: variant, values: values }; }
+  // 「{label}を {value} にした」（make.js の whatDiff と同じ形。名前のある値は名前）
+  function oneOf(theme, key, v) { var p = param(theme, key); return { k: 'changed_one', v: { label: cp(p.label), value: [MD.valueLabel(theme, key, v, 'js'), MD.valueLabel(theme, key, v, 'es')] } }; }
+  function testCh(id, time, theme, key, v, snap, extra) {
+    var c = { id: id, who: 'own', kind: 'test', time: time, what: oneOf(theme, key, v), res: true, snap: cp(snap), vis: null };
+    if (extra) Object.keys(extra).forEach(function (k) { c[k] = extra[k]; });
+    return c;
+  }
+  function seedAct(o) {
+    var thread = [{ id: o.id + '-m1', who: 'buddy', time: o.baseTime, r: 'open', text: MD.replies.open[0] }];
+    o.changes.forEach(function (c, i) {
+      var prev = i ? o.changes[i - 1].snap : o.base, key = Object.keys(c.snap.values).filter(function (k) { return c.snap.values[k] !== prev.values[k]; })[0];
+      thread.push({ id: o.id + '-m' + (i + 2), who: 'buddy', time: c.time, r: 'test', text: MD.testReply(c.snap, key, prev.values[key], 'js'), change: c.id });
+    });
+    var last = o.changes[o.changes.length - 1];
+    return {
+      id: o.id, day: o.day, title: pick(MD.variant(o.base.theme, o.base.variant).title, 'js'), origin: 'sample', theme: o.base.theme, catalogId: o.catalogId, sampleId: o.base.theme,
+      quote: null, stage: cp(last.snap), base: cp(o.base), baseTime: o.baseTime, ext: null, baseVis: null, stepsKind: 'theme', candidate: false,
+      steps: MD.stepsFor(o.base.theme, o.base.variant), stepIdx: Math.min(o.changes.length, 2), next: null,
+      changes: o.changes, shelf: [], thread: thread,
+      state: 'closed', pauseCount: 1, declined: 0, offered: false, resumeNote: null, lastPause: null,
+      clock: o.clock, seq: 20, draft: '', v: 3
+    };
+  }
+  function seedActsV2() {
+    // 人形が歩く動画: コマの数 12 → 18 / 1 秒のコマ数 6 → 8 / 6 に戻す（田中さんと）
+    var t0 = adStage('stop', 'walk', { frames: 2, fps: 1 }), t1 = adStage('stop', 'walk', { frames: 3, fps: 1 }), t2 = adStage('stop', 'walk', { frames: 3, fps: 2 }), t3 = adStage('stop', 'walk', { frames: 3, fps: 1 });
+    var stop = seedAct({ id: 'act-stop', day: '11/4', catalogId: 'media-stopmotion', base: t0, baseTime: '10:20', clock: 626, changes: [
+      testCh('act-stop-c1', '10:22', 'stop', 'frames', 3, t1), testCh('act-stop-c2', '10:24', 'stop', 'fps', 2, t2),
+      testCh('act-stop-c3', '10:26', 'stop', 'fps', 1, t3, { with: '田中さん' })] });
+    // 短い物語: 語り手を「外から語る」に / 「わたし」が語るに戻す
+    var s0 = adStage('story', 'short', { scenes: 4, voice: 0 }), s1 = adStage('story', 'short', { scenes: 4, voice: 1 }), s2 = adStage('story', 'short', { scenes: 4, voice: 0 });
+    var story = seedAct({ id: 'act-story', day: '11/3', catalogId: null, base: s0, baseTime: '10:20', clock: 624, changes: [
+      testCh('act-story-c1', '10:22', 'story', 'voice', 1, s1), testCh('act-story-c2', '10:24', 'story', 'voice', 0, s2)] });
+    // スライムで跳ねるコース: 足場の数 5 → 6
+    var a0 = adStage('ath', 'slime', { gap: 3, count: 5 }), a1 = adStage('ath', 'slime', { gap: 3, count: 6 });
+    var ath = seedAct({ id: 'act-ath', day: '11/5', catalogId: 'mc-game', base: a0, baseTime: '10:20', clock: 622, changes: [
+      testCh('act-ath-c1', '10:22', 'ath', 'count', 6, a1)] });
+    return [stop, story, ath];
+  }
+  // 並びは日付の新しい順（回 1 の見本の前に入る）
+  var SEED_WORKS_V2 = [
+    { id: 'w-seed-ath', actId: 'act-ath', at: 'act-ath-c1', title: 'スライムで跳ねるコース（足場 6 個）', like: null, craft: null, date: '11/5', status: 'trial' },
+    { id: 'w-seed-stop', actId: 'act-stop', at: 'act-stop-c3', title: '人形が歩く 18 コマの動画', like: 'コマを 18 にしたら、歩き方がなめらかになったところ',
+      craft: '1 秒に 8 コマだと速すぎたので、6 コマに戻した', date: '11/4', status: 'done' },
+    { id: 'w-seed-story', actId: 'act-story', at: 'act-story-c2', title: '雨の日の図書室（4 場面）', like: '3 場面目で、なくした本が見つかるところ',
+      craft: '「わたし」が語る形にしたら、気持ちを書きやすくなった', date: '11/3', status: 'done' }
+  ];
+  // 足した回が fromV（保存されていた番号）より新しい見本のうち、無い活動・作品だけ足す。既存の活動・作品は変えない（元の配列も変えない）。
+  // 活動は末尾に、作品は回 1 の見本（w-seed-*）の前に（無ければ末尾に）入れる。戻り値 { activities, works, changed }
+  MD.addSeeds = function (acts, works, fromV) {
+    acts = acts || []; works = works || [];
+    if ((fromV | 0) >= MD.SEED_V) return { activities: acts, works: works, changed: false };
+    var addA = seedActsV2().filter(function (a) { return !findIn(acts, a.id); });
+    var allA = acts.concat(addA);
+    var addW = buildWorks(SEED_WORKS_V2, allA).filter(function (w) { return !findIn(works, w.id); });
+    var at = -1;
+    works.forEach(function (w, i) { if (at < 0 && w && typeof w.id === 'string' && w.id.indexOf('w-seed-') === 0) at = i; });
+    var outW = at < 0 ? works.concat(addW) : works.slice(0, at).concat(addW, works.slice(at));
+    return { activities: allA, works: outW, changed: addA.length > 0 || addW.length > 0 };
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = MD;

@@ -28,6 +28,10 @@
     var t = String(text || ''), low = t.toLowerCase();
     // 自分を助ける道具（contract-Y §Y-3 / Y-8 の 9）: 既存の判定より前。「マイクラの道具」も tool（意図した仕様）
     if (/論点|道具|整理|合図/.test(t)) return 'tool';
+    // §AD-2: アスレチック → コマ撮り → 物語（既存のマイクラ / Python / 回路より前）
+    if (/アスレチック|パルクール|ギミック/.test(t)) return 'ath';
+    if (/コマ撮り|コマどり|コマドリ|ストップモーション|動画/.test(t)) return 'stop';
+    if (/小説|物語|ものがたり|お話/.test(t)) return 'story';
     if (/マイクラ|建築|コマンド/.test(t)) return 'mc';
     if (low.indexOf('python') >= 0 || /ゲーム|プログラム/.test(t)) return 'py';
     if (low.indexOf('led') >= 0 || /回路|電気|電池/.test(t)) return 'circuit';
@@ -75,7 +79,8 @@
   // 見本から（入口の「動かしてみる」）
   function fromSample(sampleId, o) {
     o = o || {};
-    var s = sampleDef(sampleId) || MD.samples[0], th = MD.theme(s.theme);
+    // 知らない見本 id はマイクラ（§AD-3 で並びが変わっても、今までの落ち先を変えない）
+    var s = sampleDef(sampleId) || sampleDef('mc'), th = MD.theme(s.theme);
     var a = newAct({ id: o.id, title: MD.pick(MD.variant(s.theme, s.variant).title, o.mode), origin: o.origin || 'sample', theme: s.theme,
       sampleId: s.id, catalogId: o.catalogId, stage: stageOf(s.theme, s.variant, 'sample'), now: o.now });
     say(a, 'open', o.mode);
@@ -178,6 +183,34 @@
     if (theme) say(a, 'open', o.mode);
     return { id: a.id, act: a, created: true, changed: false };
   }
+
+  // ---------- §AD-4「こんなのも作れる」: 提案から外で作って写真で記録する活動（stepsKind 'ext'）----------
+  // origin 'project'・projectId・題・提案の手順。題材は 'project'（写真のダミーは提案のカテゴリの線画）。
+  // fromOdai と同じ約束: 同じ提案から作った活動があれば作らずにその id を返す。o: { id, mode, now, acts }。戻り値 { id, act, created }
+  function fromProject(p, o) {
+    o = o || {};
+    if (!p || !p.id) return null;
+    var hit = null;
+    (o.acts || []).forEach(function (x) { if (!hit && x && x.projectId === p.id) hit = x; });
+    if (hit) return { id: hit.id, act: hit, created: false };
+    var a = newAct({ id: o.id, title: MD.pick(p.title, o.mode), origin: 'project', theme: PROJECT_THEME, catalogId: p.catalogId || null,
+      ext: { link: null, photos: [], visible: [] }, steps: p.steps, stepsKind: 'ext', now: o.now });
+    a.projectId = p.id;
+    return { id: a.id, act: a, created: true };
+  }
+  // ---------- §AD-3 / AD-4 入口の組（DOM に触れない）。page は何周しても一巡で最初へ ----------
+  function pageAt(n, size, page) { var c = Math.max(1, Math.ceil(n / size)), p = Math.floor(+page) || 0; return ((p % c) + c) % c; }
+  // 見本 3 枚: first（予定表から来た時の題材）があれば、その題材の見本を含む組をその見本を先頭にして出す。戻り値 { page, items }
+  function samplePageOf(samples, page, first) {
+    var list = samples || [], p = pageAt(list.length, 3, page), hit = -1;
+    if (first) list.forEach(function (s, i) { if (hit < 0 && s.theme === first) hit = i; });
+    if (hit >= 0) p = Math.floor(hit / 3);
+    var items = list.slice(p * 3, p * 3 + 3);
+    if (hit >= 0) items = [list[hit]].concat(items.filter(function (s) { return s !== list[hit]; }));
+    return { page: p, items: items };
+  }
+  function samplePage(samples, page, first) { return samplePageOf(samples, page, first).items; }
+  function projectPage(projects, page) { var list = projects || [], p = pageAt(list.length, 4, page); return list.slice(p * 4, p * 4 + 4); }
 
   // ---------- 作業対象と変化 ----------
   // いま「確かめた」状態（最後の変化の写し。無ければ始めの状態）
@@ -313,9 +346,14 @@
   // 「どこが違う？」の材料・色 は必要な物、それ以外は手順。言葉で頼む も手順
   var ODAI_THEME = 'odai', ODAI_OPTS = ['osteps', 'oneed'], ODAI_ASPECT = ['osteps', 'osteps', 'oneed', 'osteps', 'osteps'];
   function isOdaiExt(a) { return !!(a && a.theme === ODAI_THEME); }
+  // §AD-4: 提案から作った活動（theme 'project'）。任せる候補はお題から作った活動と同じ 2 つ（中身は提案の手順 / 必要な物）
+  var PROJECT_THEME = 'project';
+  function isProjectExt(a) { return !!(a && a.theme === PROJECT_THEME); }
   function odaiDef(a) { var K = DES.todayData; return K && a && a.odaiId ? K.get(a.odaiId) : null; }
   // メモの中身: お題のデータから（today-data.js の leaveNote）。データが無い時は活動の手順だけ
   function odaiNote(a, opt, alt) {
+    var pjd = isProjectExt(a) ? MD.project(a.projectId) : null;
+    if (pjd) return MD.projectNote(pjd, opt, alt);
     var K = DES.todayData, od = odaiDef(a);
     if (od && K.leaveNote) return K.leaveNote(od, opt, alt);
     if (opt !== 'osteps' || !a.steps.length) return null;
@@ -329,17 +367,17 @@
     // 同じ種類のメモを作り直す時は、もう一方の形にする（§U-11 指摘 13 と同じ）
     var alt = !!(card && card.kind === 'note' && card.opt === opt && !card.alt), n = odaiNote(A, opt, alt);
     if (!n) return { act: a, ids: [] };
-    var spec = { kind: 'note', theme: ODAI_THEME, title: clone(n.title), lines: clone(n.lines), opt: opt, alt: alt };
+    var spec = { kind: 'note', theme: isProjectExt(A) ? PROJECT_THEME : ODAI_THEME, title: clone(n.title), lines: clone(n.lines), opt: opt, alt: alt };
     spec.batch = nid(A, 'b'); spec.time = tick(A, 1); spec.id = nid(A, 'k'); spec.state = 'making';
     A.shelf = [spec].concat(A.shelf);
     return { act: A, ids: [spec.id], opt: opt };
   }
   function remakeOptions(a, c) {
-    if (isOdaiExt(a)) return ODAI_OPTS.slice();
+    if (isOdaiExt(a) || isProjectExt(a)) return ODAI_OPTS.slice();
     return c && c.kind === 'note' ? ['calc', 'steps', 'cmd'] : ['redo', 'two', 'fix'];
   }
   function leaveOptions(a) {
-    if (isOdaiExt(a)) return ODAI_OPTS.slice();
+    if (isOdaiExt(a) || isProjectExt(a)) return ODAI_OPTS.slice();
     if (a.stage && a.stage.kind === 'sample') return ['find', 'one'];
     if (a.stage && a.stage.kind === 'draft') return ['redo', 'two', 'fix'];
     if (a.ext) return ['calc', 'steps', 'cmd'];
@@ -392,7 +430,7 @@
   // 任せる（作っている の破線カードを置く。中身は settle で決まる）
   function leave(a, opt, o) {
     o = o || {};
-    if (isOdaiExt(a)) return leaveOdai(a, opt, o);
+    if (isOdaiExt(a) || isProjectExt(a)) return leaveOdai(a, opt, o);
     if (opt === 'aspect') opt = (isToolAct(a) ? TOOL_ASPECT : ASPECT_OPT)[Math.max(0, Math.min(4, o.aspect | 0))];
     var A = clone(a), base = o.card ? { stage: cardStage(find(A.shelf, o.card)), fromStage: false } : baseStage(A);
     if (!base.stage || (base.stage.kind === 'note' && opt !== 'calc' && opt !== 'steps' && opt !== 'cmd')) base = baseStage(A);
@@ -454,6 +492,9 @@
     var n = last ? (last.n + 1) % cnt : 0;
     var ph = { id: nid(A, 'ph'), theme: odai ? ODAI_THEME : (last ? last.theme : A.theme), n: n, kind: kind === 'shot' ? 'shot' : 'photo', time: nowOf(A) };
     if (odai) ph.odai = A.odaiId;
+    // 提案から作った活動の写真は提案のカテゴリの線画（§AD-4）
+    var pjd = isProjectExt(A) ? MD.project(A.projectId) : null;
+    if (pjd) ph.cat = pjd.cat;
     A.ext.visible = visibleIds(A).concat([ph.id]);
     A.ext.photos.push(ph);
     var res = commitChange(A, { who: 'own', kind: ph.kind, what: { k: ph.kind === 'shot' ? 'added_shot' : 'added_photo' }, photoId: ph.id, advance: true });
@@ -559,7 +600,7 @@
     return 'unknown';
   }
   function requestOpt(a) {
-    if (isOdaiExt(a)) return 'osteps';
+    if (isOdaiExt(a) || isProjectExt(a)) return 'osteps';
     if (a.stage && a.stage.kind === 'sample') return 'one';
     if (a.stage && a.stage.kind === 'draft') return 'fix';
     if (a.ext) return 'cmd';
@@ -869,7 +910,9 @@
     migrateWork: migrateWork, withPending: withPending, fromOdai: fromOdai, isOdaiExt: isOdaiExt, remakeOptions: remakeOptions, ODAI_THEME: ODAI_THEME,
     fromSelf: fromSelf, findSelfLink: findSelfLink, isSelfLink: isSelfLink, changeOptsKey: changeOptsKey, TOOL_ASPECT: TOOL_ASPECT,
     // §W（作品の一覧・詳細）が使う
-    defaultStatus: defaultStatus, normalizeWorks: normalizeWorks, chState: chState, baseState: baseState, curState: curState
+    defaultStatus: defaultStatus, normalizeWorks: normalizeWorks, chState: chState, baseState: baseState, curState: curState,
+    // §AD
+    fromProject: fromProject, samplePage: samplePage, projectPage: projectPage, isProjectExt: isProjectExt, PROJECT_THEME: PROJECT_THEME
   };
   Object.keys(pure).forEach(function (k) { M[k] = pure[k]; });
   // ---------- あしあと（CONTRACT-v3 §Z-5 / Z-14）: 「もう一度試す」= 同じ始まりから新しい活動。元の活動 a は変えない（既存の活動を再利用しない） ----------
@@ -922,7 +965,9 @@
     return isObj(a) && typeof a.id === 'string' && typeof a.title === 'string' && Array.isArray(a.changes) && Array.isArray(a.shelf) &&
       Array.isArray(a.thread) && Array.isArray(a.steps) && typeof a.stepIdx === 'number' && STATES.indexOf(a.state) >= 0;
   }
-  function sideDefaults() { return { chatHidden: false, shelfFolded: false, tab: 'stage', paused: null, lastStop: null }; }
+  // §AD: seedV = 見本を足した回（MD.SEED_V より古ければ読み込み時に足す）/ samplePage・projectPage = 入口の組の位置（リロードで残る）
+  function sideDefaults() { return { chatHidden: false, shelfFolded: false, tab: 'stage', paused: null, lastStop: null, seedV: 0, samplePage: 0, projectPage: 0 }; }
+  function count0(v) { return typeof v === 'number' && v >= 0 && v % 1 === 0 && v < 1000 ? v : 0; }
   var CLEAN = {
     activities: function (v) { return Array.isArray(v) ? v.filter(validAct) : null; },
     works: function (v) { return Array.isArray(v) ? v.filter(function (w) { return isObj(w) && typeof w.id === 'string' && typeof w.title === 'string'; }) : null; },
@@ -930,7 +975,8 @@
       if (!isObj(v)) return null;
       var d = sideDefaults();
       return { chatHidden: v.chatHidden === true, shelfFolded: v.shelfFolded === true, tab: v.tab === 'consult' ? 'consult' : 'stage',
-        paused: typeof v.paused === 'string' ? v.paused : d.paused, lastStop: typeof v.lastStop === 'string' ? v.lastStop : d.lastStop };
+        paused: typeof v.paused === 'string' ? v.paused : d.paused, lastStop: typeof v.lastStop === 'string' ? v.lastStop : d.lastStop,
+        seedV: count0(v.seedV), samplePage: count0(v.samplePage), projectPage: count0(v.projectPage) };
     }
   };
   if (DES.store && !DES.store._make) {
@@ -952,6 +998,13 @@
       s.activities = s.activities.map(function (a) { return migrate(a, tx); });
       // 作品が保存されていない（初めて・はじめの状態に戻した）時は見本の作品（§W-6）。活動に結び付くものだけ
       if (!s.works) s.works = MD.seedWorks(s.activities);
+      // §AD-6: 見本を足した回が古ければ、不足分の活動と作品だけ足して番号を上げる（既存の活動・作品は変えない）。
+      // 番号はすぐ保存する（作品だけ保存する操作が続いても、本人が外した見本を次の読み込みでまた足さないように）
+      if (s.makeSide.seedV < MD.SEED_V) {
+        var add = MD.addSeeds(s.activities, s.works, s.makeSide.seedV);
+        s.activities = add.activities; s.works = add.works; s.makeSide.seedV = MD.SEED_V;
+        (add.changed ? ['activities', 'works', 'makeSide'] : ['makeSide']).forEach(function (k) { if (!save0.call(DES.store, k)) s.saveFailed = true; });
+      }
       // 前の版の作品は 残した時点（at / snap）を補い（§U-12 補足 2）、§W の欄（status / craft / shares）を補う（§W-5）
       s.works = normalizeWorks(s.works.map(function (w) { return migrateWork(w, s.activities); }));
       // 「作っている」の途中で閉じた・読み込んだ活動は、ここで完了させる（§U-11 指摘 11）。新しいカードが入るので棚は開く
@@ -1052,7 +1105,7 @@
     createAndOpen(fromText(t, { id: newId('a'), origin: 'make', now: DES.data.now, mode: mode(), works: S().works }));
   };
   // 予定表 mine 行の「作るで開く」: その取り組みの制作中があれば作業台、無ければ入口（同じカテゴリの見本を先頭に）
-  var CAT_THEME = { minecraft: 'mc', programming: 'py', digital: 'circuit' };
+  var CAT_THEME = { minecraft: 'mc', programming: 'py', digital: 'circuit', media: 'stop' };
   M.openFromPlan = function (row) {
     if (!row) return;
     var hit = null;
@@ -1165,6 +1218,8 @@
     if (vp.length) return MD.photoArt(vp[vp.length - 1]);
     // お題の活動（theme 'odai'）はお題の絵（3 題材の見本を出さない）
     if (isOdaiExt(a)) { var od = odaiDef(a); return od ? DES.todayData.cardArt(od) : MD.photoArt({ theme: ODAI_THEME }); }
+    // 提案から作った活動は提案のカテゴリの線画（§AD-4。マイクラの絵に落とさない）
+    if (isProjectExt(a)) { var pjd = MD.project(a.projectId); return MD.catArt(pjd ? pjd.cat : null); }
     var th = MD.theme(a.theme), c = a.shelf.filter(function (x) { return x.kind !== 'note'; })[0];
     return MD.art(c ? cardStage(c) : stageOf(a.theme, th.sample, 'sample'));
   }
@@ -1194,11 +1249,40 @@
       ])
     ]);
   }
-  function orderedSamples() {
-    var first = mk().makeFirst, list = MD.samples.slice();
-    if (first) list.sort(function (a, b) { return (a.theme === first ? 0 : 1) - (b.theme === first ? 0 : 1); });
-    return list;
+  // §AD-3: 入口の見本 3 枚（組の位置は makeSide.samplePage。予定表から来た時は makeFirst の題材の組）
+  function shownSamples() { return samplePageOf(MD.samples, S().makeSide.samplePage, mk().makeFirst); }
+  // §AD-5: 提案の絵。photo / illust で画像の一覧（DES.thumbs）にあればそれ（「AI が作ったイメージ」の印）、無い・読めない時はカテゴリの線画
+  function thumbOf(p) {
+    var th = DES.thumbs, u = mk();
+    if (p.style !== 'photo' && p.style !== 'illust') return null;
+    if (!th || !Object.prototype.hasOwnProperty.call(th, p.id) || typeof th[p.id] !== 'string' || (u.thumbFail && u.thumbFail[p.id])) return null;
+    return th[p.id];
   }
+  function projectArt(p) {
+    var src = thumbOf(p);
+    if (!src) return H('div', { class: 'pj-art' }, [DES.raw(MD.catArt(p.cat))]);
+    return H('div', { class: 'pj-art has-img' }, [
+      H('img', { src: src, alt: MD.pick(p.title, mode()), loading: 'lazy', 'data-thumb': p.id }),
+      H('span', { class: 'pj-ai' }, T('pj_ai_image'))
+    ]);
+  }
+  function projectCard(p) {
+    var m = mode();
+    return H('article', { class: 'pj-card' }, [
+      projectArt(p),
+      H('div', { class: 'pj-body' }, [
+        H('span', { class: 'pill pj-chip' }, T('pj_cat_' + p.cat)),
+        H('h3', null, MD.pick(p.title, m)),
+        H('p', { class: 'pj-what' }, MD.pick(p.what, m)),
+        H('p', { class: 'pj-first' }, T('pj_first', { step: MD.pick(p.first, m) })),
+        H('p', { class: 'muted pj-need' }, T('pj_need', { need: MD.pick(p.need, m), min: p.min })),
+        p.safety ? H('span', { class: 'pill orange pj-safety' }, T('pj_safety')) : null,
+        H('button', { class: 'btn orange small', type: 'button', 'data-action': 'mk-project', 'data-arg': p.id }, T('pj_start'))
+      ])
+    ]);
+  }
+  // 入れ替えた直後の描画だけ、新しい組をふわっと出す（150ms。reduced-motion は CSS で止まる）
+  function fadeCls(kind) { var u = mk(); if (u.fadeIn !== kind) return ''; u.fadeIn = null; return ' is-fadein'; }
   function renderEntry(main) {
     var acts = S().activities.filter(function (a) { return a.state === 'working' || a.state === 'paused'; });
     var u = mk(), canStart = !!u.ideaText.replace(/\s/g, '');
@@ -1211,8 +1295,16 @@
       ]) : null,
       H('section', { class: 'make-sec', 'aria-labelledby': 'mk-samples-h' }, [
         H('div', { class: 'section-head' }, [H('h2', { id: 'mk-samples-h' }, T('samples_h'))]),
-        H('div', { class: 'idea-options sample-options' }, orderedSamples().map(function (s) { return sampleCard(s); })),
-        H('div', { class: 'more-row' }, [H('button', { class: 'link-btn', type: 'button', 'data-action': 'mk-more-samples' }, T('more_samples'))])
+        H('div', { class: 'idea-options sample-options' + fadeCls('samples'), 'data-swap': 'samples' }, shownSamples().items.map(function (s) { return sampleCard(s); })),
+        H('div', { class: 'more-row' }, [H('button', { class: 'link-btn', type: 'button', 'data-action': 'mk-more-samples' }, T('more_samples'))]),
+        H('p', { class: 'sr-only', 'aria-live': 'polite', 'data-live': 'samples' }, '')
+      ]),
+      // §AD-4「こんなのも作れる」（見本と思いつきの間）
+      H('section', { class: 'make-sec make-projects', 'aria-labelledby': 'mk-pj-h' }, [
+        H('div', { class: 'section-head' }, [H('div', null, [H('h2', { id: 'mk-pj-h' }, T('pj_h')), H('p', { class: 'sec-sub' }, T('pj_sub'))])]),
+        H('div', { class: 'pj-grid' + fadeCls('projects'), 'data-swap': 'projects' }, projectPage(MD.projects, S().makeSide.projectPage).map(projectCard)),
+        H('div', { class: 'more-row' }, [H('button', { class: 'link-btn', type: 'button', 'data-action': 'mk-more-projects' }, T('pj_more'))]),
+        H('p', { class: 'sr-only', 'aria-live': 'polite', 'data-live': 'projects' }, '')
       ]),
       H('section', { class: 'make-sec make-idea', 'aria-labelledby': 'mk-idea-h' }, [
         H('div', { class: 'section-head' }, [H('h2', { id: 'mk-idea-h' }, T('from_idea_h'))]),
@@ -1688,8 +1780,46 @@
 
   A['mk-sample'] = function (el) { createAndOpen(fromSample(el.getAttribute('data-arg'), { id: newId('a'), now: DES.data.now, mode: mode() })); };
   A['mk-open'] = function (el) { openAct(el.getAttribute('data-id')); };
-  // 見本は 3 つだけ（U-1）。見本が 0 件の時の文（no_samples）は使わない（§U-11 指摘 18）
-  A['mk-more-samples'] = function () { DES.app.toast(MD.samples.length ? T('only_samples') : T('no_samples')); };
+  // §AD-3 / AD-4「別の見本を見る」「別の提案を見る」: 次の組へ（最後の次は最初）。150ms のクロスフェード（reduced-motion は即時）。
+  // フォーカスはボタンに残し、aria-live で入れ替えたことを伝える。組の位置は makeSide に保存（リロードで残る）
+  function swapGroup(kind) {
+    var u = mk();
+    if (u.swapping) return;
+    var side = S().makeSide, key = kind === 'samples' ? 'samplePage' : 'projectPage';
+    var cur = kind === 'samples' ? shownSamples().page : pageAt(MD.projects.length, 4, side.projectPage);
+    var total = Math.max(1, Math.ceil((kind === 'samples' ? MD.samples.length : MD.projects.length) / (kind === 'samples' ? 3 : 4)));
+    var action = kind === 'samples' ? 'mk-more-samples' : 'mk-more-projects';
+    function run() {
+      u.swapping = false;
+      side[key] = (cur + 1) % total;
+      if (kind === 'samples') u.makeFirst = null;
+      if (motionOK()) u.fadeIn = kind;
+      // 表示の位置だけの保存。保存できなくても入れ替えは見せ、save_fail を出す（学びマップの表示の保存と同じ扱い）
+      if (!DES.store.save('makeSide')) { S().saveFailed = true; DES.app.renderSaveState(); }
+      DES.app.render();
+      var b = document.querySelector('[data-action="' + action + '"]');
+      if (b) b.focus();
+      setTimeout(function () { var live = document.querySelector('[data-live="' + kind + '"]'); if (live) live.textContent = T(kind === 'samples' ? 'samples_swapped' : 'pj_swapped'); }, 60);
+    }
+    var grid = document.querySelector('[data-swap="' + kind + '"]');
+    if (!motionOK() || !grid) { run(); return; }
+    u.swapping = true;
+    grid.classList.add('is-fading');
+    setTimeout(run, 150);
+  }
+  A['mk-more-samples'] = function () { swapGroup('samples'); };
+  A['mk-more-projects'] = function () { swapGroup('projects'); };
+  // §AD-4「これで始める」: 外で作って写真で記録する活動を作って作業台へ（同じ提案の活動があればそれを開く）
+  A['mk-project'] = function (el) {
+    var p = MD.project(el.getAttribute('data-arg'));
+    if (!p) return;
+    var r = fromProject(p, { id: newId('a'), mode: mode(), now: DES.data.now, acts: S().activities });
+    if (!r) return;
+    if (!r.created) { openAct(r.id); return; }
+    change(function () { S().activities = [r.act].concat(S().activities); });
+    go('#make/' + r.id);
+    DES.app.toast(T('pj_placed'));
+  };
   A['mk-start'] = function () {
     var text = mk().ideaText.replace(/^\s+|\s+$/g, '');
     if (!text) return;
@@ -2297,6 +2427,17 @@
       if (u.remakeFor && !t.closest('.remake-opts') && !t.closest('[data-action="mk-remake-open"]')) { u.remakeFor = null; redraw = true; }
       if (redraw && DES.app.route() === 'make') DES.app.render();
     });
+    // §AD-5: 提案の画像が読めなかった時はカテゴリの線画に替える（以後の描画も線画。error は bubble しないので capture で受ける）
+    document.addEventListener('error', function (e) {
+      var t = e.target, id = t && t.getAttribute ? t.getAttribute('data-thumb') : null, p = id ? MD.project(id) : null, box = t && t.parentNode;
+      if (!p || !box) return;
+      var u = mk();
+      if (!u.thumbFail) u.thumbFail = {};
+      u.thumbFail[p.id] = true;
+      box.textContent = '';
+      box.classList.remove('has-img');
+      box.appendChild(DES.raw(MD.catArt(p.cat)));
+    }, true);
     var dlg = dlgEl();
     if (dlg) dlg.addEventListener('close', function () {
       var tEl = document.getElementById('toast');
