@@ -350,6 +350,11 @@
   M.OPT_KEY = OPT_KEY;
   // 「どこが違う？」の候補（形 / 大きさ / 材料・色 / 動き / それ以外）→ 作り直しの種類
   var ASPECT_OPT = ['redo', 'one', 'fix', 'one', 'redo'];
+  // 自分を助ける道具（contract-Y §Y-9）: まとめる数 / 間かく / 出かた / 使う場面 / それ以外 → 作り直しの種類（使う場面 = 既存の「材料・色」と同じ fix）
+  var TOOL_ASPECT = ['one', 'fix', 'redo', 'redo', 'redo'];
+  function isToolAct(a) { return !!(a && a.theme === 'tool'); }
+  // 「どこが違う？」の選択肢の i18n key（tool だけ change_opts_tool。他の題材と 'odai' は change_opts）
+  function changeOptsKey(a) { return isToolAct(a) ? 'change_opts_tool' : 'change_opts'; }
   function bump(theme, values, n) {
     var ps = MD.theme(theme).params, p = ps[Math.min(n, ps.length - 1)], out = clone(values);
     out[p.key] = values[p.key] + 1 > p.max ? p.min : values[p.key] + 1;
@@ -388,7 +393,7 @@
   function leave(a, opt, o) {
     o = o || {};
     if (isOdaiExt(a)) return leaveOdai(a, opt, o);
-    if (opt === 'aspect') opt = ASPECT_OPT[Math.max(0, Math.min(4, o.aspect | 0))];
+    if (opt === 'aspect') opt = (isToolAct(a) ? TOOL_ASPECT : ASPECT_OPT)[Math.max(0, Math.min(4, o.aspect | 0))];
     var A = clone(a), base = o.card ? { stage: cardStage(find(A.shelf, o.card)), fromStage: false } : baseStage(A);
     if (!base.stage || (base.stage.kind === 'note' && opt !== 'calc' && opt !== 'steps' && opt !== 'cmd')) base = baseStage(A);
     var specs = specsFor(A, opt, base);
@@ -861,7 +866,7 @@
     finishMaking: finishMaking, cardNames: cardNames, visiblePhotos: visiblePhotos, cardTitle: cardTitle,
     canRevertTo: canRevertTo, restoreState: restoreState, findMsg: findMsg, declineReply: declineReply, undoDeclineReply: undoDeclineReply, migrate: migrate,
     migrateWork: migrateWork, withPending: withPending, fromOdai: fromOdai, isOdaiExt: isOdaiExt, remakeOptions: remakeOptions, ODAI_THEME: ODAI_THEME,
-    fromSelf: fromSelf, findSelfLink: findSelfLink, isSelfLink: isSelfLink,
+    fromSelf: fromSelf, findSelfLink: findSelfLink, isSelfLink: isSelfLink, changeOptsKey: changeOptsKey, TOOL_ASPECT: TOOL_ASPECT,
     // §W（作品の一覧・詳細）が使う
     defaultStatus: defaultStatus, normalizeWorks: normalizeWorks, chState: chState, baseState: baseState, curState: curState
   };
@@ -1263,7 +1268,7 @@
       if (m.opts) m.opts.forEach(function (o, i) {
         ops.push(btn(tx(o.label), o.a, { id: a.id, arg: o.arg != null ? o.arg : i, attrs: { 'data-msg': m.id } }));
       });
-      if (m.diff) optLabels('change_opts').forEach(function (l, i) { ops.push(btn(l, 'mk-diff-pick', { id: a.id, arg: i, attrs: { 'data-msg': m.id } })); });
+      if (m.diff) optLabels(changeOptsKey(a)).forEach(function (l, i) { ops.push(btn(l, 'mk-diff-pick', { id: a.id, arg: i, attrs: { 'data-msg': m.id } })); });
     }
     if (ops.length) body.appendChild(H('div', { class: 'msg-opts' }, ops));
     if (!m.diff && !m.ask) body.appendChild(H('div', { class: 'msg-foot' }, [
@@ -1397,7 +1402,7 @@
     var e = mk().edit;
     return H('div', { class: 'photo-form', role: 'group', 'aria-labelledby': 'mk-pf-h' }, [
       H('p', { class: 'pf-head', id: 'mk-pf-h' }, T('what_changed')),
-      H('div', { class: 'opt-chips' }, optLabels('change_opts').map(function (l, i) {
+      H('div', { class: 'opt-chips' }, optLabels(changeOptsKey(a)).map(function (l, i) {
         return H('button', { class: 'opt-chip', type: 'button', 'data-action': 'mk-photo-opt', 'data-id': a.id, 'data-arg': String(i), 'aria-pressed': e.opt === i ? 'true' : 'false' }, l);
       })),
       H('label', { class: 'sr-only', for: 'mk-edit-photo' }, T('what_changed')),
@@ -1782,7 +1787,7 @@
     var a = cur(el), i = +el.getAttribute('data-arg'), mid = el.getAttribute('data-msg');
     if (!a) return;
     var x = clone(a);
-    useMsg(x, mid, optLabels('change_opts')[i]);
+    useMsg(x, mid, optLabels(changeOptsKey(a))[i]);
     runLeave(x, 'aspect', { aspect: i });
   };
   // 違う（変化の列のバディ行）: その変化の前に戻して、相談列に「どこが違う？」
