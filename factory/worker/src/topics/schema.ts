@@ -67,7 +67,7 @@ const COUNTS: Record<TopicKind, Record<'premises' | 'facts' | 'views' | 'stances
   news: { premises: [0, 0], facts: [2, 4], views: [0, 3], stances: [2, 4], sources: [1, 6] },
   talk: { premises: [0, 3], facts: [0, 3], views: [2, 4], stances: [2, 4], sources: [0, 6] },
   philo: { premises: [0, 2], facts: [1, 4], views: [2, 4], stances: [2, 4], sources: [1, 6] },
-  make: { premises: [0, 0], facts: [0, 0], views: [0, 0], stances: [0, 0], sources: [0, 2] },
+  make: { premises: [0, 0], facts: [0, 0], views: [0, 0], stances: [0, 0], sources: [0, 0] }, // make は事実・考えを持たないので、出典も持たない（v2.3）
 };
 
 const TOP_KEYS = ['schema_version', 'kind', 'locale', 'title', 'lead', 'event_day', 'premises', 'facts', 'views', 'asks', 'stances', 'next', 'make', 'sources', 'tags'];

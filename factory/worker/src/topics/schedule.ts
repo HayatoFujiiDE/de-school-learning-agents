@@ -89,8 +89,13 @@ export function planStmts(D: string, picked: readonly PickedSlot[], now: string)
   ];
 }
 
-/** 日 D の予定を確定する。確定済み（topic_plans に行がある）なら何もしない（'exists'）。入・切が切なら 'disabled' */
-export async function planDay(env: Env, D: string): Promise<'made' | 'exists' | 'disabled'> {
+export type PlanResult = 'made' | 'exists' | 'disabled' | 'no_ready';
+
+/**
+ * 日 D の予定を確定する。確定済み（topic_plans に行がある）なら何もしない（'exists'）。入・切が切なら 'disabled'。
+ * requireReady（当日の分）: 出せるお題（ready で evergreen = 1 か fresh_until >= D）が 1 本も無ければ確定せず 'no_ready'（行を作らない。次の tick がまた見る）
+ */
+export async function planDay(env: Env, D: string, o: { requireReady?: boolean } = {}): Promise<PlanResult> {
   const db = env.DB;
   if (!(await topicsEnabled(db))) return 'disabled';
   const has = await all(db, stmt('SELECT 1 FROM topic_plans WHERE day = ?', D));
@@ -99,6 +104,7 @@ export async function planDay(env: Env, D: string): Promise<'made' | 'exists' | 
     db,
     stmt(`SELECT id, kind, status, lineage_id, depth, created_at, slot_day, starred, evergreen, fresh_until FROM topics WHERE status = 'ready' AND (evergreen = 1 OR fresh_until >= ?)`, D),
   );
+  if (o.requireReady && candidates.length === 0) return 'no_ready';
   const history = await all<PickHistory>(db, stmt('SELECT lineage_id, day FROM topic_schedule WHERE day < ?', D));
   const picked = pickForDay(candidates, history, D);
   try {
@@ -110,10 +116,10 @@ export async function planDay(env: Env, D: string): Promise<'made' | 'exists' | 
   return 'made';
 }
 
-/** 段 (1): 当日の分（時刻に関係なく）→ 翌日の分（Asia/Tokyo の 18:00 以降）を順に */
-export async function planStep(env: Env, now: Date = new Date()): Promise<{ today: string; tomorrow: string | null }> {
+/** 段 (1): 当日の分（時刻に関係なく。出せるお題が 1 本以上ある時だけ）→ 翌日の分（Asia/Tokyo の 18:00 以降。0 本でも確定）を順に */
+export async function planStep(env: Env, now: Date = new Date()): Promise<{ today: PlanResult; tomorrow: PlanResult | null }> {
   const today = tokyoDay(now);
-  const t = await planDay(env, today);
+  const t = await planDay(env, today, { requireReady: true });
   const tomorrow = tokyoHour(now) >= 18 ? await planDay(env, addDays(today, 1)) : null;
   return { today: t, tomorrow };
 }

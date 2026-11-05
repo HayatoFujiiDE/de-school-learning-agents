@@ -126,15 +126,19 @@ describe('validateTopicBody: asks / stances / next / make', () => {
 });
 
 describe('validateTopicBody: sources', () => {
-  it('news 1〜6 / talk 0〜6 / philo 1〜6 / make 0〜2（make は facts・views を持たないので出典を置くと指されない出典で落ちる）', () => {
+  it('news 1〜6 / talk 0〜6 / philo 1〜6 / make 0', () => {
     const n = newsBody(D);
     bad({ ...n, sources: [] }, 'sources_count');
     const seven = ['s1', 's2', 's3', 's4', 's5', 's6', 's7'].map(SRC);
     bad({ ...n, sources: seven }, 'sources_count');
     bad({ ...philoBody(), sources: [] }, 'sources_count');
     ok({ ...talkBody(), sources: [] });
-    bad({ ...makeBody(), sources: [SRC('s1')] }, 'unreferenced_source');
+    ok({ ...makeBody(), sources: [] });
     bad({ ...makeBody(), sources: ['s1', 's2', 's3'].map(SRC) }, 'sources_count');
+  });
+  it('make の出典は 1 個でも 2 個でも個数の規則（sources_count）で落ちる（v2.3）', () => {
+    bad({ ...makeBody(), sources: [SRC('s1')] }, 'sources_count');
+    bad({ ...makeBody(), sources: [SRC('s1'), SRC('s2')] }, 'sources_count');
   });
   it('重複した source id・指されていない出典・source_ids が無い id を指すと落ちる', () => {
     const n = newsBody(D);

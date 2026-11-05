@@ -71,7 +71,10 @@ async function main() {
   // ---- 検査 → 自動 ready / 重いお題は要確認 ----
   const a1 = await cronUntil(A, (t) => t.status === 'ready');
   check('(t3) 検査 → 普通のお題は自動で ready（決定の記録 auto_ready）', a1?.topic?.status === 'ready' && a1?.decisions?.some((d) => d.decision === 'auto_ready'), `status=${a1?.topic?.status}`);
-  const b1 = await cronUntil(B, (t) => t.status === 'held');
+  // 今日の予定は、出せるお題がある最初の tick で確定する（v2.3）。B を今日の予定に入れるため、
+  // A が ready になった後は B の承認まで cron を流さない（検査は 1 tick に 3 本まで: A と同じ tick で B も held になる）
+  let b1 = await topic(B);
+  if (b1?.topic?.status !== 'held') b1 = await cronUntil(B, (t) => t.status === 'held');
   const held = (await api('GET', '/api/topics?status=held')).json?.topics ?? [];
   const hb = held.find((t) => t.id === B);
   check('(t4) 重いお題は要確認（held・hold_group heavy・承認できる・read_all が要る）', b1?.topic?.hold_reason === 'heavy' && hb?.hold_group === 'heavy' && hb?.approvable === true && hb?.needs_read_all === true, JSON.stringify(hb ?? null).slice(0, 160));
@@ -83,20 +86,20 @@ async function main() {
   check('(t5) 重い話題は read_all なしで 400 → read_all つきで承認 → ready', noRead.status === 400 && noRead.json?.error === 'read_all_required' && ok.status === 200 && ok.json?.topic?.status === 'ready', `no_read=${noRead.status}/${noRead.json?.error} ok=${ok.status}/${ok.json?.topic?.status}`);
 
   // ---- 予定の確定 → 配信 ----
-  // 今日の予定は最初の tick で（まだ ready の無いうちに）確定済みなので、fake の制御で消して次の tick に確定し直させる。
+  // 今日の予定はまだ確定していない（出せるお題の無い tick では確定しない）。A・B が ready の次の tick で確定する。
   // 並びを決まったものにするため A・B に星を付ける（予定の後で外す）
   await decide(A, a1.topic.content_sha256, 'star');
   await decide(B, shaB, 'star');
-  const rp = await api('POST', '/__fake/topics-replan', { day: today });
+  const before = (await api('GET', `/api/topics/schedule?day=${today}`)).json;
   await cron();
   const lib = await api('GET', '/api/library/topics');
   const ids = (lib.json?.topics ?? []).map((t) => t.topic_id);
   const lb = (lib.json?.topics ?? []).find((t) => t.topic_id === B);
   const la = (lib.json?.topics ?? []).find((t) => t.topic_id === A);
   check(
-    '(t6) 予定の確定 → GET /api/library/topics に両方出る（重い方は needs_supporter・no-store・子どもの項目なし）',
-    rp.status === 200 && lib.status === 200 && ids.includes(A) && ids.includes(B) && lb?.needs_supporter === true && la?.needs_supporter === false && Object.keys(lb ?? {}).sort().join(',') === 'body,kind,lineage_id,needs_supporter,pos,topic_id',
-    `replan=${rp.status} lib=${lib.status} ids=${ids.length} b_sup=${lb?.needs_supporter}`,
+    '(t6) 出せるお題の無い間は今日の予定が未確定 → 確定 → GET /api/library/topics に両方出る（重い方は needs_supporter・no-store・子どもの項目なし）',
+    before?.planned === false && lib.status === 200 && ids.includes(A) && ids.includes(B) && lb?.needs_supporter === true && la?.needs_supporter === false && Object.keys(lb ?? {}).sort().join(',') === 'body,kind,lineage_id,needs_supporter,pos,topic_id',
+    `planned_before=${before?.planned} lib=${lib.status} ids=${ids.length} b_sup=${lb?.needs_supporter}`,
   );
   await decide(A, a1.topic.content_sha256, 'unstar');
   await decide(B, shaB, 'unstar');

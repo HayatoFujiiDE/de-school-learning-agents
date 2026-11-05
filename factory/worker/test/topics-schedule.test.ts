@@ -116,6 +116,29 @@ describe('予定の確定（planDay）', () => {
     expect(await planStep(env, evening)).toEqual({ today: 'exists', tomorrow: 'made' });
   });
 
+  it('当日の分は出せるお題が 1 本も無い時は確定しない（no_ready・topic_plans に行を作らない）。出せるお題ができた次の tick で確定する（v2.3）', async () => {
+    db.prepare("UPDATE topics SET status = 'held'").run();
+    // 期限切れの news は ready でも当日の候補にならない
+    await seedTopic(db, { id: 'tp_n_old', body: newsBody(today), status: 'ready', slotDay: today });
+    db.prepare("UPDATE topics SET fresh_until = ? WHERE id = 'tp_n_old'").run(addDays(today, -1));
+    expect(await planDay(env, today, { requireReady: true })).toBe('no_ready');
+    expect(count(db, 'SELECT COUNT(*) AS n FROM topic_plans')).toBe(0);
+    const morning = new Date(`${today}T01:00:00.000Z`); // 10:00 JST
+    expect(await planStep(env, morning)).toEqual({ today: 'no_ready', tomorrow: null });
+    expect(count(db, 'SELECT COUNT(*) AS n FROM topic_plans')).toBe(0);
+    db.prepare("UPDATE topics SET status = 'ready' WHERE id = 'tp_p_1'").run();
+    expect(await planStep(env, morning)).toEqual({ today: 'made', tomorrow: null });
+    expect(db.prepare('SELECT made FROM topic_plans WHERE day = ?').get(today)).toEqual({ made: 1 });
+  });
+
+  it('翌日の分は出せるお題が 0 本でも確定する（18:00 以降）', async () => {
+    db.prepare("UPDATE topics SET status = 'held'").run();
+    const evening = new Date(`${today}T09:30:00.000Z`); // 18:30 JST
+    expect(await planStep(env, evening)).toEqual({ today: 'no_ready', tomorrow: 'made' });
+    expect(db.prepare('SELECT made FROM topic_plans WHERE day = ?').get(addDays(today, 1))).toEqual({ made: 0 });
+    expect(count(db, 'SELECT COUNT(*) AS n FROM topic_plans WHERE day = ?', today)).toBe(0);
+  });
+
   it('止めたお題は配信に出ず、schedule API で stopped になる。枠の残りは empty', async () => {
     await planDay(env, today);
     db.prepare("UPDATE topics SET status = 'retired' WHERE id = 'tp_t_1'").run();
