@@ -468,7 +468,8 @@
     var opts = ['形', '大きさ', '材料・色', '動き', 'それ以外'];
     var optsEs = ['形', '大きさ', 'ざいりょう・色', '動き', 'それ以外'];
     if (text) what = { text: text };
-    else if (aspect != null && aspect >= 0 && aspect < 4) what = { k: 'changed_aspect', v: { what: [opts[aspect], optsEs[aspect]] } };
+    // tool の活動は選択肢（change_opts_tool）と同じ語で残す（§Y-9。{ k, i } = 描く時に i18n の i 番目を読む）
+    else if (aspect != null && aspect >= 0 && aspect < 4) what = { k: 'changed_aspect', v: { what: isToolAct(A) ? { k: changeOptsKey(A), i: aspect } : [opts[aspect], optsEs[aspect]] } };
     if (what) ch.what = what;
     if (aspect != null) ch.aspect = aspect;
     return { act: A, what: what };

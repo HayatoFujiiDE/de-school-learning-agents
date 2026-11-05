@@ -870,14 +870,19 @@ t('Y-4 tool がどの値でも別の題材の文・NaN に落ちない', functio
   var bad = [];
   MD.theme('tool').variants.forEach(function (va) {
     for (var c = 1; c <= 5; c++) for (var e = 0; e <= 4; e++) {
-      var st = tst(va, c, e), txt = [MD.result(st, 'js'), MD.result(st, 'es'), MD.code(st), MD.desc(st, 'js'), MD.desc(st, 'es'), MD.art(st).replace(/<[^>]*>/g, ' ')].join(' | ');
+      var st = tst(va, c, e), svg = MD.art(st), txt = [MD.result(st, 'js'), MD.result(st, 'es'), MD.code(st), MD.desc(st, 'js'), MD.desc(st, 'es'), svg.replace(/<[^>]*>/g, ' ')].join(' | ');
       if (/NaN|undefined|null|\bV\b|Ω|mA|ブロック|星|電|マイクラ|minecraft|speed/.test(txt)) bad.push(va + ' ' + c + ' ' + e + ': ' + txt.slice(0, 80));
+      // SVG の属性（座標・半径など）に NaN / undefined / Infinity が入っていないか（タグを取り除く前の文字列で見る。レビュー MINOR 2）
+      if (/NaN|undefined|Infinity/.test(svg)) bad.push(va + ' ' + c + ' ' + e + ' svg: ' + (svg.match(/[^"]*(NaN|undefined|Infinity)[^"]*/) || [''])[0]);
     }
   });
   eq(bad, [], 'Y-4 別の題材の語が 0 件');
+  // 手順は Y-2 の stepBase（まとめる数 / 間かく / 3 つ目）と各 variant の step3 の verbatim と一致（レビュー MINOR 3）
+  var BASE = [['まとめる数を変える', 'まとめる数をかえる'], ['間かくを決める', 'あいだをきめる']];
+  var STEP3 = { memo: ['サークル対話で使ってみる', 'サークル対話でつかってみる'], nudge: ['合図の言葉を決める', 'あいずのことばをきめる'],
+    oneby: ['次を出す合図を決める', 'つぎを出すあいずをきめる'], board: ['真ん中に書くことを決める', 'まん中に書くことをきめる'] };
   ['memo', 'nudge', 'oneby', 'board'].forEach(function (va) {
-    var s3 = MD.stepsFor('tool', va);
-    ok(s3.length === 3 && s3.every(function (x) { return x && typeof x[0] === 'string' && typeof x[1] === 'string'; }), 'Y-4 stepsFor tool.' + va + ' 手順 3 つ');
+    eq(MD.stepsFor('tool', va), BASE.concat([STEP3[va]]), 'Y-2 stepsFor tool.' + va + ' は契約の文言');
     ok(/^<svg/.test(MD.art(tst(va, 3, 2))), 'Y-4 MD.art tool.' + va + ' は線画');
     ok(MD.art(tst(va, 3, 2)) !== MD.art({ kind: 'sample', theme: 'mc', variant: 'cube', values: { size: 4, block: 0 } }), 'Y-4 tool.' + va + ' はマイクラの図に落ちない');
   });
@@ -987,6 +992,14 @@ t('Y-6 作品に残す: tool の絵と題材', function () {
   ok(/^<svg/.test(MD.art(sw.work.art.stage)), 'Y-6 作品の絵は tool の線画');
 });
 
+t('Y-9 写真の「何を変えた？」: tool は選択肢と同じ語（change_opts_tool）で残す', function () {
+  var x = fself(); x.stage = null;
+  var p = M.addPhoto(x, 'photo'), d = M.describePhoto(p.act, p.change.id, 1, '');
+  eq(d.what, { k: 'changed_aspect', v: { what: { k: 'change_opts_tool', i: 1 } } }, 'Y-9 tool の写真: 間かく（i18n の 1 番目）');
+  eq(M.describePhoto(p.act, p.change.id, 4, '').what, null, 'Y-9 それ以外は候補を残さない（今までどおり）');
+  var e = M.addPhoto(M.fromExt('photo', { id: 'dpm', now: '10:20' }), 'shot');
+  eq(M.describePhoto(e.act, e.change.id, 1, '').what, { k: 'changed_aspect', v: { what: ['大きさ', '大きさ'] } }, 'Y-9 マイクラは今までどおり');
+});
 t('Y-9 tool の「どこが違う？」: 選択肢の key と任せる操作の対応', function () {
   eq(M.TOOL_ASPECT, ['one', 'fix', 'redo', 'redo', 'redo'], 'Y-9 TOOL_ASPECT');
   var a = fself();

@@ -824,7 +824,8 @@ window.DES = window.DES || {};
   // 紐づけの表示: --record の小チップ + 作業台を開く（DES.make.openAct）
   function makeLinkRow(link, key) {
     return H('div', { class: 'kidea-link' }, [
-      H('span', { class: 'chip src-record sx-make-chip' }, [icon('make'), H('span', null, KX(link.label))]),
+      // 出所名の aria-label（srcChip と同じ考え方。文言は making / made_tool / saved_work）
+      H('span', { class: 'chip src-record sx-make-chip', 'aria-label': KX(link.label) }, [icon('make'), H('span', null, KX(link.label))]),
       linkBtn(KX('open_bench'), 'sx-kbench', link.act.id, { fk: 'kbench:' + key })
     ]);
   }
