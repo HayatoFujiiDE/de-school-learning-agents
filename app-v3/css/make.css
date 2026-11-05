@@ -368,3 +368,26 @@ html[data-mode="es"] .make-dialog .dialog-footer .btn,html[data-mode="es"] .stud
 html[data-mode="es"] .studio-chat .message .bubble,html[data-mode="es"] .mk-composer textarea,html[data-mode="es"] .qf-text,html[data-mode="es"] .stage-empty-text,html[data-mode="es"] .push-line p,html[data-mode="es"] .ar-text{font-size:15px}
 html[data-mode="es"] .cr-what,html[data-mode="es"] .result-line,html[data-mode="es"] .step-line,html[data-mode="es"] .card-title,html[data-mode="es"] .roles-sum{font-size:14px}
 html[data-mode="es"] .card-desc,html[data-mode="es"] .cr-result,html[data-mode="es"] .card-src,html[data-mode="es"] .face-note,html[data-mode="es"] .untested,html[data-mode="es"] .card-note{font-size:12px}
+
+/* ---------- §AD 作るを広げる（入口の組の入れ替え・こんなのも作れる） ---------- */
+.sample-options.is-fading,.pj-grid.is-fading{opacity:0;transition:opacity .15s ease}
+.sample-options.is-fadein,.pj-grid.is-fadein{animation:mk-fadein .15s ease-out}
+@keyframes mk-fadein{from{opacity:0}to{opacity:1}}
+.make-sec .sec-sub{font-size:12px;color:var(--muted);line-height:1.7;margin-top:2px}
+.pj-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.pj-card{display:flex;flex-direction:column;min-width:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}
+.pj-art{position:relative;aspect-ratio:1.6;overflow:hidden;background:var(--art-bg);border-bottom:1px solid var(--line)}
+.pj-art .mk-art{width:100%;height:100%}
+.pj-art img{display:block;width:100%;height:100%;object-fit:cover}
+.pj-ai{position:absolute;right:6px;bottom:6px;padding:2px 6px;border-radius:5px;background:#ffffffe6;color:var(--muted);font-size:10px;line-height:1.5}
+.pj-body{display:grid;gap:6px;padding:12px 12px 14px;flex:1;align-content:start;min-width:0}
+.pj-body h3{font-size:14px;line-height:1.6;overflow-wrap:anywhere}
+.pj-what,.pj-first{font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+.pj-need{font-size:11px;line-height:1.7;overflow-wrap:anywhere}
+.pj-chip,.pj-safety{justify-self:start}
+.pj-body .btn{justify-self:start;margin-top:4px}
+html[data-mode="es"] .pj-what,html[data-mode="es"] .pj-first{font-size:13px}
+html[data-mode="es"] .pj-need{font-size:12px}
+@media(max-width:1120px){.pj-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.pj-art{aspect-ratio:2.4}}
+@media(max-width:700px){.pj-grid{grid-template-columns:minmax(0,1fr);gap:10px}}
