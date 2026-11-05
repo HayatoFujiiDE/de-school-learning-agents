@@ -195,6 +195,7 @@ dialog.nav-drawer::backdrop{background:#0003;backdrop-filter:none}
 dialog.nav-drawer .sidebar{position:relative;top:auto;transform:none;visibility:visible;width:100%;height:auto;min-height:100%;box-shadow:none;border-right:0;z-index:auto}
 @media(max-width:700px){.sidebar .reset-link{display:block}
 .topbar .mobile-open{margin-right:2px}
-.breadcrumb{min-width:0}
-.top-actions{min-width:0}
+.breadcrumb{min-width:0;overflow:hidden}
+.breadcrumb strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.top-actions{min-width:0;flex-shrink:0}
 }
