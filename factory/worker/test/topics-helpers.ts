@@ -302,7 +302,7 @@ export async function seedTopic(db: DatabaseSync, o: SeedOpts): Promise<void> {
 
 export const topic = (db: DatabaseSync, id: string) => ({ ...(db.prepare('SELECT * FROM topics WHERE id = ?').get(id) as Record<string, unknown>) });
 export const count = (db: DatabaseSync, sql: string, ...p: Array<string | number | null>): number => Number((db.prepare(sql).get(...p) as { n: number }).n);
-export const ledger = (db: DatabaseSync) => db.prepare("SELECT ref_id, cents FROM cost_ledger WHERE kind = 'topic' ORDER BY created_at, ref_id").all() as Array<{ ref_id: string; cents: number }>;
+export const ledger = (db: DatabaseSync) => db.prepare("SELECT ref_id, cents FROM cost_ledger WHERE kind = 'topic' ORDER BY rowid").all() as Array<{ ref_id: string; cents: number }>;
 
 export function routeCtx(env: Env, method: string, path: string, body?: unknown, port?: FactoryPort): RouteCtx {
   const request = new Request(`http://localhost${path}`, { method, ...(body !== undefined ? { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } } : {}) });

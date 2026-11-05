@@ -78,14 +78,15 @@ export async function dueCheckIds(env: Env, limit: number, now: string): Promise
   return rows.map((r) => r.id);
 }
 
-/** 検査の失敗・lease 切れの後の状態を 1 文で決める（T-3）。where は「どの行か」の条件（述語の列を含む） */
-const FAIL_SET = `status = CASE WHEN check_attempts - check_round_start >= ? THEN 'held' ELSE 'draft' END,
-  hold_reason = CASE WHEN check_attempts - check_round_start >= ? THEN 'check_failed' ELSE NULL END,
-  check_token = NULL, check_lease_until = NULL`;
-
+/**
+ * 検査の失敗の後の状態を 1 文で決める（T-3: draft で今の巡の回数が上限、という行を作らない）。
+ * lease 切れの片付け（cleanupLeases）も同じ SET を持つ。SET 句は走査（T-14 b2）が読めるよう 1 つの文字列に書く（断片を連結しない）
+ */
 function failStmt(p: { id: string; attempt: number; token: string; now: string; max: number; notBefore: string | null }): Stmt {
   return stmt(
-    `UPDATE topics SET ${FAIL_SET}, check_not_before = ?, updated_at = ?
+    `UPDATE topics SET status = CASE WHEN check_attempts - check_round_start >= ? THEN 'held' ELSE 'draft' END,
+       hold_reason = CASE WHEN check_attempts - check_round_start >= ? THEN 'check_failed' ELSE NULL END,
+       check_token = NULL, check_lease_until = NULL, check_not_before = ?, updated_at = ?
      WHERE id = ? AND status = 'checking' AND check_attempts = ? AND check_token = ? AND check_lease_until > ?`,
     p.max,
     p.max,
@@ -111,7 +112,19 @@ export async function cleanupLeases(env: Env, now: string): Promise<{ runs: numb
         now,
       ),
     ),
-    prepare(env.DB, stmt(`UPDATE topics SET ${FAIL_SET}, updated_at = ? WHERE status = 'checking' AND check_lease_until <= ?`, max, max, now, now)),
+    prepare(
+      env.DB,
+      stmt(
+        `UPDATE topics SET status = CASE WHEN check_attempts - check_round_start >= ? THEN 'held' ELSE 'draft' END,
+           hold_reason = CASE WHEN check_attempts - check_round_start >= ? THEN 'check_failed' ELSE NULL END,
+           check_token = NULL, check_lease_until = NULL, updated_at = ?
+         WHERE status = 'checking' AND check_lease_until <= ?`,
+        max,
+        max,
+        now,
+        now,
+      ),
+    ),
   ]);
   return { runs: Number(res[0]?.meta?.changes ?? 0), checks: Number(res[1]?.meta?.changes ?? 0) };
 }

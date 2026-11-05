@@ -32,7 +32,7 @@ let env: Env;
 const empty = fetchStub({});
 const far = () => Date.now() + 10 * 60_000;
 const past = () => new Date(Date.now() - 60_000).toISOString();
-const decisions = (id: string) => db.prepare('SELECT decision, by, read_all FROM topic_decisions WHERE topic_id = ? ORDER BY created_at, id').all(id);
+const decisions = (id: string) => db.prepare('SELECT decision, by, read_all FROM topic_decisions WHERE topic_id = ? ORDER BY rowid').all(id);
 const check = (id: string, port: FactoryPort, fetchImpl = empty.fetchImpl) => checkTopic(env, port, id, { deadline: far(), fetchImpl });
 const sha = (id: string) => String(topic(db, id).content_sha256);
 const decide = async (id: string, body: Record<string, unknown>) => {
