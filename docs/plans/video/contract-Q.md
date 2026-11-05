@@ -239,5 +239,10 @@
     - v1 の video-notes.json がある版は呼ばない。
     - 回収（collect）は Gemini を呼ばず、R2 の記録も読まない。提出後に記録が増えても、回収は plan.json のまま。
     - 動画の確認が無効の時は呼び出しゼロ。予備のモデルが未設定の時の enable は 409。
+    - 過去の retryable に引きずられない: n=1 が retryable、n=2 は行だけ（記録なし）→ 何分たっても n=3 を取り置かない。
+    - 遅れて届く ok: 欠損として扱った後に ok の記録が届く → 次の試行では呼ばず、検証係の入力と review API の両方に同じ note が出る。
+    - readVersionVideoNotes の返す形の互換: 動画の記録が 1 つも無い版は従来どおり null（確認画面は「まだありません」のまま）。記録がある版は `v:1` と、動画ごとの id・区間などを含む従来の完全な形。
     - 既存のテストが green。新しいテストが変更前のコードで落ちる（mutation）。
 14. **範囲**: 触るのは `src/verify.ts`・`src/videos.ts`・`src/routes/review.ts`（video_notes の読み方だけ）・`src/routes/videos.ts`・`src/env.ts`・`src/fake/gemini.ts`・fake の R2（条件つき put が無ければ足す）・`wrangler.jsonc`（var 1 つ）・test/。migration は無し。職人の定義・admin.js は変えない。
+
+凍結（Q-10）: 2026-11-05（Astra high R3 GO）。
