@@ -471,7 +471,7 @@
         { id: 'act-build-m2', who: 'buddy', time: '10:14', r: 'photo', text: '塔を 2 倍にしたんだね。前の写真と並べて見る？', change: 'act-build-c2', opts: [{ a: 'mk-compare-photos', label: '比べる' }] }
       ],
       state: 'working', pauseCount: 0, declined: 0, offered: false, resumeNote: null,
-      clock: 614, seq: 10, touched: 1, draft: '', v: 2
+      clock: 614, seq: 10, touched: 1, draft: '', v: 3
     }];
   };
 

@@ -33,7 +33,8 @@
   }
 
   // 保存データの版（§U-12 指摘 6）。版が無い・古い活動は読み込み時に migrate で不足欄を補う
-  var SCHEMA = 2;
+  // v3: 98f0a71 の移行で stepsKind を写真の有無で決めてしまった v:2 の活動を作り直す（Astra 4 回目）
+  var SCHEMA = 3;
   // ---------- 活動を作る ----------
   function newAct(o) {
     var clock = toMin(o.now || '10:20');
@@ -651,7 +652,7 @@
     if (a && a.v >= SCHEMA) return a;
     var A = clone(a);
     // 作業対象の主の種類で決める（§U-12 補足 3）: 見本・バディの試作なら theme（写真があっても）、外の記録だけなら ext / build
-    if (!A.stepsKind) {
+    if (!A.stepsKind || (A.v || 0) < 3) {
       var build = A.id === 'act-build' || same(A.steps, MD.EXT_BUILD_STEPS);
       var mainStage = A.stage && (A.stage.kind === 'sample' || A.stage.kind === 'draft');
       A.stepsKind = mainStage || !A.ext ? 'theme' : (build ? 'build' : 'ext');
