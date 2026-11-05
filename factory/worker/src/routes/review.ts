@@ -8,7 +8,7 @@ import { AUTO_ITEMS, type AutoItem } from '../checks/triage';
 import { computeTriage, latestVerificationOf } from '../triage-step';
 import { generatedImagesOf } from './images';
 import { serveVersionFile } from './library';
-import { readVersionVideoNotes, versionVideosOf, type VideoNotesFile } from '../videos';
+import { readVersionVideoNotes, readVideoMetaViews, versionVideosOf, type VideoMetaView, type VideoNotesFile } from '../videos';
 
 export const CHECKLIST_KEYS = [
   'content_and_evidence',
@@ -148,6 +148,8 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
   const generatedImages = await generatedImagesOf(db, v.job_id, material);
   // §Q-5・§Q-10 9: 版の動画の記録（v1 の video-notes.json か、呼び出しの記録から組み立てたもの。何も無い・読めなければ null）
   const videoNotes = await readVideoNotes(c.env.R2, v.r2_prefix, v.material_json);
+  // §Q-11 8: 版の動画ごとの公式の情報（記録を読むだけ。oEmbed を呼ばず、呼び出しの数も増やさない）。動画の無い版は []
+  const videoMeta = await readVideoMeta(c.env.R2, v.r2_prefix, v.material_json);
   return json(200, {
     version: {
       id: v.id,
@@ -206,7 +208,19 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
     triage,
     generated_images: generatedImages,
     video_notes: videoNotes,
+    video_meta: videoMeta,
   });
+}
+
+/** 版の動画の公式の情報（§Q-11 8）。記録の無い・読めない動画は outcome unknown */
+async function readVideoMeta(r2: R2Bucket, prefix: string, materialJson: string): Promise<VideoMetaView[]> {
+  const videos = versionVideosOf(materialJson);
+  if (videos.length === 0) return [];
+  try {
+    return await readVideoMetaViews(r2, prefix, videos);
+  } catch {
+    return videos.map((x) => ({ video_id: x.id, outcome: 'unknown', title: null, author_name: null, author_url: null, channel_match: 'unknown' }));
+  }
 }
 
 /** result_json の videos → API の形（{id, verdict, reason}[]）。配列でなければ null（§Q-5） */
