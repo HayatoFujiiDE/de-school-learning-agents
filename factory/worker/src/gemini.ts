@@ -45,6 +45,8 @@ export class GeminiError extends Error {
     readonly kind: GeminiErrorKind,
     /** 応答に usage（数値のフィールド）があった */
     readonly usagePresent: boolean,
+    /** 応答の error（Google の {error:{status,message}}）。status は大文字と _ だけ、message は先頭 200 字・鍵らしい文字列は伏せる。probe の診断だけに使う */
+    readonly apiError?: { status: string; message: string },
   ) {
     super(`gemini_${kind}${status ? `_${status}` : ''}`);
     this.name = 'GeminiError';
@@ -64,6 +66,8 @@ export interface GeminiWatchRequest {
   startSec: number;
   endSec: number;
   prompt: string;
+  /** false の時だけ区間（processing）を付けない。probe の診断用（通常の経路は常に付ける） */
+  clip?: boolean;
 }
 
 export interface GeminiWatchResult {
@@ -113,7 +117,7 @@ export function geminiRequestBody(model: string, req: GeminiWatchRequest): Recor
       {
         type: 'video',
         uri: youtubeWatchUrl(req.youtubeId),
-        processing: { type: 'static', start_offset: `${req.startSec}s`, end_offset: `${req.endSec}s` },
+        ...(req.clip === false ? {} : { processing: { type: 'static', start_offset: `${req.startSec}s`, end_offset: `${req.endSec}s` } }),
       },
       { type: 'text', text: req.prompt },
     ],
@@ -194,6 +198,15 @@ export function extractInteractionText(body: unknown): string | null {
   return join(textsOf(obj(cand.content)?.parts, false));
 }
 
+/** Google の error 応答から診断用の値だけを取り出す（status は [A-Z_] 40 字まで、message は 200 字・鍵らしい文字列を伏せる） */
+export function apiErrorOf(body: unknown): { status: string; message: string } | undefined {
+  const e = obj(obj(body)?.error);
+  if (!e) return undefined;
+  const st = typeof e.status === 'string' && /^[A-Z_]{1,40}$/.test(e.status) ? e.status : '';
+  const msg = typeof e.message === 'string' ? capChars(e.message.replace(/AIza[0-9A-Za-z_-]{10,}/g, '[REDACTED]').replace(/\s+/g, ' '), 200) : '';
+  return st || msg ? { status: st, message: msg } : undefined;
+}
+
 /** 文字（code point）単位で max まで */
 export const capChars = (s: string, max: number): string => {
   const a = Array.from(s);
@@ -248,7 +261,7 @@ export function geminiPort(env: Env, opts: { fetchImpl?: typeof fetch } = {}): G
         }
       }
       const usage = parseGeminiUsage(parsed);
-      if (!res.ok) throw new GeminiError(true, res.status, classifyGeminiStatus(res.status), !!usage);
+      if (!res.ok) throw new GeminiError(true, res.status, classifyGeminiStatus(res.status), !!usage, apiErrorOf(parsed));
       if (body.truncated || !obj(parsed)) throw new GeminiError(true, res.status, 'bad_response', !!usage);
       const p = obj(parsed)!;
       // status があって completed でなければ失敗（incomplete = 出力の上限で切れた等。途中の本文は使わない）

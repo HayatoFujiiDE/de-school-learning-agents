@@ -199,5 +199,6 @@
      どれも無ければ Worker が unverified に下げる。
 
    検証係が書く opened_urls や reason の書き出しは、証拠に数えない。§P の deploy の前に出した Batch で、plan.json に captured が無く、YouTube の出典がある版は、作り直しにする（mismatch）。
+12. **probe の診断（本番で 503 が 2 回続いた後の追加）**: probe の応答に `clip`（区間を付けたか）と `api_error`（Google の error の status と message の先頭 200 字。鍵らしい文字列は伏せる）を足す。入力 `clip:false` で区間を付けない診断の呼び出しを 1 回だけできる（取り置きの ref は `…:noclip`）。通常の経路は常に区間を付ける。
 
 凍結: 2026-11-05（Astra high R2 GO）。

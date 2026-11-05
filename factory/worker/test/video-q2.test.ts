@@ -16,6 +16,8 @@ import {
   GEMINI_MAX_OUTPUT_TOKENS,
   GEMINI_TEXT_MAX_CHARS,
   GeminiError,
+  apiErrorOf,
+  geminiRequestBody,
   extractInteractionText,
   geminiPort,
   type GeminiPort,
@@ -924,7 +926,7 @@ describe('§Q-7 6 probe route と有効化', () => {
     const e = env();
     const r = await call(e, post('/api/probe/video', BODY));
     expect(r.status).toBe(200);
-    expect(Object.keys(r.body).sort()).toEqual(['clip_accepted', 'error_code', 'status', 'text_head', 'usage_present']);
+    expect(Object.keys(r.body).sort()).toEqual(['api_error', 'clip', 'clip_accepted', 'error_code', 'status', 'text_head', 'usage_present']);
     expect(r.body).toMatchObject({ status: 200, clip_accepted: true, usage_present: true, error_code: null });
     expect(String(r.body.text_head)).toContain('（fake）');
     expect(vvRows()).toEqual([{ ref_id: `vv:probe:${YT1}:80:185`, cents: 10, kind: 'verify' }]);
@@ -942,6 +944,30 @@ describe('§Q-7 6 probe route と有効化', () => {
     }
   });
 
+  it('診断: Google の error の status と message（200 字・鍵らしい文字列は伏せる）を api_error で返す。clip:false は区間を付けず ref に :noclip', async () => {
+    const e = env();
+    const c = (body: unknown) => {
+      const request = post('/api/probe/video', body);
+      return { env: e, request, url: new URL(request.url), email: 'ops@example.invalid', exec: {} as ExecutionContext, port: async () => no() } as RouteCtx;
+    };
+    const err = new GeminiError(true, 503, 'server', false, apiErrorOf({ error: { code: 503, status: 'UNAVAILABLE', message: 'The model is overloaded. key AIzaSyA1234567890abcdefXYZ ' + 'x'.repeat(400) } }));
+    const body = (await (await probeVideo(c({ ...BODY, start_sec: 4 }), { isFake: true, configured: true, model: 'm', watch: async () => Promise.reject(err) })).json()) as Obj;
+    const ae = body.api_error as { status: string; message: string };
+    expect(ae.status).toBe('UNAVAILABLE');
+    expect(ae.message).toContain('[REDACTED]');
+    expect(ae.message).not.toContain('AIzaSy');
+    expect(Array.from(ae.message).length).toBeLessThanOrEqual(200);
+    let seen: unknown = null;
+    const spy: GeminiPort = { isFake: true, configured: true, model: 'm', watch: async (req) => { seen = req; return { text: 'ok', httpStatus: 200 }; } };
+    const r2 = (await (await probeVideo(c({ ...BODY, start_sec: 5, clip: false }), spy)).json()) as Obj;
+    expect(r2.clip).toBe(false);
+    expect((seen as { clip?: boolean }).clip).toBe(false);
+    expect(vvRows().map((x) => x.ref_id)).toContain(`vv:probe:${YT1}:5:185:noclip`);
+    expect(geminiRequestBody('m', { youtubeId: YT1, startSec: 5, endSec: 185, prompt: 'p', clip: false }).input).toEqual([{ type: 'video', uri: `https://www.youtube.com/watch?v=${YT1}` }, { type: 'text', text: 'p' }]);
+    expect(JSON.stringify(geminiRequestBody('m', { youtubeId: YT1, startSec: 5, endSec: 185, prompt: 'p' }))).toContain('"start_offset":"5s"');
+    expect(apiErrorOf({ error: { status: 'bad status!', message: 1 } })).toBeUndefined();
+  });
+
   it('API の失敗は観測値だけ（status・clip_accepted=false・error_code）。応答が無ければ status / clip_accepted は null。text_head は 300 字まで', async () => {
     const e = env();
     const c = (body: unknown) => {
@@ -949,8 +975,8 @@ describe('§Q-7 6 probe route と有効化', () => {
       return { env: e, request, url: new URL(request.url), email: 'ops@example.invalid', exec: {} as ExecutionContext, port: async () => no() } as RouteCtx;
     };
     const failing = (err: GeminiError): GeminiPort => ({ isFake: true, configured: true, model: 'm', watch: async () => Promise.reject(err) });
-    expect(await (await probeVideo(c(BODY), failing(new GeminiError(true, 400, 'bad_request', false)))).json()).toEqual({ status: 400, clip_accepted: false, usage_present: false, text_head: '', error_code: 'bad_request' });
-    expect(await (await probeVideo(c({ ...BODY, start_sec: 1 }), failing(new GeminiError(false, undefined, 'timeout', false)))).json()).toEqual({ status: null, clip_accepted: null, usage_present: false, text_head: '', error_code: 'timeout' });
+    expect(await (await probeVideo(c(BODY), failing(new GeminiError(true, 400, 'bad_request', false)))).json()).toEqual({ status: 400, clip_accepted: false, usage_present: false, text_head: '', error_code: 'bad_request', clip: true, api_error: null });
+    expect(await (await probeVideo(c({ ...BODY, start_sec: 1 }), failing(new GeminiError(false, undefined, 'timeout', false)))).json()).toEqual({ status: null, clip_accepted: null, usage_present: false, text_head: '', error_code: 'timeout', clip: true, api_error: null });
     const long: GeminiPort = { isFake: true, configured: true, model: 'm', watch: async () => ({ text: 'あ'.repeat(1000), httpStatus: 200 }) };
     const body = (await (await probeVideo(c({ ...BODY, start_sec: 2 }), long)).json()) as Obj;
     expect(Array.from(String(body.text_head))).toHaveLength(300);
@@ -1209,10 +1235,10 @@ describe('B2 probe の clip_accepted', () => {
     };
     const port = (f: () => Promise<{ text: string; httpStatus: number }>): GeminiPort => ({ isFake: true, configured: true, model: 'm', watch: f });
     const body = async (start: number, g: GeminiPort) => (await (await probeVideo(c(start), g)).json()) as Obj;
-    expect(await body(1, port(() => Promise.reject(new GeminiError(true, 200, 'no_text', true))))).toEqual({ status: 200, clip_accepted: null, usage_present: true, text_head: '', error_code: 'no_text' });
+    expect(await body(1, port(() => Promise.reject(new GeminiError(true, 200, 'no_text', true))))).toEqual({ status: 200, clip_accepted: null, usage_present: true, text_head: '', error_code: 'no_text', clip: true, api_error: null });
     expect((await body(2, port(() => Promise.reject(new GeminiError(true, 200, 'not_completed', false))))).clip_accepted).toBeNull();
     expect((await body(3, port(() => Promise.reject(new GeminiError(true, 500, 'server', false))))).clip_accepted).toBeNull();
-    expect(await body(4, port(async () => ({ text: '', httpStatus: 200 })))).toEqual({ status: 200, clip_accepted: null, usage_present: false, text_head: '', error_code: 'no_text' });
+    expect(await body(4, port(async () => ({ text: '', httpStatus: 200 })))).toEqual({ status: 200, clip_accepted: null, usage_present: false, text_head: '', error_code: 'no_text', clip: true, api_error: null });
     expect((await body(5, port(async () => ({ text: '- 1:20 信号', httpStatus: 200 })))).clip_accepted).toBe(true);
   });
 

@@ -77,6 +77,8 @@ export async function probeVideo(c: RouteCtx, gemini?: GeminiPort): Promise<Resp
   const yt = b?.youtube_id;
   const s = b?.start_sec;
   const e = b?.end_sec;
+  // clip: false は診断用（区間を付けずに 1 回だけ。取り置きの ref を分ける）
+  const clip = b?.clip === false ? false : true;
   if (typeof yt !== 'string' || !YOUTUBE_ID_RE.test(yt) || !isSec(s) || !isSec(e) || s >= e || e - s > VIDEO_MAX_RANGE_SEC) return json(400, { error: 'invalid_input' });
   const g = gemini ?? (await getGeminiPort(c.env, { hostname: c.url.hostname }));
   // 鍵が無い時は呼ばず、取り置きもしない（§Q-4）
@@ -84,7 +86,7 @@ export async function probeVideo(c: RouteCtx, gemini?: GeminiPort): Promise<Resp
   const k = cfg(c.env);
   const at = new Date();
   const day = tokyoDay(at);
-  const ref = probeLedgerRef(yt, s, e);
+  const ref = probeLedgerRef(yt, s, e) + (clip ? '' : ':noclip');
   const reserved = await cas(
     c.env.DB,
     videoReserveStmt({
@@ -103,18 +105,18 @@ export async function probeVideo(c: RouteCtx, gemini?: GeminiPort): Promise<Resp
     const again = await first(c.env.DB, stmt('SELECT 1 AS x FROM cost_ledger WHERE ref_id = ?', ref));
     return json(409, { error: again ? 'already_probed' : 'cap_reached' });
   }
-  let out: { status: number | null; clip_accepted: boolean | null; usage_present: boolean; text_head: string; error_code: string | null };
+  let out: { status: number | null; clip_accepted: boolean | null; usage_present: boolean; text_head: string; error_code: string | null; clip: boolean; api_error: { status: string; message: string } | null };
   try {
-    const r = await g.watch({ youtubeId: yt, startSec: s, endSec: e, prompt: videoPrompt(s, e) }, { deadline: Date.now() + PROBE_TIMEOUT_MS });
+    const r = await g.watch({ youtubeId: yt, startSec: s, endSec: e, prompt: videoPrompt(s, e), clip }, { deadline: Date.now() + PROBE_TIMEOUT_MS });
     const text = String(r.text ?? '');
     const status = typeof r.httpStatus === 'number' ? r.httpStatus : null;
     const errorCode = text.trim() ? null : 'no_text';
-    out = { status, clip_accepted: clipAcceptedOf(status, errorCode, text), usage_present: !!r.usage, text_head: capChars(text, PROBE_TEXT_HEAD_CHARS), error_code: errorCode };
+    out = { status, clip_accepted: clipAcceptedOf(status, errorCode, text), usage_present: !!r.usage, text_head: capChars(text, PROBE_TEXT_HEAD_CHARS), error_code: errorCode, clip, api_error: null };
   } catch (err) {
     const ge = err instanceof GeminiError ? err : null;
     const status = ge?.responded && typeof ge.status === 'number' ? ge.status : null;
     const errorCode = ge?.kind ?? 'unknown';
-    out = { status, clip_accepted: clipAcceptedOf(status, errorCode, ''), usage_present: ge?.usagePresent ?? false, text_head: '', error_code: errorCode };
+    out = { status, clip_accepted: clipAcceptedOf(status, errorCode, ''), usage_present: ge?.usagePresent ?? false, text_head: '', error_code: errorCode, clip, api_error: ge?.apiError ?? null };
   }
   console.log(JSON.stringify({ at: 'video_probe', status: out.status, error_code: out.error_code }));
   return json(200, out);
