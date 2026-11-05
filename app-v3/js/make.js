@@ -1859,7 +1859,7 @@
   function openSave(id, opener) {
     var a = act(id), dlg = dlgEl();
     if (!a) return;
-    mk().dlg = { type: 'save', act: id, at: '', title: a.title, like: '', status: defaultStatus(a), failed: false, saved: null };
+    mk().dlg = { type: 'save', act: id, at: '', title: a.title, like: '', status: defaultStatus(a), failed: false };
     renderSave();
     DES.app.openDialog(dlg, opener);
     var t = document.getElementById('mk-save-title');
@@ -1916,15 +1916,19 @@
   A['mk-save-ok'] = function () {
     var d = mk().dlg, a = d && act(d.act);
     if (!a) return;
-    // 再試行はフォームの今の値で作り直す（§U-11 指摘 10）。前の試みで足した 1 件は外してから
-    if (d.saved) S().works = S().works.filter(function (w) { return w.id !== d.saved; });
-    var r = saveWork(S().works, a, { id: newId('w'), at: d.at || null, title: d.title, like: d.like, status: d.status, date: today() });
+    // 再試行も毎回フォームの今の値で作る（§U-11 指摘 10）。失敗した試みの作品はメモリにも残さない（§W-5）
+    var prevWorks = S().works;
+    var r = saveWork(prevWorks, a, { id: newId('w'), at: d.at || null, title: d.title, like: d.like, status: d.status, date: today() });
     S().works = r.works;
-    d.saved = r.work.id;
-    // 未試行の値を残した時は、積んだ変化を活動にも反映する（保存に失敗してもメモリには残る）
+    // 未試行の値を残した時は、積んだ変化を活動にも反映する（保存に失敗しても活動の変化は残す。§U-12 補足 4。戻すのは作品だけ）
     if (r.act !== a) setAct(r.act, true);
     var ok = DES.store.save('works');
-    if (!ok) { S().saveFailed = true; d.failed = true; DES.app.renderSaveState(); renderSave(); var b = dlgEl().querySelector('[data-action="mk-save-ok"]'); if (b) b.focus(); return; }
+    if (!ok) {
+      S().works = prevWorks;
+      S().saveFailed = true; d.failed = true; DES.app.renderSaveState(); renderSave();
+      var b = dlgEl().querySelector('[data-action="mk-save-ok"]'); if (b) b.focus();
+      return;
+    }
     S().saveFailed = false;
     DES.app.closeDialog(dlgEl());
     mk().dlg = null;

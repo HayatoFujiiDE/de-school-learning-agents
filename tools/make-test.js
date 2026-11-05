@@ -689,7 +689,7 @@ t('W-3 変わってきたところ（はじめ + 残した時点まで）', func
   var all = W.storyFrames(z, M.saveWork([], z, { id: 'wf2' }).work);
   eq(all.length, 4, 'W-3 今で残せば全部の変化');
   var none = W.storyFrames(sample('mc'), M.saveWork([], sample('mc'), { id: 'wf3' }).work);
-  eq([none.length, none[0].last], [1, true], 'W-3 変化 0 個 = はじめだけ（境界）');
+  eq([none.length, none[0].id, none[0].last, none[0].art.stage.values.size], [1, '@work', true, 4], 'W-3 変化 0 個 = 残した状態の 1 コマ（境界）');
   eq(W.storyFrames(null, w), [], 'W-3 活動が無ければコマ無し');
   // 絵の無いコマ（写真を全部隠した時点）は前の絵を薄く
   var e = M.addPhoto(M.fromExt('photo', { id: 'wf4', now: '10:20' }), 'shot').act;
@@ -698,10 +698,29 @@ t('W-3 変わってきたところ（はじめ + 残した時点まで）', func
   eq(fw[0].art, null, 'W-3 はじめに絵が無ければ空（前の絵も無い）');
   var lastF = fw[fw.length - 1];
   eq([lastF.inherited, lastF.art && lastF.art.photo && lastF.art.photo.id], [true, e.ext.photos[1].id], 'W-3 絵の無いコマは前の絵（inherited）');
-  // 残した時点の変化が活動に無い時は、作品の状態を最後のコマに
+  // 残した時点の変化が活動に無い時は、作品が持つ状態の 1 コマだけ（活動の今の base は使わない。Astra 指摘 1）
   var lost = cl(w); lost.at = 'gone';
   var fl = W.storyFrames(z, lost);
-  eq([fl.length, fl[1].id, fl[1].last, fl[1].art.stage.values.size], [2, '@work', true, 6], 'W-3 時点が見つからなければ作品の状態（境界）');
+  eq([fl.length, fl[0].id, fl[0].last, fl[0].art.stage.values.size], [1, '@work', true, 6], 'W-3 時点が見つからなければ作品の状態 1 コマ（境界）');
+});
+t('W-3 変化の前に残した作品は、後で活動が変わっても残した状態を見せる（Astra 指摘 1 の再現）', function () {
+  // 思いつきから → 案を選ばずに残す → 同じ活動で見本を置く → 作品の詳細
+  var c = M.fromText('マイクラ', { id: 'r1', now: '10:20', mode: 'js' });
+  var w = M.saveWork([], c, { id: 'wr1' }).work;
+  eq([w.at, w.art, w.snap.stage], [null, null, null], 'W-3 前提: 時点なし・絵なしで残った');
+  var p = M.pickSample(c, 'mc', 'js');
+  eq([p.base && p.base.kind, p.changes.length], ['sample', 0], 'W-3 前提: 活動の base は後から見本に変わった');
+  var fr = W.storyFrames(p, w);
+  eq([fr.length, fr[0].id, fr[0].art, fr[0].last], [1, '@work', null, true], 'W-3 詳細は残した状態（見本の絵を出さない）');
+  var sh = W.shareItems(w, p, 'story');
+  eq(sh[3].v.n, 1, 'W-3 見せる側のコマ数も残した状態から');
+  // 見本を残した後に、同じ活動の値を変えた（変化はまだ無い）場合も、残した値のまま
+  var s = sample('mc'), ws = M.saveWork([], s, { id: 'wr2' }).work;
+  var moved = M.setParam(s, 'size', 8);
+  eq(W.storyFrames(moved, ws)[0].art.stage.values.size, 4, 'W-3 未試行の今の値も作品のコマに入れない');
+  // 古い作品で snap も無ければ作品の絵
+  var bare = { id: 'wr3', actId: 'r1', at: null, art: { stage: { kind: 'sample', theme: 'mc', variant: 'cube', values: { size: 3, block: 0 } } } };
+  eq(W.storyFrames(p, bare)[0].art.stage.values.size, 3, 'W-3 snap が無ければ作品の絵（境界）');
 });
 t('W-3 直す・状態・外す（純関数は元を変えない）', function () {
   var ws = [{ id: 'a', title: '塔', like: null, craft: null, status: 'trial', from: 'make' }, { id: 'b', title: '回路', status: 'done', from: 'capture', read: { text: 'x', edited: false, declined: false } }];
@@ -768,6 +787,14 @@ t('W-4 相手に見える内容（作品だけ / 流れも）', function () {
   eq(W.shareItems(dec, actOf(cap), 'story')[4].read, null, 'W-4 違うと言った見立ては見せない');
   eq(W.shareItems(cap, null, 'story')[3].k, 'pv_story_lost', 'W-4 活動が無ければ記録は無いと書く');
   eq(only.filter(function (i) { return i.src === 'own'; }).length, 1, 'W-4 本人の言葉は本人の出所');
+  // 相手に見えるものに個人名を入れない（Astra 指摘 2）: 手伝った人は「いっしょに作った人」の回数だけ
+  var py = byId('w-seed-py'), pyStory = W.shareItems(py, actOf(py), 'story');
+  eq(py.roles.people, [{ name: '田中さん', n: 1 }], 'W-4 前提: 作品の関わりには田中さん（本人の詳細では名前のまま）');
+  eq(pyStory[4].roles, { own: 4, ai: 1, with: 1 }, 'W-4 流れもの関わり = 本人・バディ・いっしょに作った人の回数');
+  ok(JSON.stringify(pyStory).indexOf('田中') < 0 && JSON.stringify(W.shareItems(py, actOf(py), 'work')).indexOf('田中') < 0, 'W-4 プレビューに個人名が無い');
+  var two = cl(py); two.roles.people = [{ name: 'A', n: 2 }, { name: 'B', n: 1 }];
+  eq(W.shareItems(two, actOf(py), 'story')[4].roles.with, 3, 'W-4 複数の人もまとめて回数だけ（境界）');
+  eq(W.shareItems(Object.assign(cl(py), { roles: null }), actOf(py), 'story')[4].roles, null, 'W-4 関わりが無ければ null（境界）');
 });
 t('W-6 見本の作品', function () {
   var acts = MD.seedActivities(), sw = MD.seedWorks(acts), g = W.group(sw);
