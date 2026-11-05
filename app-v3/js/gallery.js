@@ -47,7 +47,8 @@
   }
   function okCall(c) { return isObj(c) && isStr(c.id) && isStr(c.itemId) && CALLS.indexOf(c.kind) >= 0 && ['sent', 'ok', 'later'].indexOf(c.state) >= 0 && isStr(c.time); }
   function okInbox(c) { return isObj(c) && isStr(c.id) && isStr(c.workId) && isStr(c.from) && CALLS.indexOf(c.kind) >= 0 && ['new', 'ok', 'later'].indexOf(c.state) >= 0 && isStr(c.time); }
-  function okPromise(p) { return isObj(p) && isStr(p.id) && isStr(p.with) && isStr(p.title) && (p.actId === null || isStr(p.actId)) && isStr(p.time); }
+  // 空の id の約束は捨てる（「先に準備する」が id で探すため。レビューへの裁定）
+  function okPromise(p) { return isObj(p) && isStr(p.id) && !!p.id && isStr(p.with) && isStr(p.title) && (p.actId === null || isStr(p.actId)) && isStr(p.time); }
   function pickList(raw, test, uniq) {
     var out = [], seen = {};
     if (!Array.isArray(raw)) return out;
@@ -110,15 +111,23 @@
     d.catalog.forEach(function (c) { (c.items || []).forEach(function (it) { if (it.id === id) hit = c.id; }); });
     return hit && GD.CATS.indexOf(hit) >= 0 ? hit : null;
   }
-  // 自分の作品の種類: catalog の id → 題材 → ものづくり
-  function catOf(w) { return catalogCat(w && w.catalogId) || GD.THEME_CAT[w && w.theme] || 'craft'; }
-  // 出している = 1 つずつ出した（in）か、自動が入で完成の作品（外した out は出さない）
+  // 提案から作った作品（§AD-4。theme 'project'）の種類: 提案のカテゴリ（作品の projectId → 無ければ写真のカテゴリ）。レビューへの裁定
+  function projectCat(w) {
+    if (!w || w.theme !== 'project') return null;
+    var MD = DES.makeData, p = isStr(w.projectId) && MD && MD.project ? MD.project(w.projectId) : null;
+    var c = p ? p.cat : (isObj(w.art) && isObj(w.art.photo) ? w.art.photo.cat : null);
+    return GD.CATS.indexOf(c) >= 0 ? c : null;
+  }
+  // 自分の作品の種類: 提案のカテゴリ → catalog の id → 題材 → ものづくり
+  function catOf(w) { return projectCat(w) || catalogCat(w && w.catalogId) || GD.THEME_CAT[w && w.theme] || 'craft'; }
+  // 出している = 1 つずつ出した（in）か、自動が入で完成の作品（外した out は出さない）。
+  // 写真から入れた作品（from 'capture'）は自動では出さない（顔や名前が写っていないかを本人が見てから 1 つずつ。§AF-2）
   function isIn(state, w) {
     if (!w || !state) return false;
     var m = state.mine && state.mine[w.id];
     if (m && m.state === 'out') return false;
     if (m && m.state === 'in') return true;
-    return state.auto === true && w.status === 'done';
+    return state.auto === true && w.status === 'done' && w.from !== 'capture';
   }
   function inTime(state, w) {
     var m = state.mine && state.mine[w.id];
@@ -209,6 +218,10 @@
     S.notes.push({ id: o.id, itemId: o.itemId, text: text, state: guard(text), time: String(o.time || '') });
     return S;
   }
+  // 「送る」を押せるか: 下書きがあり、どの作品のひとことも送信待ちでない時だけ（レビューへの裁定）
+  function canSend(draft, sending) { return !!trim(draft) && !sending; }
+  // 入力欄の値をコードポイントで 80 字までにする（入力欄も保存も同じ数え方。§AF-4）
+  function fitNote(v) { return cut(String(v == null ? '' : v), NOTE_MAX); }
   function removeNote(state, noteId) {
     var i = idx(state.notes, noteId);
     if (i < 0) return null;
@@ -308,11 +321,33 @@
     return null;
   }
 
+  // ---------- 保存された作品の絵の形（レビューへの裁定）: 形が違う時は null（呼ぶ側が種類の線画に替える） ----------
+  function okPair(v) { return isStr(v) || (Array.isArray(v) && v.length >= 1 && v.every(isStr)); }
+  function okNum(v) { return typeof v === 'number' && isFinite(v); }
+  function okStage(st) {
+    var MD = DES.makeData;
+    if (!isObj(st) || !MD || !Array.isArray(MD.THEMES) || MD.THEMES.indexOf(st.theme) < 0 || !isStr(st.variant) || !isObj(st.values)) return false;
+    var th = MD.theme(st.theme);
+    if (th.variants.indexOf(st.variant) < 0) return false;
+    return th.params.every(function (p) { var x = st.values[p.key]; return okNum(x) && x >= p.min && x <= p.max; });
+  }
+  function safeArt(art) {
+    if (!isObj(art)) return null;
+    if ('note' in art) return isObj(art.note) && okPair(art.note.title) && Array.isArray(art.note.lines) && art.note.lines.every(okPair) ? art : null;
+    if ('photo' in art) {
+      var p = art.photo;
+      return isObj(p) && isStr(p.theme) && (p.n == null || (okNum(p.n) && p.n >= 0)) && (p.cat == null || isStr(p.cat)) && (p.odai == null || isStr(p.odai)) ? art : null;
+    }
+    if ('stage' in art) return okStage(art.stage) ? art : null;
+    return null;
+  }
+
   var pure = {
     initial: initial, normalize: normalize, okName: okName, setName: setName, setAuto: setAuto, items: items, isIn: isIn, inTime: inTime, itemId: itemId,
     catOf: catOf, filter: filter, cats: cats, put: put, take: take, restoreTake: restoreTake, react: react, reactors: reactors, guard: guard,
     addNote: addNote, removeNote: removeNote, restoreNote: restoreNote, thread: thread, call: call, cancelCall: cancelCall, restoreCall: restoreCall,
     settle: settle, answer: answer, setPromiseAct: setPromiseAct, promiseCat: promiseCat, timeKey: timeKey,
+    canSend: canSend, fitNote: fitNote, safeArt: safeArt,
     KINDS: KINDS, CALLS: CALLS, NAME_MAX: NAME_MAX, NOTE_MAX: NOTE_MAX
   };
   Object.keys(pure).forEach(function (k) { G[k] = pure[k]; });
@@ -389,13 +424,14 @@
   // ---------- 絵: 自分の作品 = 作品の絵 / 見本 = DES.thumbs の画像（AI の印つき）、無ければ種類の線画 ----------
   var SAFE_SRC = /^img\/[A-Za-z0-9_\/.-]+\.(webp|png|jpg|jpeg)$/;
   function thumbSrc(id) { var t = (DES.thumbs || {})[id]; return isStr(t) && SAFE_SRC.test(t) && t.indexOf('..') < 0 ? t : null; }
-  function workArt(art, cat) {
-    var MD = DES.makeData;
+  // 保存された絵の形が違う時・絵を作る途中で例外が出た時は、種類の線画に替える（例外で止めない。レビューへの裁定）
+  function workArt(raw, cat) {
+    var MD = DES.makeData, art = safeArt(raw), svg = '';
     if (art && art.note) {
       return [H('div', { class: 'work-note gl-note-art' }, [H('p', { class: 'wn-title' }, pick(art.note.title)),
-        H('ul', null, (art.note.lines || []).map(function (l) { return H('li', null, pick(l)); }))])];
+        H('ul', null, art.note.lines.map(function (l) { return H('li', null, pick(l)); }))])];
     }
-    var svg = art && art.photo && MD ? MD.photoArt(art.photo) : (art && art.stage && MD ? MD.art(art.stage) : '');
+    try { svg = art && art.photo && MD ? MD.photoArt(art.photo) : (art && art.stage && MD ? MD.art(art.stage) : ''); } catch (e) { svg = ''; }
     return [DES.raw(svg || GD.lineArt(cat))];
   }
   function artEl(it, cls) {
@@ -469,7 +505,9 @@
         H('div', null, [H('h1', { tabindex: '-1', 'data-fk': 'gl-h' }, T('gallery')), H('p', null, T('gl_sub')), H('p', { class: 'gl-sub2' }, T('gl_sub2'))]),
         nameRow
       ]),
-      H('label', { class: 'gl-auto', for: 'gl-auto' }, [H('input', { type: 'checkbox', id: 'gl-auto', 'data-ui': 'gl-auto', checked: st.auto === true }), H('span', null, T('gl_auto'))])
+      H('label', { class: 'gl-auto', for: 'gl-auto' }, [H('input', { type: 'checkbox', id: 'gl-auto', 'data-ui': 'gl-auto', checked: st.auto === true, 'aria-describedby': 'gl-auto-capture' }), H('span', null, T('gl_auto'))]),
+      // 切替の下の 1 行（§AF-2）: 写真から入れた作品は自動では出さない
+      H('p', { class: 'hint gl-auto-note', id: 'gl-auto-capture' }, T('gl_auto_capture'))
     ];
     var ib = inboxSec(), ps = promiseSec();
     if (ib) kids.push(ib);
@@ -517,7 +555,8 @@
   function notesSec(it) {
     var u = ui(), st = S().gallery, th = thread(st, it.id, GD.notes), sending = !!(u.sending && u.sending.itemId === it.id);
     var held = st.notes.filter(function (n) { return n.itemId === it.id && n.state === 'hold'; });
-    var draft = u.draft[it.id] || '', dis = !trim(draft) || sending;
+    // どの作品のひとことが送信待ちでも「送る」は押せない（ハンドラーも全部の送信待ちで止まるため）
+    var draft = u.draft[it.id] || '', dis = !canSend(draft, u.sending);
     var kids = [H('h2', { id: 'gl-notes-h' }, T('gl_notes_h'))];
     kids.push(th.length ? H('ol', { class: 'gl-thread' }, th.map(function (n) {
       return H('li', { class: 'gl-msg' + (n.mine ? ' is-me' : '') }, [
@@ -538,7 +577,8 @@
     kids.push(H('div', { class: 'gl-note-form', 'data-fk': 'gl-note-form' }, [
       H('label', { for: 'gl-note' }, T('gl_note_label')),
       H('div', { class: 'gl-note-row' }, [
-        H('input', { id: 'gl-note', type: 'text', 'data-ui': 'gl-note', 'data-id': it.id, value: draft, maxlength: String(NOTE_MAX), autocomplete: 'off',
+        // 字数はコードポイントで数える（UTF-16 で数える入力欄の上限の属性は使わず、入力のたびに fitNote で切る。§AF-4）
+        H('input', { id: 'gl-note', type: 'text', 'data-ui': 'gl-note', 'data-id': it.id, value: draft, autocomplete: 'off',
           readonly: sending, 'aria-busy': sending ? 'true' : null, 'aria-describedby': 'gl-note-need' }),
         btn(T('gl_note_send'), 'gl-note-send', { id: it.id, kls: 'primary', icon: 'send', disabled: dis })
       ]),
@@ -868,10 +908,12 @@
     document.addEventListener('input', function (e) {
       var t = e.target, k = t && t.getAttribute ? t.getAttribute('data-ui') : null, u = ui();
       if (k === 'gl-note') {
+        var fit = fitNote(t.value);
+        if (fit !== t.value) t.value = fit;
         var id = t.getAttribute('data-id'), has = !!trim(t.value);
         u.draft[id] = t.value;
         var b = document.querySelector('[data-action="gl-note-send"][data-id="' + esc(id) + '"]'), need = document.getElementById('gl-note-need');
-        if (b) b.disabled = !has || !!u.sending;
+        if (b) b.disabled = !canSend(t.value, u.sending);
         if (need) need.hidden = has || !!u.sending;
       } else if (k === 'gl-name' && u.dlg) { u.dlg.text = t.value; syncName(); }
     });

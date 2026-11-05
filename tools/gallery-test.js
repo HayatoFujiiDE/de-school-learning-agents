@@ -110,18 +110,18 @@ eq(G.items(sp, works.filter(function (w) { return w.id !== 'wb'; }), GD.items).l
 var sa = G.setAuto(sn, true);
 eq(G.setAuto(sa, true), sa, 'setAuto 同じなら同じ state');
 var ia = G.items(sa, works, GD.items).filter(function (x) { return x.mine; }).map(function (x) { return x.workId; });
-eq(ia.sort(), ['wa', 'wc'], 'items 自動が入なら完成の作品だけ（試作は自動では出さない）');
+eq(ia.sort(), ['wa'], 'items 自動が入なら完成の作品だけ（試作・写真から入れた作品は自動では出さない。§AF-2 改訂）');
 var tk = G.take(sa, 'wa', '11/2 10:25');
 ok(tk && tk.state.mine.wa.state === 'out', 'take 自動で並んでいる作品も out にする');
-eq(G.items(tk.state, works, GD.items).filter(function (x) { return x.mine; }).map(function (x) { return x.workId; }), ['wc'], 'items 外した作品は自動が入でも出さない');
+eq(G.items(tk.state, works, GD.items).filter(function (x) { return x.mine; }).map(function (x) { return x.workId; }), [], 'items 外した作品は自動が入でも出さない');
 eq(G.take(tk.state, 'wa', 't'), null, 'take もう外していれば null');
 eq(G.restoreTake(tk.state, tk.undo).mine, {}, 'take の復元（前の記録が無ければ消す）');
 var tk2 = G.take(sp, 'wb', '11/2 10:30');
 eq(G.restoreTake(tk2.state, tk2.undo).mine.wb, { state: 'in', time: '11/2 10:20' }, 'take の復元（前の記録に戻る）');
 eq(G.items(tk2.state, works, GD.items).length, 8, 'take → 一覧から消える');
 var sp2 = G.put(tk.state, 'wa', '11/2 10:40');
-eq(G.items(sp2, works, GD.items).filter(function (x) { return x.mine; }).map(function (x) { return x.workId; }).sort(), ['wa', 'wc'], 'put 外した作品を 1 つずつ出し直せる');
-var wcItem = G.items(sa, works, GD.items).filter(function (x) { return x.workId === 'wc'; })[0];
+eq(G.items(sp2, works, GD.items).filter(function (x) { return x.mine; }).map(function (x) { return x.workId; }).sort(), ['wa'], 'put 外した作品を 1 つずつ出し直せる');
+var wcItem = G.items(G.put(sa, 'wc', '11/2 10:45'), works, GD.items).filter(function (x) { return x.workId === 'wc'; })[0];
 ok(wcItem.photo === true && wcItem.cat === 'digital' && wcItem.craft === '工夫', 'items 写真から入れた作品の印・種類・工夫したところ');
 var waItem = G.items(sa, works, GD.items).filter(function (x) { return x.workId === 'wa'; })[0];
 ok(waItem.buddy === true && wcItem.buddy === false, 'items バディが関わった作品だけ「バディと作った」');
@@ -271,6 +271,57 @@ ok(!/innerHTML|insertAdjacentHTML|outerHTML/.test(gsrc), 'AF innerHTML を使わ
 ok(!/\bfetch\(|XMLHttpRequest/.test(gsrc + fs.readFileSync(path.join(__dirname, '../app-v3/js/gallery-data.js'), 'utf8')), 'AF fetch を使わない');
 ok(/\(DES\.thumbs \|\| \{\}\)\[id\]/.test(gsrc), 'AF DES.thumbs が無くても落ちない');
 ok(!/badge|count\b/i.test(browser.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'AF 件数のバッジを作らない');
+
+// ---------- レビューへの裁定（contract-app 末尾「直す（実装）」/「契約の方を直した」）----------
+function t(name, fn) { try { fn(); } catch (e) { fail += 1; console.log('NG  ' + name + '  (例外 ' + e.message + ')'); } }
+var MD = require(path.join(__dirname, '../app-v3/js/make-data.js'));
+function gHandler(name) { var i = gsrc.indexOf("A['" + name + "'] = function"); if (i < 0) return ''; var j = gsrc.indexOf("\n  A['", i + 10); return gsrc.slice(i, j < 0 ? i + 3000 : j); }
+t('裁定 5 展示の種類: 提案から作った作品は提案のカテゴリ', function () {
+  var a = M.fromProject(MD.project('pj-novel-3'), { id: 'a-g5', mode: 'js', now: '10:20', acts: [] }).act;
+  var w = M.saveWork([], a, { id: 'w-g5', date: '11/6', status: 'done' }).work;
+  eq([w.projectId, G.catOf(w)], ['pj-novel-3', 'writing'], '裁定 5 「3 場面の短い小説」の作品は「文章」');
+  var st = G.put(G.initial(), 'w-g5', '11/6 10:30');
+  eq(G.filter(G.items(st, [w], []), 'writing').map(function (it) { return it.id; }), ['my-w-g5'], '裁定 5 「文章」で絞ると出る');
+  var mc = M.fromProject(MD.project('pj-mc-door'), { id: 'a-g5b', mode: 'js', now: '10:20', acts: [] }).act;
+  eq(G.catOf(M.saveWork([], mc, { id: 'w-g5b' }).work), 'minecraft', '裁定 5 マイクラの提案はマイクラ');
+  eq(G.catOf({ id: 'w-x', title: 'x', theme: 'mc' }), 'minecraft', '裁定 5 提案でない作品は今までどおり題材から');
+});
+t('裁定 6 約束の id: 空の id は読み込み時に捨てる', function () {
+  var raw = G.initial();
+  raw.promises = [{ id: '', with: 'fixture', title: 'fixture', actId: null, time: 't' }, { id: 'p-gc1', with: 'そらまめ', title: '粘土', actId: null, time: 't' }];
+  eq(G.normalize(raw).promises.map(function (p) { return p.id; }), ['p-gc1'], '裁定 6 空の id の約束は捨てる');
+});
+t('裁定 7 ひとこと: 送信待ちの間は、どの作品の「送る」も disabled', function () {
+  eq([G.canSend('こんにちは', null), G.canSend('こんにちは', { itemId: 'g-lamp' }), G.canSend('こんにちは', { itemId: 'g-clay-walk' }), G.canSend('  ', null)], [true, false, false, false], '裁定 7 送れるのは下書きがあって送信待ちでない時だけ');
+  var ns = gsrc.slice(gsrc.indexOf('function notesSec'), gsrc.indexOf('function callSec'));
+  ok(/dis = !canSend\(draft, u\.sending\)/.test(ns) && !/sending = !!\(u\.sending && u\.sending\.itemId === it\.id\)[^;]*;\s*\n[^\n]*dis = !trim\(draft\) \|\| sending/.test(ns), '裁定 7 送るの disabled は作品を問わず送信待ちを見る');
+});
+t('裁定 9 展示の絵: 保存された作品の絵の形が違う時は、種類の線画に替える', function () {
+  var bad = [{ note: { title: 'x', lines: 'abc' } }, { note: 'x' }, { photo: 'x' }, { photo: { theme: 5 } }, { stage: { theme: 'nope', variant: 'x', values: {} } },
+    { stage: { kind: 'sample', theme: 'stop', variant: 'walk', values: { frames: 99, fps: 1 } } }, { stage: { kind: 'sample', theme: 'mc', variant: 'cube', values: 'x' } }, 'x', [1], { other: 1 }];
+  bad.forEach(function (b, i) { eq(G.safeArt(b), null, '裁定 9 壊れた絵 ' + i + ' は使わない（線画に替える）'); });
+  var good = [{ note: { title: ['a', 'a'], lines: [['1', '1'], '2'] } }, { photo: { id: 'ph1', theme: 'project', n: 0, cat: 'craft', kind: 'photo' } },
+    { stage: { kind: 'sample', theme: 'stop', variant: 'walk', values: { frames: 2, fps: 1 } } }];
+  good.forEach(function (g, i) { eq(G.safeArt(g), g, '裁定 9 正しい絵 ' + i + ' はそのまま'); });
+  var wa = gsrc.slice(gsrc.indexOf('function workArt'), gsrc.indexOf('function artEl'));
+  ok(/safeArt\(/.test(wa) && /catch \(e\)/.test(wa), '裁定 9 workArt は形を確かめ、例外でも線画に替える');
+});
+t('契約 AF-2: 写真から入れた作品は自動では展示に出さない + 切替の下の 1 行', function () {
+  var st = G.setAuto(G.initial(), true);
+  var cap = { id: 'w-cap', title: '写真', status: 'done', from: 'capture', theme: 'mc' }, mk = { id: 'w-mk', title: '作った', status: 'done', from: 'make', theme: 'mc' };
+  eq([G.isIn(st, cap), G.isIn(st, mk)], [false, true], 'AF-2 自動では写真から入れた作品を出さない');
+  eq(G.isIn(G.put(st, 'w-cap', 't'), cap), true, 'AF-2 1 つずつなら出せる');
+  eq(G.items(st, [cap, mk], []).map(function (it) { return it.id; }), ['my-w-mk'], 'AF-2 自動の並びに写真から入れた作品は無い');
+  ok(i18n.indexOf("gl_auto_capture: ['写真から入れた作品は、1 つずつ出してね'") > 0, 'AF-2 切替の下の 1 行（verbatim）');
+  var rl = gsrc.slice(gsrc.indexOf('function renderList'), gsrc.indexOf('// ---------- 詳細'));
+  ok(rl.indexOf("T('gl_auto_capture')") > rl.indexOf("T('gl_auto')"), 'AF-2 1 行は切替の下');
+});
+t('契約 AF-4: ひとことの字数は入力欄も保存もコードポイント', function () {
+  var e81 = Array(82).join('😀');
+  eq([Array.from(G.fitNote(e81)).length, G.fitNote('abc')], [80, 'abc'], 'AF-4 入力欄の値はコードポイントで 80 字まで');
+  var ns = gsrc.slice(gsrc.indexOf('function notesSec'), gsrc.indexOf('function callSec'));
+  ok(!/maxlength/.test(ns) && /fitNote\(t\.value\)/.test(gsrc), 'AF-4 入力欄は UTF-16 の maxlength を使わず、入力のたびにコードポイントで切る');
+});
 
 console.log('gallery-test: ' + pass + ' passed, ' + fail + ' failed');
 console.log('GALLERY_TEST=' + (fail === 0 ? 'PASS' : 'FAIL'));

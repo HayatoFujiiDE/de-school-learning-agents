@@ -19,7 +19,9 @@ html[data-mode="es"] .gallery-page .btn,html[data-mode="es"] .gallery-page .link
 .gl-name{display:flex;align-items:center;gap:6px 10px;flex-wrap:wrap;background:#fff;border:1px solid var(--line);border-radius:12px;padding:6px 6px 6px 14px;min-width:0;max-width:100%}
 .gl-name-k{font-size:11px;color:var(--muted);font-weight:600}
 .gl-name strong{font-size:14px;overflow-wrap:anywhere;min-width:0}
-.gl-auto{display:inline-flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px 14px;font-size:12px;font-weight:600;line-height:1.6;margin:-8px 0 22px;cursor:pointer;max-width:100%}
+.gl-auto{display:inline-flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px 14px;font-size:12px;font-weight:600;line-height:1.6;margin:-8px 0 6px;cursor:pointer;max-width:100%}
+/* 切替の下の 1 行（§AF-2: 写真から入れた作品は 1 つずつ） */
+.gl-auto-note{margin:0 0 22px;overflow-wrap:anywhere}
 .gl-auto input{width:20px;height:20px;flex-shrink:0;accent-color:var(--record);margin:0}
 .gl-auto span{overflow-wrap:anywhere;min-width:0}
 
