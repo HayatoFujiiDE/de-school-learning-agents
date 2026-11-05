@@ -921,6 +921,9 @@
   // 作業台の「写真を足す」のダミー: そのお題の線画（探す写真と同じ 3 枚を順に）。make-data.js の MD.photoArt がここを呼ぶ
   TDD.workPhotoArt = function (photo) {
     var o = TDD.get(photo && photo.odai);
+    // 対話のお題（§AE）から作った活動の写真: お題の絵 + 写真の四隅（探す写真が無いので、どの 1 枚もお題の絵。レビューへの裁定）
+    var d = o ? null : TDD.getDialog(photo && photo.odai);
+    if (d) return TDD.cardArt(d).replace('</svg>', corners() + '</svg>').replace('class="mk-art td-art"', 'class="mk-art td-art is-photo"');
     if (!o) return TDD.frameOnly();
     var list = o.find.photos;
     return TDD.photoArt(o, list[((photo.n || 0) % list.length + list.length) % list.length].id);

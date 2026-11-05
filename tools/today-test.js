@@ -51,9 +51,9 @@ topics.forEach(function (t) {
   ok(t.find && t.find.hints.length === 3 && t.find.photos.length >= 1, 'X-3 ' + t.id + ' の手がかり 3 つ・ダミー写真');
   ok(t.play && t.play.sliders.length >= 1 && t.play.sliders.length <= 2 && typeof t.play.result === 'function', 'X-3 ' + t.id + ' のスライダー 1〜2 本 + 結果の関数');
   if (t.makeTheme) {
-    // §AD の題材（stop / ath / story）は別の担当が make-data.js に足す。作るにある時は案まで、まだ無い時は題材名だけを検査（統合の前後で通る）
-    if (MD.THEMES.indexOf(t.makeTheme) >= 0) ok(MD.theme(t.makeTheme).variants.indexOf(t.makeVariant) >= 0, 'X-3 ' + t.id + ' の題材と案は作るにある');
-    else ok(['stop', 'ath', 'story'].indexOf(t.makeTheme) >= 0, 'AE-3 ' + t.id + ' の題材 ' + t.makeTheme + ' は §AD の題材');
+    // 題材（§AD の stop / ath / story を含む）は作るに必ずある（統合後。レビューへの裁定で必須に戻した）
+    ok(MD.THEMES.indexOf(t.makeTheme) >= 0, 'AE-3 ' + t.id + ' の題材 ' + t.makeTheme + ' は MD.THEMES にある');
+    ok(MD.THEMES.indexOf(t.makeTheme) >= 0 && MD.theme(t.makeTheme).variants.indexOf(t.makeVariant) >= 0, 'X-3 ' + t.id + ' の題材と案は作るにある');
   } else {
     ok(t.makeTheme === null && t.makeSteps.length >= 3 && t.makeSteps.length <= 4 && t.makeSteps.every(function (s) { return s[0] && s[1]; }), 'X-3 ' + t.id + ' は makeSteps 3〜4 個（[中, 小]）');
   }
@@ -450,6 +450,98 @@ var missing = Object.keys(keys).filter(function (k) { return !new RegExp('\\n\\s
 eq(missing, [], 'X-6 使う key が i18n.js に [中, 小] である');
 var tdLines = i18n.split('\n').filter(function (l) { return /^\s+(td_|odai_rec)/.test(l); }).join('\n');
 ok(tdLines.length > 0 && !/点数|ランキング|順位|評価|成績|レベル|集中力|得意|苦手|上手|成長|頑張|すごい|版/.test(tdLines), 'X-6 §X の文言に評価の語・「版」が無い');
+
+// ---------- レビューへの裁定（contract-app 末尾「直す（実装）」）----------
+function t(name, fn) { try { fn(); } catch (e) { fail += 1; console.log('NG  ' + name + '  (例外 ' + e.message + ')'); } }
+function fakeStore(st, failKey) {
+  var s = { log: [], disk: {} };
+  s.save = function (k) { s.log.push(k); if (k === failKey) return false; s.disk[k] = JSON.stringify(st[k]); return true; };
+  return s;
+}
+var TDSRC = fs.readFileSync(path.join(__dirname, '../app-v3/js/today.js'), 'utf8');
+function handlerSrc(name) { var i = TDSRC.indexOf("A['" + name + "'] = function"); if (i < 0) return ''; var j = TDSRC.indexOf("\n  A['", i + 10); var k = TDSRC.indexOf('\n  function ', i + 10); var e = [j, k].filter(function (x) { return x > 0; }); return TDSRC.slice(i, e.length ? Math.min.apply(null, e) : i + 3000); }
+t('裁定 12 §AD の題材（stop / ath / story）は MD.THEMES に必ずある', function () {
+  ['stop', 'ath', 'story'].forEach(function (th) { ok(MD.THEMES.indexOf(th) >= 0, '裁定 12 ' + th + ' は MD.THEMES にある'); });
+});
+t('裁定 1 対話のお題の「作ってみる」: 保存できなければ活動を足さず、作業台へ移らない', function () {
+  var o = TDD.getDialog('od-philo-ai'), st = { activities: [], saveFailed: false };
+  var r = TD.dialogMake(st, o, { id: 'a-dm1', mode: 'js', now: '10:20', recText: 'x' }, fakeStore(st, 'activities').save);
+  eq([r.ok, r.created, st.activities.length, st.saveFailed], [false, true, 0, true], '裁定 1 保存の失敗 → 活動は足さない');
+  var r2 = TD.dialogMake(st, o, { id: 'a-dm2', mode: 'js', now: '10:20', recText: 'x' }, fakeStore(st, null).save);
+  eq([r2.ok, r2.created, st.activities.length, st.activities[0].odaiId], [true, true, 1, 'od-philo-ai'], '裁定 1 保存できたら足す');
+  var r3 = TD.dialogMake(st, o, { id: 'a-dm3', mode: 'js', now: '10:20', recText: 'x' }, fakeStore(st, 'activities').save);
+  eq([r3.created, r3.id], [false, 'a-dm2'], '裁定 1 2 回目は同じ活動（保存しない）');
+  var h = handlerSrc('td-dmake');
+  ok(h.indexOf('dialogMake(') > 0 && h.indexOf('dialogMake(') < h.indexOf('window.location.hash') && /if \(!r\.ok\)/.test(h) && h.indexOf('DES.app.change') < 0, '裁定 1 td-dmake は保存の結果を見てから移動');
+});
+t('裁定 1 対話のお題の「バディと話す」: 保存できなければ下書きを変えず、#talk へ移らない', function () {
+  var st = { draft: { text: '前の下書き', scroll: 5 }, saveFailed: false };
+  eq([TD.addTalk(st, '話したい', fakeStore(st, 'draft').save), st.draft, st.saveFailed], [false, { text: '前の下書き', scroll: 5 }, true], '裁定 1 保存の失敗 → 下書きはそのまま');
+  eq([TD.addTalk(st, '話したい', fakeStore(st, null).save), st.draft], [true, { text: '前の下書き\n話したい', scroll: 5 }], '裁定 1 保存できたら改行して足す');
+  var st2 = { draft: { text: '', scroll: 0 } };
+  TD.addTalk(st2, '話したい', fakeStore(st2, null).save);
+  eq(st2.draft.text, '話したい', '裁定 1 下書きが空ならそのまま入れる');
+  var h = handlerSrc('td-dtalk'), ia = h.indexOf('if (!addTalk(');
+  ok(ia > 0 && ia < h.indexOf("T('prefilled')") && ia < h.indexOf("'#talk'") && h.indexOf('DES.app.change') < 0, '裁定 1 td-dtalk は保存の結果を見てからトースト・移動');
+});
+t('裁定 1 「とっておく」: 保存できなければとっておかず、トーストを出さない', function () {
+  var st = { odai: TD.initial(), saveFailed: false }, id = st.odai.dslots.news;
+  eq([TD.saveOdai(st, TD.keep(st.odai, id), fakeStore(st, 'odai').save), st.odai.kept, st.saveFailed], [false, [], true], '裁定 1 保存の失敗 → kept は前のまま');
+  eq([TD.saveOdai(st, TD.keep(st.odai, id), fakeStore(st, null).save), st.odai.kept], [true, [id]], '裁定 1 保存できたら入る');
+  var h = handlerSrc('td-keep');
+  ok(/if \(!putOdai\(next[^)]*\)\) return;/.test(h) && h.indexOf('setOdai(') < 0, '裁定 1 td-keep は保存の結果を見てからトースト');
+});
+t('裁定 1 入口を開いた記録: 保存できなければ入口を開かず（記録も戻す）、「次の一歩」も出ない', function () {
+  var st = { odai: TD.initial(), saveFailed: false }, open = {}, id = 'od-news-mmx';
+  var r = TD.openDEntry(st, open, id, 'facts', fakeStore(st, 'odai').save);
+  eq([r.saved, open[id] || null, TD.isOpened(st.odai, id), st.saveFailed], [false, null, false, true], '裁定 1 保存の失敗 → パネルは閉じたまま・記録なし');
+  open[id] = 'views';
+  var r1 = TD.openDEntry(st, open, id, 'facts', fakeStore(st, 'odai').save);
+  eq([r1.saved, open[id]], [false, 'views'], '裁定 1 別の入口が開いていた時は、その入口のまま');
+  var r2 = TD.openDEntry(st, open, id, 'facts', fakeStore(st, null).save);
+  eq([r2.saved, open[id], TD.isOpened(st.odai, id)], [true, 'facts', true], '裁定 1 保存できたら開いて記録');
+  var r3 = TD.openDEntry(st, open, id, 'facts', fakeStore(st, 'odai').save);
+  eq([r3.saved, open[id] || null], [null, null], '裁定 1 もう一度押すと閉じる（保存なし）');
+  var r4 = TD.openDEntry(st, open, id, 'facts', fakeStore(st, 'odai').save);
+  eq([r4.saved, open[id]], [null, 'facts'], '裁定 1 開いた記録が既にある入口は保存なしで開く');
+  ok(handlerSrc('td-dentry').indexOf('openDEntry(') > 0, '裁定 1 td-dentry は openDEntry を使う');
+});
+t('裁定 4 対話のお題から作った活動: 「必要な物をまとめて」を出さない / 写真のダミーはお題の絵', function () {
+  var o = TDD.getDialog('od-philo-ai'), a = M.fromOdai(TDD.makeOdaiOf(o), { id: 'a-d4', mode: 'js', now: '10:20', acts: [] }).act;
+  eq([M.leaveOptions(a), M.remakeOptions(a, null)], [['osteps'], ['osteps']], '裁定 4 任せる候補・作り直しの候補は「手順を整理して」だけ');
+  eq(M.leave(a, 'oneed').ids.length, 0, '裁定 4 必要な物のメモは作らない');
+  var asp = M.leave(a, 'aspect', { aspect: 2 });
+  eq([asp.ids.length, asp.opt], [1, 'osteps'], '裁定 4 「材料・色」を選んでも手順のメモ（無反応にしない）');
+  var ph = M.addPhoto(a, 'photo').photo, art = MD.photoArt(ph);
+  ok(art.indexOf('is-photo') > 0 && art !== TDD.frameOnly() && art.indexOf(TDD.cardArt(o).replace(/<\/svg>$/, '').slice(40, 200)) > 0, '裁定 4 写真のダミーはお題の絵（空の枠にしない）');
+  var plain = M.fromOdai(TDD.get('od-seed'), { id: 'a-d4b', acts: [] }).act;
+  eq(M.leaveOptions(plain), ['osteps', 'oneed'], '裁定 4 作る・ためすのお題の活動は今までどおり 2 つ');
+});
+t('裁定 6 考えの id: 既にある id と重ならない採番 / 空の id は読み込み時に捨てる', function () {
+  var id = 'od-talk-ai', st = TD.initial();
+  st.think[id] = { opened: { facts: false, views: false, asks: false, mine: true }, ask: null, marks: [{ id: 'mk9007199254740992', stance: 's1', line: null, time: '11/6 10:20' }] };
+  st = TD.normalize(st);
+  var s1 = TD.putMark(st, id, { stance: 's2', line: 'a', time: 't' }), s2 = TD.putMark(s1, id, { stance: 's3', line: 'b', time: 't' });
+  var ids = s2.think[id].marks.map(function (m) { return m.id; });
+  eq(ids.filter(function (x, i) { return ids.indexOf(x) !== i; }), [], '裁定 6 id が重ならない（' + ids.join(',') + '）');
+  eq(TD.normalize(JSON.parse(JSON.stringify(s2))).think[id].marks.length, 3, '裁定 6 読み込み直しても 3 件残る');
+  var r = TD.removeMark(s2, id, ids[0]), back = TD.restoreMark(r.state, r.undo), bids = back.think[id].marks.map(function (m) { return m.id; });
+  eq([bids.length, bids.filter(function (x, i) { return bids.indexOf(x) !== i; }).length], [3, 0], '裁定 6 元に戻しても重ならない');
+  var raw = TD.initial();
+  raw.think[id] = { opened: {}, ask: null, marks: [{ id: '', stance: 's1', line: null, time: 't' }, { id: 'mk2', stance: 's1', line: null, time: 't' }] };
+  eq(TD.normalize(raw).think[id].marks.map(function (m) { return m.id; }), ['mk2'], '裁定 6 空の id は捨てる');
+});
+t('裁定 8 フォーカス: 考えの保存の失敗の後 / 古い考えを外して元に戻した後', function () {
+  var id = 'od-talk-ai', st = TD.initial();
+  st = TD.putMark(st, id, { stance: 's1', line: '古い', time: 't1' });
+  st = TD.putMark(st, id, { stance: 's2', line: '新しい', time: 't2' });
+  var old = st.think[id].marks[1].id, r = TD.removeMark(st, id, old), back = TD.restoreMark(r.state, r.undo);
+  eq(TD.restoredMarkId(back, r.undo), old, '裁定 8 元に戻した考え（古い方）の id');
+  var h = handlerSrc('td-mark-del');
+  ok(/restoredMarkId\(/.test(h) && /data-arg="' \+ esc\(/.test(h.slice(h.indexOf('undo_restore'))), '裁定 8 元に戻した後は、戻した考えの「外す」へ');
+  var p = handlerSrc('td-mark-put');
+  ok(p.indexOf('DES.app.render()') < 0 && /putOdai\(next, \{[^}]*ok:/.test(p), '裁定 8 置くの保存の失敗の後は描き直しを 1 回（フォーカスを消さない）');
+});
 
 console.log('today-test: ' + pass + ' passed, ' + fail + ' failed');
 console.log('TODAY_TEST=' + (fail === 0 ? 'PASS' : 'FAIL'));
