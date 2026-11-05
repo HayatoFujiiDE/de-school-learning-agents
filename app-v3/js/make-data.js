@@ -11,7 +11,7 @@
   var INK = '#292c29', OLIVE = '#524e44', ORANGE = '#ed922c', SAND = '#f1ece3', PAPER = '#ffffff', SOFT = '#fbecd7', MID = '#e4ded1';
 
   // ---------- 題材 ----------
-  // §AD-1: コマ撮りの動画（stop）/ マイクラのアスレチック（ath）/ 物語（story）を足して 7 つ
+  // §AE-1: コマ撮りの動画（stop）/ マイクラのアスレチック（ath）/ 物語（story）を足して 7 つ
   MD.THEMES = ['mc', 'py', 'circuit', 'tool', 'stop', 'ath', 'story'];
   var THEME = {
     mc: {
@@ -68,7 +68,7 @@
       extSteps: [['写真を入れる', '写真を入れる'], ['使った場面を書く', 'つかった場面を書く']],
       find: [{ count: 2, every: 1 }, { count: 4, every: 3 }]
     },
-    // ---- §AD-1（contract-app verbatim。「小」は既存の書き方で起こした） ----
+    // ---- §AE-1（contract-app verbatim。「小」は既存の書き方で起こした） ----
     stop: {
       sample: 'walk', ideas: ['clay', 'brick', 'draw'], capIdea: 'clay', variants: ['walk', 'clay', 'brick', 'draw'],
       topic: ['コマ撮りの動画', 'コマどりの動画'],
@@ -117,7 +117,7 @@
   MD.STEP_MIN = 5;
   MD.EXT_BUILD_STEPS = [['塔を建てる', 'とうをたてる'], ['塔を 2 倍にする', 'とうを 2 倍にする'], ['屋根を置く', 'やねをおく']];
 
-  // 見本 6 枚（§AD-3 の順。入口には 3 枚ずつ出す。tool は入れない）
+  // 見本 6 枚（§AE-3 の順。入口には 3 枚ずつ出す。tool は入れない）
   MD.samples = [
     { id: 'stop', theme: 'stop', variant: 'walk' },
     { id: 'ath', theme: 'ath', variant: 'jump' },
@@ -145,7 +145,7 @@
     'tool.nudge': { title: ['ひとこと合図', 'ひとことの合図'], values: { count: 1, every: 1 }, step3: ['合図の言葉を決める', 'あいずのことばをきめる'] },
     'tool.oneby': { title: ['ひとつずつリスト', 'ひとつずつリスト'], values: { count: 1, every: 4 }, step3: ['次を出す合図を決める', 'つぎを出すあいずをきめる'] },
     'tool.board': { title: ['話の地図', '話のちず'], values: { count: 4, every: 2 }, step3: ['真ん中に書くことを決める', 'まん中に書くことをきめる'] },
-    // §AD-1。subj = 結果の主語（stop）/ gim = ギミックの足場・block = ブロック id（ath）
+    // §AE-1。subj = 結果の主語（stop）/ gim = ギミックの足場・block = ブロック id（ath）
     'stop.walk': { title: ['コマ撮りの短い動画', 'コマどりのみじかい動画'], values: { frames: 2, fps: 1 }, subj: ['人形が歩く動画', '人形があるく動画'] },
     'stop.clay': { title: ['粘土が形を変える動画', 'ねん土が形をかえる動画'], values: { frames: 2, fps: 1 }, step3: ['粘土の色を決める', 'ねん土の色をきめる'], subj: ['粘土が形を変える動画', 'ねん土が形をかえる動画'] },
     'stop.brick': { title: ['ブロックの車が走る動画', 'ブロックの車が走る動画'], values: { frames: 3, fps: 2 }, step3: ['道を作る', '道をつくる'], subj: ['ブロックの車が走る動画', 'ブロックの車が走る動画'] },
@@ -199,7 +199,7 @@
         alt: { title: ['論点メモの使い方（話の地図）', 'ろんてんメモのつかいかた（話のちず）'], lines: [['1. 聞いたことを 1 行ずつメモに入れる', '1. 聞いたことを 1 行ずつメモに入れる'], ['2. AI が真ん中の問いから枝を伸ばす', '2. AI がまん中の問いから枝をのばす'], ['3. 自分の考えを枝に足す', '3. 自分の考えを枝にたす']] } },
       cmd: { variant: 'board', values: { count: 4, every: 2 } }
     },
-    // ---- §AD-1 ----
+    // ---- §AE-1 ----
     stop: {
       calc: { title: ['コマの計算', 'コマの計算'], lines: [['12 コマ ÷ 1 秒に 6 コマ = 2 秒', '12 コマ ÷ 1 びょうに 6 コマ = 2 びょう'], ['10 秒にするには 60 コマ', '10 びょうにするには 60 コマ'], ['1 コマで 5 mm 動かすと、60 コマで 30 cm', '1 コマで 5 mm うごかすと、60 コマで 30 cm']],
         alt: { title: ['コマの計算（1 秒に 12 コマ）', 'コマの計算（1 びょうに 12 コマ）'], lines: [['12 コマ ÷ 1 秒に 12 コマ = 1 秒', '12 コマ ÷ 1 びょうに 12 コマ = 1 びょう'], ['10 秒にするには 120 コマ', '10 びょうにするには 120 コマ'], ['1 コマで 2.5 mm 動かすと、120 コマで 30 cm', '1 コマで 2.5 mm うごかすと、120 コマで 30 cm']] } },
@@ -292,25 +292,37 @@
   var TOOL_CODE = { memo: 'メモ → AI → 論点 × {count}（{Es}）', nudge: '時計 → 合図「いまの話を {count} 行で」（{Es}）', oneby: 'リスト → {count} 件ずつ表示（{Es}）', board: 'メモ → AI → 枝 × {count}（{Es}）' };
   var TOOL_DESC = { memo: '論点 {count}', nudge: '{count} 行', oneby: '{count} 件ずつ', board: '枝 {count}' };
   function toolVariant(va) { return TOOL_RESULT[va] ? va : THEME.tool.sample; }
-  // ---- §AD-1 の計算（知らない案は題材の最初の案として読む。別の題材には落とさない） ----
+  // ---- §AE-1 の計算（知らない案は題材の最初の案として読む。別の題材には落とさない） ----
   function adVariant(theme, va) { return VARIANT[theme + '.' + va] ? va : THEME[theme].sample; }
+  // 値が欠けている・整数でない・範囲の外の時は、その題材の既定値（params の def）で読む（NaN・undefined・{F} を出さない。レビューへの裁定）
+  var AD_THEMES = { stop: true, ath: true, story: true };
+  function adVals(theme, v) {
+    var src = v && typeof v === 'object' ? v : {}, out = {};
+    THEME[theme].params.forEach(function (p) {
+      var x = src[p.key];
+      out[p.key] = typeof x === 'number' && isFinite(x) && x % 1 === 0 && x >= p.min && x <= p.max ? x : p.def;
+    });
+    return out;
+  }
+  MD.adVals = adVals;
   // コマ撮り: F = コマの数 / P = 1 秒のコマ数 / S = 秒（小数 1 けた）
-  function stopNums(v) { var F = num('stop', 'frames', v.frames), P = num('stop', 'fps', v.fps); return { F: F, P: P, S: Math.round(F / P * 10) / 10 }; }
+  function stopNums(v) { v = adVals('stop', v); var F = num('stop', 'frames', v.frames), P = num('stop', 'fps', v.fps); return { F: F, P: P, S: Math.round(F / P * 10) / 10 }; }
   MD.stopNums = stopNums;
   // アスレチック: n = 足場の数 / g = あいだ / k = ギミックの足場（2 個目・4 個目…。jump は 0）/ L = コースの長さ
-  function athNums(va, v) { var n = v.count, g = v.gap, gim = !!VARIANT['ath.' + adVariant('ath', va)].gim; return { n: n, g: g, k: gim ? Math.floor(n / 2) : 0, L: n + g * (n - 1) }; }
+  function athNums(va, v) { v = adVals('ath', v); var n = v.count, g = v.gap, gim = !!VARIANT['ath.' + adVariant('ath', va)].gim; return { n: n, g: g, k: gim ? Math.floor(n / 2) : 0, L: n + g * (n - 1) }; }
   MD.athNums = athNums;
   // 手ごたえ（このモックでの目安。ゲームの事実としては書かない）
   var ATH_FEEL = [['かんたん', 'かんたん'], ['ふつう', 'ふつう'], ['むずかしい', 'むずかしい'], ['とてもむずかしい', 'とてもむずかしい']];
   function athFeel(g, mode) { return pick(ATH_FEEL[Math.max(1, Math.min(4, g)) - 1], mode); }
   // 物語: n = 場面の数 / k = 山場（最後の 1 つ前の場面）
-  function storyNums(v) { return { n: v.scenes, k: v.scenes - 1 }; }
+  function storyNums(v) { v = adVals('story', v); return { n: v.scenes, k: v.scenes - 1 }; }
   MD.storyNums = storyNums;
 
   // 結果 1 行（「試す」で確かめたこと）
   MD.result = function (stage, mode) {
     if (!stage || stage.kind === 'note') return '';
     var v = stage.values || {}, t = stage.theme, va = stage.variant;
+    if (AD_THEMES[t]) v = adVals(t, v);
     if (t === 'mc') {
       var blk = MD.valueLabel('mc', 'block', v.block, mode), s = v.size, n = mcCount(va, s);
       var shape = va === 'tower' ? fmt(pick(['高さ {h} の塔', '高さ {h} のとう'], mode), { h: 2 * s })
@@ -331,7 +343,7 @@
       var m = toolMin(v.every), E = m === 0 ? MD.valueLabel('tool', 'every', v.every, mode) : m + ' 分ごとに';
       return fmt(pick(TOOL_RESULT[toolVariant(va)], mode), { E: E, count: v.count });
     }
-    // §AD-1
+    // §AE-1
     if (t === 'stop') {
       var sn = stopNums(v);
       return fmt(pick(['{subj} · {F} コマ ÷ 1 秒に {P} コマ = {S} 秒', '{subj} · {F} コマ ÷ 1 びょうに {P} コマ = {S} びょう'], mode),
@@ -355,6 +367,7 @@
   MD.code = function (stage) {
     if (!stage || stage.kind === 'note') return '';
     var v = stage.values || {}, t = stage.theme, va = stage.variant;
+    if (AD_THEMES[t]) v = adVals(t, v);
     if (t === 'mc') {
       var id = ['stone', 'glass', 'oak_planks'][v.block] || 'stone', s = v.size;
       if (va === 'tower') return '/fill ~ ~ ~ ~2 ~' + (2 * s - 1) + ' ~2 minecraft:' + id + ' hollow';
@@ -372,7 +385,7 @@
       return 'speed = ' + v.speed + '\n' + name + ' = ' + v.count + '\nplayer.move(speed)';
     }
     if (t === 'tool') return fmt(TOOL_CODE[toolVariant(va)], { count: v.count, Es: toolEs(v.every) });
-    // §AD-1
+    // §AE-1
     if (t === 'stop') { var sn = stopNums(v); return sn.F + ' コマ ÷ ' + sn.P + ' コマ/秒 = ' + sn.S + ' 秒'; }
     if (t === 'ath') {
       var an = athNums(va, v), vd = VARIANT['ath.' + adVariant('ath', va)], lines = [];
@@ -389,6 +402,7 @@
     if (!stage) return '';
     if (stage.kind === 'note') return pick(stage.lines && stage.lines[0], mode) || '';
     var v = stage.values || {}, t = stage.theme, va = stage.variant;
+    if (AD_THEMES[t]) v = adVals(t, v);
     if (t === 'mc') {
       var blk = MD.valueLabel('mc', 'block', v.block, mode);
       if (va === 'tower') return fmt(pick(['{blk}。高さ {h}', '{blk}。高さ {h}'], mode), { blk: blk, h: 2 * v.size });
@@ -398,7 +412,7 @@
     }
     if (t === 'py') return fmt(pick(['速さ {sp}・数 {c}', 'はやさ {sp}・数 {c}'], mode), { sp: v.speed, c: v.count });
     if (t === 'tool') return fmt(TOOL_DESC[toolVariant(va)], { count: v.count }) + ' · ' + toolEs(v.every);
-    // §AD-1
+    // §AE-1
     if (t === 'stop') { var sn = stopNums(v); return fmt(pick(['{F} コマ · 1 秒に {P} コマ', '{F} コマ · 1 びょうに {P} コマ'], mode), sn); }
     if (t === 'ath') return fmt('足場 {n} · あいだ {g}', { n: v.count, g: v.gap });
     if (t === 'story') return fmt(pick(['{n} 場面 · {name}', '{n} 場めん · {name}'], mode), { n: v.scenes, name: MD.valueLabel('story', 'voice', v.voice, mode) });
@@ -615,7 +629,7 @@
     out += toolClock(mk.every);
     return wrap(out);
   }
-  // ---- §AD-1 の線画（墨 + オリーブ、強調だけ橙。文字は入れない） ----
+  // ---- §AE-1 の線画（墨 + オリーブ、強調だけ橙。文字は入れない） ----
   // コマ撮り: 上にコマの枠が F 個（1 行に入らなければ 2〜3 行。主役の位置や形がコマごとに少しずつ変わる）、下に時間の線（長さ ∝ S・1 秒ごとの目盛り）
   var STOP_SEC_PX = 33;
   function stopMarks(v) { var sn = stopNums(v); return { frames: sn.F, secs: sn.S }; }
@@ -716,7 +730,8 @@
   MD.art = function (stage) {
     if (!stage) return '';
     if (stage.kind === 'note') return '';
-    var v = stage.values || MD.variantValues(stage.theme, stage.variant);
+    // 3 題材は MD.result と同じ値（values が無ければ題材の既定値）。既存 4 題材は今までどおり案の既定値
+    var v = AD_THEMES[stage.theme] ? adVals(stage.theme, stage.values || {}) : (stage.values || MD.variantValues(stage.theme, stage.variant));
     if (stage.theme === 'py') return pyArt(stage.variant, v);
     if (stage.theme === 'circuit') return circuitArt(stage.variant, v);
     if (stage.theme === 'tool') return toolArt(stage.variant, v);
@@ -728,7 +743,7 @@
   // 図に出している量（テスト用。線画と同じ計算）
   MD.artMarks = function (stage) {
     if (!stage || stage.kind === 'note') return '';
-    var v = stage.values || MD.variantValues(stage.theme, stage.variant);
+    var v = AD_THEMES[stage.theme] ? adVals(stage.theme, stage.values || {}) : (stage.values || MD.variantValues(stage.theme, stage.variant));
     if (stage.theme === 'py') return JSON.stringify(pyMarks(v));
     if (stage.theme === 'circuit') return JSON.stringify(circuitMarks(stage.variant, v));
     if (stage.theme === 'tool') return JSON.stringify(toolMarks(v));
@@ -756,7 +771,7 @@
       var noun = stage.variant === 'board' ? '枝' : (stage.variant === 'nudge' ? '行' : 'カード');
       vars.effect = 'まとめる数'; vars.aim = '数'; vars.how = noun + (up ? 'がふえた' : 'がへった');
     }
-    // §AD-1（contract-app verbatim）
+    // §AE-1（contract-app verbatim）
     else if (t === 'stop' && key === 'frames') { vars.effect = '動画の長さ'; vars.aim = '長さ'; vars.how = up ? '動画が長くなった' : '動画がみじかくなった'; }
     else if (t === 'stop') { vars.effect = '動きのなめらかさ'; vars.aim = 'なめらかさ'; vars.how = up ? 'なめらかに動いた' : 'カクカク動いた'; }
     else if (t === 'ath' && key === 'gap') { vars.effect = 'とぶ距離'; vars.aim = '距離'; vars.how = up ? '足場がはなれた' : '足場が近くなった'; }
@@ -802,11 +817,11 @@
       // 写真から tool を作る経路は無い（§Y-7）。万一来ても道具の線画にする（マイクラの写真に落とさない）
       inner = toolArt(['memo', 'nudge', 'oneby', 'board'][n % 4], { count: 3, every: 2 });
     } else if (photo.theme === 'stop' || photo.theme === 'ath' || photo.theme === 'story') {
-      // §AD-1: 題材の線画（案を順に。値は案の既定）
+      // §AE-1: 題材の線画（案を順に。値は案の既定）
       var vk = THEME[photo.theme].variants[n % 4];
       inner = MD.art({ kind: 'sample', theme: photo.theme, variant: vk, values: MD.variantValues(photo.theme, vk) });
     } else if (photo.theme === 'project') {
-      // §AD-4: 提案から作った活動の写真は提案のカテゴリの線画（マイクラの写真に落とさない）
+      // §AE-4: 提案から作った活動の写真は提案のカテゴリの線画（マイクラの写真に落とさない）
       inner = MD.catArt(photo.cat);
     } else {
       return wrap(mcShot(n % MD.PHOTO_COUNT) + corners(), 'is-photo');
@@ -814,7 +829,7 @@
     return inner.replace('</svg>', corners() + '</svg>').replace('class="mk-art"', 'class="mk-art is-photo"');
   };
 
-  // ---------- §AD-5 カテゴリの線画（7 種。墨 + オリーブ、強調だけ橙）。知らないカテゴリは空の枠 ----------
+  // ---------- §AE-5 カテゴリの線画（7 種。墨 + オリーブ、強調だけ橙）。知らないカテゴリは空の枠 ----------
   MD.CATS = ['minecraft', 'programming', 'craft', 'digital', 'media', 'drawing', 'writing'];
   MD.catArt = function (cat) {
     var out = '', i;
@@ -857,7 +872,7 @@
     return wrap(out);
   };
 
-  // ---------- §AD-4「こんなのも作れる」の提案 12 件（contract-app verbatim。「小」は既存の書き方で起こした）----------
+  // ---------- §AE-4「こんなのも作れる」の提案 12 件（contract-app verbatim。「小」は既存の書き方で起こした）----------
   // cat = data.js の catalog のカテゴリ id（writing だけはこの一覧専用）。catalogId は catalog に対応する項目がある時だけ
   function pj(id, cat, style, safety, catalogId, title, what, first, need, min, steps) {
     return { id: id, cat: cat, style: style, safety: safety, catalogId: catalogId, title: title, what: what, first: first, need: need, min: min, steps: steps };
@@ -1045,7 +1060,7 @@
     return out;
   }
 
-  // ---------- §AD-6 見本を足した回 2: 作品の見本 3 件（完成 2 + 試作 1）と結び付く活動 3 件 ----------
+  // ---------- §AE-6 見本を足した回 2: 作品の見本 3 件（完成 2 + 試作 1）と結び付く活動 3 件 ----------
   // 回 1（上の seedActivities / seedWorks）は変えない。読み込み時に make.js が MD.addSeeds で「足した回」が古い保存データにだけ足す
   MD.SEED_V = 2;
   function adStage(theme, variant, values) { return { kind: 'sample', theme: theme, variant: variant, values: values }; }

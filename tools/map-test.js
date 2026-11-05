@@ -142,10 +142,9 @@ ok(MPD.past.filter(function (p) { return p.catalogId; }).length >= 4, 'AB-9 予�
 // ---------- 単元どうしのつながり・これから作れそう（§AB-10） ----------
 var order = MPD.unitLinks.filter(function (k) { return k.kind === 'order'; }), cross = MPD.unitLinks.filter(function (k) { return k.kind === 'cross'; });
 ok(order.length >= 8 && order.length <= 12, 'AB-10 学ぶ順 8〜12（' + order.length + '）');
-ok(cross.length >= 8 && cross.length <= 10, 'AB-10 教科をまたぐ 8〜10（' + cross.length + '）');
+eq(cross.length, 0, 'AD-1 教科をまたぐ（cross）は MPD.unitLinks から消した');
 ok(MPD.unitLinks.every(function (k) { return MPD.anyUnit(k.from) && MPD.anyUnit(k.to) && k.from !== k.to; }), 'AB-10 つながりの単元がある');
-ok(cross.every(function (k) { return pair(k.why) && MPD.anyUnit(k.from).sub !== MPD.anyUnit(k.to).sub; }), 'AB-10 教科をまたぐ = 違う教科どうし + なぜつながるか [中, 小]');
-ok(cross.some(function (k) { return k.from === 'M4-C-01' && k.to === 'S4-A-01' && k.why[0] === '電池の数と明るさも、2 つの量の変わり方'; }), 'AB-10 変わり方 ↔ 電流の働き（契約の例）');
+ok(MPD.unitLinks.every(function (k) { return k.kind === 'order' && !('why' in k); }), 'AD-1 / AD-9 単元どうしのつながりは学ぶ順のデータだけ（詳細の 前 / 後 用に残す・why は概念へ移した）');
 ok(MPD.next.length >= 4 && MPD.next.length <= 6, 'AB-10 これから作れそう 4〜6（' + MPD.next.length + '）');
 ok(MPD.next.every(function (x) { return pair(x.title) && pair(x.line) && x.learned.length > 0 && x.learned.every(function (id) { return !!MPD.learnedDef(id); }) && x.units.every(function (c) { return !!MPD.anyUnit(c); }); }), 'AB-10 これから作れそう = 題・元の学んだこと / 単元・バディの 1 行');
 ok(MPD.next.every(function (x) { return Object.keys(x).every(function (k) { return ['id', 'title', 'learned', 'units', 'line'].indexOf(k) >= 0; }); }), 'AB-6 これから作れそうに 数・おすすめ度を持たない');
@@ -163,7 +162,8 @@ eq(g.nodes.units.length, MPD.allUnits().length, 'graph 単元 = 全教科');
 eq(g.nodes.next.length, MPD.next.length, 'graph これから作れそう');
 var kinds = {};
 g.edges.forEach(function (e) { kinds[e.kind] = (kinds[e.kind] || 0) + 1; });
-ok(kinds.base > 0 && kinds.mu > 0 && kinds.peer > 0 && kinds.order === order.length && kinds.cross === cross.length && kinds.next > 0, 'graph 線の種類 base / mu / peer / order / cross / next ' + JSON.stringify(kinds));
+ok(kinds.base > 0 && kinds.mu > 0 && kinds.peer > 0 && kinds.order === order.length && !kinds.cross && kinds.next > 0, 'graph 線の種類 base / mu / peer / order / next（cross なし）' + JSON.stringify(kinds));
+ok(!MP.graph(MPD.learned, acts, works, [], { today: '11/2', links: [{ id: 'x1', kind: 'cross', from: 'M4-C-01', to: 'S4-A-01', why: ['a', 'b'] }] }).edges.some(function (e) { return e.kind === 'cross'; }), 'AD-1 graph は教科をまたぐ線を渡されても落とす');
 var eids = g.edges.map(function (e) { return e.id; });
 eq(eids.filter(function (x, i) { return eids.indexOf(x) !== i; }), [], 'graph 線の id が重ならない');
 var all = ids(g.nodes.made.concat(g.nodes.learned, g.nodes.units, g.nodes.next));
@@ -216,14 +216,14 @@ var rbf = MP.related(g, 'act:act-build');
 ok(rbf.kinds.mu.indexOf('past:past-maze>unit:M4-B-03') >= 0 && rbf.kinds.mu.indexOf('act:act-build>unit:M4-B-03') >= 0, 'AC-13 related 分野で見る（作ったもの → 単元 ← 作ったもの）');
 ok(MP.related(g, 'act:act-cap').nodes.every(function (id) { return !/^(act|past|work):/.test(id); }), 'AC-13 related 同じ単元が無ければ 他の作ったものは濃くならない');
 ok(rb.kinds.next.length > 0 && rb.nodes.indexOf('next:nx-tower-box') >= 0, 'related 作ったもの → これから作れそう');
-eq([rb.kinds.order.length, rb.kinds.cross.length], [0, 0], 'related 作ったものには 学ぶ順・教科をまたぐ を含めない');
+ok(!('order' in rb.kinds) && !('cross' in rb.kinds) && rb.edges.every(function (id) { return id.indexOf('ul:') !== 0; }), 'AD-1 / AD-9 related に 学ぶ順・教科をまたぐ が無い');
 ok(rb.nodes.indexOf('act:act-build') < 0, 'related 自分は含めない');
 var ru = MP.related(g, 'unit:M4-C-01');
-ok(ru.kinds.order.indexOf('ul:o-graph-change') >= 0 && ru.kinds.order.indexOf('ul:o-rule-change') >= 0 && ru.kinds.cross.indexOf('ul:x-change-current') >= 0, 'related 単元 → 学ぶ順・教科をまたぐ');
-ok(ru.nodes.indexOf('act:act-py') >= 0 && ru.nodes.indexOf('ln:ln-stars') >= 0 && ru.nodes.indexOf('unit:S4-A-01') >= 0, 'related 単元 ← 学んだこと ← 作ったもの + またぐ相手');
+ok(ru.edges.every(function (id) { return id.indexOf('ul:') !== 0; }) && ru.nodes.indexOf('unit:M4-D-02') < 0 && ru.nodes.indexOf('unit:S4-A-01') < 0, 'AD-9 related 単元を選んでも 学ぶ順の前後・教科をまたぐ相手は濃くしない（線が無い）');
+ok(ru.nodes.indexOf('act:act-py') >= 0 && ru.nodes.indexOf('ln:ln-stars') >= 0, 'related 単元 ← 学んだこと ← 作ったもの');
 var rn = MP.related(g, 'next:nx-lamp');
 eq(rn.kinds.next.sort(), ['ln:ln-battery>next:nx-lamp', 'ln:ln-stars>next:nx-lamp', 'unit:M4-C-01>next:nx-lamp', 'unit:S4-A-01>next:nx-lamp'].sort(), 'related これから作れそう ← 元（学んだこと・単元）');
-eq(MP.related(g, 'nope'), { nodes: [], edges: [], kinds: { base: [], mu: [], order: [], cross: [], next: [] } }, 'related 無い id');
+eq(MP.related(g, 'nope'), { nodes: [], edges: [], kinds: { base: [], mu: [], next: [] } }, 'related 無い id');
 eq(MP.peers(g, 'act:act-build'), [{ id: 'past:past-leaf', units: ['M4-B-03'] }, { id: 'past:past-maze', units: ['M4-B-03'] }, { id: 'past:past-box', units: ['M4-B-02'] }], 'peers 同じ単元につながる作ったもの + 共有単元（新しい順）');
 eq(MP.peers(g, 'past:past-maze'), [{ id: 'act:act-build', units: ['M4-B-03'] }, { id: 'past:past-leaf', units: ['M4-B-03'] }, { id: 'past:past-box', units: ['M4-B-01', 'M4-B-04'] }], 'peers 共有単元が 2 つ');
 eq(MP.peers(g, 'act:act-cap'), [], 'peers 同じ単元が無ければ空');
@@ -232,7 +232,7 @@ var vm = MP.viewNodes(g, 'made'), vf = MP.viewNodes(g, 'fields');
 ok(vm['ln:ln-area'] && !vm['unit:M4-C-02'] && vm['unit:M4-B-03'], 'viewNodes 作ったものから = 学んだこと + つながる単元だけ');
 ok(!vf['ln:ln-area'] && vf['unit:M4-C-02'] && vf['unit:J4-C-02'], 'viewNodes 分野で見る = 学んだことなし・全単元');
 ok(MP.edgesIn(g, 'fields').every(function (e) { return e.kind !== 'base'; }) && MP.edgesIn(g, 'made').every(function (e) { return e.kind !== 'mu'; }), 'edgesIn 分野で見るは 作ったもの → 単元 にまとめる');
-ok(MP.edgesIn(g, 'made').filter(function (e) { return e.kind === 'order' || e.kind === 'cross'; }).every(function (e) { return vm[e.from] && vm[e.to]; }), 'edgesIn 作ったものからの 学ぶ順・教科をまたぐ は出ている単元どうしだけ');
+ok(['made', 'flow', 'fields', 'concepts', 'list'].every(function (v) { return MP.edgesIn(g, v).every(function (e) { return e.kind !== 'order' && e.kind !== 'cross'; }); }) && g.edges.some(function (e) { return e.kind === 'order'; }), 'AD-1 / AD-9 学ぶ順・教科をまたぐ の線はどの見方にも描かない（学ぶ順はグラフに残す = 詳細の 前 / 後）');
 ok(peer.length > 0 && ['made', 'flow', 'fields', 'list'].every(function (v) { return MP.edgesIn(g, v).every(function (e) { return e.kind !== 'peer'; }); }), 'AC-13 作ったものどうしの線はどの見方にも描かない（並びと peers のためグラフには残す）');
 eq(MP.viewNodes(g, 'flow'), vm, 'AC-8 流れで見るのノード = 作ったものから と同じ');
 
@@ -372,17 +372,18 @@ ok(MPC.thin(titles, 0.1).length > 0 && MPC.thin(titles, 0.1).indexOf(g.nodes.mad
 
 // ---------- MP.normalizeUi（§AB-13）/ select / decline ----------
 var D = MP.defaultUi();
-eq(D, { view: 'made', sel: { made: null, flow: null, fields: null, list: null }, chips: { order: false, cross: false, next: false }, declined: [], declinedNext: [], pos: { made: null, fields: null }, big: false, only: false }, 'normalizeUi 初期値（AC-13: チップ 3 つはどれも off・大きく見る / 作ったものだけ は off）');
+eq(D, { view: 'made', sel: { made: null, flow: null, fields: null, concepts: null, list: null }, chips: { next: false }, declined: [], declinedNext: [], pos: { made: null, fields: null }, big: false, only: false, concept: null, moved: { made: {}, fields: {} } }, 'normalizeUi 初期値（AD-9: チップは これから作れそう 1 つで off・大きく見る / 作ったものだけ は off・考え方なし・動かした分なし）');
 eq(MP.normalizeUi(null, g), D, 'normalizeUi 無い = 初期値（選択なし = 静かな初期表示）');
-[5, 'x', [1, 2], { view: 3, sel: 'a', chips: [], declined: 'x', declinedNext: {}, pos: 7, big: 'yes', only: 1 }].forEach(function (raw, i) {
+[5, 'x', [1, 2], { view: 3, sel: 'a', chips: [], declined: 'x', declinedNext: {}, pos: 7, big: 'yes', only: 1, concept: 3, moved: 'x' }, { concept: 'c-zz', moved: { made: [1], fields: 'a' } }].forEach(function (raw, i) {
   eq(MP.normalizeUi(raw, g), D, 'normalizeUi 壊れた値は初期値（' + i + '）');
 });
-var good = { view: 'fields', sel: { made: 'ln:ln-area', flow: 'unit:M4-C-01', fields: 'unit:J4-C-02', list: 'next:nx-lamp' }, chips: { order: true, cross: true, next: true }, declined: ['ln-cuboid'], declinedNext: ['nx-moon-haiku'], pos: { made: { x: 10, y: 20, z: 0.5 }, fields: { x: -5, y: 0, z: 1.25 } }, big: true, only: true };
+var good = { view: 'fields', sel: { made: 'ln:ln-area', flow: 'unit:M4-C-01', fields: 'unit:J4-C-02', concepts: 'unit:S4-A-01', list: 'next:nx-lamp' }, chips: { next: true }, declined: ['ln-cuboid'], declinedNext: ['nx-moon-haiku'], pos: { made: { x: 10, y: 20, z: 0.5 }, fields: { x: -5, y: 0, z: 1.25 } }, big: true, only: true,
+  concept: 'c-change', moved: { made: { 'past:past-box': { dx: 120, dy: -48 } }, fields: { 'act:act-py': { dx: -24, dy: 0 } } } };
 eq(MP.normalizeUi(good, g), good, 'normalizeUi 正しい値は保つ');
-eq(MP.normalizeUi({ sel: { made: 'unit:J4-C-02', flow: 'unit:J4-C-02', fields: 'ln:ln-area', list: 'zzz' } }, g).sel, { made: null, flow: null, fields: null, list: null }, 'normalizeUi その見方に無いノードの選択は null');
-eq(MP.normalizeUi({ sel: 'act:act-py' }, g).sel, { made: 'act:act-py', flow: null, fields: null, list: null }, 'normalizeUi §Y の形（文字列）は 作ったものから の選択');
-eq(MP.normalizeUi({ chips: { peer: 'yes', order: true, zzz: true } }, g).chips, { order: true, cross: false, next: false }, 'normalizeUi チップは真偽値だけ（その欄だけ初期値）');
-eq(MP.normalizeUi({ chips: { peer: true, order: false } }, g).chips, { order: false, cross: false, next: false }, 'AC-13 保存済みの chips.peer は読み捨てる');
+eq(MP.normalizeUi({ sel: { made: 'unit:J4-C-02', flow: 'unit:J4-C-02', fields: 'ln:ln-area', list: 'zzz' } }, g).sel, { made: null, flow: null, fields: null, concepts: null, list: null }, 'normalizeUi その見方に無いノードの選択は null');
+eq(MP.normalizeUi({ sel: 'act:act-py' }, g).sel, { made: 'act:act-py', flow: null, fields: null, concepts: null, list: null }, 'normalizeUi §Y の形（文字列）は 作ったものから の選択');
+eq(MP.normalizeUi({ chips: { peer: 'yes', next: 1, zzz: true } }, g).chips, { next: false }, 'normalizeUi チップは真偽値だけ（その欄だけ初期値）');
+eq(MP.normalizeUi({ chips: { peer: true, cross: true, order: true, next: true } }, g).chips, { next: true }, 'AC-13 / AD-1 / AD-9 保存済みの chips.peer・cross・order は読み捨てる');
 eq([MP.normalizeUi({ view: 'flow', sel: { flow: 'ln:ln-area' } }, g).view, MP.normalizeUi({ view: 'flow', sel: { flow: 'ln:ln-area' } }, g).sel.flow], ['flow', 'ln:ln-area'], 'AC-9 normalizeUi は view:flow・sel.flow を受ける');
 eq([MP.normalizeUi({ big: true, only: true }, g).big, MP.normalizeUi({ big: true, only: true }, g).only, MP.normalizeUi({ big: 'true', only: 'x' }, g).big, MP.normalizeUi({ big: 'true', only: 'x' }, g).only], [true, true, false, false], 'AC-9 / AC-14 normalizeUi big・only は真偽値だけ（形が違えば false）');
 eq(MP.select(D, g, 'flow', 'unit:M4-C-01').sel.flow, 'unit:M4-C-01', 'select 流れで見るの選択は sel.flow');
@@ -409,7 +410,7 @@ eq([MP.selIn({ sel: { made: 'act:missing' } }, g, 'made'), MP.selIn({ sel: { mad
 var s1 = MP.select(D, g, 'made', 'act:act-py');
 eq(s1.sel.made, 'act:act-py', 'select 選ぶ');
 eq(MP.select(s1, g, 'made', 'act:act-py').sel.made, null, 'select 同じノードをもう一度 = 外す');
-eq(MP.select(s1, g, 'fields', 'unit:M4-C-02').sel, { made: 'act:act-py', flow: null, fields: 'unit:M4-C-02', list: null }, 'select 見方ごとの選択');
+eq(MP.select(s1, g, 'fields', 'unit:M4-C-02').sel, { made: 'act:act-py', flow: null, fields: 'unit:M4-C-02', concepts: null, list: null }, 'select 見方ごとの選択');
 eq(MP.select(s1, g, 'fields', 'ln:ln-area').sel.fields, null, 'select その見方に無いノードは選ばない');
 eq(MP.deselect(s1, g, 'made').sel.made, null, 'deselect 外す');
 var d1 = MP.decline({ sel: { made: 'ln:ln-area' } }, g, 'made', 'ln:ln-area');
@@ -424,6 +425,115 @@ eq([dn1.declinedNext, dn1.sel.made], [['nx-lamp'], null], 'declineNext 地図か
 eq(MP.declineNext({}, g, 'made', 'act:act-py'), null, 'declineNext これから作れそう以外は外さない');
 eq(MP.undeclineNext(dn1, 'made', 'nx-lamp', 'next:nx-lamp').declinedNext, [], 'undeclineNext 元に戻す');
 
+// ---------- 概念で見る（§AD-2〜AD-4）: MPD.concepts / MP.conceptView / conceptNodes / conceptLines ----------
+var CC = MPD.concepts;
+ok(CC.length >= 5 && CC.length <= 7, 'AD-3 考え方 5〜7（' + CC.length + '）');
+var ccIds = CC.map(function (c) { return c.id; });
+eq(ccIds.filter(function (x, i) { return ccIds.indexOf(x) !== i; }), [], 'AD-3 考え方の id が重ならない');
+CC.forEach(function (c) {
+  ok(pair(c.name) && pair(c.line), 'AD-3 ' + c.id + ' の名前・1 行は [中, 小]');
+  ok(Object.keys(c).every(function (k) { return ['id', 'name', 'line', 'learned', 'units'].indexOf(k) >= 0; }), 'AD-3 ' + c.id + ' は { id, name, line, learned, units }（数・割合・達成を持たない）');
+  ok(c.learned.every(function (id) { return !!MPD.learnedDef(id); }), 'AD-3 ' + c.id + ' の学んだことは見本にある');
+  ok(c.units.length >= 2 && c.units.every(function (u) { return !!MPD.anyUnit(u.id) && pair(u.why) && (u.via === undefined || (!!MPD.anyUnit(u.via) && c.units.some(function (x) { return x.id === u.via; }))); }), 'AD-3 ' + c.id + ' の単元は見本にあり「なぜ同じ考え方か」[中, 小]（via は同じ考え方の単元）');
+  ok(c.learned.every(function (id) { return MPD.learnedDef(id).units.some(function (code) { return c.units.some(function (u) { return u.id === code; }); }); }), 'AD-3 ' + c.id + ' の学んだことは、その考え方の単元につながる（実際に当てはまる）');
+  ok(!/概念/.test(strings([c.name, c.line, c.units], []).join('')), 'AD-3 ' + c.id + ' のカード・説明では「概念」と言わない');
+});
+// 旧「教科をまたぐ」10 本の文は概念のデータへそのまま移した（二重に持たない）
+var OLD_CROSS = ['電池の数と明るさも、2 つの量の変わり方', '気温の変わり方は、折れ線グラフにすると見やすい', '表に分けて整理すると、比べやすくなる', '地図の上の広さも、面積で比べられる', '町で使う水の量は、大きな数で表す',
+  '雨の量は 2.5 mm のように小数で表す', '月の高さは、角度で表せる', '季節の生き物は、俳句の季語にもなる', '大雨の水の流れ方を知ると、災害にそなえられる', '調べた地域のよさを、話して伝える'];
+var whys = [];
+CC.forEach(function (c) { c.units.forEach(function (u) { whys.push(u.why[0]); }); });
+eq(OLD_CROSS.filter(function (w) { return whys.indexOf(w) < 0; }), [], 'AD-1 旧 教科をまたぐ の文 10 本は すべて概念のデータにある');
+eq(OLD_CROSS.filter(function (w) { return whys.filter(function (x) { return x === w; }).length !== 1; }), [], 'AD-1 旧 教科をまたぐ の文は 1 回ずつ（二重に持たない）');
+ok(dataSrc0.indexOf('教科をまたぐ') < 0 || !/kind: 'cross'/.test(fs.readFileSync(path.join(__dirname, '../app-v3/js/map-data.js'), 'utf8')), 'AD-1 map-data.js に kind:cross のデータが無い');
+eq(CC.filter(function (c) { return !c.learned.length; }).length >= 1, true, 'AD-2 やったことの無い考え方の見本がある');
+// conceptView: やったことの教科で 近い / 遠い を分ける
+var cvc = MP.conceptView(g, CC, 'c-change');
+eq(cvc.did, ['ln:ln-stars', 'ln:ln-speed', 'ln:ln-battery', 'ln:ln-rain-graph', 'ln:ln-bead-repeat', 'ln:ln-moon-frames'].filter(function (id) { return cvc.did.indexOf(id) >= 0; }).length === 6 ? cvc.did : null, 'conceptView ともなって変わる: やったこと 6');
+eq(cvc.did, g.nodes.learned.map(function (l) { return l.id; }).filter(function (id) { return cvc.did.indexOf(id) >= 0; }), 'conceptView やったことはグラフの順（作ったものの新しい順）');
+eq([cvc.near, cvc.far, cvc.mixed], [['unit:M4-C-01', 'unit:M4-D-02', 'unit:S4-A-01', 'unit:S4-B-04', 'unit:S4-A-03'], ['unit:J4-C-02', 'unit:C4-B-02'], false], 'conceptView 近い = やったことの教科（算数・理科）/ 遠い = 別の教科（国語・社会）');
+var cvm = MP.conceptView(g, CC, 'c-measure');
+eq([cvm.near, cvm.far], [['unit:M4-B-03', 'unit:M4-A-04', 'unit:M4-A-01', 'unit:M4-A-02', 'unit:M4-B-04'], ['unit:C4-A-01', 'unit:C4-B-01', 'unit:S4-B-04', 'unit:S4-B-05']], 'conceptView はかって数で表す: やったことが算数だけ → 理科・社会は遠い');
+CC.forEach(function (c) {
+  var v = MP.conceptView(g, CC, c.id), all = v.near.concat(v.far);
+  eq(all.slice().sort(), c.units.map(function (u) { return 'unit:' + u.id; }).sort(), 'conceptView ' + c.id + ' 近い + 遠い = その考え方の単元すべて（1 回ずつ）');
+  var subs = {};
+  v.did.forEach(function (lid) { MP.nodeById(g, lid).units.forEach(function (code) { subs[MPD.anyUnit(code).sub] = 1; }); });
+  ok(v.near.every(function (id) { return v.mixed || subs[MPD.anyUnit(id.slice(5)).sub]; }) && v.far.every(function (id) { return !subs[MPD.anyUnit(id.slice(5)).sub]; }), 'conceptView ' + c.id + ' 近い・遠いは教科で分ける');
+  eq(JSON.stringify(MP.conceptView(g, CC, c.id)), JSON.stringify(v), 'conceptView ' + c.id + ' 決定論');
+});
+var cvw = MP.conceptView(g, CC, 'c-whole');
+eq([cvw.did, cvw.far, cvw.mixed, cvw.near.length], [[], [], true, 5], 'conceptView やったことの無い考え方 = mixed（中にまとめる・遠いは空）');
+// 見立てを外すと、やったことから外れる
+var gd = MP.graph(MPD.learned, acts, works, ['ln-box-right', 'ln-maze-wall'], OPT), cvd = MP.conceptView(gd, CC, 'c-shape');
+eq(cvd.did, ['ln:ln-cuboid', 'ln:ln-maze-turn', 'ln:ln-box-net'].filter(function (id) { return cvd.did.indexOf(id) >= 0; }).length === 3 ? cvd.did : null, 'conceptView 外した見立ては やったことに入らない');
+var gx2 = MP.graph(MPD.learned, acts, works, [], { today: '11/2', next: [{ id: 'nx-q', title: ['q', 'q'], learned: ['ln-area'], units: ['M4-A-05'], line: ['q', 'q'] }] });
+eq(MP.conceptView(gx2, CC, 'c-whole').next, ['next:nx-q'], 'conceptView やったことの無い考え方は、その単元につながる これから作れそう を出す');
+eq(MP.conceptView(g, CC, 'c-change').next, [], 'conceptView やったことがある時は これから作れそう を出さない');
+eq(MP.conceptView(g, CC, 'nope'), { did: [], near: [], far: [], mixed: false, next: [] }, 'conceptView 無い考え方');
+eq(MP.conceptView(null, CC, 'c-change').did, [], 'conceptView グラフが無い');
+eq(MP.conceptView(g, [{ id: 'cz', name: ['z', 'z'], line: ['z', 'z'], learned: ['ln-nope', 'ln-area'], units: [{ id: 'ZZ-1', why: ['z', 'z'] }, { id: 'M4-B-03', why: ['z', 'z'] }, { id: 'M4-B-03', why: ['z', 'z'] }] }], 'cz'),
+  { did: ['ln:ln-area'], near: ['unit:M4-B-03'], far: [], mixed: false, next: [] }, 'conceptView 存在しない id は落とす・重なりは 1 つに');
+// conceptNodes / conceptLines
+var cn = MP.conceptNodes(g, CC, 'c-change');
+ok(cn['ln:ln-stars'] && cn['act:act-py'] && cn['unit:J4-C-02'] && !cn['ln:ln-area'] && !cn['unit:M4-B-03'], 'conceptNodes = やったこと・その作ったもの・近い・遠い だけ');
+var cl = MP.conceptLines(g, CC, 'c-change'), clIds = cl.map(function (e) { return e.from + '>' + e.to; });
+ok(clIds.indexOf('ln:ln-stars>unit:M4-C-01') >= 0 && clIds.indexOf('ln:ln-battery>unit:S4-A-01') >= 0 && clIds.indexOf('unit:M4-C-01>unit:J4-C-02') >= 0 && clIds.indexOf('unit:M4-C-01>unit:C4-B-02') >= 0, 'conceptLines やったこと → 単元 / 近い → 遠い（via）');
+ok(cl.every(function (e) { return cn[e.from] && cn[e.to] && e.from !== e.to; }) && clIds.filter(function (x, i) { return clIds.indexOf(x) !== i; }).length === 0, 'conceptLines 両端は帯に出ているもの・重ならない');
+ok(cl.every(function (e) { var a = cvc.near.indexOf(e.from) >= 0, b = cvc.far.indexOf(e.to) >= 0; return /^ln:/.test(e.from) ? (cvc.near.indexOf(e.to) >= 0 || cvc.far.indexOf(e.to) >= 0) : (a && b); }), 'conceptLines 左 → 右だけ（同じ列の中の線は無い）');
+CC.forEach(function (c) { var v = MP.conceptView(g, CC, c.id); ok(v.mixed || v.far.every(function (id) { return MP.conceptLines(g, CC, c.id).some(function (e) { return e.to === id; }); }), 'conceptLines ' + c.id + ' 遠いところの単元にはどれも線が届く'); });
+eq(MP.conceptLines(g, CC, 'c-whole'), [], 'conceptLines やったことの無い考え方（これからも無い）は線なし');
+eq(MP.conceptLines(gx2, CC, 'c-whole').map(function (e) { return e.from + '>' + e.to; }), ['next:nx-q>unit:M4-A-05'], 'conceptLines やったことが無い時は これから → 単元');
+// normalizeUi（AD-4）
+eq(MP.viewNodes(g, 'concepts')['unit:M4-C-02'] && MP.viewNodes(g, 'concepts')['ln:ln-area'], true, 'viewNodes 概念で見る = 全単元・学んだこと');
+eq([MP.normalizeUi({ view: 'concepts' }, g).view, MP.normalizeUi({ concept: 'c-sort' }, g).concept, MP.normalizeUi({ concept: 'c-zz' }, g).concept, MP.normalizeUi({ concept: 7 }, g).concept], ['concepts', 'c-sort', null, null], 'AD-4 normalizeUi は view:concepts・concept（見本にある考え方だけ）を受ける');
+eq(MP.normalizeUi({ concept: 'c-change', sel: { concepts: 'unit:J4-C-02' } }, g).sel.concepts, 'unit:J4-C-02', 'AD-4 normalizeUi は sel.concepts を受ける');
+eq([MP.normalizeUi({ concept: 'c-change', sel: { concepts: 'unit:M4-B-03' } }, g).sel.concepts, MP.normalizeUi({ sel: { concepts: 'unit:J4-C-02' } }, g).sel.concepts], [null, null], 'AD-4 sel.concepts は選んでいる考え方の帯に出ているものだけ（考え方なし = 選択なし）');
+eq(MP.normalizeUi({ concept: 'c-change', sel: { concepts: 'unit:M4-B-03' } }, null).sel.concepts, 'unit:M4-B-03', 'AD-4 グラフなしでは形だけ見る（読み込み時）');
+eq(MP.select(MP.normalizeUi({ concept: 'c-change' }, g), g, 'concepts', 'unit:S4-A-01').sel.concepts, 'unit:S4-A-01', 'select 概念で見るの選択は sel.concepts');
+
+// ---------- 作ったものを自分で並べる（§AD-5）: MP.normalizeMoved / moveTargets / applyMoved ----------
+eq(MP.normalizeMoved({ 'act:act-py': { dx: 10.04, dy: -5 }, 'ln:ln-area': { dx: 1, dy: 1 }, 'past:past-box': { dx: 'a', dy: 1 }, 'past:past-maze': { dx: 9999, dy: -9999 }, 'past:past-moon': { dx: 0, dy: 0 }, 'act:zz': { dx: 1, dy: 2 } }, null),
+  { 'act:act-py': { dx: 10, dy: -5 }, 'past:past-maze': { dx: 1500, dy: -1500 }, 'act:zz': { dx: 1, dy: 2 } }, 'AD-5 normalizeMoved 作ったものの id・数だけ・±1500（差し戻し 3）・動いていないものは捨てる');
+eq(MP.MOVE_MAX, 1500, '差し戻し 3 動かせる範囲は ±1500（定数 1 つ）');
+eq(Object.keys(MP.normalizeMoved({ 'act:act-py': { dx: 1, dy: 2 }, 'act:zz': { dx: 1, dy: 2 } }, g)), ['act:act-py'], 'AD-5 normalizeMoved グラフに無い id は捨てる');
+eq(MP.normalizeUi({ moved: { made: { 'past:past-box': { dx: 5, dy: 6 } }, fields: 3, list: { 'act:act-py': { dx: 1, dy: 1 } } } }, g).moved, { made: { 'past:past-box': { dx: 5, dy: 6 } }, fields: {} }, 'AD-5 normalizeUi moved は 作ったものから / 分野で見る だけ（壊れた見方は空）');
+var LM = MPL.layout(g, 'made'), LF = MPL.layout(g, 'fields');
+eq(MP.moveTargets(g, 'past:past-box', LM), ['past:past-box', 'ln:ln-box-net', 'ln:ln-box-right', 'ln:ln-box-coins'], 'AD-5 moveTargets 作ったものから = その作ったもの + その学んだこと');
+eq(MP.moveTargets(g, 'past:past-box', LF), ['past:past-box'], 'AD-5 moveTargets 分野で見る = 作ったものだけ');
+eq([MP.moveTargets(g, 'unit:M4-B-03', LM), MP.moveTargets(g, 'ln:ln-area', LM), MP.moveTargets(g, 'next:nx-lamp', LM)], [[], [], []], 'AD-5 moveTargets 単元・学んだこと・これからは つかめない');
+var LMm = MP.applyMoved(LM, { 'past:past-box': { dx: 100, dy: -40 } }, g), movedIds = Object.keys(LM.nodes).filter(function (id) { return LM.nodes[id].x !== LMm.nodes[id].x || LM.nodes[id].y !== LMm.nodes[id].y; });
+eq(movedIds.sort(), ['ln:ln-box-coins', 'ln:ln-box-net', 'ln:ln-box-right', 'past:past-box'], 'AD-5 applyMoved 作ったものと その学んだことだけが動く（単元・橋・これからは動かない）');
+ok(movedIds.every(function (id) { return LMm.nodes[id].x === LM.nodes[id].x + 100 && LMm.nodes[id].y === LM.nodes[id].y - 40; }), 'AD-5 applyMoved 同じ分だけ動く');
+eq(JSON.stringify(MPL.layout(g, 'made')), JSON.stringify(LM), 'AD-5 applyMoved は並びの計算（MPL.layout）を変えない');
+var far1 = MP.applyMoved(LM, { 'past:past-box': { dx: -1500, dy: 1500 } }, g), fb = far1.bounds, bx = far1.nodes['past:past-box'];
+var farX = MP.applyMoved(LM, { 'past:past-box': { dx: -9000, dy: 9000 } }, g);
+ok(farX.nodes['past:past-box'].x === LM.nodes['past:past-box'].x - 1500 && farX.nodes['past:past-box'].y === LM.nodes['past:past-box'].y + 1500, '差し戻し 3 applyMoved も ±1500 で止まる');
+ok(fb.x <= bx.x - 60 && fb.y + fb.h >= bx.y + bx.h + 60 && fb.x + fb.w >= LM.bounds.w && Object.keys(far1.nodes).every(function (id) { return MPL.inside(far1.nodes[id], fb); }), 'AD-5 applyMoved 全体の範囲は動かした後のノードまで広がる（全体を見る用）');
+eq(MP.applyMoved(LM, {}, g).bounds, LM.bounds, 'AD-5 applyMoved 動かしていなければ範囲は同じ');
+eq(MP.applyMoved(LM, { 'unit:M4-B-03': { dx: 5, dy: 5 }, 'act:zz': { dx: 5, dy: 5 } }, g).nodes, LM.nodes, 'AD-5 applyMoved 作ったもの以外・無い id は動かさない');
+var FFm = MP.applyMoved(LF, { 'act:act-py': { dx: -24, dy: 48 } }, g);
+ok(FFm.nodes['act:act-py'].x === LF.nodes['act:act-py'].x - 24 && FFm.nodes['unit:M4-C-01'].x === LF.nodes['unit:M4-C-01'].x && JSON.stringify(FFm.islands) === JSON.stringify(LF.islands), 'AD-5 applyMoved 分野で見る = 作ったものだけ（島・単元は動かない）');
+eq(JSON.stringify(MP.applyMoved(LM, { 'past:past-box': { dx: 100, dy: -40 } }, g)), JSON.stringify(LMm), 'AD-5 applyMoved 決定論');
+eq(MPC.MOVE_STEP, 24, 'AD-5 Shift + 矢印は地図の座標で 24px');
+// 差し戻し 4: 保存値にグラフに無い id だけがある → 描く前の照合で捨てる（動いたノードが無いので「ならびを元に戻す」は出ない）
+var uz = MP.normalizeUi({ moved: { made: { 'act:zz': { dx: 30, dy: 0 } }, fields: { 'past:gone': { dx: 1, dy: 1 } } } }, null);
+eq(uz.moved.made, { 'act:zz': { dx: 30, dy: 0 } }, '差し戻し 4 前提: 読み込み時（グラフなし）は形だけ見るので不明 id が残る');
+var pz = MP.pruneMoved(uz, g);
+eq([pz.moved, pz !== uz, uz.moved.made['act:zz'].dx], [{ made: {}, fields: {} }, true, 30], '差し戻し 4 pruneMoved グラフに無い id を捨てる（元の ui は書き換えない）');
+var keepU = MP.normalizeUi({ moved: { made: { 'past:past-box': { dx: 5, dy: 0 } } } }, null);
+ok(MP.pruneMoved(keepU, g) === keepU && MP.pruneMoved(keepU, null) === keepU, '差し戻し 4 pruneMoved 変わらなければ同じものを返す（グラフ無しは何もしない）');
+var mixU = MP.pruneMoved(MP.normalizeUi({ moved: { made: { 'past:past-box': { dx: 5, dy: 0 }, 'act:zz': { dx: 1, dy: 1 } } } }, null), g);
+eq(mixU.moved.made, { 'past:past-box': { dx: 5, dy: 0 } }, '差し戻し 4 pruneMoved 実際にあるものは残す');
+// 差し戻し 5: 概念で見るで 学んだことの「違う」→ 作ったものが帯から消える時は選択なし（戻し先が無い）
+var dc = MP.decline({ concept: 'c-change', sel: { concepts: 'ln:ln-moon-frames' } }, g, 'concepts', 'ln:ln-moon-frames');
+eq([dc.declined, dc.sel.concepts], [['ln-moon-frames'], null], '差し戻し 5 decline 概念で見る: その作ったもの（お月見）が帯から消える → 選択なし');
+var gm = MP.graph(MPD.learned, acts, works, ['ln-moon-frames'], OPT);
+ok(!MP.conceptNodes(gm, CC, 'c-change')['past:past-moon'], '差し戻し 5 前提: 外した後、お月見は ともなって変わる の帯に無い');
+var dc2 = MP.decline({ concept: 'c-shape', sel: { concepts: 'ln:ln-box-right' } }, g, 'concepts', 'ln:ln-box-right');
+eq(dc2.sel.concepts, 'past:past-box', '差し戻し 5 decline 同じ作ったものの別の学んだことが帯に残る時は、その作ったものへ');
+eq(MP.decline({ sel: { made: 'ln:ln-moon-frames' } }, g, 'made', 'ln:ln-moon-frames').sel.made, 'past:past-moon', '差し戻し 5 作ったものから は今までどおり その作ったものへ');
+
 // ---------- MP.unitLinks（単元の詳細） ----------
 eq(MP.unitLinks(g, 'M4-C-01').map(function (x) { return [x.learned.id, x.made.id]; }), [['ln:ln-stars', 'act:act-py'], ['ln:ln-speed', 'act:act-py'], ['ln:ln-bead-repeat', 'past:past-beads'], ['ln:ln-moon-frames', 'past:past-moon']], 'unitLinks 変わり方 ← 学んだこと ← 作ったもの');
 eq(MP.unitLinks(g, 'M4-A-05'), [], 'unitLinks つながりの無い単元 = []');
@@ -436,7 +546,7 @@ var layoutSrc = fs.readFileSync(path.join(__dirname, '../app-v3/js/map-layout.js
 var canvasSrc = fs.readFileSync(path.join(__dirname, '../app-v3/js/map-canvas.js'), 'utf8');
 var cssSrc = fs.readFileSync(path.join(__dirname, '../app-v3/css/map.css'), 'utf8');
 var keys = { mp_in_map: true, mp_kind_act: true, mp_kind_work: true, mp_kind_learned: true, mp_kind_unit: true, mp_kind_next: true, mp_tab_links: true, mp_tab_basics: true,
-  mp_view_made: true, mp_view_flow: true, mp_view_fields: true, mp_view_list: true, mp_k_order: true, mp_k_cross: true, mp_k_next: true, mp_big: true, mp_big_off: true, mp_only: true };
+  mp_view_made: true, mp_view_flow: true, mp_view_fields: true, mp_view_concepts: true, mp_view_list: true, mp_k_order: true, mp_k_next: true, mp_big: true, mp_big_off: true, mp_only: true };
 mapSrc.replace(/\bT\('([a-z_]+)'/g, function (all, k) { if (!/_$/.test(k)) keys[k] = true; return all; });
 var missing = Object.keys(keys).filter(function (k) { return !new RegExp('\\n\\s+' + k + ": \\['[^']+', '[^']+'\\]").test(i18n); });
 eq(missing, [], 'AB-14 使う key が i18n.js に [中, 小] である');
@@ -462,7 +572,8 @@ ok(!/k-peer|'peer'/.test(mapSrc.split('ここから下はブラウザ専用')[1]
 var shellI18n = ['nav_rail_close', 'nav_rail_open'].filter(function (k) { return !new RegExp('\\n\\s+' + k + ": \\['[^']+', '[^']+'\\]").test(i18n); });
 eq(shellI18n, [], 'AC-10 メニューを閉じる / 開く の key が [中, 小]');
 ok(/mp_big: \['大きく見る', '大きく 見る'\]/.test(i18n) && /mp_big_off: \['もとの大きさ', 'もとの 大きさ'\]/.test(i18n) && /mp_view_flow: \['流れで見る', 'ながれで 見る'\]/.test(i18n) && /nav_rail_close: \['メニューを閉じる', 'メニューを とじる'\]/.test(i18n) && /nav_rail_open: \['メニューを開く', 'メニューを ひらく'\]/.test(i18n) && /mp_only: \['作ったものだけ', '作ったものだけ'\]/.test(i18n), 'AC-10 / AC-14 文言は契約どおり');
-ok(/stroke-dasharray:0 6/.test(cssSrc) && /stroke-dasharray:7 5/.test(cssSrc) && /k-cross \.i/.test(cssSrc), 'AB-3 線の種類は形で分ける（点線・破線・二重）');
+ok(/stroke-dasharray:7 5/.test(cssSrc) && !/k-cross|k-order/.test(cssSrc) && !/k-cross|k-order|mp_k_cross/.test(mapSrc), 'AB-3 / AD-1 / AD-9 線の形は 基本 = 実線・これから = 破線（教科をまたぐ・学ぶ順の線・見本は無い）');
+ok(!/mp_k_cross/.test(i18n) && !/教科をまたぐ/.test(i18n), 'AD-1 文言から「教科をまたぐ」を消した');
 ok(!/#ed922c|--orange/.test(cssSrc.split('\n').filter(function (l) { return /mp-e\b|mp-e\.|mp-sw|mp-sq/.test(l); }).join('\n')), 'AB-3 / Y-3 線とマスに橙を使わない');
 
 console.log('map-test: ' + pass + ' passed, ' + fail + ' failed');

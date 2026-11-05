@@ -2,7 +2,7 @@
    一覧 = お題 3 枚（fit near / next / new が 1 枚ずつ。fit は画面に出さない）+ とっておいたお題。
    詳細 = 問い・なぜ出したか・印 + 4 つの入口（短い動画を見る / 実物を探す / 試して遊ぶ / 作ってみる）。同時に開く入口は 1 つ。
    お題は #today を開いた時だけ出す（バッジ・通知・他画面への差し込みはしない。§X-5）。回数・連続日数・完了は出さない。
-   §AE（contract-app）: 一覧は 2 段（話す・考える = news / talk / philo が 1 枚ずつ、作る・ためす = 上の 3 枚）+ とっておいた + サークル対話に持っていく問い。
+   §AF（contract-app）: 一覧は 2 段（話す・考える = news / talk / philo が 1 枚ずつ、作る・ためす = 上の 3 枚）+ とっておいた + サークル対話に持っていく問い。
    対話のお題の詳細 = 前提を読む / いろいろな考えを見る / 問いを選ぶ / 自分の考えを置く + 考えのあしあと + 次の一歩（バディと話す / サークル対話 / 作ってみる）。
    純関数（TD.initial / swap / keep / unkeep / markEntry / addFound / toggleHint / play / normalize …）は DOM と DES.t に触れず、
    node からも読める（tools/today-test.js）。変更は DES.app.change → DES.store.save → 再描画 の 1 経路（des3.odai を足す）。 */
@@ -13,7 +13,7 @@
   var MD = DES.makeData || (typeof require === 'function' ? require('./make-data.js') : null);
   var TD = DES.today = DES.today || {};
   var FITS = TDD.FITS, ENTRIES = ['watch', 'find', 'play', 'make'];
-  // §AE 対話のお題: 種類（news / talk / philo）・問いの段（check / self / open）・詳細の入口（前提 / 考え / 問い / 自分の考え）
+  // §AF 対話のお題: 種類（news / talk / philo）・問いの段（check / self / open）・詳細の入口（前提 / 考え / 問い / 自分の考え）
   var KINDS = TDD.KINDS, LEVELS = TDD.LEVELS, OPENS = ['facts', 'views', 'asks', 'mine'], LINE_MAX = 80;
 
   // ---------- 小道具 ----------
@@ -27,7 +27,7 @@
 
   // ---------- 状態（§X-4）: { slots: [id,id,id], kept: [id], tried: { id: { entries, found, checks } }, rot: { near, next, new } } ----------
   // rot = その fit のプールで、いまスロットに出ている位置。slots[i] は FITS[i] のプールから
-  // §AE-5 で足す: dslots { news, talk, philo } / drot（同じ形の回転の位置）/ think { id: { opened, ask, marks } } / circle [{ id, ask, time }]
+  // §AF-5 で足す: dslots { news, talk, philo } / drot（同じ形の回転の位置）/ think { id: { opened, ask, marks } } / circle [{ id, ask, time }]
   function initial() {
     var dslots = {}, drot = {};
     KINDS.forEach(function (k) { dslots[k] = TDD.kindPool(k)[0]; drot[k] = 0; });
@@ -43,7 +43,8 @@
     out.ask = LEVELS.indexOf(t.ask) >= 0 ? t.ask : null;
     if (Array.isArray(t.marks)) {
       t.marks.forEach(function (m) {
-        if (!isObj(m) || typeof m.id !== 'string' || seen[m.id] || !isStance(o, m.stance) || !(m.line == null || typeof m.line === 'string') || typeof m.time !== 'string') return;
+        // 空の id は捨てる（外す・元に戻すが id で探すため。レビューへの裁定）
+        if (!isObj(m) || typeof m.id !== 'string' || !m.id || seen[m.id] || !isStance(o, m.stance) || !(m.line == null || typeof m.line === 'string') || typeof m.time !== 'string') return;
         seen[m.id] = true;
         var line = m.line ? trim(m.line).slice(0, LINE_MAX) : '';
         out.marks.push({ id: m.id, stance: m.stance, line: line || null, time: m.time });
@@ -87,7 +88,7 @@
       out.rot = {};
       FITS.forEach(function (f) { out.rot[f] = raw.rot[f] % TDD.pool(f).length; });
     }
-    // kept: 配列なら知っているお題だけ（重なりなし。§AE: 種類を問わない）
+    // kept: 配列なら知っているお題だけ（重なりなし。§AF: 種類を問わない）
     if (Array.isArray(raw.kept)) raw.kept.forEach(function (id) { if (validAny(id) && out.kept.indexOf(id) < 0) out.kept.push(id); });
     // tried: オブジェクトなら、お題ごとに形の合うものだけ
     if (isObj(raw.tried)) {
@@ -96,7 +97,7 @@
         if (t) out.tried[id] = t;
       });
     }
-    // §AE-5: dslots は 3 種類とも、その種類の知っているお題 / drot は 3 種類とも 0 以上の整数（プールの長さで折り返す）
+    // §AF-5: dslots は 3 種類とも、その種類の知っているお題 / drot は 3 種類とも 0 以上の整数（プールの長さで折り返す）
     if (isObj(raw.dslots) && KINDS.every(function (k) { return validD(raw.dslots[k]) && TDD.getDialog(raw.dslots[k]).kind === k; })) {
       out.dslots = {};
       KINDS.forEach(function (k) { out.dslots[k] = raw.dslots[k]; });
@@ -207,7 +208,7 @@
     return { values: v, art: TDD.drawArt(odai.art, v), result: odai.play.result(v) };
   }
 
-  // ---------- §AE-6 対話のお題 ----------
+  // ---------- §AF-6 対話のお題 ----------
   // 別のお題を見る（種類ごと）: そのカードだけ、同じ種類の次のお題へ。一巡したら最初に戻る。差し替えられない時は同じ state
   function swapKind(state, kind) {
     if (KINDS.indexOf(kind) < 0 || !state || !isObj(state.dslots)) return state;
@@ -249,10 +250,15 @@
     th.opened.asks = true;
     return S;
   }
+  // 既にある id と重ならない採番（レビューへの裁定）: 番号は 10 億未満の 'mkN' の最大の次から。とても大きい番号（数の精度を超える）は
+  // 最大に数えない。それでも重なれば次の番号へ進める
+  var MARK_N_MAX = 1e9;
   function nextMarkId(marks) {
-    var n = 0;
-    marks.forEach(function (m) { var k = /^mk(\d+)$/.exec(m.id); if (k && +k[1] > n) n = +k[1]; });
-    return 'mk' + (n + 1);
+    var n = 0, used = {};
+    marks.forEach(function (m) { used[m.id] = true; var k = /^mk(\d+)$/.exec(m.id); if (k && +k[1] > n && +k[1] < MARK_N_MAX) n = +k[1]; });
+    var next = n + 1;
+    while (used['mk' + next]) next += 1;
+    return 'mk' + next;
   }
   // 自分の考えを置く: 新しいものが上。前のものは残す（考えが変わったことが見える）。line は 80 字で切る（空なら null）
   function putMark(state, id, m) {
@@ -278,6 +284,12 @@
     if (th.marks.some(function (m) { return m.id === item.id; })) item.id = nextMarkId(th.marks);
     th.marks.splice(Math.max(0, Math.min(u.index | 0, th.marks.length)), 0, item);
     return S;
+  }
+  // 元に戻した考えの id（restoreMark の後の state で、戻した位置の 1 件。id が重なって替わった時はその新しい id）。フォーカスを戻す先
+  function restoredMarkId(state, u) {
+    var t = state && u && state.think && state.think[u.id];
+    if (!t || !Array.isArray(t.marks) || !t.marks.length) return null;
+    return t.marks[Math.max(0, Math.min(u.index | 0, t.marks.length - 1))].id;
   }
   // サークル対話に持っていく（お題 + 選んだ問いがあればその段）。新しいものが先頭（at を渡すとその位置 = 外すの元に戻す）。
   // 既に入っていれば、選んだ問いだけ今のものに替える
@@ -306,11 +318,48 @@
     return { state: S, undo: { index: i, item: clone(item) } };
   }
 
+  // ---------- 保存の失敗を戻す（共通の約束。DES.make.trySave = 作る・展示と同じ約束）----------
+  // save(key) は DES.store.save と同じ約束（偽 = 保存できなかった）。どれも保存できなければ state を前に戻して false
+  function trySave(st, keys, fn, save) { return DES.make.trySave(st, keys, fn, save); }
+  function saveOdai(st, next, save) { return trySave(st, ['odai'], function (s) { s.odai = next; }, save); }
+  // バディと話す: 話す画面の下書き（state.draft）に line を入れる（下書きがあれば改行して足す）
+  function addTalk(st, line, save) {
+    return trySave(st, ['draft'], function (s) {
+      var cur = String((s.draft && s.draft.text) || '').replace(/\s+$/, '');
+      s.draft = { text: cur ? cur + '\n' + line : line, scroll: (s.draft && s.draft.scroll) || 0 };
+    }, save);
+  }
+  // 対話のお題の入口を開く（同時に 1 つ。もう一度押すと閉じる）。open = 画面の今開いている入口 { id: entry }。
+  // 開いた記録が変わる時は保存し、保存できなければ入口も押す前に戻す。戻り値 { saved: true | false | null（保存なし） }
+  function openDEntry(st, open, id, k, save) {
+    var prev = open[id] || null;
+    open[id] = prev === k ? null : k;
+    if (!open[id]) return { saved: null };
+    var cur = st.odai, next = markOpen(cur, id, k);
+    if (next === cur) return { saved: null };
+    if (saveOdai(st, next, save)) return { saved: true };
+    open[id] = prev;
+    return { saved: false };
+  }
+  // 作ってみる（§AF-4 の 5）: 題 = next.makeTitle・手順 = next.makeSteps の外で作る活動を作って保存する（2 回目は同じ活動）。
+  // opts: { id, mode, now, recText }。戻り値 { ok, id, created }（ok = 保存できた。created でなければ保存しない）
+  function dialogMake(st, o, opts, save) {
+    var mk = TDD.makeOdaiOf(o), M = DES.make;
+    if (!mk || !M || !M.fromOdai) return null;
+    opts = opts || {};
+    var r = M.fromOdai(mk, { id: opts.id, mode: opts.mode, now: opts.now, acts: st.activities || [], recText: opts.recText });
+    if (!r) return null;
+    if (!r.created) return { ok: true, id: r.id, created: false };
+    return { ok: M.addAct(st, r.act, save), id: r.id, created: true };
+  }
+
   var pure = {
     initial: initial, normalize: normalize, swap: swap, keep: keep, unkeep: unkeep, markEntry: markEntry, isStarted: isStarted,
     addFound: addFound, removeFound: removeFound, restoreFound: restoreFound, toggleHint: toggleHint, play: play, isKept: isKeptIn, FITS: FITS, ENTRIES: ENTRIES,
     swapKind: swapKind, markOpen: markOpen, isOpened: isOpened, pickAsk: pickAsk, putMark: putMark, removeMark: removeMark, restoreMark: restoreMark,
-    toCircle: toCircle, fromCircle: fromCircle, inCircle: inCircle, KINDS: KINDS, LEVELS: LEVELS, OPENS: OPENS, LINE_MAX: LINE_MAX
+    toCircle: toCircle, fromCircle: fromCircle, inCircle: inCircle, KINDS: KINDS, LEVELS: LEVELS, OPENS: OPENS, LINE_MAX: LINE_MAX,
+    // レビューへの裁定
+    restoredMarkId: restoredMarkId, saveOdai: saveOdai, addTalk: addTalk, openDEntry: openDEntry, dialogMake: dialogMake
   };
   Object.keys(pure).forEach(function (k) { TD[k] = pure[k]; });
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
@@ -349,7 +398,7 @@
   function ui() {
     var u = DES.ui;
     if (!u.td) u.td = { open: {}, play: {}, own: null, dlg: null, shownDetail: null, missing: null, fresh: null, pendingFocus: null };
-    // §AE: dmine = 自分の考えの入力中の値（お題ごと { stance, line }。保存しない）/ dfresh = 替えたばかりの対話のカード（種類）
+    // §AF: dmine = 自分の考えの入力中の値（お題ごと { stance, line }。保存しない）/ dfresh = 替えたばかりの対話のカード（種類）
     if (!u.td.dmine) u.td.dmine = {};
     return u.td;
   }
@@ -416,7 +465,7 @@
       ])
     ]);
   }
-  // ---------- §AE-2 対話のカード（話す・考える） ----------
+  // ---------- §AF-2 対話のカード（話す・考える） ----------
   // 種類のチップ（news は右に日付）
   function kindEl(o) {
     return H('p', { class: 'odai-kind' }, [H('span', { class: 'chip k-kind k-' + o.kind }, T('td_kind_' + o.kind)),
@@ -615,7 +664,7 @@
     if (u.shownDetail !== o.id) { u.shownDetail = o.id; var h = main.querySelector('h1'); if (h) h.focus(); }
   }
 
-  // ---------- §AE-4 対話のお題の詳細 ----------
+  // ---------- §AF-4 対話のお題の詳細 ----------
   var DENTRY_ICON = { facts: 'record', views: 'chat', asks: 'quote', mine: 'check' };
   function dentries(o) { return OPENS.filter(function (k) { return k !== 'views' || o.views.length > 0; }); }
   function dentriesEl(o, open) {
@@ -829,7 +878,8 @@
     if (isKept(id)) { unkeepWithUndo(id); return; }
     var next = keep(st, id);
     if (next === st) return;
-    setOdai(next);
+    // 保存できなければとっておかず、成功のトーストも出さない（save_fail。レビューへの裁定）
+    if (!putOdai(next)) return;
     DES.app.toast(T('td_kept_toast'));
   };
   A['td-unkeep'] = function (el) { unkeepWithUndo(el.getAttribute('data-id')); };
@@ -840,20 +890,17 @@
     window.location.hash = '#today';
   };
 
-  // ---------- §AE 対話のお題の操作 ----------
+  // ---------- §AF 対話のお題の操作 ----------
   // 保存してから描き直す。保存に失敗したら画面の状態を戻し、save_fail を出す（共通の約束）
+  // o.ok = 保存できた時だけ、描き直す前にする事（入力欄を空にする等。失敗した時は入力を残し、描き直しは 1 回だけ）
+  function storeSave(k) { return DES.store.save(k); }
+  function failSave(o) { DES.app.commit(o); DES.app.toast(T('save_fail')); }
   function putOdai(next, o) {
-    var prev = S().odai;
-    if (next === prev) return false;
-    S().odai = next;
-    if (!DES.store.save('odai')) {
-      S().odai = prev;
-      S().saveFailed = true;
-      DES.app.commit(o);
-      DES.app.toast(T('save_fail'));
-      return false;
-    }
+    o = o || {};
+    if (next === S().odai) return false;
+    if (!saveOdai(S(), next, storeSave)) { failSave(o); return false; }
     S().saveFailed = false;
+    if (o.ok) o.ok();
     DES.app.commit(o);
     return true;
   }
@@ -870,11 +917,12 @@
       setTimeout(function () { if (ghost.parentNode) ghost.parentNode.removeChild(ghost); }, 200);
     }
   };
-  // 入口を開く（同時に 1 つ。もう一度押すと閉じる）。開いたことは記録に残す
+  // 入口を開く（同時に 1 つ。もう一度押すと閉じる）。開いたことは記録に残す。保存できなければ開かない（記録とパネルを食い違わせない）
   A['td-dentry'] = function (el) {
-    var id = el.getAttribute('data-id'), k = el.getAttribute('data-arg'), u = ui();
-    u.open[id] = u.open[id] === k ? null : k;
-    if (!u.open[id] || !putOdai(markOpen(S().odai, id, k))) DES.app.commit();
+    var id = el.getAttribute('data-id'), k = el.getAttribute('data-arg'), u = ui(), r = openDEntry(S(), u.open, id, k, storeSave);
+    if (r.saved === false) { failSave(); return; }
+    if (r.saved) S().saveFailed = false;
+    DES.app.commit();
     var p = u.open[id] && document.getElementById('td-panel');
     if (p && p.scrollIntoView) p.scrollIntoView({ block: 'nearest' });
   };
@@ -889,9 +937,9 @@
     if (!id) { var b = document.querySelector('[data-action="td-mark-put"]'); id = b ? b.getAttribute('data-id') : null; }
     var mine = id ? mineOf(id) : null;
     if (!mine || !mine.stance) return;
-    var next = putMark(S().odai, id, { stance: mine.stance, line: mine.line, time: stamp() }), line = mine.line;
-    mine.line = '';
-    if (!putOdai(next, { sel: '[data-action="td-mark-put"]' })) { mine.line = line; DES.app.render(); return; }
+    var next = putMark(S().odai, id, { stance: mine.stance, line: mine.line, time: stamp() });
+    // 保存できた時だけ 1 行を空に戻す。失敗した時は入力を残したまま 1 回だけ描き直し、フォーカスを「置く」（Enter なら入力欄）に戻す
+    if (!putOdai(next, { sel: '[data-action="td-mark-put"]', ok: function () { mine.line = ''; } })) return;
     var put = document.querySelector('[data-action="td-mark-put"]');
     if (put) put.focus();
     DES.app.toast(T('td_mark_toast'));
@@ -902,18 +950,19 @@
     var left = r.state.think[id].marks;
     if (!putOdai(r.state, { sel: left.length ? '[data-action="td-mark-del"][data-arg="' + esc(left[Math.min(r.undo.index, left.length - 1)].id) + '"]' : '[data-action="td-dentry"][data-arg="mine"]' })) return;
     DES.app.toast(T('td_mark_removed'), { label: T('undo_restore'), fn: function () {
-      putOdai(restoreMark(S().odai, r.undo), { sel: '[data-action="td-mark-del"][data-id="' + esc(id) + '"]' });
+      // 元に戻した考えの「外す」へフォーカス（古い考えを戻しても、先頭の考えへ飛ばない）
+      var back = restoreMark(S().odai, r.undo), mid = restoredMarkId(back, r.undo);
+      putOdai(back, { sel: mid ? '[data-action="td-mark-del"][data-id="' + esc(id) + '"][data-arg="' + esc(mid) + '"]' : '[data-action="td-dentry"][data-arg="mine"]' });
     } });
   };
   // バディと話す: 話す画面の下書き（S().draft）に next.talk を入れて #talk へ（下書きがあれば改行して足す）
   A['td-dtalk'] = function (el) {
     var o = TDD.getDialog(el.getAttribute('data-id'));
     if (!o) return;
-    var line = pick(o.next.talk);
-    DES.app.change(function () {
-      var cur = String((S().draft && S().draft.text) || '').replace(/\s+$/, '');
-      S().draft = { text: cur ? cur + '\n' + line : line, scroll: (S().draft && S().draft.scroll) || 0 };
-    });
+    // 保存できなければ下書きを変えず、#talk へ移らない・成功のトーストも出さない（save_fail。レビューへの裁定）
+    if (!addTalk(S(), pick(o.next.talk), storeSave)) { failSave(); return; }
+    S().saveFailed = false;
+    DES.app.commit();
     DES.app.toast(T('prefilled'));
     DES.ui.focusComposer = true;
     window.location.hash = '#talk';
@@ -937,16 +986,17 @@
   A['td-uncircle'] = function (el) { uncircleWithUndo(el.getAttribute('data-id'), null); };
   // 作ってみる: DES.make.openOdai と同じ移動（同じお題の活動があればそれを開く）。題 = next.makeTitle・手順 = next.makeSteps の外で作る活動
   A['td-dmake'] = function (el) {
-    var o = TDD.getDialog(el.getAttribute('data-id')), mk = TDD.makeOdaiOf(o);
-    if (!mk) return;
-    var m = DES.mode();
-    var r = DES.make.fromOdai(mk, { id: DES.plan.newId('a'), mode: m, now: DES.data.now, acts: S().activities,
-      recText: T('td_make_rec', { q: pick(o.title), step: pick(o.next.makeSteps[0]) }) });
+    var o = TDD.getDialog(el.getAttribute('data-id'));
+    if (!o) return;
+    var r = dialogMake(S(), o, { id: DES.plan.newId('a'), mode: DES.mode(), now: DES.data.now,
+      recText: T('td_make_rec', { q: pick(o.title), step: pick(o.next.makeSteps[0]) }) }, storeSave);
     if (!r) return;
-    if (r.created) {
-      DES.app.change(function () { S().activities = [r.act].concat(S().activities); });
-      if (window.location.hash !== '#make/' + r.id) window.location.hash = '#make/' + r.id; else DES.app.render();
-    } else DES.make.openAct(r.id);
+    if (!r.created) { DES.make.openAct(r.id); return; }
+    // 保存できなければ活動を足さず、作業台へ移らない（save_fail。レビューへの裁定）
+    if (!r.ok) { failSave(); return; }
+    S().saveFailed = false;
+    DES.app.commit();
+    if (window.location.hash !== '#make/' + r.id) window.location.hash = '#make/' + r.id; else DES.app.render();
   };
   // 入口を開く（同時に 1 つ。もう一度押すと閉じる）。開いたことは記録に残す
   A['td-entry'] = function (el) {
@@ -1071,7 +1121,7 @@
     });
     document.addEventListener('change', function (e) {
       var t = e.target, k = t && t.getAttribute ? t.getAttribute('data-ui') : null, id = k ? t.getAttribute('data-id') : null;
-      // §AE: 問いを選ぶ（記録して描き直す・フォーカスは選んだラジオに残る）/ 立場を選ぶ（入力中の値。「置く」を使えるようにする）
+      // §AF: 問いを選ぶ（記録して描き直す・フォーカスは選んだラジオに残る）/ 立場を選ぶ（入力中の値。「置く」を使えるようにする）
       if (k === 'td-ask') { putOdai(pickAsk(S().odai, id, t.value), { sel: '#td-ask-' + esc(t.value) }); return; }
       if (k === 'td-stance') { mineOf(id).stance = t.value; syncMine(id); return; }
       if (k !== 'td-hint') return;

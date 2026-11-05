@@ -108,7 +108,7 @@ html[data-mode="es"] .today-page .btn,html[data-mode="es"] .today-page .link-btn
 /* ダイアログ（見つけた写真を残す） */
 .today-dialog .cap-thumb svg{border-radius:6px}
 
-/* ---------- §AE 対話のお題（話す・考える）: 一覧の 2 段 / 種類のチップ / 詳細の 4 入口 / 考えのあしあと / 次の一歩 / サークル対話 ---------- */
+/* ---------- §AF 対話のお題（話す・考える）: 一覧の 2 段 / 種類のチップ / 詳細の 4 入口 / 考えのあしあと / 次の一歩 / サークル対話 ---------- */
 .odai-sec{min-width:0}
 .odai-sec+.odai-sec{margin-top:30px}
 .odai-sec-h{font-size:15px;line-height:1.6;margin-bottom:12px}

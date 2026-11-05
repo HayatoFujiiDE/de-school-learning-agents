@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 作るの提案（contract-app §AD-5）と作品展示（§AF）の写真風サムネイルを作る。node 単体・依存なし。
+// 作るの提案（contract-app §AE-5）と作品展示（§AG）の写真風サムネイルを作る。node 単体・依存なし。
 //
 // 実行はふじさんの通常ターミナルで（agent からは --dry-run だけ）:
 //   node tools/gen-thumbs.mjs --dry-run      呼ばずに対象と件数だけ出す（鍵も読まない）
@@ -34,7 +34,7 @@ const API_URL = 'https://api.openai.com/v1/images/generations';
 const MAX_CALLS = 17;
 const TIMEOUT_MS = 180_000;
 
-// プロンプトの共通の約束（contract-app §AD-5 verbatim。illust は後半を替える）
+// プロンプトの共通の約束（contract-app §AE-5 verbatim。illust は後半を替える）
 const RULE = '人物・顔・手・文字・ロゴ・商標のあるキャラクターを入れない。';
 const TAIL_PHOTO = RULE + '子どもの机の上で撮った自然光の写真のように。';
 const TAIL_ILLUST = RULE + 'やわらかい水彩のイラストで。';
@@ -83,7 +83,7 @@ function writeThumbs() {
   const list = {};
   for (const t of TARGETS) { const rel = existing(t); if (rel) list[t.id] = rel; }
   const body = Object.keys(list).map((id) => '  ' + JSON.stringify(id) + ': ' + JSON.stringify(list[id])).join(',\n');
-  const src = '/* 作るの提案（§AD-5）・作品展示（§AF）の画像の一覧。tools/gen-thumbs.mjs が画像と一緒に書き出す（存在するファイルだけ）。\n' +
+  const src = '/* 作るの提案（§AE-5）・作品展示（§AG）の画像の一覧。tools/gen-thumbs.mjs が画像と一緒に書き出す（存在するファイルだけ）。\n' +
     '   一覧に無い id はカテゴリの線画。 */\n' +
     'window.DES = window.DES || {};\n' +
     'window.DES.thumbs = {' + (body ? '\n' + body + '\n' : '') + '};\n';
@@ -102,6 +102,28 @@ function kindOf(buf) {
 function isStopError(status, code) {
   return status === 429 || status === 401 || status === 403 || /quota|billing|insufficient|invalid_api_key|rate_limit/i.test(code || '');
 }
+// エラーの時に出す文は、この決まった分類だけ（API が返した文字列・例外の名前をそのまま出さない。レビューへの裁定）
+const WHY = {
+  timeout: 'timeout',
+  connection: 'connection_error',
+  rate_limit: 'rate_limit (429)',
+  quota: 'quota_or_billing',
+  auth: 'auth_error (401/403)',
+  server: 'server_error (5xx)',
+  request: 'request_error (4xx)',
+  other: 'unexpected_status',
+  bad_response: 'bad_response',
+  crashed: 'internal_error',
+};
+// status と error.code を読んで分類する（code は判定にだけ使い、出力には入れない）
+function whyOf(status, code) {
+  if (status === 429) return /quota|billing|insufficient/i.test(code || '') ? WHY.quota : WHY.rate_limit;
+  if (/quota|billing|insufficient/i.test(code || '')) return WHY.quota;
+  if (status === 401 || status === 403 || /invalid_api_key/i.test(code || '')) return WHY.auth;
+  if (status >= 500 && status < 600) return WHY.server;
+  if (status >= 400 && status < 500) return WHY.request;
+  return WHY.other;
+}
 
 async function callOnce(key, t) {
   let res;
@@ -113,17 +135,18 @@ async function callOnce(key, t) {
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (e) {
-    return { ok: false, stop: false, why: 'connection ' + (e && e.name ? e.name : 'error') };
+    const timedOut = !!(e && (e.name === 'TimeoutError' || e.name === 'AbortError'));
+    return { ok: false, stop: false, why: timedOut ? WHY.timeout : WHY.connection };
   }
   let parsed = null;
   try { parsed = await res.json(); } catch { parsed = null; }
   if (!res.ok) {
     const code = parsed && parsed.error && typeof parsed.error.code === 'string' ? parsed.error.code.slice(0, 60) : '';
-    return { ok: false, stop: isStopError(res.status, code), why: 'status ' + res.status + (code ? ' ' + code : '') };
+    return { ok: false, stop: isStopError(res.status, code), why: whyOf(res.status, code) };
   }
   const b64 = parsed && Array.isArray(parsed.data) && parsed.data[0] && typeof parsed.data[0].b64_json === 'string' ? parsed.data[0].b64_json : '';
   const buf = Buffer.from(b64, 'base64'), kind = kindOf(buf);
-  if (!kind) return { ok: false, stop: false, why: 'bad_response' };
+  if (!kind) return { ok: false, stop: false, why: WHY.bad_response };
   return { ok: true, buf: buf, kind: kind };
 }
 
@@ -170,4 +193,4 @@ async function main() {
   return rc;
 }
 
-main().then((rc) => { process.exitCode = rc; }, (e) => { console.error('止まった: ' + (e && e.name ? e.name : 'error')); process.exitCode = 1; });
+main().then((rc) => { process.exitCode = rc; }, () => { console.error('止まった: ' + WHY.crashed); process.exitCode = 1; });

@@ -38,7 +38,7 @@ window.DES = window.DES || {};
     expand: 'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
     shrink: 'M9 4v5H4 M15 4v5h5 M9 20v-5H4 M15 20v-5h5',
     sidebar: 'M4 4h16v16H4z M9 4v16 M14 10l-2 2 2 2',
-    // 作品展示（contract-app §AF-1）: 額縁と山
+    // 作品展示（contract-app §AG-1）: 額縁と山
     gallery: 'M3 4h18v16H3z M6 7h12v10H6z M6 17l4-5 3 3 2-2 3 4'
   };
   var THICK = { more: 3, drag: 3 };
@@ -78,7 +78,7 @@ window.DES = window.DES || {};
   var ROUTES = ['talk', 'plan', 'make', 'works', 'gallery', 'today', 'self', 'map', 'trail', 'paused'];
   var NAV = ['talk', 'make', 'works', 'gallery', 'today', 'self', 'map', 'trail'];
 
-  // #make/<id>（作業台）・#works/<id>・#gallery/<id>・#today/<id>・#map/<arg> は前方一致（CONTRACT-v3 §U-3 / §W / §AF / §X / §Y）。他は完全一致
+  // #make/<id>（作業台）・#works/<id>・#gallery/<id>・#today/<id>・#map/<arg> は前方一致（CONTRACT-v3 §U-3 / §W / §AG / §X / §Y）。他は完全一致
   var PREFIX = ['make', 'works', 'gallery', 'today', 'map'];
   function route() {
     var h = window.location.hash.replace(/^#/, ''), base = h.split('/')[0];

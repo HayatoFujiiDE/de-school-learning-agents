@@ -1,4 +1,4 @@
-/* 作品展示（#gallery 一覧 / #gallery/<itemId> 詳細）: contract-app §AF。§W-4 の「見せる」とは別の操作（見せるは変えない）。
+/* 作品展示（#gallery 一覧 / #gallery/<itemId> 詳細）: contract-app §AG。§W-4 の「見せる」とは別の操作（見せるは変えない）。
    展示に並ぶもの = 他の人の作品の見本（gallery-data.js）+ 自分が出している作品。並びは新しい順だけ。反応の数・人気順・件数は出さない。
    呼び名・ひとことは利用者の入力なので、必ず DES.h の文字列子要素（textContent）で出す。DES.raw には固定の SVG だけを渡す。
    通知やバッジを他の画面に出さない（#gallery を開いた時だけ分かる）。返事と見本の声かけは #gallery を開いた時の決定論（G.settle）。
@@ -35,7 +35,7 @@
   }
   function newestFirst(list) { return byTime(list, -1); }
 
-  // ---------- 状態（§AF-6） ----------
+  // ---------- 状態（§AG-6） ----------
   function initial() {
     return { v: 1, name: null, auto: false, mine: {}, reacts: {}, notes: [], calls: [], inbox: [], promises: [], seeded: false };
   }
@@ -47,7 +47,8 @@
   }
   function okCall(c) { return isObj(c) && isStr(c.id) && isStr(c.itemId) && CALLS.indexOf(c.kind) >= 0 && ['sent', 'ok', 'later'].indexOf(c.state) >= 0 && isStr(c.time); }
   function okInbox(c) { return isObj(c) && isStr(c.id) && isStr(c.workId) && isStr(c.from) && CALLS.indexOf(c.kind) >= 0 && ['new', 'ok', 'later'].indexOf(c.state) >= 0 && isStr(c.time); }
-  function okPromise(p) { return isObj(p) && isStr(p.id) && isStr(p.with) && isStr(p.title) && (p.actId === null || isStr(p.actId)) && isStr(p.time); }
+  // 空の id の約束は捨てる（「先に準備する」が id で探すため。レビューへの裁定）
+  function okPromise(p) { return isObj(p) && isStr(p.id) && !!p.id && isStr(p.with) && isStr(p.title) && (p.actId === null || isStr(p.actId)) && isStr(p.time); }
   function pickList(raw, test, uniq) {
     var out = [], seen = {};
     if (!Array.isArray(raw)) return out;
@@ -103,22 +104,32 @@
     return S;
   }
 
-  // ---------- 展示に並ぶもの（§AF-2 / AF-3） ----------
+  // ---------- 展示に並ぶもの（§AG-2 / AG-3） ----------
   function catalogCat(id) {
     var d = DES.data, hit = null;
     if (!id || !d || !Array.isArray(d.catalog)) return null;
     d.catalog.forEach(function (c) { (c.items || []).forEach(function (it) { if (it.id === id) hit = c.id; }); });
     return hit && GD.CATS.indexOf(hit) >= 0 ? hit : null;
   }
-  // 自分の作品の種類: catalog の id → 題材 → ものづくり
-  function catOf(w) { return catalogCat(w && w.catalogId) || GD.THEME_CAT[w && w.theme] || 'craft'; }
-  // 出している = 1 つずつ出した（in）か、自動が入で完成の作品（外した out は出さない）
+  // 提案から作った作品（§AE-4。theme 'project'）の種類: 提案のカテゴリ（作品の projectId → 無ければ acts の中の作品の actId の活動の projectId
+  // → 無ければ写真のカテゴリ）。保存データは書き換えない。レビューへの裁定
+  function projectCat(w, acts) {
+    if (!w || w.theme !== 'project') return null;
+    var a = !isStr(w.projectId) && isStr(w.actId) ? find(acts, w.actId) : null, pid = isStr(w.projectId) ? w.projectId : (a && isStr(a.projectId) ? a.projectId : null);
+    var MD = DES.makeData, p = pid && MD && MD.project ? MD.project(pid) : null;
+    var c = p ? p.cat : (isObj(w.art) && isObj(w.art.photo) ? w.art.photo.cat : null);
+    return GD.CATS.indexOf(c) >= 0 ? c : null;
+  }
+  // 自分の作品の種類: 提案のカテゴリ → catalog の id → 題材 → ものづくり（acts = 活動の一覧。省略可）
+  function catOf(w, acts) { return projectCat(w, acts) || catalogCat(w && w.catalogId) || GD.THEME_CAT[w && w.theme] || 'craft'; }
+  // 出している = 1 つずつ出した（in）か、自動が入で完成の作品（外した out は出さない）。
+  // 写真から入れた作品（from 'capture'）は自動では出さない（顔や名前が写っていないかを本人が見てから 1 つずつ。§AG-2）
   function isIn(state, w) {
     if (!w || !state) return false;
     var m = state.mine && state.mine[w.id];
     if (m && m.state === 'out') return false;
     if (m && m.state === 'in') return true;
-    return state.auto === true && w.status === 'done';
+    return state.auto === true && w.status === 'done' && w.from !== 'capture';
   }
   function inTime(state, w) {
     var m = state.mine && state.mine[w.id];
@@ -126,17 +137,17 @@
     return w.date ? (w.date + (w.atTime ? ' ' + w.atTime : '')) : '';
   }
   function itemId(workId) { return MY + workId; }
-  function ownItem(state, w) {
-    return { id: itemId(w.id), mine: true, workId: w.id, name: state.name, cat: catOf(w), title: w.title, like: w.like || null, craft: w.craft || null,
+  function ownItem(state, w, acts) {
+    return { id: itemId(w.id), mine: true, workId: w.id, name: state.name, cat: catOf(w, acts), title: w.title, like: w.like || null, craft: w.craft || null,
       buddy: !!(w.roles && w.roles.ai > 0), photo: w.from === 'capture', art: clone(w.art || null), time: inTime(state, w), answers: null };
   }
   function seedItem(s) {
     return { id: s.id, mine: false, workId: null, name: s.name, cat: s.cat, title: s.title, like: s.like || null, craft: s.craft || null,
       buddy: false, photo: false, art: s.art, time: s.time, answers: s.answers || null };
   }
-  function items(state, works, seed) {
+  function items(state, works, seed, acts) {
     var out = [];
-    (works || []).forEach(function (w) { if (w && isStr(w.id) && isIn(state, w)) out.push(ownItem(state, w)); });
+    (works || []).forEach(function (w) { if (w && isStr(w.id) && isIn(state, w)) out.push(ownItem(state, w, acts)); });
     (seed || GD.items).forEach(function (s) { out.push(seedItem(s)); });
     return newestFirst(out);
   }
@@ -144,7 +155,7 @@
   // 並んでいる種類（チップ。GD.CATS の順）
   function cats(list) { return GD.CATS.filter(function (c) { return list.some(function (it) { return it.cat === c; }); }); }
 
-  // ---------- 出す・外す（§AF-2） ----------
+  // ---------- 出す・外す（§AG-2） ----------
   function put(state, workId, time) {
     if (!isStr(workId) || !workId) return state;
     var m = state.mine[workId];
@@ -169,7 +180,7 @@
     return S;
   }
 
-  // ---------- 反応（§AF-4。押すと入る・もう一度で外れる） ----------
+  // ---------- 反応（§AG-4。押すと入る・もう一度で外れる） ----------
   function react(state, id, kind) {
     if (KINDS.indexOf(kind) < 0 || !isStr(id) || !id) return state;
     var S = clone(state), cur = S.reacts[id] || [], i = cur.indexOf(kind);
@@ -186,7 +197,7 @@
     return out;
   }
 
-  // ---------- 番人（§AF-4。モックの決定論）: hold にするのは (a) 語の一覧 (b) 7 けた以上の数字 (c) http・@・住所・電話・LINE (d) 同じ文字 8 回以上 ----------
+  // ---------- 番人（§AG-4。モックの決定論）: hold にするのは (a) 語の一覧 (b) 7 けた以上の数字 (c) http・@・住所・電話・LINE (d) 同じ文字 8 回以上 ----------
   function guard(text) {
     var raw = String(text == null ? '' : text), t = raw.normalize ? raw.normalize('NFKC') : raw, low = t.toLowerCase();
     if (GD.BAD_WORDS.some(function (w) { return t.indexOf(w) >= 0 || raw.indexOf(w) >= 0; })) return 'hold';
@@ -200,7 +211,7 @@
     return 'ok';
   }
 
-  // ---------- ひとこと（§AF-4）: 80 字で切る・番人の結果を state に持つ ----------
+  // ---------- ひとこと（§AG-4）: 80 字で切る・番人の結果を state に持つ ----------
   function addNote(state, o) {
     o = o || {};
     var text = cut(trim(o.text), NOTE_MAX);
@@ -209,6 +220,10 @@
     S.notes.push({ id: o.id, itemId: o.itemId, text: text, state: guard(text), time: String(o.time || '') });
     return S;
   }
+  // 「送る」を押せるか: 下書きがあり、どの作品のひとことも送信待ちでない時だけ（レビューへの裁定）
+  function canSend(draft, sending) { return !!trim(draft) && !sending; }
+  // 入力欄の値をコードポイントで 80 字までにする（入力欄も保存も同じ数え方。§AG-4）
+  function fitNote(v) { return cut(String(v == null ? '' : v), NOTE_MAX); }
   function removeNote(state, noteId) {
     var i = idx(state.notes, noteId);
     if (i < 0) return null;
@@ -229,7 +244,7 @@
     return byTime(out, 1);
   }
 
-  // ---------- 声かけ（§AF-5）。同じ作品には 1 つまで ----------
+  // ---------- 声かけ（§AG-5）。同じ作品には 1 つまで ----------
   function call(state, o) {
     o = o || {};
     if (CALLS.indexOf(o.kind) < 0 || !isStr(o.itemId) || !o.itemId || !isStr(o.id)) return state;
@@ -252,8 +267,11 @@
     S.calls.splice(Math.max(0, Math.min(u.index | 0, S.calls.length)), 0, clone(u.call));
     return S;
   }
+  // 約束を足す。id が既にある別の約束と重なったら、重ならない id（末尾に -2、-3 …）で足す（確認レビューへの裁定）
   function addPromise(S, p) {
-    if (find(S.promises, p.id)) return false;
+    var id = p.id, k = 1;
+    while (find(S.promises, id)) { k += 1; id = p.id + '-' + k; }
+    p.id = id;
     S.promises.unshift(p);
     return true;
   }
@@ -301,10 +319,31 @@
     return S;
   }
   // 約束の種類（先に準備する活動の題材）: 声かけからなら見本の作品、届いた声かけからなら自分の作品
-  function promiseCat(state, p, works, seed) {
+  function promiseCat(state, p, works, seed, acts) {
     var rest = p && isStr(p.id) ? p.id.slice(2) : '', c = find(state.calls, rest), inb = find(state.inbox, rest);
     if (c) { var it = find(seed || GD.items, c.itemId); return it ? it.cat : null; }
-    if (inb) { var w = find(works, inb.workId); return w ? catOf(w) : null; }
+    if (inb) { var w = find(works, inb.workId); return w ? catOf(w, acts) : null; }
+    return null;
+  }
+
+  // ---------- 保存された作品の絵の形（レビューへの裁定）: 形が違う時は null（呼ぶ側が種類の線画に替える） ----------
+  function okPair(v) { return isStr(v) || (Array.isArray(v) && v.length >= 1 && v.every(isStr)); }
+  function okNum(v) { return typeof v === 'number' && isFinite(v); }
+  function okStage(st) {
+    var MD = DES.makeData;
+    if (!isObj(st) || !MD || !Array.isArray(MD.THEMES) || MD.THEMES.indexOf(st.theme) < 0 || !isStr(st.variant) || !isObj(st.values)) return false;
+    var th = MD.theme(st.theme);
+    if (th.variants.indexOf(st.variant) < 0) return false;
+    return th.params.every(function (p) { var x = st.values[p.key]; return okNum(x) && x >= p.min && x <= p.max; });
+  }
+  function safeArt(art) {
+    if (!isObj(art)) return null;
+    if ('note' in art) return isObj(art.note) && okPair(art.note.title) && Array.isArray(art.note.lines) && art.note.lines.every(okPair) ? art : null;
+    if ('photo' in art) {
+      var p = art.photo;
+      return isObj(p) && isStr(p.theme) && (p.n == null || (okNum(p.n) && p.n >= 0)) && (p.cat == null || isStr(p.cat)) && (p.odai == null || isStr(p.odai)) ? art : null;
+    }
+    if ('stage' in art) return okStage(art.stage) ? art : null;
     return null;
   }
 
@@ -313,6 +352,7 @@
     catOf: catOf, filter: filter, cats: cats, put: put, take: take, restoreTake: restoreTake, react: react, reactors: reactors, guard: guard,
     addNote: addNote, removeNote: removeNote, restoreNote: restoreNote, thread: thread, call: call, cancelCall: cancelCall, restoreCall: restoreCall,
     settle: settle, answer: answer, setPromiseAct: setPromiseAct, promiseCat: promiseCat, timeKey: timeKey,
+    canSend: canSend, fitNote: fitNote, safeArt: safeArt,
     KINDS: KINDS, CALLS: CALLS, NAME_MAX: NAME_MAX, NOTE_MAX: NOTE_MAX
   };
   Object.keys(pure).forEach(function (k) { G[k] = pure[k]; });
@@ -367,7 +407,7 @@
   function stamp() { var p = DES.data.today.split('-'); return (+p[1]) + '/' + (+p[2]) + ' ' + DES.data.now; }
   function newId(p) { return DES.plan.newId(p); }
   function refocus(sel) { var n = sel ? document.querySelector(sel) : null; if (n) n.focus(); }
-  function allItems() { return items(S().gallery, S().works, GD.items); }
+  function allItems() { return items(S().gallery, S().works, GD.items, S().activities); }
   function btn(label, action, o) {
     o = o || {};
     var at = { class: 'btn small' + (o.kls ? ' ' + o.kls : ''), type: 'button', 'data-action': action };
@@ -389,13 +429,14 @@
   // ---------- 絵: 自分の作品 = 作品の絵 / 見本 = DES.thumbs の画像（AI の印つき）、無ければ種類の線画 ----------
   var SAFE_SRC = /^img\/[A-Za-z0-9_\/.-]+\.(webp|png|jpg|jpeg)$/;
   function thumbSrc(id) { var t = (DES.thumbs || {})[id]; return isStr(t) && SAFE_SRC.test(t) && t.indexOf('..') < 0 ? t : null; }
-  function workArt(art, cat) {
-    var MD = DES.makeData;
+  // 保存された絵の形が違う時・絵を作る途中で例外が出た時は、種類の線画に替える（例外で止めない。レビューへの裁定）
+  function workArt(raw, cat) {
+    var MD = DES.makeData, art = safeArt(raw), svg = '';
     if (art && art.note) {
       return [H('div', { class: 'work-note gl-note-art' }, [H('p', { class: 'wn-title' }, pick(art.note.title)),
-        H('ul', null, (art.note.lines || []).map(function (l) { return H('li', null, pick(l)); }))])];
+        H('ul', null, art.note.lines.map(function (l) { return H('li', null, pick(l)); }))])];
     }
-    var svg = art && art.photo && MD ? MD.photoArt(art.photo) : (art && art.stage && MD ? MD.art(art.stage) : '');
+    try { svg = art && art.photo && MD ? MD.photoArt(art.photo) : (art && art.stage && MD ? MD.art(art.stage) : ''); } catch (e) { svg = ''; }
     return [DES.raw(svg || GD.lineArt(cat))];
   }
   function artEl(it, cls) {
@@ -416,7 +457,7 @@
     return box;
   }
 
-  // ---------- 一覧（§AF-3） ----------
+  // ---------- 一覧（§AG-3） ----------
   function card(it) {
     return H('a', { class: 'gl-card' + (it.mine ? ' is-mine' : ''), href: '#gallery/' + it.id, 'data-fk': 'glc:' + it.id }, [
       artEl(it, 'gl-card-art'),
@@ -469,7 +510,9 @@
         H('div', null, [H('h1', { tabindex: '-1', 'data-fk': 'gl-h' }, T('gallery')), H('p', null, T('gl_sub')), H('p', { class: 'gl-sub2' }, T('gl_sub2'))]),
         nameRow
       ]),
-      H('label', { class: 'gl-auto', for: 'gl-auto' }, [H('input', { type: 'checkbox', id: 'gl-auto', 'data-ui': 'gl-auto', checked: st.auto === true }), H('span', null, T('gl_auto'))])
+      H('label', { class: 'gl-auto', for: 'gl-auto' }, [H('input', { type: 'checkbox', id: 'gl-auto', 'data-ui': 'gl-auto', checked: st.auto === true, 'aria-describedby': 'gl-auto-capture' }), H('span', null, T('gl_auto'))]),
+      // 切替の下の 1 行（§AG-2）: 写真から入れた作品は自動では出さない
+      H('p', { class: 'hint gl-auto-note', id: 'gl-auto-capture' }, T('gl_auto_capture'))
     ];
     var ib = inboxSec(), ps = promiseSec();
     if (ib) kids.push(ib);
@@ -486,7 +529,7 @@
     main.appendChild(H('div', { class: 'gallery-page' }, kids));
   }
 
-  // ---------- 詳細（§AF-4 / AF-5） ----------
+  // ---------- 詳細（§AG-4 / AG-5） ----------
   function textBlock(label, text) { return H('div', { class: 'gl-text' }, [H('p', { class: 'gl-text-k' }, label), H('p', { class: 'gl-text-v' }, text)]); }
   function reactSec(it) {
     var who = reactors(S().gallery, it.id, GD.reacts), kids;
@@ -517,7 +560,8 @@
   function notesSec(it) {
     var u = ui(), st = S().gallery, th = thread(st, it.id, GD.notes), sending = !!(u.sending && u.sending.itemId === it.id);
     var held = st.notes.filter(function (n) { return n.itemId === it.id && n.state === 'hold'; });
-    var draft = u.draft[it.id] || '', dis = !trim(draft) || sending;
+    // どの作品のひとことが送信待ちでも「送る」は押せない（ハンドラーも全部の送信待ちで止まるため）
+    var draft = u.draft[it.id] || '', dis = !canSend(draft, u.sending);
     var kids = [H('h2', { id: 'gl-notes-h' }, T('gl_notes_h'))];
     kids.push(th.length ? H('ol', { class: 'gl-thread' }, th.map(function (n) {
       return H('li', { class: 'gl-msg' + (n.mine ? ' is-me' : '') }, [
@@ -538,7 +582,8 @@
     kids.push(H('div', { class: 'gl-note-form', 'data-fk': 'gl-note-form' }, [
       H('label', { for: 'gl-note' }, T('gl_note_label')),
       H('div', { class: 'gl-note-row' }, [
-        H('input', { id: 'gl-note', type: 'text', 'data-ui': 'gl-note', 'data-id': it.id, value: draft, maxlength: String(NOTE_MAX), autocomplete: 'off',
+        // 字数はコードポイントで数える（UTF-16 で数える入力欄の上限の属性は使わず、入力のたびに fitNote で切る。§AG-4）
+        H('input', { id: 'gl-note', type: 'text', 'data-ui': 'gl-note', 'data-id': it.id, value: draft, autocomplete: 'off',
           readonly: sending, 'aria-busy': sending ? 'true' : null, 'aria-describedby': 'gl-note-need' }),
         btn(T('gl_note_send'), 'gl-note-send', { id: it.id, kls: 'primary', icon: 'send', disabled: dis })
       ]),
@@ -622,7 +667,7 @@
   // ルートが変わったら一時的な UI を閉じる（app.js の closeTransient から）。絞り込みと下書きは残す
   G.resetUi = function () { var u = ui(); u.shownDetail = null; u.missing = null; u.entered = false; u.pick = {}; };
 
-  // ---------- 作品の詳細の節「作品展示」（works.js から。§AF-2 の 1 つずつ） ----------
+  // ---------- 作品の詳細の節「作品展示」（works.js から。§AG-2 の 1 つずつ） ----------
   G.workBlock = function (w) {
     var st = S().gallery;
     if (isIn(st, w)) {
@@ -840,7 +885,7 @@
     var pid = el.getAttribute('data-id'), st = S().gallery, p = find(st.promises, pid), M = DES.make, MD = DES.makeData;
     if (!p) return;
     if (p.actId && act(p.actId)) { M.openAct(p.actId); return; }
-    var cat = promiseCat(st, p, S().works, GD.items), th = GD.CAT_THEME[cat];
+    var cat = promiseCat(st, p, S().works, GD.items, S().activities), th = GD.CAT_THEME[cat];
     var r = M.fromPromise(p, { id: newId('a'), title: T('gl_prep_title', { title: p.title }), steps: GD.PREP_STEPS,
       theme: th && MD.THEMES.indexOf(th) >= 0 ? th : 'mc', now: DES.data.now, acts: S().activities });
     if (!r) return;
@@ -868,10 +913,12 @@
     document.addEventListener('input', function (e) {
       var t = e.target, k = t && t.getAttribute ? t.getAttribute('data-ui') : null, u = ui();
       if (k === 'gl-note') {
+        var fit = fitNote(t.value);
+        if (fit !== t.value) t.value = fit;
         var id = t.getAttribute('data-id'), has = !!trim(t.value);
         u.draft[id] = t.value;
         var b = document.querySelector('[data-action="gl-note-send"][data-id="' + esc(id) + '"]'), need = document.getElementById('gl-note-need');
-        if (b) b.disabled = !has || !!u.sending;
+        if (b) b.disabled = !canSend(t.value, u.sending);
         if (need) need.hidden = has || !!u.sending;
       } else if (k === 'gl-name' && u.dlg) { u.dlg.text = t.value; syncName(); }
     });
