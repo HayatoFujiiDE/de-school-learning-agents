@@ -946,7 +946,7 @@
     content.appendChild(H('div', { class: 'plan-page' }, [
       H('section', { class: 'plan-main', 'aria-labelledby': 'plan-h' }, [
         H('div', { class: 'section-head' }, [
-          H('div', null, [H('h2', { id: 'plan-h', tabindex: '-1', 'data-fk': 'plan-head' }, T('plan')), H('p', { class: 'panel-date' }, dateLabel())])
+          H('div', null, [H('h1', { id: 'plan-h', tabindex: '-1', 'data-fk': 'plan-head' }, T('plan')), H('p', { class: 'panel-date' }, dateLabel())])
         ]),
         P.renderGoals({ wide: true }),
         P.renderTable({ ctx: 'page', compact: false, wide: true })

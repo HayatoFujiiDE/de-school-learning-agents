@@ -159,7 +159,9 @@
 .plan-main,.plan-history{min-width:0}
 .plan-page .section-head{align-items:flex-end}
 .plan-page .section-head h2{font-size:20px}
-.plan-page .section-head h2:focus{outline:none}
+/* 先頭見出し「今日の予定」は h1（§AA-2）。見た目は h2 の時のまま */
+.plan-page .section-head h1{font-size:20px;line-height:1.6;letter-spacing:normal}
+.plan-page .section-head h1:focus,.plan-page .section-head h2:focus{outline:none}
 .plan-main .plan-table{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:16px}
 
 /* ---------- ダイアログ（drawer / sheet / pick / 行メニュー / 表示） ---------- */

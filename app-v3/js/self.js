@@ -1271,7 +1271,8 @@ window.DES = window.DES || {};
   function fillSheet() {
     var dlg = sheet(), p = ui.pick, av = SD().avatar;
     dlg.textContent = '';
-    dlg.appendChild(H('div', { class: 'dialog-head' }, [H('h2', { id: 'self-sheet-h' }, TX('avatar_h'))]));
+    dlg.appendChild(H('div', { class: 'dialog-head' }, [H('h2', { id: 'self-sheet-h' }, TX('avatar_h')),
+      H('button', { class: 'icon-btn', type: 'button', 'data-action': 'dialog-close', 'aria-label': DS().t('close') }, [icon('close')])]));
     dlg.appendChild(H('div', { class: 'dialog-body' }, [
       H('div', { class: 'sx-av-preview' }, [avatarEl(p, 'preview', TX('avatar_alt'))]),
       H('fieldset', { class: 'sx-fieldset' }, [
