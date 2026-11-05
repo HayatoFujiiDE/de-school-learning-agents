@@ -316,7 +316,8 @@ html[data-mode="es"] .mp-frame[data-lod="far"] .mp-n.is-made .mp-label{font-size
 }
 
 /* ---------- 大きく見る（§AC-6）: 左メニュー・topbar・説明 1 文を隠し、見出しの行を小さく（h1 18px）。体験モックの帯は残す ---------- */
-html.mp-big .sidebar,html.mp-big .topbar{display:none}
+/* 隠すのはシェルの左メニュー（#sidebar）だけ。≤ 700 の引き出し（#nav-drawer の中の .sidebar）は下タブの「もっと」から今までどおり開ける */
+html.mp-big #sidebar,html.mp-big .topbar{display:none}
 html.mp-big .shell{grid-template-columns:minmax(0,1fr)}
 html.mp-big .content{max-width:none;padding:4px 16px 0}
 html.mp-big .mp-headrow{margin-bottom:4px;align-items:center}

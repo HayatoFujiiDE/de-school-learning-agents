@@ -1471,6 +1471,12 @@
     applyBig();
     renderView(main, arg);
     restoreFocus(main, fk);
+    // 作り直し（流れで見るの 3 列 ⇄ カード一覧など）で同じものが見つからずフォーカスが落ちたら:
+    // 詳細が開いていればその ×、無ければ選んでいたノード（カード）へ
+    if (fk && (!document.activeElement || document.activeElement === document.body || !main.contains(document.activeElement))) {
+      var back = firstShown(main, '.mp-detail:not([hidden]) [data-action="mp-close"]') || firstShown(main, '[data-action="mp-sel"][aria-pressed="true"]:not(.mp-rel)');
+      if (back) back.focus();
+    }
     var u = ui();
     // 開いたら見出しへ（タブ・見方・単元を開いた時も）。同じ画面の描き直しでは動かさない。見つからなかった引数は移った先で
     if (u.redirect) { u.redirect = false; u.lastUnit = null; return; }
