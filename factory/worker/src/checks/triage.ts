@@ -151,6 +151,16 @@ function noHtmlParts(material: unknown): boolean {
   return true;
 }
 
+/**
+ * §Q-9.6: parts のどれかに動画がある（videos が空でない配列、または配列でない値）。
+ * 動画の本人性と区間は人が確認画面で見るので、動画のある版の「利用条件」は自動 OK にしない。
+ * material が読めない時は従来どおり（取り込みの schema 検査を通った material_json だけが版になる）
+ */
+export function hasVideos(material: unknown): boolean {
+  if (!isObj(material) || !Array.isArray(material.parts)) return false;
+  return material.parts.some((p) => isObj(p) && p.videos !== undefined && (!Array.isArray(p.videos) || p.videos.length > 0));
+}
+
 const REASON_TEXT = (r: Reason, n: { claims: number; confirmed: number; sources: number; quoteBad: number }): string => {
   switch (r) {
     case 'contradicted':
@@ -231,7 +241,9 @@ export function triageVersion(input: TriageInput): TriageOutput {
   );
   const auto: TriageOutput['auto'] = {
     content_and_evidence: report && allConfirmed && refsGreen ? 'ok' : 'review',
-    terms_of_use: sources.size >= 1 && [...sources.values()].every((s) => s.license !== 'unknown') ? 'ok' : 'review',
+    // §Q-9.6: 動画のある版は人が見る（本人のアップか・区間が再生できて内容が合うか）
+    terms_of_use:
+      sources.size >= 1 && [...sources.values()].every((s) => s.license !== 'unknown') && !hasVideos(input.material) ? 'ok' : 'review',
     artifact_behavior: checksClean(input.checks) && noHtmlParts(input.material) ? 'ok' : 'review',
   };
 

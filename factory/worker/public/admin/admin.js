@@ -1731,6 +1731,44 @@
           (sub.length ? ' <small class="muted">' + sub.join(' ・ ') + '</small>' : '') + '</li>';
       }).join('') + '</ul></details>';
   }
+  // §Q-5: 動画（YouTube）。youtube_id は取り込みの schema で検査済みでも、埋め込む前にもう一度この形で確かめる
+  var YT_ID_RE = /^[A-Za-z0-9_-]{11}$/;
+  /** §Q-9.6 の文（verbatim） */
+  var VIDEO_CHECK_TEXT = '動画: 本人のアップか・区間が再生できて内容が合うかを見てください';
+  var VIDEO_NOTE_TEXT = '区間の指定と rel=0 は、区間の外への移動や関連動画を止めません。youtube-nocookie も、広告・追跡が無いことを保証しません。';
+  var VIDEO_NO_RECORD = '動画の記録はまだありません';
+  /** material.parts[].videos[] を出現順に（形の違う要素は飛ばさず残し、表示側で埋め込まない） */
+  function videosOf(mat) {
+    var out = [];
+    ((mat && mat.parts) || []).forEach(function (p) {
+      if (p && Array.isArray(p.videos)) p.videos.forEach(function (v) { out.push(v && typeof v === 'object' ? v : {}); });
+    });
+    return out;
+  }
+  function isSec(n) { return typeof n === 'number' && isFinite(n) && n >= 0 && Math.floor(n) === n; }
+  /** 秒 → 分:秒（例 80 → 1:20） */
+  function fmtSec(n) { var s = n % 60; return Math.floor(n / 60) + ':' + (s < 10 ? '0' : '') + s; }
+  function videoHtml(v) {
+    var s = v.start_sec, e = v.end_sec;
+    var okId = typeof v.youtube_id === 'string' && YT_ID_RE.test(v.youtube_id);
+    var okRange = isSec(s) && isSec(e) && s < e;
+    var embed = okId && okRange
+      ? '<iframe src="' + esc('https://www.youtube-nocookie.com/embed/' + v.youtube_id + '?start=' + s + '&end=' + e + '&rel=0') + '" title="' + esc(v.title) +
+        '" allow="encrypted-media; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin" loading="lazy"></iframe>'
+      : '<p class="err" data-video-bad="1">動画の id か区間の形が正しくないため、埋め込みません</p>';
+    return '<div class="rv-video" data-video="' + esc(v.id) + '"><p><b>動画 ' + esc(v.id) + '</b> ' + esc(v.title) + '</p>' + embed +
+      '<p>区間 ' + (okRange ? esc(fmtSec(s)) + '〜' + esc(fmtSec(e)) : '<span class="muted">不明</span>') + ' ・ チャンネル ' + esc(v.channel) + '</p>' +
+      '<p>見どころ: ' + esc(v.why) + '</p>' +
+      '<p>本人のアップと言える理由: ' + esc(v.rights_note) + '</p>' +
+      '<details data-video-notes="1"><summary>Gemini の記録</summary><p class="muted">' + esc(VIDEO_NO_RECORD) + '</p></details>' +
+      '<p data-video-verdict="1">検証係の判定: <span class="muted">' + esc(VIDEO_NO_RECORD) + '</span></p></div>';
+  }
+  /** 「説明と表現」の下の動画（0 本なら出さない） */
+  function videosHtml(vids) {
+    if (!vids.length) return '';
+    return '<div class="rv-videos" data-videos="' + vids.length + '"><p><span class="muted">動画 ' + vids.length + ' 本</span> ' + esc(VIDEO_CHECK_TEXT) + '</p>' +
+      '<p class="muted"><small>' + esc(VIDEO_NOTE_TEXT) + '</small></p>' + vids.map(videoHtml).join('') + '</div>';
+  }
   /** サムネイルの下の判定の pill と reason（判定の無い path は空） */
   function figVerdictHtml(f) {
     if (!f || !Object.prototype.hasOwnProperty.call(FIG_VERDICT, f.verdict)) return '';
@@ -1881,7 +1919,8 @@
       (Array.isArray(d.generated_images) ? d.generated_images : []).forEach(function (g) { if (g && typeof g.path === 'string') gen[g.path] = g; });
       var figs = figuresOf(d), figBy = {};
       (figs || []).forEach(function (f) { if (f && typeof f.path === 'string') figBy[f.path] = f; });
-      extra = '<div class="rv-figs"><span class="muted">図・画像 ' + imgs.length + ' 枚' +
+      var vids = videosOf(d.version.material);
+      extra = '<div class="rv-figs"><span class="muted">図・画像 ' + imgs.length + ' 枚' + (vids.length ? '・動画 ' + vids.length + ' 本' : '') +
         (figs ? '（検証係も図を見ています。判定はサムネイルの下。最後はあなたがすべて見てください）' : '（この版の検証係は図を見ていません。すべて見てください）') + '</span>' +
         (imgs.length ? '<div class="thumbs">' + imgs.map(function (p) {
           var a = '<a href="' + esc(base + p) + '" target="_blank" rel="noopener noreferrer" title="' + esc(p) + '"><img class="thumb" alt="' + esc(p) + '" src="' + esc(base + p) + '"></a>';
@@ -1890,9 +1929,15 @@
           if (!g && !f) return a;
           // 生成した絵はサムネイルの下に「生成: 正確さ・prompt の先頭 80 字」（§O-7 6）、その下に検証係の判定（§O-12 d）
           return '<div class="thumb-gen"' + (g ? ' data-gen="1"' : '') + '>' + a + (g ? '<p class="thumb-cap">' + esc(genCaption(g)) + '</p>' : '') + figVerdictHtml(f) + '</div>';
-        }).join('') + '</div>' : '') + '</div>' + analogyGapsHtml(d);
+        }).join('') + '</div>' : '') + '</div>' + videosHtml(vids) + analogyGapsHtml(d);
     }
-    if (tri.present && AUTO_KEYS.indexOf(k) >= 0 && AUTO_HINT[k]) extra += '<p class="muted">' + esc(AUTO_HINT[k]) + '</p>';
+    // §Q-9.6: 動画のある版の「利用条件」は自動 OK にならない。理由の文を動画の文にする（出典の利用条件が分からない時は従来の文も残す）
+    var tuVideos = k === 'terms_of_use' && videosOf(d.version && d.version.material).length > 0;
+    if (tuVideos) {
+      var srcs = Array.isArray(d.sources) ? d.sources : [];
+      var tuLicense = !srcs.length || srcs.some(function (s) { return !s || s.license === 'unknown'; });
+      extra += (tri.present && tuLicense ? '<p class="muted">' + esc(AUTO_HINT.terms_of_use) + '</p>' : '') + '<p class="muted" data-video-terms="1">' + esc(VIDEO_CHECK_TEXT) + '</p>';
+    } else if (tri.present && AUTO_KEYS.indexOf(k) >= 0 && AUTO_HINT[k]) extra += '<p class="muted">' + esc(AUTO_HINT[k]) + '</p>';
     return '<div class="rv-item" id="ck-' + k + '" data-ck="' + k + '"><div class="rv-item-head">' +
       (human >= 0 ? '<span class="kbd" title="' + (human + 1) + ' = OK / Shift+' + (human + 1) + ' = NG">' + (human + 1) + '</span>' : '<span class="kbd blank"></span>') +
       '<b>' + esc(CK_LABEL[k]) + '</b><span class="seg">' + opts + '</span></div>' + extra +
