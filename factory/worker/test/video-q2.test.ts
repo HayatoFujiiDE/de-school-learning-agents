@@ -40,6 +40,7 @@ import {
 import {
   VIDEO_DOWNGRADE_NOTE,
   enforceVideoConfirmations,
+  isYoutubeUrl,
   neutralizeInputText,
   videoNotesSection,
   videoReserveStmt,
@@ -702,6 +703,25 @@ describe('§Q-9.10 動画を出典にした claim の confirmed は「動画の�
     const [r] = enforceVideoConfirmations([x], claims, sources, vs, shown);
     expect(r.verdict).toBe(want);
     expect(r.reason.startsWith(VIDEO_DOWNGRADE_NOTE)).toBe(want === 'unverified');
+  });
+
+  it('host の書き方（末尾の .・大文字・サブドメイン・youtu.be）でも YouTube の出典と見分ける。似た名前の別 host は見分けない', () => {
+    const one2 = (url: string) =>
+      enforceVideoConfirmations([v('c9', 'confirmed', '概要欄にそう書いてある')], JSON.stringify({ claims: [{ id: 'c9', source_ids: ['s20'] }] }), JSON.stringify({ sources: [{ id: 's20', url }] }), [], [])[0].verdict;
+    expect(isYoutubeUrl(`https://www.youtube.com./watch?v=${YT1}`)).toBe(true);
+    for (const u of [`https://www.youtube.com./watch?v=${YT1}`, `https://WWW.YouTube.COM../watch?v=${YT1}`, 'https://m.youtube.com/@ch/about', `https://youtu.be./${YT1}`, 'https://www.youtube-nocookie.com/embed/x']) {
+      expect(one2(u), u).toBe('unverified');
+    }
+    for (const u of ['https://notyoutube.com/watch', 'https://youtube.com.evil.example/watch', 'https://minecraft.wiki/w/x']) expect(one2(u), u).toBe('confirmed');
+  });
+
+  it('版の動画の source_id が指す出典は、url が YouTube に見えなくても YouTube の出典として扱う（sources.json が読めなくても）', () => {
+    const odd = versionVideosOf(JSON.stringify({ parts: [{ id: 'p1', videos: [video({ source_id: 's30' })] }] }));
+    const claimsOdd = JSON.stringify({ claims: [{ id: 'c1', source_ids: ['s30'] }] });
+    const srcOdd = JSON.stringify({ sources: [{ id: 's30', url: 'https://example.com/looks-like-a-normal-page' }] });
+    expect(enforceVideoConfirmations([v('c1', 'confirmed', '概要欄')], claimsOdd, srcOdd, odd, [])[0].verdict).toBe('unverified');
+    expect(enforceVideoConfirmations([v('c1', 'confirmed', '概要欄')], claimsOdd, 'not json', odd, [])[0].verdict).toBe('unverified');
+    expect(enforceVideoConfirmations([v('c1', 'confirmed', '動画の記録で確認: 1:20')], claimsOdd, srcOdd, odd, ['v1'])[0].verdict).toBe('confirmed');
   });
 
   it('同期: 記録の無い動画を出典にした claim を confirmed にしても、保存では unverified（数も unverified に入る）', async () => {

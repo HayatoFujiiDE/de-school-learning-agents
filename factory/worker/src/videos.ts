@@ -263,10 +263,13 @@ export function videoNotesSection(
 export const VIDEO_CONFIRM_PREFIX = '動画の記録で確認:';
 export const VIDEO_DOWNGRADE_NOTE = '（Worker: 動画を出典にした claim は「動画の記録で確認:」の時だけ confirmed にできるため unverified にしました）';
 
-/** YouTube のページの URL か（watch ページ・チャンネル等。投稿者が自由に書ける文） */
+/**
+ * YouTube のページの URL か（watch ページ・チャンネル等。投稿者が自由に書ける文）。
+ * hostname は URL が小文字・punycode（ASCII）にしたものを使い、末尾の `.`（www.youtube.com. 等の完全修飾の書き方）を落として比べる
+ */
 export function isYoutubeUrl(url: string): boolean {
   try {
-    const h = new URL(url).hostname.toLowerCase();
+    const h = new URL(url).hostname.toLowerCase().replace(/\.+$/, '');
     return h === 'youtube.com' || h.endsWith('.youtube.com') || h === 'youtu.be' || h === 'youtube-nocookie.com' || h.endsWith('.youtube-nocookie.com');
   } catch {
     return false;
@@ -282,7 +285,8 @@ const startsWithVideoPrefix = (reason: string) => {
  * §Q-9.10 の検査。confirmed の claim のうち、
  * - 出典がすべて YouTube の claim: reason が「動画の記録で確認:」で始まり、かつその出典の動画の記録を入力に入れた（shown）時だけ confirmed のまま
  * - YouTube と他の出典が混ざる claim: 「動画の記録で確認:」と書いたのに記録を入れた動画の出典が無い時だけ
- * 当てはまらないものを unverified にし、reason の先頭に VIDEO_DOWNGRADE_NOTE を足す（検証は失敗にしない。人が確認画面で見る）
+ * 当てはまらないものを unverified にし、reason の先頭に VIDEO_DOWNGRADE_NOTE を足す（検証は失敗にしない。人が確認画面で見る）。
+ * YouTube の出典 = url が YouTube の行（isYoutubeUrl）と、版の動画の source_id が指す行（url の書き方に関係なく。host の書き方の違いで抜けない）
  */
 export function enforceVideoConfirmations<T extends { claim_id: string; verdict: string; reason: string }>(
   verdicts: T[],
@@ -296,8 +300,9 @@ export function enforceVideoConfirmations<T extends { claim_id: string; verdict:
     const raw = (JSON.parse(sourcesText) as { sources?: unknown })?.sources;
     for (const s of Array.isArray(raw) ? (raw as unknown[]) : []) if (isObj(s) && isStr(s.id) && isStr(s.url) && isYoutubeUrl(s.url)) yt.add(s.id);
   } catch {
-    // 読めない sources.json は YouTube の出典なし
+    // 読めない sources.json は url からは見分けない（版の動画の source_id は下で足す）
   }
+  for (const v of videos) yt.add(v.source_id);
   if (yt.size === 0) return verdicts;
   const shown = new Set(shownVideoIds);
   const shownSources = new Set(videos.filter((v) => shown.has(v.id)).map((v) => v.source_id));
