@@ -367,6 +367,7 @@ window.DES = window.DES || {};
     else if (r === 'today') DES.today.render(main, APP.routeArg());
     else if (r === 'map') DES.map.render(main, APP.routeArg());
     else if (r === 'self') DES.self.render(main);
+    else if (r === 'trail') DES.trail.render(main);
     else if (rebuild) {
       if (r === 'paused') { if (DES.make.pausedAct()) DES.make.renderPaused(main); else DES.talk.renderPaused(main); }
       else { main.textContent = ''; main.appendChild(H('p', { class: 'empty-line' }, T('not_yet'))); }
@@ -428,6 +429,7 @@ window.DES = window.DES || {};
     DES.works.resetUi();
     DES.today.resetUi();
     DES.map.resetUi();
+    DES.trail.resetUi();
   }
   function onHash() {
     var u = DES.ui, st = DES.state, r = route();

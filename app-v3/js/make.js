@@ -872,6 +872,41 @@
     defaultStatus: defaultStatus, normalizeWorks: normalizeWorks, chState: chState, baseState: baseState, curState: curState
   };
   Object.keys(pure).forEach(function (k) { M[k] = pure[k]; });
+  // ---------- あしあと（CONTRACT-v3 §Z-5 / Z-14）: 「もう一度試す」= 同じ始まりから新しい活動。元の活動 a は変えない（既存の活動を再利用しない） ----------
+  // 始まりの選び方: お題（odaiId）→ 自己理解の紐づけ（selfLink）→ 見本（sampleId）→ 言葉（quote）→ 外の記録（ext / build = 同じ手順の空の活動）→ 始めの作業対象（base）→ 同じ題材の仮の案。
+  // 題材の分け方は既存の fromOdai / fromSelf / fromSample / fromText に任せる。新しい活動は origin 'trail'・fromActId = a.id・catalogId / odaiId / selfLink を引き継ぐ。
+  // o: { id, now, mode, works, odai（お題の定義。無ければ DES.todayData から）, recText（お題の記録 1 行。作った時点の表示の文字列） }
+  function fromTrail(a, o) {
+    o = o || {};
+    if (!a || !o.id) return null;
+    var K = DES.todayData, od = a.odaiId ? (o.odai || (K && K.get ? K.get(a.odaiId) : null)) : null, n = null;
+    var base = { id: o.id, now: o.now, mode: o.mode, origin: 'trail', catalogId: a.catalogId || null };
+    if (od) { var r = fromOdai(od, { id: o.id, now: o.now, mode: o.mode, acts: [], recText: o.recText }); n = r ? r.act : null; }
+    else if (isSelfLink(a.selfLink)) {
+      n = fromSelf({ id: o.id, linkId: a.selfLink, text: a.quote ? a.quote.text : '', src: a.quote ? a.quote.src : null, variant: a.base && a.base.variant,
+        mode: o.mode, now: o.now, works: o.works });
+    }
+    else if (a.sampleId && sampleDef(a.sampleId)) n = fromSample(a.sampleId, base);
+    else if (a.quote && a.quote.text) { base.works = o.works; n = fromText(a.quote.text, base); }
+    else if (a.stepsKind === 'ext' || a.stepsKind === 'build') {
+      n = newAct({ id: o.id, title: a.title, origin: 'trail', theme: a.theme, catalogId: a.catalogId, ext: { link: a.ext ? a.ext.link : null, photos: [], visible: [] },
+        steps: a.steps, stepsKind: a.stepsKind, now: o.now });
+    } else if (a.base && a.base.kind !== 'note') {
+      n = newAct({ id: o.id, title: a.title, origin: 'trail', theme: a.base.theme || a.theme, catalogId: a.catalogId, stage: clone(a.base), now: o.now });
+      say(n, 'open', o.mode);
+    } else {
+      n = newAct({ id: o.id, title: a.title, origin: 'trail', theme: a.theme, catalogId: a.catalogId, candidate: true, now: o.now });
+      addIdeas(n, a.theme, o.works);
+      say(n, 'land', o.mode);
+    }
+    if (!n) return null;
+    n.origin = 'trail';
+    n.fromActId = a.id;
+    n.catalogId = a.catalogId || n.catalogId || null;
+    if (a.odaiId) n.odaiId = a.odaiId;
+    return n;
+  }
+  pure.fromTrail = M.fromTrail = fromTrail;
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
   if (typeof document === 'undefined') return;
 

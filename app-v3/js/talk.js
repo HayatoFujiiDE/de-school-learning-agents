@@ -203,6 +203,20 @@ window.DES = window.DES || {};
     var list = document.getElementById('message-list');
     list.textContent = '';
     TK.messages().forEach(function (m) { list.appendChild(messageEl(m)); });
+    // あしあとの「話すで見る」（CONTRACT-v3 §Z-4）: DES.ui.focusMsg の発言へ 1 回だけ移る。
+    // ルート移動の scrollTo(0,0) の後にスクロールするため、スクロールだけ次のタスクで行う
+    var fm = ui().focusMsg;
+    if (fm) {
+      ui().focusMsg = null;
+      var tgt = null;
+      Array.prototype.forEach.call(list.children, function (n) { if (n.getAttribute('data-id') === fm) tgt = n; });
+      if (tgt) {
+        tgt.setAttribute('tabindex', '-1');
+        tgt.classList.add('is-trail-focus');
+        tgt.focus({ preventScroll: true });
+        setTimeout(function () { if (tgt.isConnected && tgt.scrollIntoView) tgt.scrollIntoView({ block: 'center' }); }, 0);
+      }
+    }
     var aside2 = document.getElementById('plan-panel');
     if (inline && st.panel === 'open') DES.plan.renderPanel(aside2, { ctx: 'panel', compact: false });
     else aside2.textContent = '';

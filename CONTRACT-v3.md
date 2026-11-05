@@ -535,3 +535,39 @@ design-v3 の裁定「画面に『版』の語を出さない。時刻で指す�
 - **Y-9 純関数（DOM・`DES.t` 非依存・map-test で検査）**: `MP.progress(unit, progress)` → `{ done, practiceOnly, explainOnly, total, pct }` / `MP.overall(units, progress)`（全項目で数える）/ `MP.graph(learned, acts, works, declined)` → `{ nodes:{acts,learned,units}, edges }`（存在しない活動・作品の辺と declined を落とす。活動 1 つ = ノード 1 つ）/ `MP.related(graph, nodeId)`（2 ホップ）/ `MP.defaultSel(graph)` / `MP.normalizeUi(raw, graph)` / `MP.unitLinks(graph, code)`。
 - **Y-10 受け入れ（操作ループ・各操作にフィードバック）**: 開くと h1 フォーカス・いちばん新しい作ったものが選択済みで線が濃い → 別ノード選択で濃淡が替わり詳細が差し替わる → Esc で解除 → バディ由来の学んだことを「違う」→ 消える + トースト + 元に戻す → 「バディと話す」で #talk の下書きに 1 行 → 「これで作る」で作業台 → 単元ノードの「基礎学習で見る」→ 単元詳細（項目ごとに 2 つの印）→ 戻る → 基礎学習タブ（領域 4 段・帯の左右・% ・全体 %）→ 「作ったものとつながっている」印 → つながりタブで選択済み → 理科の破線ノードは「基礎学習で見る」が無い → 無い code / 無い引数 → 作品の詳細「学びマップで見る」→ 選択済み → 390 でカード一覧 + カード内展開 → es/js 切替で選択・タブ保持 → リロードで保持 → 活動 0 の空状態 1 文 → キーボードだけで全部。操作領域 js 44 / es 48。
 - **Y-11 検証**: `node tools/map-test.js`（MAP_TEST=PASS）/ `node tools/make-test.js`・`node tools/today-test.js` 維持 / `sh tools/check.sh talk plan make works works/w-seed-py today map map/basics map/u/<見本 code> self paused`（CHECK_RESULT=PASS・横スクロール含む）/ `grep -rnE 'まだ|理解した|身についた' app-v3/js/map*.js app-v3/css/map.css` 0 件 / `sh tools/render.sh <scratch>/render map map/basics map/u/<code>` の 1440/1024/390（PNG を見る）/ 既存 CDP ループ 1〜6 PASS + 新 loop7（Y-10）。
+
+## Z. あしあと（`#trail`）（2026-11-05 凍結。§I の「#trail は空状態 1 文」を本節で置き換える）
+
+正本: `reference/統合構想設計案-v1.0-2026-11-03.md` 84 行（前回したかったこと、止まった場所、次の候補、関連する会話や作品）・284 行（元の記録を残したまま「続きをする」「もう一度試す」へ）・375〜381 行（「できなかった一覧」を入口にしない / 画面ごとに別の履歴を作らない）・539 行・704 行 + ふじさん確定（作るの活動は予定表に自動で出さない — memory `project-make-page-design`）。design-v3 の「画面に『版』の語を出さない・時刻で指す」はここにも掛かる。
+設計: Fable 草案を司令塔が採用。ふじさん確定 4 問（2026-11-05、全問推奨案）: 上段は作業中と止めたものだけ・最大 3 / 「もう一度試す」= 同じ始まりから新しい活動（元の記録は不変）/ 会話は本人の発言 1 つ + 直後のバディの返事で 1 件 / 「予定に入れる」は上段と「終わった予定」の行だけ。
+
+- **Z-1 データ源（新しい履歴ストアを作らない）**: 画面は既存の `S().activities` / `S().works` / `DES.talk.messages()`（無ければ同等の読み取り口を talk.js に足す）/ `S().plan` / `S().catalogMarks` / `S().odai` / `S().makeSide.lastStop` を読んで並べ直すだけ。保存する新しいキーは `des3.trail = { filter: 'all'|'make'|'talk'|'found'|'plan' }` の 1 つ（形が違えば `'all'`。`DES.store` 経由・try/catch・失敗は `save_fail`。「はじめの状態に戻す」で消える）。活動・作品・会話・お題の記録はあしあとから**消せない**（削除はそれぞれの画面で）。
+- **Z-2 上段「前はここまで」（小: 「まえはここまで」）**: `state` が `working|paused` の活動を、`lastStop` が `make:<id>` の活動を先頭、以降は最後の変化（無ければ `baseTime`）の新しい順で**最大 3 枚**（≥ 951 は横 3 列・それ以下は縦 1 列）。各カードの中身の順:
+  1. タイトル + 出所チップ（既存 `origin_*`）
+  2. 「前にしたかったこと」= `a.next`（本人が書いた文。本人チップ）。空文字 / null なら行ごと出さない（§U-11 指摘 7）
+  3. 「止まった場所」= 最後の変化 `M.tx(c.what)` + `c.time` + 誰が（本人 / バディ / `c.with` の人名 のチップ）。変化が 0 なら `opened_stage` + `baseTime`
+  4. 「次の候補」= `stepNext(a)` の文（琥珀の AI チップ）。`a.next` と同文なら出さない
+  5. 操作: 主「続きをする」（`M.openAct` 相当 = 同じ作業台。巻き戻さない）/ 副「予定に入れる」（`a.catalogId` がある時だけ。Z-6）
+  上段が 0 件なら見出しごと出さない。「未完了」「残り」「やりかけ」の語は使わない。
+- **Z-3 先頭の 1 文**: 上段の先頭カードがあれば、バディの 1 文を既存 key `resume_push`（「前はここまで。{step}から始める？」）で `{step}` = `a.next` または `stepNext` を入れて出す（`DES.buddy(30)` + AI チップ）。どちらも無ければ出さない。上段が無い時は中立の 1 文（中: 「前にしたこと・話したこと・見つけたものが、ここに残るよ」/ 小: 「まえにしたこと・はなしたこと・見つけたものが、ここにのこるよ」）。
+- **Z-4 時系列「たどる」**: 日ごとの見出し（今日 = 「今日」/「きょう」、他は `11/1` 形式）→ 新しい順。1 件 = 左に時刻、右に種類の小アイコン（既存の線画アイコン）+ 本文 1〜2 行 + 出所チップ + リンク/操作。
+  - 作った: `a.changes` を**活動 × 日で 1 件**に畳む。タイトル / 最後の変化 `tx(what)` / 変化が 2 つ以上なら「ほか {n} 件の変化」の小リンク（`#make/<id>`）。出所 = 最後の変化の本人 / バディ / 人名。戻り方「続きをする」。`state` が `closed` なら「ここで一区切り」、`stopped` なら既存の記録行を添え、どちらも「もう一度試す」を足す（Z-5）。
+  - 作品に残した: 小さい線画 / タイトル / 状態チップ（完成・試作）/ `w.like` があれば本人チップで 1 行。カード全体が `#works/<id>` へのリンク。
+  - 話した: 会話を**本人の発言 1 つ + 直後のバディの返事**で 1 件（記録行 `who:'record'` は別件）。本人の文（本人チップ）/ バディの返事の 1 行目（AI チップ）。「話すで見る」→ `#talk` へ移り、その発言へスクロール（`DES.ui.focusMsg = id` を talk.js の renderPage で 1 回だけ消費）。
+  - 予定の記録: `plan` の `gone:'finished'` 行 + 会話の `who:'record'`。「{title} {start}〜{end}」+ 既存の終わった語 / 記録の文。記録チップ（緑）。finished 行だけ「予定に入れる」（Z-6）。見送り・外した・非表示は**出さない**。
+  - 見つけた: `odai.tried[id].found[]`。お題の線画（`TDD.photoArt`）/ 本人の 1 行（本人チップ）/ お題の問い。「お題で見る」→ `#today/<id>`。
+  入口を開いただけ（`entries`）・とっておいた・背中押し・断った回数は出さない。件数・連続日数・達成率・順位を出さない。
+- **Z-5 戻り方（元の記録を残す）**:
+  - 「続きをする」= 既存の作業台を開く経路（paused/closed/stopped → working、変化は積まない。§U-11 指摘 6 の既存挙動）。移動自体がフィードバック。
+  - 「もう一度試す」= `M.fromTrail(a, { id, now, mode })`（新規・純関数）: 同じ始まり（`sampleId` があれば見本から、`quote` があれば言葉から、`ext/build` なら同じ `steps` の空の ext 活動、お題（`odaiId`）なら同じお題から新しく — 既存の再利用をしない）で**新しい活動**を作る。`origin:'trail'`、`fromActId: a.id`、`catalogId` / `odaiId` を引き継ぐ。元の活動は変えない。開いた後トースト「もう一度、{title}を始めたよ」+「戻す」（5 秒: 新しい活動を外して `#trail` へ戻り、元の行へフォーカス）。
+- **Z-6 予定に入れる（明示操作だけ）**: 上段カードと「予定の記録（終わった）」の行だけに置く。押すと `plan.js` の取り組みを予定に入れる既存経路と**同じ**（空きの選び方・`mine` 行・会話への記録行・トースト + 戻す）。空きが無ければ既存の「明日にとっておく」。`catalogId` が無い活動ではボタンを出さない。作る活動は、あしあとで本人が押さない限り予定表に出ない。
+- **Z-7 絞り込み**: 見出し下に 5 つのトグル（`button[aria-pressed]`。中: すべて / 作った / 話した / 見つけた / 予定、小: すべて / つくった / はなした / 見つけた / 予定）。即時に描き直し・`des3.trail.filter` に保存・リロードで残る。絞って 0 件なら 1 文（中: 「{filter}のあしあとは、ここに出るよ」— 「まだない」系の欠如表現を避ける）。上段は絞り込みの影響を受けない。
+- **Z-8 空状態**: どれも無い時: 1 文（中: 「話す か 作る から始めると、ここにあしあとが残るよ」/ 小: 「はなす か つくる からはじめると、ここにあしあとがのこるよ」）。
+- **Z-9 レイアウト**: `.trail-page` は max-width 820・中央（上段だけ広げてよい）。時系列は ≥ 701 で「時刻 | 縦の線 + 点（墨 + オリーブの 2 色）| 本文」、≤ 700 で時刻を本文の上に置き線を消す。操作領域 js 44 / es 48。横スクロール禁止。
+- **Z-10 キーボード・フォーカス**: ページを開いたら h1 にフォーカス（一覧ページだが他ページと揃える。既存の `:focus{outline:none}` 慣例）。カード・行はすべて `<a>` か `<button>`。各行に `data-fk="tr:<entryId>"` を付けて再描画でフォーカスを失わない。トーストの「戻す」は既存 toast。
+- **Z-11 文言**: 新 key は `i18n.js` に [中, 小]（`tr_*` 接頭）。**あしあとの key は i18n の末尾にまとめて追加**（並行作業の別セッション・学びマップと場所を分ける）。本人の言葉・記録の文は書き換えない。禁止: §I の評価語 + 「成長」「頑張」「すごい」「版」「未完了」「やりかけ」「できなかった」「残り」「まだ」。`origin_trail: ['あしあとから', 'あしあとから']` を足す。
+- **Z-12 データの小さな追加**: (a) `make-data.js` の見本活動 `act-py` に `day: '10/30'`、`act-cap` に `day: '11/1'`（任意欄。無ければ今日。schema 番号は上げない）(b) 活動に `fromActId`（任意・`fromTrail` だけが書く）(c) `DES.ui.focusMsg`（一時値）。`data.js` / `buddy.js` / `tokens.css` は触らない。
+- **Z-13 ファイル**: 新規 `app-v3/js/trail.js`、`app-v3/css/trail.css`、`tools/trail-test.js`（`TRAIL_TEST=PASS|FAIL`）。変更は `index.html`・`app.js`（render 分岐・後片付け・bind）・`make.js`（`M.fromTrail` と必要な読み取りの公開。**既存挙動は変えない・追加は 1 か所にまとめる**。並行作業の別セッションが make.js の題材分岐を変更中のため、題材分岐には触らない）・`make-data.js`（Z-12 a の 2 行だけ）・`plan.js`（取り組みを予定に入れる経路を外から呼べる関数として公開するだけ）・`talk.js`（`focusMsg` の消費・必要なら読み取り口）・`i18n.js`・`tools/check.sh`（`trail` を含む時 `trail-test.js` を回す — today と同じ型）。他ページの挙動は変えない。
+- **Z-14 純関数（DOM・`DES.t` 非依存）**: `TR.resumeCards(acts, lastStop)`（≤3・順序 Z-2・`next` と `wanted` の同文除外）/ `TR.entries({...})`（day 降順 → time 降順・id 重複なし・除外対象を含まない）/ `TR.groupByDay(entries, today)` / `TR.filter(entries, f)` / `TR.talkTopics(messages)` / `TR.buddyLine(cards)` / `TR.normalize(raw)` / `M.fromTrail(a, o)`（元の `a` を変更しない）。
+- **Z-15 受け入れ（操作ループ・各操作にフィードバック）**: 開く → 上段 ≤3 枚 → 続きをする → 作業台（巻き戻らない）→ 戻る → 一区切りの行（act-py）の「もう一度試す」→ 新しい作業台（元の変化は不変）→ トースト「戻す」で新活動が消え元の行へフォーカス → 上段の「予定に入れる」→ 予定表に mine 行 + 会話に記録行 + トースト「戻す」→ 絞り込み 5 種（リロードで残る・0 件の 1 文）→ 話したの「話すで見る」でその発言へ → 作品の行で詳細へ → 見つけたの行でお題詳細へ → es/js 切替で本人の言葉が変わらない → 390 で横スクロール無し → キーボードだけで全部。
+- **Z-16 検証**: `node tools/trail-test.js`（TRAIL_TEST=PASS）/ make-test・today-test 維持 / `sh tools/check.sh talk plan make works today trail self paused`（CHECK_RESULT=PASS・横スクロール含む）/ `sh tools/render.sh <scratch>/render trail` の 1440/1024/390（PNG を見る）/ 既存 CDP ループ 1〜6 PASS + 新 loop8（Z-15）。
