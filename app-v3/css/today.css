@@ -2,7 +2,7 @@
    部品（.page-head / .range-row / .inline-edit / .cap-thumb / .chip / .btn）は shell.css・make.css・plan.css のものを使い、ここは v3 追加だけ。
    橙は主ボタン（やってみる・この問いで作る）だけ。開いている入口は墨の枠で示す。操作領域は 44px（es 48px）。 */
 
-.today-page{max-width:1180px;margin:0 auto;min-width:0}
+.today-page{max-width:var(--page-max);margin:0 auto;min-width:0}
 /* 開いた時にフォーカスを置く見出し（tabindex=-1）は輪を出さない（works.css .works-page h1 と同じ） */
 .today-page h1:focus,.today-page h2:focus{outline:none}
 .today-page .btn,.today-page .link-btn{min-height:44px}
@@ -16,7 +16,7 @@ html[data-mode="es"] .today-page .btn,html[data-mode="es"] .today-page .link-btn
 @keyframes odaiOut{from{opacity:1}to{opacity:0}}
 .odai-card.swap-in>.odai-art,.odai-card.swap-in>.odai-body{animation:odaiIn .15s ease-out}
 .odai-ghost{position:absolute;inset:0;display:flex;flex-direction:inherit;background:#fff;pointer-events:none;animation:odaiOut .15s ease-out forwards}
-.odai-art,.td-hero,.td-play-art{background:#f1eee4;background-image:radial-gradient(#d7d5ca .7px,transparent .7px);background-size:16px 16px}
+.odai-art,.td-hero,.td-play-art{background:var(--art-bg);background-image:radial-gradient(#d7d5ca .7px,transparent .7px);background-size:16px 16px}
 .odai-art{padding:10px 14px;border-bottom:1px solid var(--line)}
 .odai-art svg{width:100%;height:auto;max-height:170px}
 .odai-body{display:flex;flex-direction:column;gap:8px;padding:14px 16px 16px;flex:1;min-width:0}
@@ -40,7 +40,7 @@ html[data-mode="es"] .today-page .btn,html[data-mode="es"] .today-page .link-btn
 .odai-kept h2{font-size:15px;line-height:1.6}
 .kept-list{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
 .kept-item{display:flex;gap:12px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-width:0}
-.kept-thumb{width:84px;flex-shrink:0;border-radius:8px;background:#f1eee4;overflow:hidden;border:1px solid var(--line)}
+.kept-thumb{width:84px;flex-shrink:0;border-radius:8px;background:var(--art-bg);overflow:hidden;border:1px solid var(--line)}
 .kept-thumb svg{width:100%;height:auto}
 .kept-text{display:grid;gap:6px;min-width:0}
 .kept-text h3{font-size:12px;line-height:1.6;overflow-wrap:anywhere}

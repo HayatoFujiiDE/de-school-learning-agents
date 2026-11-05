@@ -2,7 +2,9 @@
    部品（.page-head / .section-head / .chip / .btn / .pill / .link-btn / .empty-line）は shell.css・make.css・plan.css のものを使い、ここは v3 追加だけ。
    橙は主ボタン（続きをする）だけ。時系列の線と点は 墨 + オリーブ の 2 色。操作領域は 44px（es 48px）。横スクロールを出さない。 */
 
-.trail-page{max-width:820px;margin:0 auto;min-width:0}
+.trail-page{max-width:var(--page-max);margin:0 auto;min-width:0}
+/* 時系列は 820px の箱のまま左寄せ（§AA-1） */
+.trail-page>*{max-width:820px}
 /* 開いた時にフォーカスを置く見出し・行（tabindex=-1）は輪を出さない（他ページの h1 と同じ） */
 .trail-page h1:focus,.trail-page h2:focus,.tr-item:focus{outline:none}
 .trail-page .btn,.trail-page .link-btn,.tr-filter{min-height:44px}
@@ -73,7 +75,7 @@ a.tr-work:hover{border-color:#cfcabd}
 a.tr-work:focus{outline:none}
 a.tr-work:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
 .tr-side{display:grid;gap:5px;align-content:start;min-width:0}
-.tr-thumb{display:block;border-radius:8px;overflow:hidden;border:1px solid var(--line);background:#f0eee5}
+.tr-thumb{display:block;border-radius:8px;overflow:hidden;border:1px solid var(--line);background:var(--art-bg)}
 .tr-thumb svg{width:100%;height:auto}
 .tr-thumb.is-empty{aspect-ratio:1.52}
 
