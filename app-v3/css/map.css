@@ -331,7 +331,8 @@ html[data-mode="es"] .mpo-xname{font-size:14px}
 .mpx-card.mp-frame{width:0;height:0;min-height:0;overflow:visible;border:0;border-radius:0;background:none;touch-action:auto}
 .mpx-face{margin:0}
 .mp-node.mpx-face{position:absolute;left:0;top:0;box-sizing:border-box}
-.mpx-sq{position:absolute;box-sizing:border-box;border-style:solid;border-color:var(--muted);background:var(--white);overflow:hidden}
+/* マスの形の枠: 全体の帯のマス（.mpo-box）と同じ線・地（逆向きの出発の瞬間にマスと見分けがつかない） */
+.mpx-sq{position:absolute;box-sizing:border-box;border-style:solid;border-color:var(--line);background:var(--white);overflow:hidden}
 .mpx-sqfill{position:absolute;left:0;right:0;bottom:0;background:var(--ink)}
 .mpx-sqdot{position:absolute;left:50%;border-radius:50%;background:var(--orange)}
 /* 大きく見るの古い画面は、重ね面の中でも大きく見るの形のまま（html.mp-big が外れても） */
@@ -404,13 +405,14 @@ html[data-mode="es"] .mp-frame[data-lod="far"] .mp-n.is-made .mp-label{font-size
 
 /* ---------- 大きく見る（§AC-6）: 左メニュー・topbar・説明 1 文を隠し、見出しの行を小さく（h1 18px）。体験モックの帯は残す ---------- */
 /* 隠すのはシェルの左メニュー（#sidebar）だけ。≤ 700 の引き出し（#nav-drawer の中の .sidebar）は下タブの「もっと」から今までどおり開ける */
-html.mp-big #sidebar,html.mp-big .topbar{display:none}
+/* 効かせるのは今の画面（#main・#topbar）だけ。遷移の重ね面の中の古い画面と上の帯の写しには効かせない（§AE-4: 大きく見るが付いても測った位置のまま薄くなる） */
+html.mp-big #sidebar,html.mp-big #topbar{display:none}
 html.mp-big .shell{grid-template-columns:minmax(0,1fr)}
 html.mp-big .content{max-width:none;padding:4px 16px 0}
-html.mp-big .mp-headrow{margin-bottom:4px;align-items:center}
-html.mp-big .mp-head h1{font-size:18px;line-height:1.5}
-html.mp-big .mp-head p{display:none}
-html.mp-big .mp-switch{flex-basis:auto;margin-left:auto}
+html.mp-big #main .mp-headrow{margin-bottom:4px;align-items:center}
+html.mp-big #main .mp-head h1{font-size:18px;line-height:1.5}
+html.mp-big #main .mp-head p{display:none}
+html.mp-big #main .mp-switch{flex-basis:auto;margin-left:auto}
 
 /* ---------- 流れで見る（§AC-8 / §Y-2）: 左 → 右の 3 列と線。ページとして縦にスクロール。列の見出しは上に貼り付く ---------- */
 .mp-flow{display:grid;grid-template-columns:minmax(0,1fr);gap:24px;align-items:start}
