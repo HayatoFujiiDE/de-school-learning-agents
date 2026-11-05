@@ -1,0 +1,19 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#888}iframe{border:0;display:block}</style></head>
+<body><pre id="m">HSCROLL pending</pre>
+<script>
+// check.sh の横スクロール検査: #<幅>|<URL（encodeURIComponent）> のページを <幅>px の iframe で開き、
+// 描画後の document.documentElement.scrollWidth と innerWidth を「HSCROLL <scrollWidth> <innerWidth>」で書く（--dump-dom で読む）
+(function () {
+  var h = location.hash.slice(1).replace(/%7C/i, '|'), k = h.indexOf('|'), w = parseInt(h.slice(0, k), 10), u = decodeURIComponent(h.slice(k + 1));
+  var m = document.getElementById('m'), f = document.createElement('iframe');
+  f.style.width = w + 'px'; f.style.height = '900px';
+  f.onload = function () {
+    setTimeout(function () {
+      try { var d = f.contentDocument.documentElement; m.textContent = 'HSCROLL ' + d.scrollWidth + ' ' + f.contentWindow.innerWidth; }
+      catch (e) { m.textContent = 'HSCROLL error'; }
+    }, 1200);
+  };
+  f.src = u;
+  document.body.appendChild(f);
+})();
+</script></body></html>

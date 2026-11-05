@@ -2,6 +2,7 @@
 # Mechanical gates: forbidden words in rendered DOM, JS errors, horizontal overflow per route/width.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)/app-v3"
+TOOLS="$(cd "$(dirname "$0")" && pwd)"
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 TMP="${TMPDIR:-/tmp}/des-check.$$"; mkdir -p "$TMP"
 fail=0
@@ -13,7 +14,18 @@ for r in "$@"; do
     errs=$(grep -ciE 'uncaught|TypeError|ReferenceError|SyntaxError' "$TMP/err.log")
     # forbidden words in visible DOM (strip tags)
     bad=$(sed -e 's/<script[^>]*>.*<\/script>//g' "$TMP/dom.html" | sed -e 's/<[^>]*>/ /g' | grep -oE '点数|ランキング|順位|評価|成績|レベル|データがありません' | sort | uniq -c | tr '\n' ' ')
-    printf '%-40s %4s  jserr=%s  forbidden=[%s]\n' "$r" "$W" "$errs" "$bad"
+    # horizontal overflow: open the page in a W px iframe (tools/frame-measure.html; exact width, also 390) and compare
+    # document.documentElement.scrollWidth with innerWidth. No measurement = FAIL (never treat "not measured" as clean)
+    U=$(python3 -I -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=''))" "$url")
+    "$CHROME" --headless=new --disable-gpu --hide-scrollbars --allow-file-access-from-files --window-size=1500,1000 --virtual-time-budget=3000 \
+      --dump-dom "file://$TOOLS/frame-measure.html#$W|$U" > "$TMP/frame.html" 2> "$TMP/frame-err.log"
+    hs=$(grep -oE 'HSCROLL [0-9]+ [0-9]+' "$TMP/frame.html" | head -n 1)
+    if [ -z "$hs" ]; then hsr="unmeasured"; fail=1
+    else
+      sw=$(printf '%s' "$hs" | awk '{print $2}'); iw=$(printf '%s' "$hs" | awk '{print $3}')
+      if [ "$sw" -gt $((iw + 1)) ]; then hsr="OVER(${sw}>${iw})"; fail=1; else hsr="ok"; fi
+    fi
+    printf '%-40s %4s  jserr=%s  forbidden=[%s]  hscroll=%s\n' "$r" "$W" "$errs" "$bad" "$hsr"
     [ "$errs" -gt 0 ] && fail=1
     [ -n "$bad" ] && fail=1
   done
