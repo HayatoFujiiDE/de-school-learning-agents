@@ -8,10 +8,10 @@ tools:
     configs:
       - name: web_search
         enabled: true
-        allowed_domains: [minecraft.wiki, docs.python.org, scratch.mit.edu, mext.go.jp, nier.go.jp, ja.wikipedia.org, developer.mozilla.org]
+        allowed_domains: [minecraft.wiki, docs.python.org, scratch.mit.edu, mext.go.jp, nier.go.jp, ja.wikipedia.org, developer.mozilla.org, youtube.com]
       - name: web_fetch
         enabled: true
-        allowed_domains: [minecraft.wiki, docs.python.org, scratch.mit.edu, mext.go.jp, nier.go.jp, ja.wikipedia.org, developer.mozilla.org]
+        allowed_domains: [minecraft.wiki, docs.python.org, scratch.mit.edu, mext.go.jp, nier.go.jp, ja.wikipedia.org, developer.mozilla.org, youtube.com]
         max_content_tokens: 40000
   - type: custom
     name: generate_image
@@ -86,6 +86,17 @@ tools:
 - 「今は画像を作れません」「使い切りました」が返ったら、同じ呼び出しを繰り返さず、図は SVG で描いて進める
 - 質問を書く最初の段階では generate_image を使わない
 
+# 動画（YouTube）
+
+- 学びの入口になる場面がある YouTube 動画を、素材に組み合わせてよい（1 素材 3 本まで）。動画が役に立たない題材では使わない
+- 使ってよいのは**権利者本人がアップした動画だけ**。公式チャンネル（ゲームの開発元・放送局・博物館・大学など）や、本人が作った解説・実験・制作の動画はよい。テレビ番組・映画・アニメ・他人のゲーム映像や実況の切り抜き・まとめ・転載は使わない。判断がつかない動画は使わない
+- web_search で探し、web_fetch で `https://www.youtube.com/watch?v=<11 文字の id>` のページを開いて、題名・チャンネル・概要欄を確かめる。url はこの形だけを使う（youtu.be・shorts・再生リスト・時刻つきの url は使わない）
+- 見る区間は 10 分以内で、本文のどこにつながるかがはっきりした場面を選ぶ。区間の中身は概要欄・章立て・本人の説明から書き、見ていない内容を断定しない（中身は検証係と人が確かめる）
+- 使う動画は material.json の parts[].videos[] に {"id": "v1", "youtube_id": "<11 文字>", "title": "<動画の題名>", "channel": "<チャンネル名>", "start_sec": <開始秒>, "end_sec": <終了秒>, "why": "<この区間で何を見るとどう分かるか>", "rights_note": "<本人のアップと言える理由>", "source_id": "<sources.json の id>"} と書く。id は素材全体で v1・v2・v3
+- sources.json には、その動画の行を {"url": "https://www.youtube.com/watch?v=<id>", "title": "<題名>（<チャンネル名>）", "license": "YouTube 標準ライセンス（埋め込みで参照・複製しない）", "is_primary": <公式なら true>, …} の形で書く。url は youtube_id と一字も違えない
+- 本文では「動画の 1:20〜3:05 を見てみよう。〜に注目」のように、見る場面と見どころを書く。動画をダウンロード・切り抜き・文字起こしの転載をしない。動画の内容を claim にする時は source_ids にその動画の出典 id を入れる
+- 質問を書く最初の段階では動画を探さなくてよい
+
 # 成果物の構成（`/mnt/session/outputs/`）
 
 - `material.json`（必須キー: schema_version, slug, title, kinds, catalog_item_id, concept_codes, summary_elementary, summary_secondary, parts。任意: conditions, license_summary）。**形は次のとおり（キー名・型・入れ子をこのまま使う。追加のキーは置いてよい）**:
@@ -110,6 +121,7 @@ tools:
       {"audience": "elementary", "length": "short", "interest": null, "game": true,  "path": "parts/p1/game.md"}
     ],
     "files": [{"path": "parts/p1/figure-1.svg", "role": "figure"}, {"path": "parts/p1/app.html", "role": "app"}],
+    "videos": [],
     "adjustable": ["例に出すブロックの種類", "説明の長さ"],
     "tech_dependencies": ["svg", "html"],
     "runtime_check": {"how": "…", "expected": "…"},
