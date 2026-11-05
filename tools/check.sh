@@ -37,6 +37,13 @@ case " $* " in *" today"*)
   printf '%-40s %s\n' "today-test" "${tv:-TODAY_TEST=MISSING}"
   [ "$tv" = "TODAY_TEST=PASS" ] || fail=1
 ;; esac
+# あしあとの純関数テスト（CONTRACT-v3 §Z-13）: trail のルートを検査する時だけ
+case " $* " in *" trail"*)
+  node "$(dirname "$0")/trail-test.js" > "$TMP/trail-test.log" 2>&1
+  rv=$(grep -o 'TRAIL_TEST=[A-Z]*' "$TMP/trail-test.log")
+  printf '%-40s %s\n' "trail-test" "${rv:-TRAIL_TEST=MISSING}"
+  [ "$rv" = "TRAIL_TEST=PASS" ] || fail=1
+;; esac
 rm -rf "$TMP"
 printf 'CHECK_RESULT=%s\n' "$([ $fail -eq 0 ] && echo PASS || echo FAIL)"
 exit $fail
