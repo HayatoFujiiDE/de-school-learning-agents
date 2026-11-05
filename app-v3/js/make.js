@@ -118,6 +118,40 @@
     return a;
   }
 
+  // 今日のお題から（§X-2 / X-8）: お題の問い・最初の一歩・必要な物を引き継いだ活動（origin 'today'、odaiId 付き）。
+  // 題材が §U-1 の 3 つなら theme 活動（見本の作業対象から）、それ以外は外で作って写真で記録する ext 活動（手順 = お題の makeSteps）。
+  // 同じお題から作った活動があれば作らずにその id を返す。o: { id, mode, now, acts, question（自分の案にした問い）, recText（記録の 1 行。作った時点の表示の文字列） }
+  // 戻り値: { id, act, created, changed }（changed = 既存の活動の問いを本人が書き換えた）
+  function fromOdai(odai, o) {
+    o = o || {};
+    if (!odai || !odai.id) return null;
+    var q = String(o.question == null ? '' : o.question).replace(/^\s+|\s+$/g, '');
+    var own = !!q && !(Array.isArray(odai.title) && odai.title.indexOf(q) >= 0);
+    var hit = null;
+    (o.acts || []).forEach(function (x) { if (!hit && x && x.odaiId === odai.id) hit = x; });
+    if (hit) {
+      if (!own || hit.title === q) return { id: hit.id, act: hit, created: false, changed: false };
+      var X = clone(hit);
+      X.title = q;
+      pushMsg(X, { who: 'child', text: q });
+      return { id: X.id, act: X, created: false, changed: true };
+    }
+    var title = own ? q : MD.pick(odai.title, o.mode);
+    var theme = MD.THEMES.indexOf(odai.makeTheme) >= 0 ? odai.makeTheme : null, a;
+    if (theme) {
+      var th = MD.theme(theme), variant = th.variants.indexOf(odai.makeVariant) >= 0 ? odai.makeVariant : th.sample;
+      a = newAct({ id: o.id, title: title, origin: 'today', theme: theme, stage: stageOf(theme, variant, 'sample'), now: o.now });
+    } else {
+      var steps = Array.isArray(odai.makeSteps) && odai.makeSteps.length ? odai.makeSteps : MD.theme('mc').extSteps;
+      a = newAct({ id: o.id, title: title, origin: 'today', theme: 'mc', ext: { link: null, photos: [], visible: [] }, steps: steps, stepsKind: 'ext', now: o.now });
+    }
+    a.odaiId = odai.id;
+    pushMsg(a, { who: 'record', k: 'odai_rec', v: { q: odai.title, step: odai.firstStep, need: odai.need }, text: o.recText || null });
+    if (own) pushMsg(a, { who: 'child', text: q });
+    if (theme) say(a, 'open', o.mode);
+    return { id: a.id, act: a, created: true, changed: false };
+  }
+
   // ---------- 作業対象と変化 ----------
   // いま「確かめた」状態（最後の変化の写し。無ければ始めの状態）
   function committed(a) {
@@ -743,7 +777,7 @@
     demo: demo, cardStage: cardStage, pushMsg: pushMsg, lastWhat: lastWhat, reopenAt: reopenAt, replyTarget: replyTarget,
     finishMaking: finishMaking, cardNames: cardNames, visiblePhotos: visiblePhotos, cardTitle: cardTitle,
     canRevertTo: canRevertTo, restoreState: restoreState, findMsg: findMsg, declineReply: declineReply, undoDeclineReply: undoDeclineReply, migrate: migrate,
-    migrateWork: migrateWork, withPending: withPending,
+    migrateWork: migrateWork, withPending: withPending, fromOdai: fromOdai,
     // §W（作品の一覧・詳細）が使う
     defaultStatus: defaultStatus, normalizeWorks: normalizeWorks, chState: chState, baseState: baseState, curState: curState
   };
@@ -908,6 +942,22 @@
     go('#make/' + id);
   }
   M.openAct = openAct;
+  // 今日のお題の「作ってみる」/「自分の案にする」（§X-2）: 同じお題の活動があればそれを開く（問いを書き換えていれば反映して開く）
+  M.openOdai = function (odai, question) {
+    if (!odai) return null;
+    var m = mode();
+    var r = fromOdai(odai, { id: newId('a'), mode: m, now: DES.data.now, acts: S().activities, question: question,
+      recText: T('odai_rec', { q: MD.pick(odai.title, m), step: MD.pick(odai.firstStep, m), need: MD.pick(odai.need, m) }) });
+    if (!r) return null;
+    if (r.created) {
+      change(function () { S().activities = [r.act].concat(S().activities); });
+      go('#make/' + r.id);
+    } else if (r.changed) {
+      change(function () { setAct(resume(r.act), true); });
+      go('#make/' + r.id);
+    } else openAct(r.id);
+    return r;
+  };
 
   // ---------- 共通の「続きをする」（§U-11 指摘 4）: 最後に止めたのが作るなら その作業台、会話なら #talk ----------
   M.resumeTarget = function () {
