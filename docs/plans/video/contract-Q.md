@@ -331,3 +331,10 @@
 14. **確認済みと未確認**: 手元の curl で、oEmbed は実在の id に 200、存在しない 11 文字の id に 404 を返し、応答の key は `author_name`・`author_url`・`html`・`title` などだった（2026-11-05）。Cloudflare Workers からの到達（YouTube が Workers の IP を断らないか）と、非公開・埋め込み不可の動画の status は未確認。届かない時は `unavailable` として従来どおり進む（fail-soft）ので、deploy 後に実注文で確かめる。
 
 凍結（Q-11）: 2026-11-05（Astra high R3 GO）。
+
+Q-11 実装レビュー後の追記（2026-11-05・Astra high GO の non-blocking）:
+- author_url は、`@`・`c/`・`user/` の後を decodeURIComponent し、読めない・制御文字・空白・`/`・`\`・`?`・`#`・`%` を含むものを拒む（`@%00`・`@a%ZZ`・`c/%2Fwatch`）。確認画面のリンクの確かめ直しも同じ規則。
+- oEmbed の要求の締め切りは、fetch の直前に測った min(5 秒, 試行の締め切りまでの残り)。settings の 1 文の後で残りが 0 以下なら呼ばない（数は使ったまま）。
+- 公式の情報が ok でも照合が unknown（正規化の後で名前が空）の時は、「チャンネル名を照合できませんでした。本人のチャンネルか確かめてください」の印を出す。
+- 範囲: `src/cron.ts`（port を渡す 1 か所）を含む。動画の出典の行の check_detail は既存の `no_excerpt`。
+
