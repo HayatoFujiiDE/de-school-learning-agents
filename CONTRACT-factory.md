@@ -938,7 +938,7 @@ type Cause = 'contradicted' | 'source_not_listed' | 'maker_url_not_fetched' | 'q
 | license_unknown | 利用条件が分からない |
 
 3. **本文**: 既定は「小学生・短い」。変奏は既存のタブ。要確認の主張を含む段落は黄色の印（claims の id 参照 `[c3]` 等で特定。特定できなければ印なし）
-4. **あなたが見る 3 項目**: 「説明と表現」「学習との関係」「使う条件」+ auto が review の項目。「説明と表現」は図・画像（svg / png / webp）をすべて見る項目とし、横に「図・画像 N 枚」と出してサムネイルを並べる（検証係は図を見ない）。各 OK / NG の 2 択トグル（「該当なし」は「使う条件」だけ）。NG を選んだ時だけメモ欄
+4. **あなたが見る 3 項目**: 「説明と表現」「学習との関係」「使う条件」+ auto が review の項目。「説明と表現」は図・画像（svg / png / webp）をすべて見る項目とし、横に「図・画像 N 枚」と出してサムネイルを並べる（検証係も図を見て判定をサムネイルの下に出す。§O-12。人の確認は置き換えない）。各 OK / NG の 2 択トグル（「該当なし」は「使う条件」だけ）。NG を選んだ時だけメモ欄
 5. **畳む**: 「問題なし（主張 N 件・出典 M 件）」の `<details>` に従来の claims 表・sources 表、「詳細（機械検査・自己点検・変えてよい範囲・費用）」の `<details>` に checks_json・selfcheck・adapt-rules・grader・費用・Console リンク
 6. **固定フッター**: 「承認する」「差し戻す」「却下する」。差し戻し・却下を押すと理由欄（と差し戻しの追記欄）が開き、もう一度押すと確認ダイアログ。承認不可の理由はボタンの横に 1 行で出し、該当箇所へスクロール
 - キー（次の時は無効: 入力欄にフォーカス / ダイアログ表示中 / 送信中 / キーリピート（`e.repeat`）/ Ctrl・Meta・Alt 付き。Shift は `Shift+1..3` と `?` だけ）: `1` `2` `3` = 人の 3 項目を順に OK、`Shift+1..3` = NG、`A` 承認、`R` 差し戻し、`X` 却下、`J` / `K` = 次 / 前の確認待ち、`?` = キーの一覧。ダイアログは既存の確認ダイアログ（Enter で実行・Esc で取消）。差し戻し・却下の理由欄に書きかけがある間は `J` / `K` を無視し、ボタンの横に「理由を書きかけです」と 1 行出す
@@ -1198,6 +1198,7 @@ state は `done` / `active` / `waiting` (人の番) / `failed` / `pending` / `sk
 - 職人へ返す形は形 A（base64 直。probe p5、`docs/plans/image-generation/probe-results.md`）
 - 段階 1（§M）の互換（generate_image に is_error）は、§O を deploy して職人定義に tool を足すまで有効。降格の条件は §O-3 e
 - 一時 route `/api/probe/image-tool` と `src/routes/probe.ts` は §O の実装で削除する
+- §O-12（v3.9.1、2026-11-05）: 検証係が図・画像を見る。本文は `docs/plans/image-generation/contract-O12-verifier-figures.md`。§O-0 範囲外の「検証係が画像を見ること」と §L-6 4 の「検証係は図を見ない」を置き換える
 
 ## §R 裁定記録（2026-11-04。Astra medium + 3 視点レビューの指摘への裁定）
 
