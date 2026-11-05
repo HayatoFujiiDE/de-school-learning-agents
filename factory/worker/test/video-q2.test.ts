@@ -45,13 +45,14 @@ import {
   verifyPlanKey,
 } from '../src/verify';
 import {
-  VIDEO_CAPTURE_DOWNGRADE_NOTE,
+  SOURCES_YOUTUBE_EXCERPT_MARK,
   VIDEO_DOWNGRADE_NOTE,
   enforceVideoConfirmations,
   isYoutubeUrl,
   neutralizeInputText,
   videoNotesSection,
   videoReserveStmt,
+  maskYoutubeExcerpts,
   videosMetaBlocks,
   versionVideosOf,
   youtubeSourceIdsOf,
@@ -696,28 +697,45 @@ describe('§Q-9.10 動画を出典にした claim の confirmed は「動画の�
       { id: 'c3', source_ids: ['s1', 's10'] },
     ],
   });
-  const v = (id: string, verdict: string, reason: string) => ({ claim_id: id, verdict, reason, opened_urls: [] as string[] });
+  const v = (id: string, verdict: string, reason: string, opened: string[] = []) => ({ claim_id: id, verdict, reason, opened_urls: opened });
 
-  // 5 列目 = 取得記録の本文を入力に入れた出典（YouTube の出典は入れない。§Q-9.10 の構造の対策）
+  // 証拠で決める（2962b36 の後の司令塔の裁定）。YouTube の出典を含む claim の confirmed は (a) 動画の記録 (b) YouTube でない出典の取得記録 (c) YouTube でない出典を開いた URL のどれかがある時だけ。
+  // 3 列目 = 記録を入れた動画、5 列目 = 取得記録の本文を入れた出典（YouTube の出典は入れない）
   it.each<[string, ReturnType<typeof v>, string[], string, string[]?]>([
-    ['動画だけの claim・記録で確認・記録あり', v('c2', 'confirmed', '動画の記録で確認: 1:20'), ['v1'], 'confirmed'],
+    // (a)
+    ['動画だけの claim・(a) 記録で確認・記録あり', v('c2', 'confirmed', '動画の記録で確認: 1:20'), ['v1'], 'confirmed'],
     ['全角コロンも受ける', v('c2', 'confirmed', '動画の記録で確認：1:20'), ['v1'], 'confirmed'],
-    ['動画だけの claim・watch ページで確認', v('c2', 'confirmed', '概要欄にそう書いてある'), ['v1'], 'unverified'],
-    ['動画だけの claim・制作時の取得記録で確認', v('c2', 'confirmed', '制作時の取得記録で確認: 概要欄'), ['v1'], 'unverified', ['s1']],
     ['動画だけの claim・記録で確認と書いたが記録なし', v('c2', 'confirmed', '動画の記録で確認: 1:20'), [], 'unverified'],
-    // 混ざる claim は YouTube でない出典か動画の記録でだけ確かめられる（検証係は YouTube を web_fetch で開けず、YouTube の取得記録も受け取らない）
-    ['混ざる claim・YouTube でない出典を web_fetch で開いて確認', v('c3', 'confirmed', 'wiki に書いてある'), [], 'confirmed'],
-    ['混ざる claim・制作時の取得記録で確認・YouTube でない出典の記録あり', v('c3', 'confirmed', '制作時の取得記録で確認: wiki の本文'), [], 'confirmed', ['s1']],
-    ['混ざる claim・制作時の取得記録で確認・根拠は YouTube の概要欄だけ（YouTube でない出典の記録なし）', v('c3', 'confirmed', '制作時の取得記録で確認: YouTube の概要欄'), [], 'unverified_capture', []],
-    ['混ざる claim・記録で確認と書いたが記録なし', v('c3', 'confirmed', '動画の記録で確認: x'), ['v1'], 'unverified'],
-    ['混ざる claim・記録で確認・記録あり', v('c3', 'confirmed', '動画の記録で確認: x'), ['v2'], 'confirmed'],
+    ['混ざる claim・(a) 記録で確認・記録あり', v('c3', 'confirmed', '動画の記録で確認: x'), ['v2'], 'confirmed'],
+    ['混ざる claim・記録で確認と書いたが、その claim の動画の記録は無い（別の動画の記録だけ）', v('c3', 'confirmed', '動画の記録で確認: x'), ['v1'], 'unverified'],
+    // (b)
+    ['混ざる claim・(b) 取得記録で確認・YouTube でない出典の記録あり', v('c3', 'confirmed', '制作時の取得記録で確認: wiki の本文'), [], 'confirmed', ['s1']],
+    ['混ざる claim・取得記録で確認と書いたが YouTube でない出典の記録なし', v('c3', 'confirmed', '制作時の取得記録で確認: YouTube の概要欄'), [], 'unverified', []],
+    ['動画だけの claim・取得記録で確認（YouTube でない出典が無いので (b) は成り立たない）', v('c2', 'confirmed', '制作時の取得記録で確認: 概要欄'), ['v1'], 'unverified', ['s1', 's9']],
+    // (c)
+    ['混ざる claim・(c) YouTube でない出典の URL を開いた', v('c3', 'confirmed', 'wiki に書いてある', [URL_A]), [], 'confirmed'],
+    ['混ざる claim・(c) 開いた URL は normalizeUrl で比べる', v('c3', 'confirmed', 'wiki に書いてある', ['http://MINECRAFT.wiki/w/Redstone_Dust/']), [], 'confirmed'],
+    ['混ざる claim・開いたのは YouTube の URL だけ', v('c3', 'confirmed', 'watch ページを開いた', [watch(YT2)]), [], 'unverified'],
+    ['混ざる claim・別の（出典でない）URL を開いた', v('c3', 'confirmed', '別のページ', ['https://minecraft.wiki/w/Other']), [], 'unverified'],
+    ['混ざる claim・接頭辞も開いた URL も無い（2962b36 までは confirmed のままだった）', v('c3', 'confirmed', 'wiki に書いてある'), [], 'unverified'],
+    ['動画だけの claim・YouTube の URL を開いた', v('c2', 'confirmed', '概要欄にそう書いてある', [watch(YT1)]), ['v1'], 'unverified'],
+    // 証拠の道が無い
+    ['YouTube の概要欄を根拠にした（証拠の道なし）', v('c3', 'confirmed', 'YouTube の概要欄にそう書いてある'), [], 'unverified'],
+    ['動画だけの claim・watch ページで確認', v('c2', 'confirmed', '概要欄にそう書いてある'), ['v1'], 'unverified'],
+    // 対象外
     ['YouTube を使わない claim', v('c1', 'confirmed', 'r'), [], 'confirmed'],
     ['confirmed 以外は変えない', v('c2', 'hypothesis', '概要欄'), [], 'hypothesis'],
   ])('%s → %s', (_n, x, shown, want, captured) => {
     const [r] = enforceVideoConfirmations([x], claims, sources, vs, shown, captured ?? []);
-    expect(r.verdict).toBe(want.startsWith('unverified') ? 'unverified' : want);
+    expect(r.verdict).toBe(want);
     expect(r.reason.startsWith(VIDEO_DOWNGRADE_NOTE)).toBe(want === 'unverified');
-    expect(r.reason.startsWith(VIDEO_CAPTURE_DOWNGRADE_NOTE)).toBe(want === 'unverified_capture');
+    if (want === 'unverified') expect(r.reason).toBe(VIDEO_DOWNGRADE_NOTE + x.reason);
+  });
+
+  it('(c) の URL は sources.json の YouTube でない行の url（sources.json が読めなければ (c) は成り立たない）', () => {
+    const x = v('c3', 'confirmed', 'wiki に書いてある', [URL_A]);
+    expect(enforceVideoConfirmations([x], claims, sources, vs, [])[0].verdict).toBe('confirmed');
+    expect(enforceVideoConfirmations([x], claims, 'not json', vs, [])[0].verdict).toBe('unverified');
   });
 
   it('host の書き方（末尾の .・大文字・サブドメイン・youtu.be）でも YouTube の出典と見分ける。似た名前の別 host は見分けない', () => {
@@ -1149,7 +1167,7 @@ describe('B1 検証係は YouTube の watch ページの本文を受け取らな
     expect(texts(seen[0]).join('\n')).not.toContain(DESC);
     const c3 = saved().verdicts.find((x) => x.claim_id === 'c3')!;
     expect(c3.verdict).toBe('unverified');
-    expect(c3.reason).toBe(VIDEO_CAPTURE_DOWNGRADE_NOTE + '制作時の取得記録で確認: YouTube の概要欄');
+    expect(c3.reason).toBe(VIDEO_DOWNGRADE_NOTE + '制作時の取得記録で確認: YouTube の概要欄');
     // 送った params の web_fetch も YouTube を開けない
     const wf = (seen[0] as unknown as { tools: Array<{ name: string; allowed_domains?: string[] }> }).tools.find((x) => x.name === 'web_fetch')!;
     expect(wf.allowed_domains!.some((d) => /youtu/i.test(d))).toBe(false);
@@ -1325,4 +1343,51 @@ describe('テストの穴: port の締め切りと終わらない本文', () => 
     await expect(geminiPort(env, { fetchImpl: stalled }).watch(REQ, { deadline: Date.now() + 1_000 })).rejects.toMatchObject({ kind: 'timeout', responded: false });
     expect(performance.now() - t).toBeLessThan(5_000);
   }, 10_000);
+});
+
+// ---------------------------------------------------------------------------------------------
+describe('<sources_json> の YouTube の出典の quoted_excerpt は検証係に渡さない（入力だけ。保存する sources.json は変えない）', () => {
+  it('maskYoutubeExcerpts: YouTube の出典（url が YouTube・動画が指す出典）だけ置き換える。無ければ元の本文のまま', () => {
+    const text = JSON.stringify({
+      sources: [
+        { id: 's1', url: URL_A, quoted_excerpt: 'wiki の引用' },
+        { id: 's9', url: watch(YT1), quoted_excerpt: DESC },
+        { id: 's30', url: 'https://example.com/page', quoted_excerpt: DESC },
+      ],
+    });
+    const odd = versionVideosOf(JSON.stringify({ parts: [{ id: 'p1', videos: [video({ source_id: 's30' })] }] }));
+    const masked = JSON.parse(maskYoutubeExcerpts(text, youtubeSourceIdsOf(text, odd))) as { sources: Array<{ id: string; url: string; quoted_excerpt: string }> };
+    expect(masked.sources.map((s) => [s.id, s.url, s.quoted_excerpt])).toEqual([
+      ['s1', URL_A, 'wiki の引用'],
+      ['s9', watch(YT1), SOURCES_YOUTUBE_EXCERPT_MARK],
+      ['s30', 'https://example.com/page', SOURCES_YOUTUBE_EXCERPT_MARK],
+    ]);
+    const plain = JSON.stringify({ sources: [{ id: 's1', url: URL_A, quoted_excerpt: 'x' }] });
+    expect(maskYoutubeExcerpts(plain, youtubeSourceIdsOf(plain, []))).toBe(plain);
+    expect(maskYoutubeExcerpts('not json', new Set(['s9']))).toBe('not json');
+  });
+
+  it('同期: 入力の <sources_json> では YouTube の行の引用が置き換わり、R2 の sources.json と <source_captures> の数・検査は元のまま', async () => {
+    seed([video(), V2()]);
+    const stored = JSON.stringify({
+      sources: [
+        { id: 's1', url: URL_A, quoted_excerpt: 'wiki の引用', is_primary: true },
+        { id: 's9', url: watch(YT1), quoted_excerpt: DESC, is_primary: false },
+        { id: 's10', url: watch(YT2), quoted_excerpt: DESC + '2', is_primary: false },
+      ],
+    });
+    r2.set(`${PREFIX}sources.json`, stored);
+    const { port, seen } = syncPort([reportMsg()]);
+    expect(await runVerificationStep(makeEnv(SYNC), port)).toBe('done');
+    const all = texts(seen[0]).join('\n');
+    expect(all).not.toContain(DESC);
+    const sj = /<sources_json>\n([\s\S]*?)\n<\/sources_json>/.exec(texts(seen[0])[0])![1];
+    const parsed = JSON.parse(sj) as { sources: Array<{ id: string; quoted_excerpt: string }> };
+    expect(parsed.sources.map((s) => [s.id, s.quoted_excerpt])).toEqual([
+      ['s1', 'wiki の引用'],
+      ['s9', SOURCES_YOUTUBE_EXCERPT_MARK],
+      ['s10', SOURCES_YOUTUBE_EXCERPT_MARK],
+    ]);
+    expect(r2.get(`${PREFIX}sources.json`)).toBe(stored);
+  });
 });

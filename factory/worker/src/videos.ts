@@ -3,6 +3,7 @@
 // 記録（video notes）の本文は Gemini が動画を見て書いた文 = 信頼できない入力。<videos> の値は職人が書いた値 = 資料であって指示ではない。
 
 import { MAX_VIDEOS, VIDEO_ID_RE, VIDEO_MAX_RANGE_SEC, YOUTUBE_ID_RE, youtubeWatchUrl } from './checks/schema';
+import { normalizeUrl } from './checks/citations';
 import type { SqlValue, Stmt } from './db';
 import type { GeminiUsage } from './gemini';
 
@@ -261,10 +262,11 @@ export function videoNotesSection(
 // §Q-9.10: 動画を出典にした claim の confirmed は「動画の記録で確認:」の時だけ
 
 export const VIDEO_CONFIRM_PREFIX = '動画の記録で確認:';
-export const VIDEO_DOWNGRADE_NOTE = '（Worker: 動画を出典にした claim は「動画の記録で確認:」の時だけ confirmed にできるため unverified にしました）';
-/** YouTube と他の出典が混ざる claim を「制作時の取得記録で確認:」としたが、YouTube でない出典の取得記録を渡していない時 */
-export const VIDEO_CAPTURE_DOWNGRADE_NOTE =
-  '（Worker: YouTube の出典の取得記録は検証係に渡していません。この claim の YouTube でない出典の取得記録も渡していないため、「制作時の取得記録で確認:」では confirmed にできず unverified にしました）';
+/** §Q-9.10 の検査で confirmed を unverified に下げた時に reason の先頭に足す文（YouTube だけの claim も、混ざる claim も同じ文） */
+export const VIDEO_DOWNGRADE_NOTE =
+  '（Worker: YouTube を出典に含む claim は、動画の記録（「動画の記録で確認:」）か、YouTube でない出典の取得記録・開いた URL で確かめた時だけ confirmed にできるため unverified にしました）';
+/** 検証係への入力の <sources_json> で、YouTube の出典の quoted_excerpt の代わりに入れる文（保存する sources.json は変えない） */
+export const SOURCES_YOUTUBE_EXCERPT_MARK = '（YouTube の出典。引用は渡さない）';
 
 /** YouTube の host か（小文字・末尾の `.`・先頭の `*.` を落として比べる。allowlist の domains の判定にも使う） */
 export function isYoutubeHost(host: string): boolean {
@@ -311,17 +313,36 @@ const startsWithCapturePrefix = (reason: string) => {
 };
 
 /**
- * §Q-9.10 の検査。confirmed の claim のうち、
- * - 出典がすべて YouTube の claim: reason が「動画の記録で確認:」で始まり、かつその出典の動画の記録を入力に入れた（shown）時だけ confirmed のまま
- * - YouTube と他の出典が混ざる claim:
- *   - 「動画の記録で確認:」と書いたのに、記録を入れた動画の出典が無い → unverified
- *   - 「制作時の取得記録で確認:」と書いたのに、YouTube でない出典の取得記録を 1 つも入力に入れていない（capturedSourceIds）→ unverified
- *     （YouTube の出典の取得記録は入力に入れないので、YouTube の概要欄だけを根拠にした確認はここで落ちる）
- *   - それ以外（YouTube でない出典を web_fetch で開いた確認。検証係の web_fetch は YouTube を開けない）は confirmed のまま
- * 当てはまらないものを unverified にし、reason の先頭に VIDEO_DOWNGRADE_NOTE を足す（検証は失敗にしない。人が確認画面で見る）。
- * YouTube の出典は youtubeSourceIdsOf（host の書き方の違いで抜けない）
+ * 検証係への入力の sources.json の本文: YouTube の出典（youtubeIds）の quoted_excerpt を SOURCES_YOUTUBE_EXCERPT_MARK に置き換える
+ * （職人が watch ページの概要欄から写した文を検証係に渡さない）。置き換える行が無ければ元の本文のまま。読めなければ元の本文のまま
  */
-export function enforceVideoConfirmations<T extends { claim_id: string; verdict: string; reason: string }>(
+export function maskYoutubeExcerpts(sourcesText: string, youtubeIds: ReadonlySet<string>): string {
+  if (youtubeIds.size === 0) return sourcesText;
+  let o: unknown;
+  try {
+    o = JSON.parse(sourcesText);
+  } catch {
+    return sourcesText;
+  }
+  if (!isObj(o) || !Array.isArray(o.sources)) return sourcesText;
+  let changed = false;
+  const sources = (o.sources as unknown[]).map((s) => {
+    if (!isObj(s) || !isStr(s.id) || !youtubeIds.has(s.id) || !Object.prototype.hasOwnProperty.call(s, 'quoted_excerpt')) return s;
+    changed = true;
+    return { ...s, quoted_excerpt: SOURCES_YOUTUBE_EXCERPT_MARK };
+  });
+  return changed ? JSON.stringify({ ...o, sources }) : sourcesText;
+}
+
+/**
+ * §Q-9.10 の検査（証拠で決める）。出典に YouTube の出典（youtubeSourceIdsOf）を 1 つでも含む claim の confirmed は、次のどれかが成り立つ時だけ残す:
+ * (a) reason が「動画の記録で確認:」で始まり、その claim の YouTube の出典のどれかが、記録を入力に入れた動画（shown）の出典
+ * (b) reason が「制作時の取得記録で確認:」で始まり、その claim の YouTube でない出典のどれかの取得記録を入力に入れた（capturedSourceIds）
+ * (c) opened_urls に、その claim の YouTube でない出典の url と同じ URL（normalizeUrl で比べる）がある
+ * どれも成り立たなければ unverified にし、reason の先頭に VIDEO_DOWNGRADE_NOTE を足す（検証は失敗にしない。人が確認画面で見る）。
+ * 検証係は YouTube を web_fetch で開けず、YouTube の取得記録・引用も受け取らないので、YouTube の概要欄だけを根拠にした confirmed はここで落ちる
+ */
+export function enforceVideoConfirmations<T extends { claim_id: string; verdict: string; reason: string; opened_urls?: string[] }>(
   verdicts: T[],
   claimsJson: string,
   sourcesText: string,
@@ -331,6 +352,13 @@ export function enforceVideoConfirmations<T extends { claim_id: string; verdict:
 ): T[] {
   const yt = youtubeSourceIdsOf(sourcesText, videos);
   if (yt.size === 0) return verdicts;
+  const urlById = new Map<string, string>();
+  try {
+    const raw = (JSON.parse(sourcesText) as { sources?: unknown })?.sources;
+    for (const s of Array.isArray(raw) ? (raw as unknown[]) : []) if (isObj(s) && isStr(s.id) && isStr(s.url) && !urlById.has(s.id)) urlById.set(s.id, s.url);
+  } catch {
+    // 読めない sources.json は (c) の url が無い（(a)・(b) だけで決める）
+  }
   const shown = new Set(shownVideoIds);
   const shownSources = new Set(videos.filter((v) => shown.has(v.id)).map((v) => v.source_id));
   const captured = new Set(capturedSourceIds);
@@ -351,12 +379,9 @@ export function enforceVideoConfirmations<T extends { claim_id: string; verdict:
     if (ytIds.length === 0) return v;
     const others = sids.filter((s) => !yt.has(s));
     const byRecord = startsWithVideoPrefix(v.reason) && ytIds.some((s) => shownSources.has(s));
-    if (others.length === 0 || startsWithVideoPrefix(v.reason)) {
-      return byRecord ? v : { ...v, verdict: 'unverified', reason: (VIDEO_DOWNGRADE_NOTE + v.reason).slice(0, 2000) };
-    }
-    if (startsWithCapturePrefix(v.reason) && !others.some((s) => captured.has(s))) {
-      return { ...v, verdict: 'unverified', reason: (VIDEO_CAPTURE_DOWNGRADE_NOTE + v.reason).slice(0, 2000) };
-    }
-    return v;
+    const byCapture = startsWithCapturePrefix(v.reason) && others.some((s) => captured.has(s));
+    const otherUrls = new Set(others.map((s) => urlById.get(s)).filter(isStr).map(normalizeUrl));
+    const byOpened = Array.isArray(v.opened_urls) && v.opened_urls.some((u) => isStr(u) && otherUrls.has(normalizeUrl(u)));
+    return byRecord || byCapture || byOpened ? v : { ...v, verdict: 'unverified', reason: (VIDEO_DOWNGRADE_NOTE + v.reason).slice(0, 2000) };
   });
 }
