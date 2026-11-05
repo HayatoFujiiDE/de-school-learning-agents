@@ -294,23 +294,35 @@
   function toolVariant(va) { return TOOL_RESULT[va] ? va : THEME.tool.sample; }
   // ---- §AD-1 の計算（知らない案は題材の最初の案として読む。別の題材には落とさない） ----
   function adVariant(theme, va) { return VARIANT[theme + '.' + va] ? va : THEME[theme].sample; }
+  // 値が欠けている・整数でない・範囲の外の時は、その題材の既定値（params の def）で読む（NaN・undefined・{F} を出さない。レビューへの裁定）
+  var AD_THEMES = { stop: true, ath: true, story: true };
+  function adVals(theme, v) {
+    var src = v && typeof v === 'object' ? v : {}, out = {};
+    THEME[theme].params.forEach(function (p) {
+      var x = src[p.key];
+      out[p.key] = typeof x === 'number' && isFinite(x) && x % 1 === 0 && x >= p.min && x <= p.max ? x : p.def;
+    });
+    return out;
+  }
+  MD.adVals = adVals;
   // コマ撮り: F = コマの数 / P = 1 秒のコマ数 / S = 秒（小数 1 けた）
-  function stopNums(v) { var F = num('stop', 'frames', v.frames), P = num('stop', 'fps', v.fps); return { F: F, P: P, S: Math.round(F / P * 10) / 10 }; }
+  function stopNums(v) { v = adVals('stop', v); var F = num('stop', 'frames', v.frames), P = num('stop', 'fps', v.fps); return { F: F, P: P, S: Math.round(F / P * 10) / 10 }; }
   MD.stopNums = stopNums;
   // アスレチック: n = 足場の数 / g = あいだ / k = ギミックの足場（2 個目・4 個目…。jump は 0）/ L = コースの長さ
-  function athNums(va, v) { var n = v.count, g = v.gap, gim = !!VARIANT['ath.' + adVariant('ath', va)].gim; return { n: n, g: g, k: gim ? Math.floor(n / 2) : 0, L: n + g * (n - 1) }; }
+  function athNums(va, v) { v = adVals('ath', v); var n = v.count, g = v.gap, gim = !!VARIANT['ath.' + adVariant('ath', va)].gim; return { n: n, g: g, k: gim ? Math.floor(n / 2) : 0, L: n + g * (n - 1) }; }
   MD.athNums = athNums;
   // 手ごたえ（このモックでの目安。ゲームの事実としては書かない）
   var ATH_FEEL = [['かんたん', 'かんたん'], ['ふつう', 'ふつう'], ['むずかしい', 'むずかしい'], ['とてもむずかしい', 'とてもむずかしい']];
   function athFeel(g, mode) { return pick(ATH_FEEL[Math.max(1, Math.min(4, g)) - 1], mode); }
   // 物語: n = 場面の数 / k = 山場（最後の 1 つ前の場面）
-  function storyNums(v) { return { n: v.scenes, k: v.scenes - 1 }; }
+  function storyNums(v) { v = adVals('story', v); return { n: v.scenes, k: v.scenes - 1 }; }
   MD.storyNums = storyNums;
 
   // 結果 1 行（「試す」で確かめたこと）
   MD.result = function (stage, mode) {
     if (!stage || stage.kind === 'note') return '';
     var v = stage.values || {}, t = stage.theme, va = stage.variant;
+    if (AD_THEMES[t]) v = adVals(t, v);
     if (t === 'mc') {
       var blk = MD.valueLabel('mc', 'block', v.block, mode), s = v.size, n = mcCount(va, s);
       var shape = va === 'tower' ? fmt(pick(['高さ {h} の塔', '高さ {h} のとう'], mode), { h: 2 * s })
@@ -355,6 +367,7 @@
   MD.code = function (stage) {
     if (!stage || stage.kind === 'note') return '';
     var v = stage.values || {}, t = stage.theme, va = stage.variant;
+    if (AD_THEMES[t]) v = adVals(t, v);
     if (t === 'mc') {
       var id = ['stone', 'glass', 'oak_planks'][v.block] || 'stone', s = v.size;
       if (va === 'tower') return '/fill ~ ~ ~ ~2 ~' + (2 * s - 1) + ' ~2 minecraft:' + id + ' hollow';
@@ -389,6 +402,7 @@
     if (!stage) return '';
     if (stage.kind === 'note') return pick(stage.lines && stage.lines[0], mode) || '';
     var v = stage.values || {}, t = stage.theme, va = stage.variant;
+    if (AD_THEMES[t]) v = adVals(t, v);
     if (t === 'mc') {
       var blk = MD.valueLabel('mc', 'block', v.block, mode);
       if (va === 'tower') return fmt(pick(['{blk}。高さ {h}', '{blk}。高さ {h}'], mode), { blk: blk, h: 2 * v.size });
@@ -717,6 +731,7 @@
     if (!stage) return '';
     if (stage.kind === 'note') return '';
     var v = stage.values || MD.variantValues(stage.theme, stage.variant);
+    if (AD_THEMES[stage.theme]) v = adVals(stage.theme, v);
     if (stage.theme === 'py') return pyArt(stage.variant, v);
     if (stage.theme === 'circuit') return circuitArt(stage.variant, v);
     if (stage.theme === 'tool') return toolArt(stage.variant, v);
@@ -729,6 +744,7 @@
   MD.artMarks = function (stage) {
     if (!stage || stage.kind === 'note') return '';
     var v = stage.values || MD.variantValues(stage.theme, stage.variant);
+    if (AD_THEMES[stage.theme]) v = adVals(stage.theme, v);
     if (stage.theme === 'py') return JSON.stringify(pyMarks(v));
     if (stage.theme === 'circuit') return JSON.stringify(circuitMarks(stage.variant, v));
     if (stage.theme === 'tool') return JSON.stringify(toolMarks(v));

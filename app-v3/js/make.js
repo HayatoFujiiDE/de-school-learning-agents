@@ -350,6 +350,9 @@
   var PROJECT_THEME = 'project';
   function isProjectExt(a) { return !!(a && a.theme === PROJECT_THEME); }
   function odaiDef(a) { var K = DES.todayData; return K && a && a.odaiId ? K.get(a.odaiId) : null; }
+  // 対話のお題（§AE。news / talk / philo）から作った活動: 必要な物の欄が無いので、任せる候補は「手順を整理して」だけ（レビューへの裁定）
+  function isDialogAct(a) { var K = DES.todayData; return !!(isOdaiExt(a) && a.odaiId && K && K.getDialog && K.getDialog(a.odaiId)); }
+  function odaiOpts(a) { return isDialogAct(a) ? ['osteps'] : ODAI_OPTS.slice(); }
   // メモの中身: お題のデータから（today-data.js の leaveNote）。データが無い時は活動の手順だけ
   function odaiNote(a, opt, alt) {
     var pjd = isProjectExt(a) ? MD.project(a.projectId) : null;
@@ -361,8 +364,8 @@
   }
   function leaveOdai(a, opt, o) {
     o = o || {};
-    if (opt === 'aspect') opt = ODAI_ASPECT[Math.max(0, Math.min(4, o.aspect | 0))];
-    if (ODAI_OPTS.indexOf(opt) < 0) return { act: a, ids: [] };
+    if (opt === 'aspect') { opt = ODAI_ASPECT[Math.max(0, Math.min(4, o.aspect | 0))]; if (odaiOpts(a).indexOf(opt) < 0) opt = 'osteps'; }
+    if (odaiOpts(a).indexOf(opt) < 0) return { act: a, ids: [] };
     var A = clone(a), card = o.card ? find(A.shelf, o.card) : null;
     // 同じ種類のメモを作り直す時は、もう一方の形にする（§U-11 指摘 13 と同じ）
     var alt = !!(card && card.kind === 'note' && card.opt === opt && !card.alt), n = odaiNote(A, opt, alt);
@@ -373,11 +376,11 @@
     return { act: A, ids: [spec.id], opt: opt };
   }
   function remakeOptions(a, c) {
-    if (isOdaiExt(a) || isProjectExt(a)) return ODAI_OPTS.slice();
+    if (isOdaiExt(a) || isProjectExt(a)) return odaiOpts(a);
     return c && c.kind === 'note' ? ['calc', 'steps', 'cmd'] : ['redo', 'two', 'fix'];
   }
   function leaveOptions(a) {
-    if (isOdaiExt(a) || isProjectExt(a)) return ODAI_OPTS.slice();
+    if (isOdaiExt(a) || isProjectExt(a)) return odaiOpts(a);
     if (a.stage && a.stage.kind === 'sample') return ['find', 'one'];
     if (a.stage && a.stage.kind === 'draft') return ['redo', 'two', 'fix'];
     if (a.ext) return ['calc', 'steps', 'cmd'];
@@ -706,6 +709,8 @@
     var work = { id: o.id, actId: a.id, at: ch ? ch.id : null, atTime: ch ? ch.time : null, title: title, like: like || null, from: 'make',
       theme: a.theme, art: art, roles: roles(a, ch ? ch.id : null), date: o.date || null, snap: clone(st), snapTime: ch ? ch.time : nowOf(a),
       status: status, craft: null, shares: [] };
+    // 提案から作った活動の作品は提案の id を持つ（作品展示の種類を提案のカテゴリにする。レビューへの裁定）
+    if (a.projectId) work.projectId = a.projectId;
     return { works: [work].concat(works || []), work: work, act: a };
   }
   // 保存済みの作品に §W の欄を補う（§W-5）: status 無し → done、craft 無し → null、shares 無し → []。補うだけで消さない
@@ -897,6 +902,39 @@
     return names;
   }
 
+  // ---------- 保存の失敗を戻す（contract-app 共通の約束「失敗は save_fail + 画面状態を戻す」。作る・お題・話す・展示で同じ約束）----------
+  // keys の今の値を写してから fn(st) で書き換え、keys を順に save(key) する。1 つでも偽なら、全部のキーを書き換える前の値に戻し
+  // （先に保存できたキーは前の値で保存し直す）、st.saveFailed を立てて false。全部保存できたら true（saveFailed を下げるかは呼ぶ側）
+  function trySave(st, keys, fn, save) {
+    var before = {}, done = [], ok = true;
+    keys.forEach(function (k) { before[k] = clone(st[k]); });
+    fn(st);
+    keys.forEach(function (k) { if (!ok) return; if (save(k)) done.push(k); else ok = false; });
+    if (ok) return true;
+    keys.forEach(function (k) { st[k] = before[k]; });
+    done.forEach(function (k) { save(k); });
+    st.saveFailed = true;
+    return false;
+  }
+  // 作った活動を先頭に足して保存する（提案の「これで始める」・対話のお題の「作ってみる」）。保存できなければ足さずに false
+  function addAct(st, a, save) { return trySave(st, ['activities'], function (s) { s.activities = [a].concat(s.activities || []); }, save); }
+  // §AD-3 / AD-4「別の見本を見る」「別の提案を見る」: 組の位置を cur の次へ（最後の次は最初）して保存。保存できなければ前の組のまま false
+  function swapPage(st, kind, cur, save) {
+    var samples = kind === 'samples', key = samples ? 'samplePage' : 'projectPage';
+    var total = Math.max(1, Math.ceil((samples ? MD.samples : MD.projects).length / (samples ? 3 : 4)));
+    return trySave(st, ['makeSide'], function (s) { s.makeSide[key] = ((cur | 0) + 1) % total; }, save);
+  }
+  // §AD-6: 見本を足した回が古ければ不足分の活動と作品を足し、活動・作品・番号を順に保存する。番号を進めるのは全部保存できた時だけ
+  // （1 つでも失敗したら足した見本も番号も前に戻す。次の読み込みでまた足す）。本人が外した見本は MD.addSeeds が足さない
+  function applySeeds(s, save) {
+    if (!s.makeSide || s.makeSide.seedV >= MD.SEED_V) return true;
+    var add = MD.addSeeds(s.activities, s.works, s.makeSide.seedV);
+    return trySave(s, add.changed ? ['activities', 'works', 'makeSide'] : ['makeSide'], function (x) {
+      if (add.changed) { x.activities = add.activities; x.works = add.works; }
+      x.makeSide.seedV = MD.SEED_V;
+    }, save);
+  }
+
   var pure = {
     pickTheme: pickTheme, fromSample: fromSample, fromText: fromText, fromExt: fromExt, committed: committed, isDirty: isDirty, setParam: setParam,
     whatDiff: whatDiff, commitChange: commitChange, test: test, revert: revert, canRevert: canRevert, undoRevert: undoRevert,
@@ -912,7 +950,9 @@
     // §W（作品の一覧・詳細）が使う
     defaultStatus: defaultStatus, normalizeWorks: normalizeWorks, chState: chState, baseState: baseState, curState: curState,
     // §AD
-    fromProject: fromProject, samplePage: samplePage, projectPage: projectPage, isProjectExt: isProjectExt, PROJECT_THEME: PROJECT_THEME
+    fromProject: fromProject, samplePage: samplePage, projectPage: projectPage, isProjectExt: isProjectExt, PROJECT_THEME: PROJECT_THEME,
+    // レビューへの裁定（保存の失敗を戻す）
+    trySave: trySave, addAct: addAct, swapPage: swapPage, applySeeds: applySeeds
   };
   Object.keys(pure).forEach(function (k) { M[k] = pure[k]; });
   // ---------- あしあと（CONTRACT-v3 §Z-5 / Z-14）: 「もう一度試す」= 同じ始まりから新しい活動。元の活動 a は変えない（既存の活動を再利用しない） ----------
@@ -947,6 +987,8 @@
     n.fromActId = a.id;
     n.catalogId = a.catalogId || n.catalogId || null;
     if (a.odaiId) n.odaiId = a.odaiId;
+    // 提案から作った活動（§AD-4）: 提案の id を引き継ぐ（必要な物のメモ・写真のカテゴリ・展示の種類が提案から決まる）
+    if (a.projectId) n.projectId = a.projectId;
     return n;
   }
   pure.fromTrail = M.fromTrail = fromTrail;
@@ -1015,12 +1057,9 @@
       // 作品が保存されていない（初めて・はじめの状態に戻した）時は見本の作品（§W-6）。活動に結び付くものだけ
       if (!s.works) s.works = MD.seedWorks(s.activities);
       // §AD-6: 見本を足した回が古ければ、不足分の活動と作品だけ足して番号を上げる（既存の活動・作品は変えない）。
-      // 番号はすぐ保存する（作品だけ保存する操作が続いても、本人が外した見本を次の読み込みでまた足さないように）
-      if (s.makeSide.seedV < MD.SEED_V) {
-        var add = MD.addSeeds(s.activities, s.works, s.makeSide.seedV);
-        s.activities = add.activities; s.works = add.works; s.makeSide.seedV = MD.SEED_V;
-        (add.changed ? ['activities', 'works', 'makeSide'] : ['makeSide']).forEach(function (k) { if (!save0.call(DES.store, k)) s.saveFailed = true; });
-      }
+      // 番号は読み込みの時に保存する（作品だけ保存する操作が続いても、本人が外した見本を次の読み込みでまた足さないように）。
+      // 番号を進めるのは活動・作品・番号の保存が全部できた時だけ（レビューへの裁定。失敗したら足さずに save_fail、次の読み込みでまた足す）
+      applySeeds(s, function (k) { return save0.call(DES.store, k); });
       // 前の版の作品は 残した時点（at / snap）を補い（§U-12 補足 2）、§W の欄（status / craft / shares）を補う（§W-5）
       s.works = normalizeWorks(s.works.map(function (w) { return migrateWork(w, s.activities); }));
       // 「作っている」の途中で閉じた・読み込んだ活動は、ここで完了させる（§U-11 指摘 11）。新しいカードが入るので棚は開く
@@ -1098,6 +1137,16 @@
     return !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   }
   function go(hash) { if (window.location.hash !== hash) window.location.hash = hash; else DES.app.render(); }
+  function esc(v) { return window.CSS && CSS.escape ? CSS.escape(v) : String(v).replace(/"/g, '\\"'); }
+  function storeSave(k) { return DES.store.save(k); }
+  // 保存に失敗した時（共通の約束）: 状態は trySave が戻してある。描き直して押したボタンへフォーカスを戻し、save_fail を出す
+  function saveFailUi(sel) {
+    DES.app.renderSaveState();
+    DES.app.render();
+    var n = sel ? document.querySelector(sel) : null;
+    if (n) n.focus();
+    DES.app.toast(T('save_fail'));
+  }
   function today() { var d = DES.data.today.split('-'); return (+d[1]) + '/' + (+d[2]); }
 
   // ---------- 入口から活動を作る（話す bridge / 予定表 / 入口） ----------
@@ -1796,24 +1845,22 @@
 
   A['mk-sample'] = function (el) { createAndOpen(fromSample(el.getAttribute('data-arg'), { id: newId('a'), now: DES.data.now, mode: mode() })); };
   A['mk-open'] = function (el) { openAct(el.getAttribute('data-id')); };
-  // §AD-3 / AD-4「別の見本を見る」「別の提案を見る」: 次の組へ（最後の次は最初）。150ms のクロスフェード（reduced-motion は即時）。
-  // フォーカスはボタンに残し、aria-live で入れ替えたことを伝える。組の位置は makeSide に保存（リロードで残る）
+  // §AD-3 / AD-4「別の見本を見る」「別の提案を見る」: 次の組へ（最後の次は最初）。今の組が 150ms で消え、次の組が 150ms で現れる（reduced-motion は即時）。
+  // フォーカスはボタンに残し、aria-live で入れ替えたことを伝える。組の位置は makeSide に保存（リロードで残る）。
+  // 先に保存し、保存できなければ入れ替えない（今の組のまま・save_fail。共通の約束）
   function swapGroup(kind) {
     var u = mk();
     if (u.swapping) return;
-    var side = S().makeSide, key = kind === 'samples' ? 'samplePage' : 'projectPage';
-    var cur = kind === 'samples' ? shownSamples().page : pageAt(MD.projects.length, 4, side.projectPage);
-    var total = Math.max(1, Math.ceil((kind === 'samples' ? MD.samples.length : MD.projects.length) / (kind === 'samples' ? 3 : 4)));
-    var action = kind === 'samples' ? 'mk-more-samples' : 'mk-more-projects';
+    var cur = kind === 'samples' ? shownSamples().page : pageAt(MD.projects.length, 4, S().makeSide.projectPage);
+    var action = kind === 'samples' ? 'mk-more-samples' : 'mk-more-projects', sel = '[data-action="' + action + '"]';
+    if (!swapPage(S(), kind, cur, storeSave)) { saveFailUi(sel); return; }
+    S().saveFailed = false;
+    if (kind === 'samples') u.makeFirst = null;
     function run() {
       u.swapping = false;
-      side[key] = (cur + 1) % total;
-      if (kind === 'samples') u.makeFirst = null;
       if (motionOK()) u.fadeIn = kind;
-      // 表示の位置だけの保存。保存できなくても入れ替えは見せ、save_fail を出す（学びマップの表示の保存と同じ扱い）
-      if (!DES.store.save('makeSide')) { S().saveFailed = true; DES.app.renderSaveState(); }
       DES.app.render();
-      var b = document.querySelector('[data-action="' + action + '"]');
+      var b = document.querySelector(sel);
       if (b) b.focus();
       setTimeout(function () { var live = document.querySelector('[data-live="' + kind + '"]'); if (live) live.textContent = T(kind === 'samples' ? 'samples_swapped' : 'pj_swapped'); }, 60);
     }
@@ -1832,7 +1879,10 @@
     var r = fromProject(p, { id: newId('a'), mode: mode(), now: DES.data.now, acts: S().activities });
     if (!r) return;
     if (!r.created) { openAct(r.id); return; }
-    change(function () { S().activities = [r.act].concat(S().activities); });
+    // 保存できなければ活動を足さず、作業台へ移らない・トーストも出さない（save_fail。共通の約束）
+    if (!addAct(S(), r.act, storeSave)) { saveFailUi('[data-action="mk-project"][data-arg="' + esc(p.id) + '"]'); return; }
+    S().saveFailed = false;
+    DES.app.commit();
     go('#make/' + r.id);
     DES.app.toast(T('pj_placed'));
   };
