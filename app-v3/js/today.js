@@ -39,17 +39,21 @@
     }
     return out;
   }
-  // 読み込んだ値を整える。形が違えばそのキーだけ初期値（slots が違っても rot が正しければ rot から作り直す）
+  // 読み込んだ値を整える（§X-4）。形が違えばそのキーだけ初期値に戻す（他のキーから作り直さない）
   function normalize(raw) {
     var d = initial();
     if (!isObj(raw)) return d;
-    var out = { slots: d.slots, kept: [], tried: {}, rot: {} };
-    var slotsOK = Array.isArray(raw.slots) && raw.slots.length === FITS.length && raw.slots.every(function (id, i) { return valid(id) && TDD.get(id).fit === FITS[i]; });
-    var rotOK = isObj(raw.rot) && FITS.every(function (f) { return isNat(raw.rot[f]); });
-    if (slotsOK) out.slots = raw.slots.slice();
-    else if (rotOK) out.slots = FITS.map(function (f) { var p = TDD.pool(f); return p[raw.rot[f] % p.length]; });
-    FITS.forEach(function (f, i) { out.rot[f] = TDD.pool(f).indexOf(out.slots[i]); });
+    var out = { slots: d.slots, kept: [], tried: {}, rot: d.rot };
+    // slots: 3 枚とも知っているお題で、near / next / new の順に合っているものだけ
+    if (Array.isArray(raw.slots) && raw.slots.length === FITS.length && raw.slots.every(function (id, i) { return valid(id) && TDD.get(id).fit === FITS[i]; })) out.slots = raw.slots.slice();
+    // rot: near / next / new がどれも 0 以上の整数（プールの長さで折り返す）
+    if (isObj(raw.rot) && FITS.every(function (f) { return isNat(raw.rot[f]); })) {
+      out.rot = {};
+      FITS.forEach(function (f) { out.rot[f] = raw.rot[f] % TDD.pool(f).length; });
+    }
+    // kept: 配列なら知っているお題だけ（重なりなし）
     if (Array.isArray(raw.kept)) raw.kept.forEach(function (id) { if (valid(id) && out.kept.indexOf(id) < 0) out.kept.push(id); });
+    // tried: オブジェクトなら、お題ごとに形の合うものだけ
     if (isObj(raw.tried)) {
       Object.keys(raw.tried).forEach(function (id) {
         var o = TDD.get(id), t = o ? cleanTried(raw.tried[id], o) : null;
@@ -115,6 +119,20 @@
     t.entries.find = true;
     return S;
   }
+  // 残した写真を消す + 元に戻す（元の位置へ）
+  function removeFound(state, id, i) {
+    var t = state && state.tried && state.tried[id];
+    if (!t || !Array.isArray(t.found) || !isNat(i) || i >= t.found.length) return null;
+    var S = clone(state), item = S.tried[id].found.splice(i, 1)[0];
+    return { state: S, undo: { id: id, index: i, item: clone(item) } };
+  }
+  function restoreFound(state, u) {
+    var o = u && TDD.get(u.id);
+    if (!o || !u.item || !TDD.photo(o, u.item.photo)) return state;
+    var S = clone(state), t = triedOf(S, u.id);
+    t.found.splice(Math.max(0, Math.min(u.index | 0, t.found.length)), 0, clone(u.item));
+    return S;
+  }
   // 手がかりのチェック（付ける・外す）
   function toggleHint(state, id, i) {
     var o = TDD.get(id);
@@ -138,7 +156,7 @@
 
   var pure = {
     initial: initial, normalize: normalize, swap: swap, keep: keep, unkeep: unkeep, markEntry: markEntry, isStarted: isStarted,
-    addFound: addFound, toggleHint: toggleHint, play: play, isKept: isKeptIn, FITS: FITS, ENTRIES: ENTRIES
+    addFound: addFound, removeFound: removeFound, restoreFound: restoreFound, toggleHint: toggleHint, play: play, isKept: isKeptIn, FITS: FITS, ENTRIES: ENTRIES
   };
   Object.keys(pure).forEach(function (k) { TD[k] = pure[k]; });
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
@@ -184,6 +202,10 @@
   function actFor(id) { var hit = null; (S().activities || []).forEach(function (a) { if (!hit && a.odaiId === id) hit = a; }); return hit; }
   function stamp() { var p = DES.data.today.split('-'); return (+p[1]) + '/' + (+p[2]) + ' ' + DES.data.now; }
   function refocus(sel) { var n = sel ? document.querySelector(sel) : null; if (n) n.focus(); }
+  function motionOK() {
+    if (document.documentElement.classList.contains('reduced-motion')) return false;
+    return !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
   function chip(kind, text, label) {
     var ic = { own: 'quote', ai: 'spark', record: 'record' }[kind];
     return H('span', { class: 'chip src-' + kind, role: 'img', 'aria-label': label || text }, [icon(ic), H('span', null, text)]);
@@ -311,10 +333,11 @@
     kids.push(H('div', { class: 'actions' }, [btn(T('td_found_btn'), 'td-found-open', { id: o.id, icon: 'camera', attrs: { 'aria-haspopup': 'dialog' } })]));
     if (found.length) {
       kids.push(H('h3', { id: 'td-found-h' }, T('td_found_h')));
-      kids.push(H('ul', { class: 'td-found', 'aria-labelledby': 'td-found-h' }, found.map(function (f) {
-        var p = TDD.photo(o, f.photo);
+      kids.push(H('ul', { class: 'td-found', 'aria-labelledby': 'td-found-h' }, found.map(function (f, i) {
+        var p = TDD.photo(o, f.photo), cap = f.line || pick(p.label);
         return H('li', null, [H('figure', null, [DES.raw(TDD.photoArt(o, f.photo)),
-          H('figcaption', null, [H('span', { class: 'td-found-line' }, f.line || pick(p.label)), H('span', { class: 'td-time' }, f.time)])])]);
+          H('figcaption', null, [H('span', { class: 'td-found-line' }, cap), H('span', { class: 'td-time' }, f.time)])]),
+          btn(T('td_found_del'), 'td-found-del', { id: o.id, arg: String(i), kls: 'ghost', attrs: { 'aria-label': T('td_found_del') + ': ' + cap } })]);
       })));
     }
     return kids;
@@ -430,11 +453,28 @@
     S().odai = next;
     if (!DES.store.save('odai')) S().saveFailed = true;
   }
+  // 別のお題を見る: 150ms のクロスフェード（前のカードの中身が消えながら、新しい中身が出る。reduced-motion で即時）
+  // 前の中身は描き直す前に写しておき、新しいカードの上に重ねて消す（読み上げ・操作・フォーカスの対象にしない）
+  function ghostOf(card) {
+    var g = H('div', { class: 'odai-ghost', 'aria-hidden': 'true' });
+    g.setAttribute('inert', '');
+    Array.prototype.forEach.call(card.children, function (c) { if (!c.classList.contains('odai-ghost')) g.appendChild(c.cloneNode(true)); });
+    Array.prototype.forEach.call(g.querySelectorAll('*'), function (n) {
+      ['id', 'data-action', 'data-fk', 'href', 'tabindex', 'aria-labelledby', 'aria-pressed'].forEach(function (k) { n.removeAttribute(k); });
+    });
+    return g;
+  }
   A['td-swap'] = function (el) {
     var i = +el.getAttribute('data-arg'), st = S().odai, next = swap(st, i);
     if (next === st) return;
-    ui().fresh = i;
+    var old = motionOK() ? document.querySelector('.odai-card[data-fk="odai:' + i + '"]') : null, ghost = old ? ghostOf(old) : null;
+    ui().fresh = ghost ? i : null;
     setOdai(next);
+    var card = ghost && document.querySelector('.odai-card[data-fk="odai:' + i + '"]');
+    if (card) {
+      card.appendChild(ghost);
+      setTimeout(function () { if (ghost.parentNode) ghost.parentNode.removeChild(ghost); }, 200);
+    }
   };
   function unkeepWithUndo(id) {
     var r = unkeep(S().odai, id);
@@ -504,6 +544,16 @@
     if (b) b.disabled = dis;
     if (h) h.hidden = !dis;
   }
+  // 残した写真を消す: 確認は出さず 5 秒の「元に戻す」（元の位置へ）
+  A['td-found-del'] = function (el) {
+    var id = el.getAttribute('data-id'), i = +el.getAttribute('data-arg'), r = removeFound(S().odai, id, i);
+    if (!r) return;
+    var left = r.state.tried[id].found.length;
+    setOdai(r.state, { sel: left ? '[data-action="td-found-del"][data-arg="' + Math.min(i, left - 1) + '"]' : '[data-action="td-found-open"]' });
+    DES.app.toast(T('td_found_deleted'), { label: T('undo_restore'), fn: function () {
+      setOdai(restoreFound(S().odai, r.undo), { sel: '[data-action="td-found-del"][data-arg="' + i + '"]' });
+    } });
+  };
   A['td-found-open'] = function (el) {
     var o = TDD.get(el.getAttribute('data-id'));
     if (!o) return;

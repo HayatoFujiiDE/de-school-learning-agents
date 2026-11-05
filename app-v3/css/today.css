@@ -10,9 +10,12 @@ html[data-mode="es"] .today-page .btn,html[data-mode="es"] .today-page .link-btn
 
 /* ---------- 一覧（§X-1）: カード 3 枚 ---------- */
 .odai-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:stretch}
-.odai-card{display:flex;flex-direction:column;background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden;min-width:0;box-shadow:var(--shadow)}
+.odai-card{position:relative;display:flex;flex-direction:column;background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden;min-width:0;box-shadow:var(--shadow)}
+/* 別のお題を見る: 150ms のクロスフェード（前の中身 = .odai-ghost が消え、新しい中身が出る。重ねて同時に。reduced-motion では JS が重ねない） */
 @keyframes odaiIn{from{opacity:0}to{opacity:1}}
-.odai-card.swap-in{animation:odaiIn .15s ease-out}
+@keyframes odaiOut{from{opacity:1}to{opacity:0}}
+.odai-card.swap-in>.odai-art,.odai-card.swap-in>.odai-body{animation:odaiIn .15s ease-out}
+.odai-ghost{position:absolute;inset:0;display:flex;flex-direction:inherit;background:#fff;pointer-events:none;animation:odaiOut .15s ease-out forwards}
 .odai-art,.td-hero,.td-play-art{background:#f1eee4;background-image:radial-gradient(#d7d5ca .7px,transparent .7px);background-size:16px 16px}
 .odai-art{padding:10px 14px;border-bottom:1px solid var(--line)}
 .odai-art svg{width:100%;height:auto;max-height:170px}
@@ -88,6 +91,8 @@ html[data-mode="es"] .today-page .btn,html[data-mode="es"] .today-page .link-btn
 .td-found figure{margin:0;display:grid;gap:4px;min-width:0}
 .td-found svg{border-radius:8px;border:1px solid var(--line);background:#fcfbf8}
 .td-found figcaption{display:grid;gap:0;font-size:11px;line-height:1.6;overflow-wrap:anywhere}
+.td-found li{display:grid;gap:2px;align-content:start;min-width:0}
+.td-found li>.btn{justify-self:start}
 
 /* 試して遊ぶ */
 .td-play-art{border-radius:12px;padding:10px 18px;max-width:560px;border:1px solid var(--line)}
