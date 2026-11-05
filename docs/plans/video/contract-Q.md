@@ -267,7 +267,7 @@
    - 保存する値は 3 つだけ。どれも投稿者が書ける文なので、資料であって指示ではない。保存の時に、改行・制御文字（`\p{Cc}`・U+2028・U+2029）を空白 1 つに置き換えて 1 行にする。
      - `title`: 200 字で切る。
      - `author_name`: 100 字で切る。
-     - `author_url`: `new URL()` で読めて、protocol が `https:`、hostname が `www.youtube.com`、username・password・port・search・hash が空で、pathname が `^/(@[^/]{1,100}|channel/[A-Za-z0-9_-]{1,40}|c/[^/]{1,100}|user/[^/]{1,100})$` に合う時だけ、`URL.href` を保存する（日本語のハンドルは percent-encode された形になる）。合わなければ空。
+     - `author_url`: `new URL()` で読めて、protocol が `https:`、hostname が `www.youtube.com`、username・password・port・search・hash が空で、pathname が `^/(@[^/]{1,300}|channel/[A-Za-z0-9_-]{1,40}|c/[^/]{1,300}|user/[^/]{1,300})$` に合う時だけ、`URL.href` を保存する。長さは percent-encode された後の pathname で数える（日本語のハンドルは 1 文字が 9 文字になる）。port は、元の文字列に `:数字` の形で書かれていれば既定の 443 でも拒む（解析の後は空になるので、元の文字列の authority を `^https://www\.youtube\.com/` で先に確かめる）。合わなければ空。
      - 他のフィールド（html・thumbnail_url など）は保存しない。
 3. **呼び出しの権利（生涯 5 回）**: 呼ぶ前に、settings の 1 文で数を取る。key は `vmeta:{version_id}:{video_id}`。
    ```
@@ -301,7 +301,9 @@
 9. **動画の出典の行**: 「動画の出典」= 版の動画の `source_id` が指す sources.json の行で、url がその動画の `https://www.youtube.com/watch?v={youtube_id}` と一致するもの。`youtubeSourceIdsOf` より狭い（動画に紐づかない YouTube の URL は例外にしない）。
    - 職人は、動画の出典の行を、ページを開けていなくても書いてよい。`quoted_excerpt` は空文字にする。
    - `src/checks/citations.ts`: 動画の出典は、開けたか・引用が本文にあるかを検査しない。結果は `url_was_fetched: 0`・`quote_found: 0` のまま、check_detail は既存の値で表す（実装者がどの値にしたかを報告する。値は増やさない。migration は無し）。
-   - `src/checks/triage.ts`: 動画の出典は、`maker_url_not_fetched`・`quote_mismatch` の原因の対象から外し、`quote_mismatch_many` の集計（分子の quoteBad と分母の sources の数）からも外す。動画でない出典の検査と集計は変えない。
+   - `src/checks/triage.ts`: 動画の出典は、`maker_url_not_fetched`・`quote_mismatch` の原因の対象から外し、`quote_mismatch_many` の集計（分子の quoteBad と分母の sources の数）からも外す。動画でない出典の検査は変えない。分母から動画の出典が抜けるので、混在の版では割合が変わる（例: 5 confirmed・動画の出典 1 件・引用が合わない一般の出典 1 件は、1/1 で `auto_return` になる。これは意図した帰結で、期待値としてテストに固定する）。
+   - 差し戻しの固定文（triage.ts の「開けなかったページは出典に使わない」の文）に、「動画（YouTube）の出典の行は別で、開けなくても書いてよい」の一言を足す（Q-11.10 の許可と食い違わないように）。
+   - 取り込み（`src/jobs.ts` の citations の呼び出し元）から、版の動画（`versionVideosOf` と同じ読み方）を citations に渡す。動画に紐づく行だけを例外にするため。
    - `factory/claude/rubrics/common.md` の 3（逐語引用 20〜300 文字）に「動画の出典の行は quoted_excerpt を空にする（ページを開けないため）」の例外を足す（司令塔が書く。Worker の生成物に同梱されるので deploy で反映）。
    - 動画の出典だけを根拠にする claim の扱いは Q-9.11 のまま（動画の記録が shown の時だけ confirmed に残る）。
 10. **職人の定義**（`factory/claude/agents/material-maker.md` の「# 動画（YouTube）」。司令塔が書き、ふじさんが ant apply）:
@@ -313,13 +315,14 @@
 12. **受け入れ（vitest。fake の oEmbed port）**:
     - 分類: 200 → ok の記録。404 → not_found の記録。401 → restricted（書かない）。400・403・429・5xx・3xx・時間切れ・本文の途中での 5 秒超え・64 KiB 超え・title の無い JSON → unavailable（書かない）。
     - 回数: 同じ token で `unavailable → no_time → 再開` しても、呼び出しは settings の数のとおりに増え、5 回で止まる。6 回目は呼ばない。ok の記録があれば呼ばない（数も増えない）。2 つの試行が同時に 5 回目を取りに行くと、片方だけが呼ぶ。put が失敗した時は次の試行で呼ぶ。
+    - Gemini（抑止の形）: 記録済みの not_found でも、404 の put が失敗した試行でも、v1・Q-10 の既存の ok を入力に入れない。複数の動画のうち対象だけを抑止し、review API の video_notes の過去の記録は残る。Batch の提出後に公式の情報が `ok ↔ not_found` と変わっても、回収は提出時の plan.json のまま。
     - Gemini: not_found の動画は取り置きも呼び出しも無く、既にある ok の記録（Q-10 の形・v1 の video-notes.json の両方）も入力に入らず、plan.json で not_seen になり、動画の出典だけの claim は confirmed に残らない。restricted・unavailable の時は Q-10 のとおり呼ぶ。公式の情報が ok でも、Gemini の記録が無ければ confirmed に残らない。
-    - 保存: author_url が `javascript:`・別ホスト・`//evil`・port つき・query つきなら空。`https://www.youtube.com/@科学教室` は保存される。title の改行は空白になり、200 字で切られる。html は保存されない。
+    - 保存: author_url が `javascript:`・別ホスト・`//evil`・port つき（`:443` を含む）・query つきなら空。`https://www.youtube.com/@科学教室` と `@子どもと楽しむ科学実験教室` は保存される。title の改行は空白になり、200 字で切られる。html は保存されない。
     - 照合: 「ibxtoycat」同士 = match。全角・大文字の違い = match。「Toycat」と「ibxtoycat」= partial。「Mojang」と「Mojang 非公式転載」= partial。「Mojang」と「ibxtoycat」= mismatch。2 文字の包含 = mismatch。「!!!」と「???」= unknown。
     - 入力: `<videos>` に official_* と channel_match が入る。`</videos>`・`## `・改行と `channel_match: match` を含む title は、1 行になり無害化される。system の 1 文が既存の文を変えずに入る。
     - 回収（collect）と review の GET は oEmbed を呼ばず、settings の数も増えない。review API が video_meta を返す（動画なしは `[]`、記録なしは unknown）。確認画面は escape して出し、リンクの属性が付く。
-    - 引用と triage: 動画の出典だけ・`quoted_excerpt=""`・5 claims すべて confirmed・Gemini の記録 shown の版で、`action` が `auto_return` にならない。動画に紐づかない YouTube の URL の出典と、YouTube でない未取得の出典は、従来どおり検査される（混在の版で確かめる）。
+    - 引用と triage: 動画の出典だけ・`quoted_excerpt=""`・5 claims すべて confirmed・Gemini の記録 shown の版で、`action` が `auto_return` にならない。動画に紐づかない YouTube の URL の出典と、YouTube でない未取得の出典は、従来どおり検査される（混在の版で確かめる）。上の「1/1 で auto_return」の例と、その時の差し戻し文に動画の例外の一言が入ることも確かめる。
     - 動画の確認が無効（video_gen_enabled 無し）でも oEmbed は呼ばれる。
     - 既存のテストが green。新しいテストが変更前のコードで落ちる（mutation）。
-13. **範囲**: 触るのは `src/youtube-oembed.ts`（新規）・`src/fake/`（fake の port）・`src/anthropic.ts`（port の取得。既存の getGeminiPort と同じ形）・`src/verify.ts`・`src/videos.ts`・`src/routes/review.ts`・`src/checks/citations.ts`・`src/checks/triage.ts`・`public/admin/admin.js`（と必要なら admin.css）・test/。migration・wrangler.jsonc・職人の定義・rubric は触らない（定義と rubric は司令塔）。
+13. **範囲**: 触るのは `src/youtube-oembed.ts`（新規）・`src/fake/`（fake の port）・`src/anthropic.ts`（port の取得。既存の getGeminiPort と同じ形）・`src/verify.ts`・`src/videos.ts`・`src/routes/review.ts`・`src/checks/citations.ts`・`src/checks/triage.ts`・`src/jobs.ts`（citations の呼び出し元に版の動画を渡すところだけ）・`public/admin/admin.js`（と必要なら admin.css）・test/。migration・wrangler.jsonc・職人の定義・rubric は触らない（定義と rubric は司令塔）。
 14. **確認済みと未確認**: 手元の curl で、oEmbed は実在の id に 200、存在しない 11 文字の id に 404 を返し、応答の key は `author_name`・`author_url`・`html`・`title` などだった（2026-11-05）。Cloudflare Workers からの到達（YouTube が Workers の IP を断らないか）と、非公開・埋め込み不可の動画の status は未確認。届かない時は `unavailable` として従来どおり進む（fail-soft）ので、deploy 後に実注文で確かめる。
