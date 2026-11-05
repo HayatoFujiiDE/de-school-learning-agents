@@ -483,6 +483,8 @@ describe('§Q-10 13 記録が無い行は時間で格上げしない', () => {
     expect(videoCallDecision([1, 2], new Map([rec(1, 'retryable'), rec(2, 'retryable')]))).toEqual({ kind: 'call', n: 3 });
     expect(videoCallDecision([1, 2, 3], new Map([rec(1, 'retryable'), rec(2, 'retryable'), rec(3, 'retryable')]))).toEqual({ kind: 'none' });
     expect(videoCallDecision([1], new Map([rec(1, 'final')]))).toEqual({ kind: 'none' });
+    // final の記録があれば、いちばん大きい n の記録が retryable でも呼ばない（§Q-10 4 の 2 つ目）
+    expect(videoCallDecision([1, 2], new Map([rec(1, 'final'), rec(2, 'retryable')]))).toEqual({ kind: 'none' });
     expect(videoCallDecision([1, 2], new Map([rec(1, 'ok'), rec(2, 'ok')]))).toMatchObject({ kind: 'note', record: { n: 1 } });
   });
 });
