@@ -288,8 +288,9 @@ export function checkVideoClaims(
   videos: VersionVideo[],
   shownVideoIds: string[],
   capturedSourceIds: string[] = [],
+  fetchedUrls: string[] = [],
 ): VerdictReport {
-  return { ...report, verdicts: enforceVideoConfirmations(report.verdicts, claimsJson, sourcesText, videos, shownVideoIds, capturedSourceIds) };
+  return { ...report, verdicts: enforceVideoConfirmations(report.verdicts, claimsJson, sourcesText, videos, shownVideoIds, capturedSourceIds, fetchedUrls) };
 }
 
 /** 定価（micro-dollars、小数のまま）: 入力 $4・cache write 1.25 倍・cache read 0.1 倍・出力 $20 / 1M（tokens × $/1M = micro-dollars） */
@@ -999,7 +1000,16 @@ async function figurePlanAtCollect(
   r: BatchRow,
   prev: MessageParam[] | null,
 ): Promise<
-  | { shown: string[]; notSeen: string[]; captures: CaptureStats | null; videos: { shown: string[]; notSeen: string[] }; videoList: VersionVideo[]; captured: string[] }
+  | {
+      shown: string[];
+      notSeen: string[];
+      captures: CaptureStats | null;
+      videos: { shown: string[]; notSeen: string[] };
+      videoList: VersionVideo[];
+      captured: string[];
+      /** 版の sources.json（R2。変わらない。§Q-9.10 の検査に使う） */
+      sourcesText: string;
+    }
   | { fail: string }
 > {
   const all = await listPartKeys(env.R2, r.r2_prefix);
@@ -1007,11 +1017,24 @@ async function figurePlanAtCollect(
   const figures = all.filter((p) => FIGURE_RE.test(p));
   // §Q-9.4: 版の動画（回収時は Gemini を呼ばず、video-notes.json からも数え直さない）
   const videoList = await versionVideos(env, r.id);
-  const none = { shown: [] as string[], notSeen: [] as string[], captures: null, videos: { shown: [] as string[], notSeen: [] as string[] }, videoList, captured: [] as string[] };
+  // §Q-9.10（Astra R2）: 版に YouTube の出典がある時、captured の無い plan（YouTube の本文・引用を伏せる前に作った会話）は使わない
+  const so = await env.R2.get(r.r2_prefix + 'sources.json');
+  const sourcesText = so ? await so.text() : '{"sources":[]}';
+  const hasYoutube = youtubeSourceIdsOf(sourcesText, videoList).size > 0;
+  const none = {
+    shown: [] as string[],
+    notSeen: [] as string[],
+    captures: null,
+    videos: { shown: [] as string[], notSeen: [] as string[] },
+    videoList,
+    captured: [] as string[],
+    sourcesText,
+  };
   const first = prev?.[0];
-  if (first && typeof first.content === 'string') return figures.length || videoList.length ? { fail: 'claim_set_mismatch' } : none;
+  if (first && typeof first.content === 'string') return figures.length || videoList.length || hasYoutube ? { fail: 'claim_set_mismatch' } : none;
   const plan = await readPlan(env, verifyPlanKey(r.id, r.verification_token));
-  if (!plan) return figures.length || videoList.length ? { fail: 'claim_set_mismatch' } : none;
+  if (!plan) return figures.length || videoList.length || hasYoutube ? { fail: 'claim_set_mismatch' } : none;
+  if (hasYoutube && plan.captured === undefined) return { fail: 'claim_set_mismatch' };
   const planned = [...plan.figures.shown, ...plan.figures.not_seen];
   const now = new Set(figures);
   if (new Set(planned).size !== planned.length || planned.length !== now.size || planned.some((p) => !now.has(p))) return { fail: 'claim_set_mismatch' };
@@ -1029,7 +1052,7 @@ async function figurePlanAtCollect(
     if (ss.size + ns.size !== want.size || [...s, ...n].some((x) => !want.has(x))) return { fail: 'claim_set_mismatch' };
     videos = { shown: [...s], notSeen: [...n] };
   }
-  return { shown: [...plan.figures.shown].sort(), notSeen: [...plan.figures.not_seen].sort(), captures: plan.captures, videos, videoList, captured: plan.captured ?? [] };
+  return { shown: [...plan.figures.shown].sort(), notSeen: [...plan.figures.not_seen].sort(), captures: plan.captures, videos, videoList, captured: plan.captured ?? [], sourcesText };
 }
 
 const oneLineText = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -1241,12 +1264,22 @@ async function runAttempt(env: Env, port: FactoryPort, v: VersionForVerify, dead
     const tu = reportBlock(resp.content);
     if (resp.stop_reason === 'tool_use' && tu) {
       const report = validateVerdicts(tu.input, claimIds, shownFigures, input.videos.shown);
+      // §Q-9.10 (c): この試行の会話（メモリの messages）で web_fetch が本文を返した URL（構造化された block。opened_urls ではない）
+      const fm = fetchMeta(messages);
       return report
         ? {
             ok: true,
-            report: checkVideoClaims(withNotSeen(report, input.notSeen, input.videos.notSeen), v.claims_json, input.sourcesText, videos, input.videos.shown, input.capturedSourceIds),
+            report: checkVideoClaims(
+              withNotSeen(report, input.notSeen, input.videos.notSeen),
+              v.claims_json,
+              input.sourcesText,
+              videos,
+              input.videos.shown,
+              input.capturedSourceIds,
+              fm.fetched_ok,
+            ),
             microDollars: micro,
-            meta: { mode: 'sync', turns: turn + 1, ...fetchMeta(messages), captures: input.captures },
+            meta: { mode: 'sync', turns: turn + 1, ...fm, captures: input.captures },
           }
         : { ok: false, reason: 'claim_set_mismatch', microDollars: micro };
     }
@@ -1619,6 +1652,18 @@ async function readConversation(env: Env, key: string): Promise<MessageParam[] |
   }
 }
 
+/**
+ * 版に YouTube の出典（youtubeSourceIdsOf）があり、提出時の plan.json に captured が無い（無い・読めない plan も含む）。
+ * captured は YouTube の取得記録・引用を伏せた入力と一緒に書くので、無ければ伏せる前の会話
+ */
+async function stalePlanForYoutube(env: Env, r: BatchRow): Promise<boolean> {
+  const videos = await versionVideos(env, r.id);
+  const so = await env.R2.get(r.r2_prefix + 'sources.json');
+  if (youtubeSourceIdsOf(so ? await so.text() : '{"sources":[]}', videos).size === 0) return false;
+  const plan = await readPlan(env, verifyPlanKey(r.id, r.verification_token));
+  return !plan || plan.captured === undefined;
+}
+
 /** 3. 提出（1 件） */
 export async function submitOne(env: Env, port: FactoryPort, r: BatchRow, deadline: number, gemini?: GeminiPort): Promise<string> {
   const c = cfg(env);
@@ -1661,6 +1706,9 @@ export async function submitOne(env: Env, port: FactoryPort, r: BatchRow, deadli
       };
       await env.R2.put(verifyPlanKey(r.id, r.verification_token), JSON.stringify(plan));
     } else {
+      // §Q-9.10（Astra R2）: YouTube の本文・引用を伏せる前（plan.json に captured が無い）の会話で、版に YouTube の出典がある → 続けない。
+      // 試行を失敗にして（claim_set_mismatch）、再試行で新しい入力を作り直す。YouTube の出典の無い版は従来どおり続ける
+      if (await stalePlanForYoutube(env, r)) return failAttempt(env, l, r.material_id, { reason: 'claim_set_mismatch' });
       const m = await readConversation(env, key);
       if (!m) return failAttempt(env, l, r.material_id, { reason: 'conversation_missing' });
       messages = m;
@@ -1713,11 +1761,18 @@ async function decideTurn(env: Env, r: BatchRow, row: MessageBatchIndividualResp
     if ('fail' in plan) return { kind: 'fail', micro, reason: plan.fail };
     const report = validateVerdicts(tu.input, claimIdsOf(r.claims_json), plan.shown, plan.videos.shown);
     if (!report) return { kind: 'fail', micro, reason: 'claim_set_mismatch' };
-    // §Q-9.10: sources.json（版の R2。変わらない）で YouTube の出典を見分ける
-    const so = await env.R2.get(r.r2_prefix + 'sources.json');
-    const sourcesText = so ? await so.text() : '{"sources":[]}';
-    const checked = checkVideoClaims(withNotSeen(report, plan.notSeen, plan.videos.notSeen), r.claims_json, sourcesText, plan.videoList, plan.videos.shown, plan.captured);
-    return { kind: 'report', micro, report: checked, meta: { mode: 'batch', turns: r.verify_turn + 1, ...fetchMeta([...(prev ?? []), assistant]), ...capturesMeta(plan.captures) } };
+    // §Q-9.10 (c): 保存した会話 + 最後の応答の web_fetch_result の block（構造化された tool の結果。プロンプトの文字列は解析しない）
+    const fm = fetchMeta([...(prev ?? []), assistant]);
+    const checked = checkVideoClaims(
+      withNotSeen(report, plan.notSeen, plan.videos.notSeen),
+      r.claims_json,
+      plan.sourcesText,
+      plan.videoList,
+      plan.videos.shown,
+      plan.captured,
+      fm.fetched_ok,
+    );
+    return { kind: 'report', micro, report: checked, meta: { mode: 'batch', turns: r.verify_turn + 1, ...fm, ...capturesMeta(plan.captures) } };
   }
   let tail: MessageParam[];
   let pauseInc = 0;

@@ -338,17 +338,19 @@ export function maskYoutubeExcerpts(sourcesText: string, youtubeIds: ReadonlySet
  * §Q-9.10 の検査（証拠で決める）。出典に YouTube の出典（youtubeSourceIdsOf）を 1 つでも含む claim の confirmed は、次のどれかが成り立つ時だけ残す:
  * (a) reason が「動画の記録で確認:」で始まり、その claim の YouTube の出典のどれかが、記録を入力に入れた動画（shown）の出典
  * (b) reason が「制作時の取得記録で確認:」で始まり、その claim の YouTube でない出典のどれかの取得記録を入力に入れた（capturedSourceIds）
- * (c) opened_urls に、その claim の YouTube でない出典の url と同じ URL（normalizeUrl で比べる）がある
+ * (c) この試行で web_fetch が実際に本文を返した URL（fetchedUrls = fetchMeta(messages).fetched_ok。構造化された web_fetch_result の block から数えたもの。
+ *     検証係が自分で書く opened_urls ではない）に、その claim の YouTube でない出典の url と同じ URL（normalizeUrl で比べる）がある
  * どれも成り立たなければ unverified にし、reason の先頭に VIDEO_DOWNGRADE_NOTE を足す（検証は失敗にしない。人が確認画面で見る）。
  * 検証係は YouTube を web_fetch で開けず、YouTube の取得記録・引用も受け取らないので、YouTube の概要欄だけを根拠にした confirmed はここで落ちる
  */
-export function enforceVideoConfirmations<T extends { claim_id: string; verdict: string; reason: string; opened_urls?: string[] }>(
+export function enforceVideoConfirmations<T extends { claim_id: string; verdict: string; reason: string }>(
   verdicts: T[],
   claimsJson: string,
   sourcesText: string,
   videos: VersionVideo[],
   shownVideoIds: string[],
   capturedSourceIds: string[] = [],
+  fetchedUrls: string[] = [],
 ): T[] {
   const yt = youtubeSourceIdsOf(sourcesText, videos);
   if (yt.size === 0) return verdicts;
@@ -362,6 +364,7 @@ export function enforceVideoConfirmations<T extends { claim_id: string; verdict:
   const shown = new Set(shownVideoIds);
   const shownSources = new Set(videos.filter((v) => shown.has(v.id)).map((v) => v.source_id));
   const captured = new Set(capturedSourceIds);
+  const fetched = new Set(fetchedUrls.filter(isStr).map(normalizeUrl));
   const claimSources = new Map<string, string[]>();
   try {
     const list = (JSON.parse(claimsJson) as { claims?: unknown })?.claims;
@@ -380,8 +383,10 @@ export function enforceVideoConfirmations<T extends { claim_id: string; verdict:
     const others = sids.filter((s) => !yt.has(s));
     const byRecord = startsWithVideoPrefix(v.reason) && ytIds.some((s) => shownSources.has(s));
     const byCapture = startsWithCapturePrefix(v.reason) && others.some((s) => captured.has(s));
-    const otherUrls = new Set(others.map((s) => urlById.get(s)).filter(isStr).map(normalizeUrl));
-    const byOpened = Array.isArray(v.opened_urls) && v.opened_urls.some((u) => isStr(u) && otherUrls.has(normalizeUrl(u)));
-    return byRecord || byCapture || byOpened ? v : { ...v, verdict: 'unverified', reason: (VIDEO_DOWNGRADE_NOTE + v.reason).slice(0, 2000) };
+    const byFetched = others.some((s) => {
+      const u = urlById.get(s);
+      return u !== undefined && fetched.has(normalizeUrl(u));
+    });
+    return byRecord || byCapture || byFetched ? v : { ...v, verdict: 'unverified', reason: (VIDEO_DOWNGRADE_NOTE + v.reason).slice(0, 2000) };
   });
 }

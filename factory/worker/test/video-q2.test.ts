@@ -700,8 +700,9 @@ describe('§Q-9.10 動画を出典にした claim の confirmed は「動画の�
   const v = (id: string, verdict: string, reason: string, opened: string[] = []) => ({ claim_id: id, verdict, reason, opened_urls: opened });
 
   // 証拠で決める（2962b36 の後の司令塔の裁定）。YouTube の出典を含む claim の confirmed は (a) 動画の記録 (b) YouTube でない出典の取得記録 (c) YouTube でない出典を開いた URL のどれかがある時だけ。
-  // 3 列目 = 記録を入れた動画、5 列目 = 取得記録の本文を入れた出典（YouTube の出典は入れない）
-  it.each<[string, ReturnType<typeof v>, string[], string, string[]?]>([
+  // 3 列目 = 記録を入れた動画、5 列目 = 取得記録の本文を入れた出典（YouTube の出典は入れない）、
+  // 6 列目 = この試行で web_fetch が本文を返した URL（fetchMeta の fetched_ok。opened_urls は自己申告なので数えない。Astra R2）
+  it.each<[string, ReturnType<typeof v>, string[], string, string[]?, string[]?]>([
     // (a)
     ['動画だけの claim・(a) 記録で確認・記録あり', v('c2', 'confirmed', '動画の記録で確認: 1:20'), ['v1'], 'confirmed'],
     ['全角コロンも受ける', v('c2', 'confirmed', '動画の記録で確認：1:20'), ['v1'], 'confirmed'],
@@ -713,20 +714,22 @@ describe('§Q-9.10 動画を出典にした claim の confirmed は「動画の�
     ['混ざる claim・取得記録で確認と書いたが YouTube でない出典の記録なし', v('c3', 'confirmed', '制作時の取得記録で確認: YouTube の概要欄'), [], 'unverified', []],
     ['動画だけの claim・取得記録で確認（YouTube でない出典が無いので (b) は成り立たない）', v('c2', 'confirmed', '制作時の取得記録で確認: 概要欄'), ['v1'], 'unverified', ['s1', 's9']],
     // (c)
-    ['混ざる claim・(c) YouTube でない出典の URL を開いた', v('c3', 'confirmed', 'wiki に書いてある', [URL_A]), [], 'confirmed'],
-    ['混ざる claim・(c) 開いた URL は normalizeUrl で比べる', v('c3', 'confirmed', 'wiki に書いてある', ['http://MINECRAFT.wiki/w/Redstone_Dust/']), [], 'confirmed'],
-    ['混ざる claim・開いたのは YouTube の URL だけ', v('c3', 'confirmed', 'watch ページを開いた', [watch(YT2)]), [], 'unverified'],
-    ['混ざる claim・別の（出典でない）URL を開いた', v('c3', 'confirmed', '別のページ', ['https://minecraft.wiki/w/Other']), [], 'unverified'],
+    ['混ざる claim・(c) YouTube でない出典の URL を web_fetch が返した', v('c3', 'confirmed', 'wiki に書いてある', [URL_A]), [], 'confirmed', [], [URL_A]],
+    ['混ざる claim・(c) opened_urls に無くても web_fetch の結果があればよい', v('c3', 'confirmed', 'wiki に書いてある'), [], 'confirmed', [], [URL_A]],
+    ['混ざる claim・(c) 返した URL は normalizeUrl で比べる', v('c3', 'confirmed', 'wiki に書いてある'), [], 'confirmed', [], ['http://MINECRAFT.wiki/w/Redstone_Dust/']],
+    ['混ざる claim・opened_urls にあるが web_fetch の結果が無い（自己申告だけ）', v('c3', 'confirmed', 'wiki に書いてある', [URL_A]), [], 'unverified', [], []],
+    ['混ざる claim・web_fetch が返したのは YouTube の URL だけ', v('c3', 'confirmed', 'watch ページを開いた', [watch(YT2)]), [], 'unverified', [], [watch(YT2)]],
+    ['混ざる claim・web_fetch が返したのは別の（出典でない）URL', v('c3', 'confirmed', '別のページ', ['https://minecraft.wiki/w/Other']), [], 'unverified', [], ['https://minecraft.wiki/w/Other']],
     ['混ざる claim・接頭辞も開いた URL も無い（2962b36 までは confirmed のままだった）', v('c3', 'confirmed', 'wiki に書いてある'), [], 'unverified'],
-    ['動画だけの claim・YouTube の URL を開いた', v('c2', 'confirmed', '概要欄にそう書いてある', [watch(YT1)]), ['v1'], 'unverified'],
+    ['動画だけの claim・YouTube の URL を開いた（web_fetch の結果があっても）', v('c2', 'confirmed', '概要欄にそう書いてある', [watch(YT1)]), ['v1'], 'unverified', [], [watch(YT1)]],
     // 証拠の道が無い
     ['YouTube の概要欄を根拠にした（証拠の道なし）', v('c3', 'confirmed', 'YouTube の概要欄にそう書いてある'), [], 'unverified'],
     ['動画だけの claim・watch ページで確認', v('c2', 'confirmed', '概要欄にそう書いてある'), ['v1'], 'unverified'],
     // 対象外
     ['YouTube を使わない claim', v('c1', 'confirmed', 'r'), [], 'confirmed'],
     ['confirmed 以外は変えない', v('c2', 'hypothesis', '概要欄'), [], 'hypothesis'],
-  ])('%s → %s', (_n, x, shown, want, captured) => {
-    const [r] = enforceVideoConfirmations([x], claims, sources, vs, shown, captured ?? []);
+  ])('%s → %s', (_n, x, shown, want, captured, fetched) => {
+    const [r] = enforceVideoConfirmations([x], claims, sources, vs, shown, captured ?? [], fetched ?? []);
     expect(r.verdict).toBe(want);
     expect(r.reason.startsWith(VIDEO_DOWNGRADE_NOTE)).toBe(want === 'unverified');
     if (want === 'unverified') expect(r.reason).toBe(VIDEO_DOWNGRADE_NOTE + x.reason);
@@ -734,8 +737,8 @@ describe('§Q-9.10 動画を出典にした claim の confirmed は「動画の�
 
   it('(c) の URL は sources.json の YouTube でない行の url（sources.json が読めなければ (c) は成り立たない）', () => {
     const x = v('c3', 'confirmed', 'wiki に書いてある', [URL_A]);
-    expect(enforceVideoConfirmations([x], claims, sources, vs, [])[0].verdict).toBe('confirmed');
-    expect(enforceVideoConfirmations([x], claims, 'not json', vs, [])[0].verdict).toBe('unverified');
+    expect(enforceVideoConfirmations([x], claims, sources, vs, [], [], [URL_A])[0].verdict).toBe('confirmed');
+    expect(enforceVideoConfirmations([x], claims, 'not json', vs, [], [], [URL_A])[0].verdict).toBe('unverified');
   });
 
   it('host の書き方（末尾の .・大文字・サブドメイン・youtu.be）でも YouTube の出典と見分ける。似た名前の別 host は見分けない', () => {
@@ -1389,5 +1392,167 @@ describe('<sources_json> の YouTube の出典の quoted_excerpt は検証係に
       ['s10', SOURCES_YOUTUBE_EXCERPT_MARK],
     ]);
     expect(r2.get(`${PREFIX}sources.json`)).toBe(stored);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Astra R2（71198bd の REVISE）
+describe('R2-1 伏せる前の Batch の会話（plan.json に captured が無い）は、版に YouTube の出典があれば続けない', () => {
+  /** replies を順に返す Batch の stub（1 ターン = 1 batch） */
+  function seqBatchPort(replies: Message[]) {
+    const created: Array<{ id: string; custom_id: string }> = [];
+    const s = { status: 'in_progress' as 'in_progress' | 'ended' };
+    const port = {
+      isFake: true,
+      createSession: no,
+      createMessage: no,
+      listEventsPage: async () => ({ data: [], next: null }),
+      async createBatch(params: { requests: Array<{ custom_id: string }> }) {
+        const id = `msgbatch_${created.length + 1}`;
+        created.push({ id, custom_id: params.requests[0].custom_id });
+        return { id, processing_status: 'in_progress', created_at: T0, expires_at: T0 };
+      },
+      async retrieveBatch(id: string) {
+        return { id, processing_status: s.status, created_at: T0, expires_at: T0 };
+      },
+      async batchResults(id: string): Promise<MessageBatchIndividualResponse[]> {
+        const i = created.findIndex((x) => x.id === id);
+        return [{ custom_id: created[i]?.custom_id ?? 't0', result: { type: 'succeeded', message: replies[Math.min(i, replies.length - 1)] } } as unknown as MessageBatchIndividualResponse];
+      },
+    } as unknown as FactoryPort;
+    return { port, created, s };
+  }
+  const pause = { type: 'message', role: 'assistant', content: [{ type: 'text', text: '開いています' }], stop_reason: 'pause_turn', usage: { input_tokens: 10, output_tokens: 1 } } as unknown as Message;
+  const dropCaptured = () => {
+    const key = verifyPlanKey('v1', String(ver().verification_token));
+    const p = JSON.parse(String(r2.get(key))) as Obj;
+    delete p.captured;
+    r2.set(key, JSON.stringify(p));
+  };
+  const onlyWikiSources = () =>
+    r2.set(`${PREFIX}sources.json`, JSON.stringify({ sources: [{ id: 's1', url: URL_A, is_primary: true }] }));
+
+  it('回収: captured の無い plan + YouTube の出典 → claim_set_mismatch（再試行で作り直す）', async () => {
+    seed([video(), V2()]);
+    const { port, s } = batchPort(reportMsg());
+    const env = makeEnv();
+    await runVerificationStep(env, port, { deadline: Date.now() + 120_000 });
+    dropCaptured();
+    s.status = 'ended';
+    expect(await runVerificationStep(env, port, { deadline: Date.now() + 120_000 })).toContain('collect=retry:claim_set_mismatch');
+    expect(verifs()).toHaveLength(0);
+  });
+
+  it('続き（2 ターン目の提出）: captured の無い plan + YouTube の出典 → 会話を続けず claim_set_mismatch', async () => {
+    seed([video(), V2()]);
+    const { port, created, s } = seqBatchPort([pause, reportMsg()]);
+    const env = makeEnv();
+    await runVerificationStep(env, port, { deadline: Date.now() + 120_000 }); // t0 提出
+    s.status = 'ended';
+    expect(await runVerificationStep(env, port, { deadline: Date.now() + 120_000 })).toContain('collect=continue:t1');
+    dropCaptured();
+    expect(await runVerificationStep(env, port, { deadline: Date.now() + 120_000 })).toContain('submit=retry:claim_set_mismatch');
+    expect(created).toHaveLength(1);
+  });
+
+  it('YouTube の出典の無い版は captured が無くても従来どおり（続きも回収も進む）', async () => {
+    seed(undefined, { claims: [{ id: 'c1', source_ids: ['s1'] }] });
+    onlyWikiSources();
+    const reply = reportMsg({ verdicts: [{ claim_id: 'c1', verdict: 'confirmed', reason: 'r', opened_urls: [] }] });
+    const { port, created, s } = seqBatchPort([pause, reply]);
+    const env = makeEnv();
+    await runVerificationStep(env, port, { deadline: Date.now() + 120_000 });
+    expect(Object.hasOwn(JSON.parse(String(r2.get(verifyPlanKey('v1', String(ver().verification_token))))) as Obj, 'captured')).toBe(false);
+    s.status = 'ended';
+    expect(await runVerificationStep(env, port, { deadline: Date.now() + 120_000 })).toContain('collect=continue:t1');
+    const out = await runVerificationStep(env, port, { deadline: Date.now() + 120_000 });
+    expect(out).toContain('submit=submitted');
+    expect(out).toContain('collect=done');
+    expect(created).toHaveLength(2);
+  });
+
+  it('Batch: captured に YouTube でない出典がある（取得記録を入れた）→ 混ざる claim の「制作時の取得記録で確認:」は confirmed のまま', async () => {
+    seed([video(), V2()], { claims: [{ id: 'c1', source_ids: ['s1'] }, { id: 'c2', source_ids: ['s9'] }, { id: 'c3', source_ids: ['s1', 's10'] }] });
+    const events = [
+      { type: 'agent.tool_use', id: 'u1', name: 'web_fetch', input: { url: URL_A } },
+      { type: 'agent.tool_result', tool_use_id: 'u1', is_error: false, content: [{ type: 'text', text: 'wiki の本文' }] },
+    ];
+    const reply = reportMsg({ verdicts: [...verdicts(), { claim_id: 'c3', verdict: 'confirmed', reason: '制作時の取得記録で確認: wiki の本文', opened_urls: [] }] });
+    const { port, s } = batchPort(reply);
+    (port as unknown as { listEventsPage: unknown }).listEventsPage = async () => ({ data: events, next: null });
+    const env = makeEnv();
+    await runVerificationStep(env, port, { deadline: Date.now() + 120_000 });
+    expect((JSON.parse(String(r2.get(verifyPlanKey('v1', String(ver().verification_token))))) as Obj).captured).toEqual(['s1']);
+    s.status = 'ended';
+    expect(await runVerificationStep(env, port, { deadline: Date.now() + 120_000 })).toContain('collect=done');
+    expect(saved().verdicts.find((x) => x.claim_id === 'c3')!.verdict).toBe('confirmed');
+  });
+});
+
+describe('R2-2 (c) は web_fetch の結果の block（構造化）で決める。opened_urls だけでは数えない', () => {
+  const MIXED = [
+    { id: 'c1', source_ids: ['s1'] },
+    { id: 'c3', source_ids: ['s1', 's10'] },
+  ];
+  /** web_fetch の結果の block（server_tool_use + web_fetch_tool_result） */
+  const fetchBlocks = (url: string) => [
+    { type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_fetch', input: { url } },
+    { type: 'web_fetch_tool_result', tool_use_id: 'srvtoolu_1', content: { type: 'web_fetch_result', url, content: { type: 'document', source: { type: 'text', media_type: 'text/plain', data: 'x' } } } },
+  ];
+  const replyWith = (blocks: unknown[]) =>
+    ({
+      type: 'message',
+      role: 'assistant',
+      content: [
+        ...blocks,
+        {
+          type: 'tool_use',
+          id: 'toolu_1',
+          name: 'report_verdicts',
+          input: {
+            verdicts: [
+              { claim_id: 'c1', verdict: 'confirmed', reason: 'r', opened_urls: [URL_A] },
+              { claim_id: 'c3', verdict: 'confirmed', reason: 'wiki に書いてある', opened_urls: [URL_A] },
+            ],
+            overall_note: '',
+            figures: [],
+            analogy_gaps: [],
+          },
+        },
+      ],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 10, output_tokens: 1 },
+    }) as unknown as Message;
+
+  it.each<[string, unknown[], string]>([
+    ['同期: opened_urls に出典の URL があるが web_fetch の結果が無い → unverified', [], 'unverified'],
+    ['同期: 同じ応答の web_fetch の結果に出典の URL → confirmed', fetchBlocks(URL_A), 'confirmed'],
+    ['同期: web_fetch の結果は YouTube でない別の URL → unverified', fetchBlocks('https://minecraft.wiki/w/Other'), 'unverified'],
+  ])('%s', async (_n, blocks, want) => {
+    seed(undefined, { claims: MIXED });
+    const { port } = syncPort([replyWith(blocks)]);
+    expect(await runVerificationStep(makeEnv(SYNC), port)).toBe('done');
+    expect(saved().verdicts.find((x) => x.claim_id === 'c3')!.verdict).toBe(want);
+  });
+
+  it('同期: 前のターンの web_fetch の結果も数える（同じ試行の messages）', async () => {
+    seed(undefined, { claims: MIXED });
+    const pauseWithFetch = { type: 'message', role: 'assistant', content: fetchBlocks(URL_A), stop_reason: 'pause_turn', usage: { input_tokens: 10, output_tokens: 1 } } as unknown as Message;
+    const { port } = syncPort([pauseWithFetch, replyWith([])]);
+    expect(await runVerificationStep(makeEnv(SYNC), port)).toBe('done');
+    expect(saved().verdicts.find((x) => x.claim_id === 'c3')!.verdict).toBe('confirmed');
+  });
+
+  it.each<[string, unknown[], string]>([
+    ['Batch: web_fetch の結果が無い → unverified', [], 'unverified'],
+    ['Batch: 最後の応答の web_fetch の結果に出典の URL → confirmed', fetchBlocks(URL_A), 'confirmed'],
+  ])('%s', async (_n, blocks, want) => {
+    seed(undefined, { claims: MIXED });
+    const { port, s } = batchPort(replyWith(blocks));
+    const env = makeEnv();
+    await runVerificationStep(env, port, { deadline: Date.now() + 120_000 });
+    s.status = 'ended';
+    expect(await runVerificationStep(env, port, { deadline: Date.now() + 120_000 })).toContain('collect=done');
+    expect(saved().verdicts.find((x) => x.claim_id === 'c3')!.verdict).toBe(want);
   });
 });
