@@ -16,6 +16,8 @@
   MPC.MAX = 2;
   // 作ったものを Shift + 矢印で動かす幅（地図の座標・§AD-5）
   MPC.MOVE_STEP = 24;
+  // これより短い動き（直線の距離・画面の px）はクリック
+  MPC.CLICK_SLOP = 6;
   // 倍率で出す量（§AB-3-1）: far < 0.6 ≦ mid < 1.1 ≦ near
   MPC.FAR = 0.6;
   MPC.NEAR = 1.1;
@@ -157,15 +159,24 @@
       }
       if (!drag || drag.id !== k) return;
       var dx = pts[k].x - drag.s.x, dy = pts[k].y - drag.s.y;
-      if (!moved && Math.abs(dx) + Math.abs(dy) < 6) return;
+      // 6px（直線の距離）より短い動きはクリック。地図の移動・ノードを動かす のどちらも同じしきい値
+      if (!moved && Math.sqrt(dx * dx + dy * dy) < MPC.CLICK_SLOP) return;
       if (!moved) {
         moved = true;
         frame.classList.add('is-dragging');
         try { frame.setPointerCapture(e.pointerId); } catch (x) { /* 取れなくても動かせる */ }
         if (drag.node && api.nodeStart) drag.lifted = api.nodeStart(drag.node) !== false;
+        if (drag.lifted) { drag.acc = { x: 0, y: 0 }; drag.last = drag.s; }
       }
-      // ノード: 画面の動き ÷ 倍率 = 地図の座標の動き
-      if (drag.lifted) { api.nodeMove(drag.node, dx / drag.v.z, dy / drag.v.z); return; }
+      // ノード: 前の点からの画面の動きを「今の倍率」で地図の座標に直して積む（途中で倍率が変わってもポインタからずれない）
+      if (drag.lifted) {
+        var z = api.view().z, p = pts[k];
+        drag.acc.x += (p.x - drag.last.x) / z;
+        drag.acc.y += (p.y - drag.last.y) / z;
+        drag.last = { x: p.x, y: p.y };
+        api.nodeMove(drag.node, drag.acc.x, drag.acc.y);
+        return;
+      }
       api.apply(MPC.pan(drag.v, dx, dy));
     }
     // 終わり。離した（up）時だけ、動かした後のクリックを捨てる。取り消し（cancel）ではクリックが来ないので捨てない
@@ -213,6 +224,8 @@
       if (dead) return;
       if (e.target && e.target.closest && e.target.closest('.mp-detail')) return;
       e.preventDefault();
+      // ノードを動かしている間は拡大縮小しない（地図の移動中も、次の動きで開始時の倍率に戻るので同じ扱い）
+      if (drag && drag.lifted) return;
       var p = local(e), dy = e.deltaY * (e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? 400 : 1));
       var f = Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.0018));
       api.apply(MPC.zoomAt(api.view(), f, p.x, p.y, minZ()));
