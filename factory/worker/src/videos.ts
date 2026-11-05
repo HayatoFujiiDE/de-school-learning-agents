@@ -262,6 +262,15 @@ export function videoNotesSection(
 
 export const VIDEO_CONFIRM_PREFIX = '動画の記録で確認:';
 export const VIDEO_DOWNGRADE_NOTE = '（Worker: 動画を出典にした claim は「動画の記録で確認:」の時だけ confirmed にできるため unverified にしました）';
+/** YouTube と他の出典が混ざる claim を「制作時の取得記録で確認:」としたが、YouTube でない出典の取得記録を渡していない時 */
+export const VIDEO_CAPTURE_DOWNGRADE_NOTE =
+  '（Worker: YouTube の出典の取得記録は検証係に渡していません。この claim の YouTube でない出典の取得記録も渡していないため、「制作時の取得記録で確認:」では confirmed にできず unverified にしました）';
+
+/** YouTube の host か（小文字・末尾の `.`・先頭の `*.` を落として比べる。allowlist の domains の判定にも使う） */
+export function isYoutubeHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\*\./, '').replace(/\.+$/, '');
+  return h === 'youtube.com' || h.endsWith('.youtube.com') || h === 'youtu.be' || h === 'youtube-nocookie.com' || h.endsWith('.youtube-nocookie.com');
+}
 
 /**
  * YouTube のページの URL か（watch ページ・チャンネル等。投稿者が自由に書ける文）。
@@ -269,24 +278,48 @@ export const VIDEO_DOWNGRADE_NOTE = '（Worker: 動画を出典にした claim �
  */
 export function isYoutubeUrl(url: string): boolean {
   try {
-    const h = new URL(url).hostname.toLowerCase().replace(/\.+$/, '');
-    return h === 'youtube.com' || h.endsWith('.youtube.com') || h === 'youtu.be' || h === 'youtube-nocookie.com' || h.endsWith('.youtube-nocookie.com');
+    return isYoutubeHost(new URL(url).hostname);
   } catch {
     return false;
   }
+}
+
+/**
+ * YouTube の出典の id: sources.json の url が YouTube の行（isYoutubeUrl）と、版の動画の source_id が指す行（url の書き方に関係なく）。
+ * 検証係はこの出典の取得記録を受け取らず（§Q-9.10 の構造の対策）、確かめるのは動画の記録だけ。sources.json が読めなければ動画の source_id だけ
+ */
+export function youtubeSourceIdsOf(sourcesText: string, videos: VersionVideo[]): Set<string> {
+  const yt = new Set<string>();
+  try {
+    const raw = (JSON.parse(sourcesText) as { sources?: unknown })?.sources;
+    for (const s of Array.isArray(raw) ? (raw as unknown[]) : []) if (isObj(s) && isStr(s.id) && isStr(s.url) && isYoutubeUrl(s.url)) yt.add(s.id);
+  } catch {
+    // 読めない sources.json は url からは見分けない
+  }
+  for (const v of videos) yt.add(v.source_id);
+  return yt;
 }
 
 const startsWithVideoPrefix = (reason: string) => {
   const r = reason.trimStart();
   return r.startsWith(VIDEO_CONFIRM_PREFIX) || r.startsWith('動画の記録で確認：');
 };
+/** §P b 4 の「制作時の取得記録で確認:」 */
+const startsWithCapturePrefix = (reason: string) => {
+  const r = reason.trimStart();
+  return r.startsWith('制作時の取得記録で確認:') || r.startsWith('制作時の取得記録で確認：');
+};
 
 /**
  * §Q-9.10 の検査。confirmed の claim のうち、
  * - 出典がすべて YouTube の claim: reason が「動画の記録で確認:」で始まり、かつその出典の動画の記録を入力に入れた（shown）時だけ confirmed のまま
- * - YouTube と他の出典が混ざる claim: 「動画の記録で確認:」と書いたのに記録を入れた動画の出典が無い時だけ
+ * - YouTube と他の出典が混ざる claim:
+ *   - 「動画の記録で確認:」と書いたのに、記録を入れた動画の出典が無い → unverified
+ *   - 「制作時の取得記録で確認:」と書いたのに、YouTube でない出典の取得記録を 1 つも入力に入れていない（capturedSourceIds）→ unverified
+ *     （YouTube の出典の取得記録は入力に入れないので、YouTube の概要欄だけを根拠にした確認はここで落ちる）
+ *   - それ以外（YouTube でない出典を web_fetch で開いた確認。検証係の web_fetch は YouTube を開けない）は confirmed のまま
  * 当てはまらないものを unverified にし、reason の先頭に VIDEO_DOWNGRADE_NOTE を足す（検証は失敗にしない。人が確認画面で見る）。
- * YouTube の出典 = url が YouTube の行（isYoutubeUrl）と、版の動画の source_id が指す行（url の書き方に関係なく。host の書き方の違いで抜けない）
+ * YouTube の出典は youtubeSourceIdsOf（host の書き方の違いで抜けない）
  */
 export function enforceVideoConfirmations<T extends { claim_id: string; verdict: string; reason: string }>(
   verdicts: T[],
@@ -294,18 +327,13 @@ export function enforceVideoConfirmations<T extends { claim_id: string; verdict:
   sourcesText: string,
   videos: VersionVideo[],
   shownVideoIds: string[],
+  capturedSourceIds: string[] = [],
 ): T[] {
-  const yt = new Set<string>();
-  try {
-    const raw = (JSON.parse(sourcesText) as { sources?: unknown })?.sources;
-    for (const s of Array.isArray(raw) ? (raw as unknown[]) : []) if (isObj(s) && isStr(s.id) && isStr(s.url) && isYoutubeUrl(s.url)) yt.add(s.id);
-  } catch {
-    // 読めない sources.json は url からは見分けない（版の動画の source_id は下で足す）
-  }
-  for (const v of videos) yt.add(v.source_id);
+  const yt = youtubeSourceIdsOf(sourcesText, videos);
   if (yt.size === 0) return verdicts;
   const shown = new Set(shownVideoIds);
   const shownSources = new Set(videos.filter((v) => shown.has(v.id)).map((v) => v.source_id));
+  const captured = new Set(capturedSourceIds);
   const claimSources = new Map<string, string[]>();
   try {
     const list = (JSON.parse(claimsJson) as { claims?: unknown })?.claims;
@@ -321,9 +349,14 @@ export function enforceVideoConfirmations<T extends { claim_id: string; verdict:
     const sids = claimSources.get(v.claim_id) ?? [];
     const ytIds = sids.filter((s) => yt.has(s));
     if (ytIds.length === 0) return v;
-    const onlyVideo = ytIds.length === sids.length;
+    const others = sids.filter((s) => !yt.has(s));
     const byRecord = startsWithVideoPrefix(v.reason) && ytIds.some((s) => shownSources.has(s));
-    const ok = onlyVideo ? byRecord : !startsWithVideoPrefix(v.reason) || byRecord;
-    return ok ? v : { ...v, verdict: 'unverified', reason: (VIDEO_DOWNGRADE_NOTE + v.reason).slice(0, 2000) };
+    if (others.length === 0 || startsWithVideoPrefix(v.reason)) {
+      return byRecord ? v : { ...v, verdict: 'unverified', reason: (VIDEO_DOWNGRADE_NOTE + v.reason).slice(0, 2000) };
+    }
+    if (startsWithCapturePrefix(v.reason) && !others.some((s) => captured.has(s))) {
+      return { ...v, verdict: 'unverified', reason: (VIDEO_CAPTURE_DOWNGRADE_NOTE + v.reason).slice(0, 2000) };
+    }
+    return v;
   });
 }

@@ -143,21 +143,30 @@ export function parseGeminiUsage(body: unknown): GeminiUsage | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
-const textsOf = (content: unknown): string[] =>
+/**
+ * content / parts の text を集める。thought: true（思考の要約）は入れない。requireType = true の時は type "text" のものだけ
+ * （Interactions の content と旧 outputs。generateContent の parts は type を持たないので false）
+ */
+const textsOf = (content: unknown, requireType: boolean): string[] =>
   Array.isArray(content)
-    ? (content as unknown[]).map(obj).filter((c): c is Record<string, unknown> => !!c && (c.type === undefined || c.type === 'text') && typeof c.text === 'string').map((c) => c.text as string)
+    ? (content as unknown[])
+        .map(obj)
+        .filter((c): c is Record<string, unknown> => !!c && (requireType ? c.type === 'text' : c.type === undefined || c.type === 'text') && c.thought !== true && typeof c.text === 'string')
+        .map((c) => c.text as string)
     : [];
 
 /**
- * 応答から本文を取り出す（寛容に。見つからなければ null）。順に:
- * 1. steps[] の type "model_output"（type の無い step も）の content[] の text（docs の形）
+ * 応答から本文を取り出す（寛容に。見つからなければ null）。status があって completed でなければ null。順に:
+ * 1. steps[] の type "model_output" の step の content[] の type "text"（docs の形。user_input・type の無い step は読まない）
  * 2. output_text（SDK の便利フィールド。REST にあれば）
- * 3. outputs[] の text（2026-05 の前の形）
- * 4. candidates[0].content.parts[].text（generateContent の形）
+ * 3. outputs[] の type "text"（2026-05 の前の形）
+ * 4. candidates[0].content.parts[].text（generateContent の形。finishReason があって STOP でなければ null）
+ * どれも thought: true の部分は読まない
  */
 export function extractInteractionText(body: unknown): string | null {
   const o = obj(body);
   if (!o) return null;
+  if (o.status !== undefined && o.status !== 'completed') return null;
   const join = (xs: string[]) => {
     const t = xs.join('\n').trim();
     return t ? t : null;
@@ -166,8 +175,8 @@ export function extractInteractionText(body: unknown): string | null {
     const xs: string[] = [];
     for (const s of o.steps as unknown[]) {
       const step = obj(s);
-      if (!step || (step.type !== undefined && step.type !== 'model_output')) continue;
-      xs.push(...textsOf(step.content));
+      if (!step || step.type !== 'model_output') continue;
+      xs.push(...textsOf(step.content, true));
     }
     const t = join(xs);
     if (t) return t;
@@ -177,12 +186,12 @@ export function extractInteractionText(body: unknown): string | null {
     if (t) return t;
   }
   if (Array.isArray(o.outputs)) {
-    const t = join(textsOf(o.outputs));
+    const t = join(textsOf(o.outputs, true));
     if (t) return t;
   }
   const cand = Array.isArray(o.candidates) ? obj((o.candidates as unknown[])[0]) : null;
-  const parts = cand ? obj(cand.content)?.parts : undefined;
-  return join(textsOf(parts));
+  if (!cand || (cand.finishReason !== undefined && cand.finishReason !== 'STOP')) return null;
+  return join(textsOf(obj(cand.content)?.parts, false));
 }
 
 /** 文字（code point）単位で max まで */

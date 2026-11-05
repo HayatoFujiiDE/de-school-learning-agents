@@ -2,7 +2,8 @@
 // - GET  /api/videos/status … 有効か・鍵があるか（値は返さない）・今月の記帳（vv:*）
 // - POST /api/videos/enable … settings video_gen_enabled を '1' にする（probe の結果を司令塔が確かめてから。鍵が無ければ 409）
 // - POST /api/probe/video   … 一時 route（§Q-6）。取り置き vv:probe:{youtube_id}:{start}:{end} と月・日の上限を通してから 1 回だけ呼ぶ。
-//   返すのは {status, clip_accepted, usage_present, text_head, error_code} だけ（観測値。clip が区間の中身に効いているかは司令塔が text_head で判断する）
+//   返すのは {status, clip_accepted, usage_present, text_head, error_code} だけ（観測値。clip が区間の中身に効いているかは司令塔が text_head で判断する）。
+//   clip_accepted は PROBE_CLIP_ACCEPTED_LABEL の意味: true = HTTP 2xx・error_code なし・本文あり、false = API が 4xx で断った、null = それ以外（5xx・応答なし・形の違い）
 // 鍵の値・応答本文はログにも応答にも出さない（text_head は記録の先頭 300 字だけ）。
 import { getGeminiPort } from '../anthropic';
 import { cas, first, getSetting, nowIso, setSetting, stmt, tokyoDay } from '../db';
@@ -16,6 +17,18 @@ import { VIDEO_ENABLED_KEY, probeLedgerRef, videoPrompt, videoReserveStmt } from
 
 /** probe の返す本文の先頭（§Q-6） */
 export const PROBE_TEXT_HEAD_CHARS = 300;
+/** probe の clip_accepted の意味（管理画面の probe の見方にも同じ文を出す） */
+export const PROBE_CLIP_ACCEPTED_LABEL = 'API が区間つきの要求を受けて本文を返したか（中身が区間どおりかは司令塔が text_head で判断）';
+
+/**
+ * clip_accepted の観測値: true = HTTP 2xx かつ error_code なし かつ本文あり / false = API が 4xx で断った / null = それ以外
+ */
+export function clipAcceptedOf(httpStatus: number | null, errorCode: string | null, text: string): boolean | null {
+  if (httpStatus !== null && httpStatus >= 200 && httpStatus < 300 && errorCode === null && text.trim().length > 0) return true;
+  if (httpStatus !== null && httpStatus >= 400 && httpStatus < 500) return false;
+  return null;
+}
+
 /** probe の呼び出しの締め切り */
 export const PROBE_TIMEOUT_MS = 150_000;
 
@@ -93,18 +106,15 @@ export async function probeVideo(c: RouteCtx, gemini?: GeminiPort): Promise<Resp
   let out: { status: number | null; clip_accepted: boolean | null; usage_present: boolean; text_head: string; error_code: string | null };
   try {
     const r = await g.watch({ youtubeId: yt, startSec: s, endSec: e, prompt: videoPrompt(s, e) }, { deadline: Date.now() + PROBE_TIMEOUT_MS });
-    out = { status: r.httpStatus, clip_accepted: r.httpStatus >= 200 && r.httpStatus < 300, usage_present: !!r.usage, text_head: capChars(String(r.text ?? ''), PROBE_TEXT_HEAD_CHARS), error_code: null };
+    const text = String(r.text ?? '');
+    const status = typeof r.httpStatus === 'number' ? r.httpStatus : null;
+    const errorCode = text.trim() ? null : 'no_text';
+    out = { status, clip_accepted: clipAcceptedOf(status, errorCode, text), usage_present: !!r.usage, text_head: capChars(text, PROBE_TEXT_HEAD_CHARS), error_code: errorCode };
   } catch (err) {
     const ge = err instanceof GeminiError ? err : null;
     const status = ge?.responded && typeof ge.status === 'number' ? ge.status : null;
-    out = {
-      status,
-      // clip の指定を付けた要求を API が受け付けたか（HTTP の観測値。応答が無ければ null）
-      clip_accepted: status === null ? null : status >= 200 && status < 300,
-      usage_present: ge?.usagePresent ?? false,
-      text_head: '',
-      error_code: ge?.kind ?? 'unknown',
-    };
+    const errorCode = ge?.kind ?? 'unknown';
+    out = { status, clip_accepted: clipAcceptedOf(status, errorCode, ''), usage_present: ge?.usagePresent ?? false, text_head: '', error_code: errorCode };
   }
   console.log(JSON.stringify({ at: 'video_probe', status: out.status, error_code: out.error_code }));
   return json(200, out);

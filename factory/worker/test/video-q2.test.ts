@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Message } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { MessageBatchIndividualResponse } from '@anthropic-ai/sdk/resources/messages/batches';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FactoryPort } from '../src/anthropic';
 import { tokyoDay } from '../src/db';
 import { cfg, type Env } from '../src/env';
@@ -24,9 +24,16 @@ import {
 import type { RouteCtx } from '../src/http';
 import worker from '../src/index';
 import { reviewDetail } from '../src/routes/review';
-import { enableVideos, probeVideo } from '../src/routes/videos';
+import { PROBE_CLIP_ACCEPTED_LABEL, clipAcceptedOf, enableVideos, probeVideo } from '../src/routes/videos';
+import { ALLOWLIST } from '../src/generated/claude-assets';
 import {
   ANALOGY_SYSTEM_LINES,
+  CAPTURE_READ_MAX_MS,
+  CAPTURE_YOUTUBE_MARK,
+  VERIFIER_FETCH_DOMAINS,
+  VIDEO_NOTES_MAX_MS,
+  captureSection,
+  verifierTools,
   VERDICT_SCHEMA,
   VERIFIER_SYSTEM,
   VERIFY_INPUT_CHAR_LIMIT,
@@ -38,6 +45,7 @@ import {
   verifyPlanKey,
 } from '../src/verify';
 import {
+  VIDEO_CAPTURE_DOWNGRADE_NOTE,
   VIDEO_DOWNGRADE_NOTE,
   enforceVideoConfirmations,
   isYoutubeUrl,
@@ -46,6 +54,7 @@ import {
   videoReserveStmt,
   videosMetaBlocks,
   versionVideosOf,
+  youtubeSourceIdsOf,
   type VersionVideo,
   type VideoNotesFile,
 } from '../src/videos';
@@ -648,6 +657,7 @@ describe('§Q-7 4 videos の判定', () => {
     ['版に無い動画', (p) => ({ ...p, videos: { shown: ['v1'], not_seen: ['v2', 'v9'] } })],
     ['shown の中で重複（§Q-9.9）', (p) => ({ ...p, videos: { shown: ['v1', 'v1'], not_seen: ['v2'] } })],
     ['shown と not_seen が交わる（§Q-9.9）', (p) => ({ ...p, videos: { shown: ['v1'], not_seen: ['v1', 'v2'] } })],
+    ['not_seen の中で重複（§Q-9.9）', (p) => ({ ...p, videos: { shown: ['v1'], not_seen: ['v2', 'v2'] } })],
     ['videos の形が違う', (p) => ({ ...p, videos: { shown: 'v1', not_seen: [] } })],
   ])('Batch: %s → claim_set_mismatch で再試行', async (_n, f) => {
     const { out } = await batchRun({ mutatePlan: f });
@@ -688,21 +698,26 @@ describe('§Q-9.10 動画を出典にした claim の confirmed は「動画の�
   });
   const v = (id: string, verdict: string, reason: string) => ({ claim_id: id, verdict, reason, opened_urls: [] as string[] });
 
-  it.each<[string, ReturnType<typeof v>, string[], string]>([
+  // 5 列目 = 取得記録の本文を入力に入れた出典（YouTube の出典は入れない。§Q-9.10 の構造の対策）
+  it.each<[string, ReturnType<typeof v>, string[], string, string[]?]>([
     ['動画だけの claim・記録で確認・記録あり', v('c2', 'confirmed', '動画の記録で確認: 1:20'), ['v1'], 'confirmed'],
     ['全角コロンも受ける', v('c2', 'confirmed', '動画の記録で確認：1:20'), ['v1'], 'confirmed'],
     ['動画だけの claim・watch ページで確認', v('c2', 'confirmed', '概要欄にそう書いてある'), ['v1'], 'unverified'],
-    ['動画だけの claim・制作時の取得記録で確認', v('c2', 'confirmed', '制作時の取得記録で確認: 概要欄'), ['v1'], 'unverified'],
+    ['動画だけの claim・制作時の取得記録で確認', v('c2', 'confirmed', '制作時の取得記録で確認: 概要欄'), ['v1'], 'unverified', ['s1']],
     ['動画だけの claim・記録で確認と書いたが記録なし', v('c2', 'confirmed', '動画の記録で確認: 1:20'), [], 'unverified'],
-    ['混ざる claim・他の出典で確認', v('c3', 'confirmed', 'wiki に書いてある'), [], 'confirmed'],
+    // 混ざる claim は YouTube でない出典か動画の記録でだけ確かめられる（検証係は YouTube を web_fetch で開けず、YouTube の取得記録も受け取らない）
+    ['混ざる claim・YouTube でない出典を web_fetch で開いて確認', v('c3', 'confirmed', 'wiki に書いてある'), [], 'confirmed'],
+    ['混ざる claim・制作時の取得記録で確認・YouTube でない出典の記録あり', v('c3', 'confirmed', '制作時の取得記録で確認: wiki の本文'), [], 'confirmed', ['s1']],
+    ['混ざる claim・制作時の取得記録で確認・根拠は YouTube の概要欄だけ（YouTube でない出典の記録なし）', v('c3', 'confirmed', '制作時の取得記録で確認: YouTube の概要欄'), [], 'unverified_capture', []],
     ['混ざる claim・記録で確認と書いたが記録なし', v('c3', 'confirmed', '動画の記録で確認: x'), ['v1'], 'unverified'],
     ['混ざる claim・記録で確認・記録あり', v('c3', 'confirmed', '動画の記録で確認: x'), ['v2'], 'confirmed'],
     ['YouTube を使わない claim', v('c1', 'confirmed', 'r'), [], 'confirmed'],
     ['confirmed 以外は変えない', v('c2', 'hypothesis', '概要欄'), [], 'hypothesis'],
-  ])('%s → %s', (_n, x, shown, want) => {
-    const [r] = enforceVideoConfirmations([x], claims, sources, vs, shown);
-    expect(r.verdict).toBe(want);
+  ])('%s → %s', (_n, x, shown, want, captured) => {
+    const [r] = enforceVideoConfirmations([x], claims, sources, vs, shown, captured ?? []);
+    expect(r.verdict).toBe(want.startsWith('unverified') ? 'unverified' : want);
     expect(r.reason.startsWith(VIDEO_DOWNGRADE_NOTE)).toBe(want === 'unverified');
+    expect(r.reason.startsWith(VIDEO_CAPTURE_DOWNGRADE_NOTE)).toBe(want === 'unverified_capture');
   });
 
   it('host の書き方（末尾の .・大文字・サブドメイン・youtu.be）でも YouTube の出典と見分ける。似た名前の別 host は見分けない', () => {
@@ -1038,4 +1053,276 @@ describe('§Q-4 env と wrangler.jsonc', () => {
     expect(w).toContain('"VIDEO_MONTHLY_CAP_CENTS": "1000"');
     expect(w).not.toMatch(/"GEMINI_API_KEY"\s*:/);
   });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Astra high R1（a1904b6 の REVISE）
+const CAP_USED = '（制作時の取得記録。web_fetch ツールが返した本文で、職人が書いたものではない）';
+const useEv = (id: string, url: string) => ({ type: 'agent.tool_use', id, name: 'web_fetch', input: { url } });
+const resEv = (id: string, text: string) => ({ type: 'agent.tool_result', tool_use_id: id, is_error: false, content: [{ type: 'text', text }] });
+const DESC = 'YouTube の概要欄: 信号は 15 ブロック進むと投稿者が書いている';
+
+describe('B1 検証係は YouTube の watch ページの本文を受け取らない（§Q-9.10 の構造の対策）', () => {
+  /** 同期の port（events は与えたもの） */
+  function evPort(events: unknown[], replies: Message[]) {
+    const seen: Params[] = [];
+    const port = {
+      isFake: true,
+      listEventsPage: async () => ({ data: events, next: null }),
+      createMessage: async (p: unknown) => {
+        seen.push(p as Params);
+        return replies[Math.min(seen.length - 1, replies.length - 1)];
+      },
+    } as unknown as FactoryPort;
+    return { port, seen };
+  }
+  const MIXED = [
+    { id: 'c1', source_ids: ['s1'] },
+    { id: 'c2', source_ids: ['s9'] },
+    { id: 'c3', source_ids: ['s1', 's10'] },
+  ];
+  const v3 = (c3: Obj) => [...verdicts(), { claim_id: 'c3', verdict: 'confirmed', reason: '制作時の取得記録で確認: YouTube の概要欄', opened_urls: [], ...c3 }];
+
+  it('取得記録を作る時に YouTube の出典は記録にせず（missing）、入力では「YouTube の出典。動画の記録で確かめる」の行だけ（本文なし）', async () => {
+    seed([video(), V2()], { claims: MIXED });
+    const events = [useEv('u1', watch(YT1)), resEv('u1', DESC), useEv('u2', URL_A), resEv('u2', 'wiki の本文'), useEv('u3', watch(YT2)), resEv('u3', DESC + '2')];
+    const { port, seen } = evPort(events, [reportMsg({ verdicts: v3({}) })]);
+    expect(await runVerificationStep(makeEnv(SYNC), port)).toBe('done');
+    const file = JSON.parse(String(r2.get(`${PREFIX}source-captures.json`))) as { captures: Array<{ source_id: string }>; missing: string[] };
+    expect(file.captures.map((c) => c.source_id)).toEqual(['s1']);
+    expect(file.missing).toEqual(['s9', 's10']);
+    const t = texts(seen[0]);
+    const i = t.indexOf('<source_captures>');
+    expect(t.slice(i, t.indexOf('</source_captures>') + 1)).toEqual([
+      '<source_captures>',
+      `## s1 ${URL_A}${CAP_USED}`,
+      'wiki の本文',
+      `## s9 ${watch(YT1)}${CAPTURE_YOUTUBE_MARK}`,
+      `## s10 ${watch(YT2)}${CAPTURE_YOUTUBE_MARK}`,
+      '</source_captures>',
+    ]);
+    expect(t.join('\n')).not.toContain('YouTube の概要欄: 信号は');
+    // 混ざる c3 は YouTube でない s1 の取得記録があるので「制作時の取得記録で確認:」のままでよい
+    expect(saved().verdicts.find((x) => x.claim_id === 'c3')!.verdict).toBe('confirmed');
+  });
+
+  it('保存済みの取得記録（変更前に作ったもの）に YouTube の本文があっても入力に入れない。動画が指す出典は url が YouTube でなくても同じ', () => {
+    const sourcesText = JSON.stringify({ sources: [{ id: 's1', url: URL_A }, { id: 's9', url: watch(YT1) }, { id: 's30', url: 'https://example.com/page' }] });
+    const odd = versionVideosOf(JSON.stringify({ parts: [{ id: 'p1', videos: [video({ source_id: 's30' })] }] }));
+    const file = {
+      v: 1 as const,
+      captures: [
+        { source_id: 's1', url: URL_A, chars: 4, text: 'wiki' },
+        { source_id: 's9', url: watch(YT1), chars: DESC.length, text: DESC },
+        { source_id: 's30', url: 'https://example.com/page', chars: DESC.length, text: DESC },
+      ],
+      missing: [],
+      truncated: [],
+    };
+    const r = captureSection(sourcesText, file, 1e9, youtubeSourceIdsOf(sourcesText, odd));
+    expect(r.blocks).toEqual([
+      '<source_captures>',
+      `## s1 ${URL_A}${CAP_USED}`,
+      'wiki',
+      `## s9 ${watch(YT1)}${CAPTURE_YOUTUBE_MARK}`,
+      `## s30 https://example.com/page${CAPTURE_YOUTUBE_MARK}`,
+      '</source_captures>',
+    ]);
+    expect(r.usedIds).toEqual(['s1']);
+    expect(r.stats).toEqual({ used: 1, missing: 2, truncated: 0 });
+  });
+
+  it('検証係の web_fetch の allowed_domains は職人の allowlist から YouTube を除いたもの（職人の allowlist には残す）', () => {
+    const tools = verifierTools(makeEnv()) as unknown as Array<{ name: string; allowed_domains?: string[] }>;
+    const wf = tools.find((x) => x.name === 'web_fetch')!;
+    expect(wf.allowed_domains).toEqual(VERIFIER_FETCH_DOMAINS);
+    expect(VERIFIER_FETCH_DOMAINS.some((d) => /youtu/i.test(d))).toBe(false);
+    expect(ALLOWLIST.domains).toContain('youtube.com');
+    expect(VERIFIER_FETCH_DOMAINS).toEqual(ALLOWLIST.domains.filter((d) => d !== 'youtube.com'));
+  });
+
+  it('同期: 混ざる claim を「制作時の取得記録で確認: YouTube の概要欄」で confirmed にしても、YouTube でない出典の記録が無ければ unverified', async () => {
+    seed([video(), V2()], { claims: MIXED });
+    const events = [useEv('u1', watch(YT2)), resEv('u1', DESC)];
+    const { port, seen } = evPort(events, [reportMsg({ verdicts: v3({}) })]);
+    expect(await runVerificationStep(makeEnv(SYNC), port)).toBe('done');
+    expect(texts(seen[0]).join('\n')).not.toContain(DESC);
+    const c3 = saved().verdicts.find((x) => x.claim_id === 'c3')!;
+    expect(c3.verdict).toBe('unverified');
+    expect(c3.reason).toBe(VIDEO_CAPTURE_DOWNGRADE_NOTE + '制作時の取得記録で確認: YouTube の概要欄');
+    // 送った params の web_fetch も YouTube を開けない
+    const wf = (seen[0] as unknown as { tools: Array<{ name: string; allowed_domains?: string[] }> }).tools.find((x) => x.name === 'web_fetch')!;
+    expect(wf.allowed_domains!.some((d) => /youtu/i.test(d))).toBe(false);
+  });
+
+  it('Batch: plan.json に取得記録を入れた出典（captured）を書き、回収はそこから読む', async () => {
+    seed([video(), V2()], { claims: MIXED });
+    const { port, s } = batchPort(reportMsg({ verdicts: v3({}) }));
+    const env = makeEnv();
+    await runVerificationStep(env, port, { deadline: Date.now() + 120_000 });
+    const key = verifyPlanKey('v1', String(ver().verification_token));
+    expect((JSON.parse(String(r2.get(key))) as Obj).captured).toEqual([]);
+    s.status = 'ended';
+    expect(await runVerificationStep(env, port, { deadline: Date.now() + 120_000 })).toContain('collect=done');
+    expect(saved().verdicts.find((x) => x.claim_id === 'c3')!.verdict).toBe('unverified');
+  });
+});
+
+describe('B2 probe の clip_accepted', () => {
+  it('true = HTTP 2xx・error_code なし・本文あり / false = 4xx / null = それ以外', () => {
+    expect(clipAcceptedOf(200, null, 'x')).toBe(true);
+    expect(clipAcceptedOf(200, null, '  ')).toBeNull();
+    expect(clipAcceptedOf(200, 'no_text', '')).toBeNull();
+    expect(clipAcceptedOf(200, 'not_completed', '')).toBeNull();
+    expect(clipAcceptedOf(400, 'bad_request', '')).toBe(false);
+    expect(clipAcceptedOf(403, 'auth', '')).toBe(false);
+    expect(clipAcceptedOf(500, 'server', '')).toBeNull();
+    expect(clipAcceptedOf(null, 'timeout', '')).toBeNull();
+  });
+
+  it('route: 2xx でも本文が無い・形の違い（no_text / not_completed）・5xx は null、本文が空の成功も null（error_code no_text）', async () => {
+    const e = { ...makeEnv() } as unknown as Env;
+    const c = (start: number) => {
+      const request = new Request('http://localhost/api/probe/video', { method: 'POST', body: JSON.stringify({ youtube_id: YT1, start_sec: start, end_sec: 185 }) });
+      return { env: e, request, url: new URL(request.url), email: 'x', exec: {} as ExecutionContext, port: async () => no() } as RouteCtx;
+    };
+    const port = (f: () => Promise<{ text: string; httpStatus: number }>): GeminiPort => ({ isFake: true, configured: true, model: 'm', watch: f });
+    const body = async (start: number, g: GeminiPort) => (await (await probeVideo(c(start), g)).json()) as Obj;
+    expect(await body(1, port(() => Promise.reject(new GeminiError(true, 200, 'no_text', true))))).toEqual({ status: 200, clip_accepted: null, usage_present: true, text_head: '', error_code: 'no_text' });
+    expect((await body(2, port(() => Promise.reject(new GeminiError(true, 200, 'not_completed', false))))).clip_accepted).toBeNull();
+    expect((await body(3, port(() => Promise.reject(new GeminiError(true, 500, 'server', false))))).clip_accepted).toBeNull();
+    expect(await body(4, port(async () => ({ text: '', httpStatus: 200 })))).toEqual({ status: 200, clip_accepted: null, usage_present: false, text_head: '', error_code: 'no_text' });
+    expect((await body(5, port(async () => ({ text: '- 1:20 信号', httpStatus: 200 })))).clip_accepted).toBe(true);
+  });
+
+  it('管理画面の #/videos に clip_accepted の意味（route と同じ文）を出す', () => {
+    const code = readFileSync(new URL('../public/admin/admin.js', import.meta.url), 'utf8');
+    const win: Record<string, unknown> = { __FACTORY_ADMIN_NO_BOOT__: true };
+    vm.runInNewContext(code, { window: win, console }, { timeout: 2000 });
+    const html = (win.FactoryAdminVideos as { videosAdminHtml(d: unknown): string }).videosAdminHtml({ enabled: false, configured: true, month_cents: 0, month_cap_cents: 1000, u_cents: 10, model: 'm' });
+    expect(PROBE_CLIP_ACCEPTED_LABEL).toBe('API が区間つきの要求を受けて本文を返したか（中身が区間どおりかは司令塔が text_head で判断）');
+    expect(html).toContain('data-video-probe-help="1"');
+    expect(html).toContain('<code>clip_accepted</code>: ' + PROBE_CLIP_ACCEPTED_LABEL + '。');
+  });
+});
+
+describe('NB 応答の読み方（寛容でも user・型なしの step、thought、completed でない応答は読まない）', () => {
+  it.each<[string, unknown]>([
+    ['user_input の step だけ', { status: 'completed', steps: [{ type: 'user_input', content: [{ type: 'text', text: 'u' }] }] }],
+    ['型の無い step', { status: 'completed', steps: [{ content: [{ type: 'text', text: 'x' }] }] }],
+    ['model_output の型の無い content', { status: 'completed', steps: [{ type: 'model_output', content: [{ text: 'x' }] }] }],
+    ['thought の part だけ', { status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'text', text: '考え中', thought: true }] }] }],
+    ['status が incomplete（output_text があっても）', { status: 'incomplete', output_text: 'a' }],
+    ['status が failed（candidates があっても）', { status: 'failed', candidates: [{ content: { parts: [{ text: 'c' }] } }] }],
+    ['candidates の finishReason が MAX_TOKENS', { candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: 'c' }] } }] }],
+    ['candidates の thought の part だけ', { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 't', thought: true }] } }] }],
+    ['outputs の thought だけ', { outputs: [{ type: 'thought', text: 't' }, { type: 'text', text: 'u', thought: true }] }],
+  ])('%s → null', (_n, body) => {
+    expect(extractInteractionText(body)).toBeNull();
+  });
+
+  it('thought の part は飛ばし、本文だけをつなぐ', () => {
+    expect(
+      extractInteractionText({
+        status: 'completed',
+        steps: [
+          { type: 'user_input', content: [{ type: 'text', text: 'prompt' }] },
+          { type: 'model_output', content: [{ type: 'text', text: '考え', thought: true }, { type: 'text', text: '- 1:20 信号' }] },
+        ],
+      }),
+    ).toBe('- 1:20 信号');
+    expect(extractInteractionText({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'x', thought: true }, { text: 'y' }] } }] })).toBe('y');
+  });
+
+  it('port: model_output が thought だけ → no_text', async () => {
+    const f = (async () => new Response(JSON.stringify({ status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'text', text: 't', thought: true }] }] }), { status: 200 })) as unknown as typeof fetch;
+    await expect(
+      geminiPort({ GEMINI_API_KEY: 'test-placeholder-key' } as unknown as Env, { fetchImpl: f }).watch({ youtubeId: YT1, startSec: 0, endSec: 10, prompt: 'p' }, { deadline: Date.now() + 10_000 }),
+    ).rejects.toMatchObject({ kind: 'no_text', status: 200 });
+  });
+});
+
+describe('NB cron の時間: 提出の段は締め切りの中で返る', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('予算は取得記録 45 秒・動画 60 秒（並行）。events も Gemini も返ってこなくても、45 + 60 秒で打ち切って提出する', async () => {
+    expect(CAPTURE_READ_MAX_MS).toBe(45_000);
+    expect(VIDEO_NOTES_MAX_MS).toBe(60_000);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.setSystemTime(new Date('2026-11-05T03:00:00.000Z'));
+    seed([video(), V2()]);
+    enable();
+    const t0 = Date.now();
+    const deadlines: number[] = [];
+    const hangG: GeminiPort = {
+      isFake: true,
+      configured: true,
+      model: 'm',
+      watch: (_r, o) => {
+        deadlines.push(o.deadline);
+        return new Promise<never>(() => {});
+      },
+    };
+    const { port, created } = batchPort();
+    (port as unknown as { listEventsPage: unknown }).listEventsPage = () => new Promise<never>(() => {});
+    let out: string | null = null;
+    const p = runVerificationStep(makeEnv(), port, { deadline: t0 + 14 * 60_000, gemini: hangG }).then((x) => (out = x));
+    for (let i = 0; i < 200 && out === null; i++) await vi.advanceTimersByTimeAsync(1_000);
+    await p;
+    expect(out).toContain('submit=submitted');
+    expect(created).toHaveLength(1);
+    expect(Date.now() - t0).toBeLessThanOrEqual(CAPTURE_READ_MAX_MS + VIDEO_NOTES_MAX_MS + 2_000);
+    expect(deadlines).toHaveLength(2);
+    for (const d of deadlines) expect(d - t0).toBeLessThanOrEqual(CAPTURE_READ_MAX_MS + VIDEO_NOTES_MAX_MS + 1_000);
+    // 呼んだが記録は返らなかった → missing（権利は使った）
+    expect(notesFile()).toEqual({ v: 1, notes: [], missing: ['v1', 'v2'] });
+  });
+});
+
+describe('テストの穴: port の締め切りと終わらない本文', () => {
+  const env = { GEMINI_API_KEY: 'test-placeholder-key' } as unknown as Env;
+  const REQ: GeminiWatchRequest = { youtubeId: YT1, startSec: 0, endSec: 10, prompt: 'p' };
+
+  it('fetch が返ってこない → port 自身の締め切りで timeout（応答不明）', async () => {
+    const waitAbort = ((_u: string, init: RequestInit) =>
+      new Promise((_, reject) => init.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))))) as unknown as typeof fetch;
+    const t = performance.now();
+    await expect(geminiPort(env, { fetchImpl: waitAbort }).watch(REQ, { deadline: Date.now() + 1_000 })).rejects.toMatchObject({ kind: 'timeout', responded: false });
+    expect(performance.now() - t).toBeLessThan(5_000);
+  }, 10_000);
+
+  it('本文が終わらずに流れ続ける → 1 MiB で読むのをやめて bad_response', async () => {
+    let pulls = 0;
+    const endless = (async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(c) {
+            pulls++;
+            // 上限（1 MiB = 16 chunk）を大きく超えても読み続ける実装なら、64 chunk（4 MiB）で流れを壊して速く落とす（テストを止めない）
+            if (pulls > 64) return c.error(new Error('read_too_far'));
+            c.enqueue(new Uint8Array(64 * 1024).fill(0x61));
+          },
+        }),
+        { status: 200 },
+      )) as unknown as typeof fetch;
+    await expect(geminiPort(env, { fetchImpl: endless }).watch(REQ, { deadline: Date.now() + 10_000 })).rejects.toMatchObject({ kind: 'bad_response', status: 200 });
+    expect(pulls).toBeLessThan(40);
+  }, 10_000);
+
+  it('本文が途中で止まって閉じない → 締め切りで timeout', async () => {
+    const stalled = (async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(new TextEncoder().encode('{"status":"comp'));
+          },
+        }),
+        { status: 200 },
+      )) as unknown as typeof fetch;
+    const t = performance.now();
+    await expect(geminiPort(env, { fetchImpl: stalled }).watch(REQ, { deadline: Date.now() + 1_000 })).rejects.toMatchObject({ kind: 'timeout', responded: false });
+    expect(performance.now() - t).toBeLessThan(5_000);
+  }, 10_000);
 });

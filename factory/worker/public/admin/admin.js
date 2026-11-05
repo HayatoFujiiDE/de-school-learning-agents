@@ -399,6 +399,8 @@
   }
 
   // ---- 画面: 動画の確認（Gemini。§Q-9.5）----
+  /** probe の clip_accepted の意味（src/routes/videos.ts の PROBE_CLIP_ACCEPTED_LABEL と同じ文） */
+  var PROBE_CLIP_ACCEPTED_LABEL = 'API が区間つきの要求を受けて本文を返したか（中身が区間どおりかは司令塔が text_head で判断）';
   /** 状況帯の 1 行。videos が無い応答（古い Worker）では何も出さない */
   function videosBandHtml(vi) {
     if (!vi || typeof vi !== 'object') return '';
@@ -421,7 +423,13 @@
         '<div class="row"><button type="button" class="btn primary" id="video-enable-btn"' + (enabled || !configured ? ' disabled' : '') + '>動画の確認を有効にする</button></div></div>' +
       '<div class="card"><h2>今月の動画の記帳</h2>' +
         '<p><b>' + cents(d && d.month_cents) + '</b> / ' + cents(d && d.month_cap_cents) + ' <span class="muted">（1 回 ' + cents(d && d.u_cents) + ' の取り置きで数えた記帳。Gemini の実際の請求とは違うことがあります）</span></p>' +
-        '<p class="muted">モデル ' + esc((d && d.model) || '—') + '</p></div>';
+        '<p class="muted">モデル ' + esc((d && d.model) || '—') + '</p></div>' +
+      '<div class="card" data-video-probe-help="1"><h2>probe（POST /api/probe/video）の見方</h2><ul>' +
+        '<li><code>status</code>: HTTP の status（応答が無ければ null）</li>' +
+        '<li><code>clip_accepted</code>: ' + esc(PROBE_CLIP_ACCEPTED_LABEL) + '。true = 受けて本文を返した / false = API が断った（4xx）/ null = それ以外（5xx・応答なし・形の違い）</li>' +
+        '<li><code>usage_present</code>: 応答に usage の数字があったか</li>' +
+        '<li><code>text_head</code>: Gemini の記録の先頭 300 字</li>' +
+        '<li><code>error_code</code>: 失敗の固定コード（成功は null）</li></ul></div>';
   }
   function viewVideos(view) {
     view.innerHTML = videosLoadingHtml();
