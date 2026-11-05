@@ -765,10 +765,10 @@ export async function loadVideoNotes(
           ...(outcome === 'ok' ? { text, ...(usage ? { usage } : {}) } : {}),
           at: nowIso(),
         };
-        // 1 呼び出し 1 ファイル・書き直さない（まだ無い時だけ）。null・例外 → この呼び出しの結果はこの試行に出さない
+        // 1 呼び出し 1 ファイル。key の n は D1 の取り置きで一意なので、書き手は 1 つだけ（条件なしの put。§Q-10 3）。null・例外 → この呼び出しの結果はこの試行に出さない
         let written = false;
         try {
-          written = (await env.R2.put(videoCallKey(v.r2_prefix, vid.id, n), JSON.stringify(record), { onlyIf: { etagDoesNotMatch: '*' } })) !== null;
+          written = (await env.R2.put(videoCallKey(v.r2_prefix, vid.id, n), JSON.stringify(record))) !== null;
         } catch {
           written = false;
         }

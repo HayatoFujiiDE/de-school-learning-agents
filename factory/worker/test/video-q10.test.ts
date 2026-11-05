@@ -51,6 +51,7 @@ const V2 = () => video({ id: 'v2', youtube_id: YT2, source_id: 's10', start_sec:
 let db: DatabaseSync;
 let r2: Map<string, string>;
 let puts: string[];
+let putOpts: unknown[];
 let gets: string[];
 let failPut: Set<string>;
 let nullPut: Set<string>;
@@ -90,6 +91,7 @@ function makeEnv(vars: Record<string, string> = {}): Env {
         if (failPut.has(k)) throw new Error('r2_down');
         if (nullPut.has(k)) return null;
         if (o?.onlyIf?.etagDoesNotMatch === '*' && r2.has(k)) return null;
+        putOpts.push(o);
         puts.push(k);
         r2.set(k, String(v));
         return { key: k };
@@ -260,6 +262,7 @@ beforeEach(() => {
   db = migratedDb();
   r2 = new Map();
   puts = [];
+  putOpts = [];
   gets = [];
   failPut = new Set();
   nullPut = new Set();
@@ -610,16 +613,14 @@ describe('§Q-10 13 記録の読み方（検証係の入力と review API は同
     expect(sleeps).toEqual([]);
   });
 
-  it('既にある記録（同じ key）は上書きしない（onlyIf etagDoesNotMatch "*" で null → not_seen）', async () => {
+  it('記録の put は条件なし（公式 docs に無い etag の wildcard に頼らない。書き手の一意性は D1 の取り置き §Q-10 3）', async () => {
     seed([video()]);
     enable();
-    // 形の違う記録（記録が無い扱い）が置いてある key に、n=1 の取り置きに勝った側が書こうとする
-    r2.set(callKey('v1', 1), 'not json');
     const g = scripted(['ok']);
     const f = await attempt(makeEnv(), g.port);
     expect(g.calls).toHaveLength(1);
-    expect(f.missing).toEqual(['v1']);
-    expect(r2.get(callKey('v1', 1))).toBe('not json');
+    expect(f.notes).toHaveLength(1);
+    expect(putOpts.filter((o) => o && 'onlyIf' in o)).toEqual([]);
   });
 });
 

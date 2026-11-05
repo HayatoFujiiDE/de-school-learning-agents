@@ -209,7 +209,7 @@
 
 1. **保証（有界）**: 版 × 動画ごとの Gemini の呼び出しは、生涯 `VIDEO_MAX_CALLS = 3` 回まで。1 回の検証の試行の中では 2 回まで。記帳は呼び出し 1 回ごとに U_video で、精算しない（行は消さない）。最悪の記帳は 1 動画あたり 3U（30¢）。月と日の上限は Q-9.1 の 1 文のまま、呼び出しごとに当てる。
 2. **呼び出しの権利の行**: n 回目の呼び出しの ref は、n = 1 なら `vv:{version_id}:{video_id}`（Q-9.1 と同じ。既存の行と互換）、n ≥ 2 なら `vv:{version_id}:{video_id}:r{n}`。n は D1 にある行（この 3 つの ref）の最大 + 1 で決め、**n > 3 なら取り置きを試みない**。取り置きは Q-9.1 の 1 文（`NOT EXISTS ref`）をそのまま使う。同時に 2 つの試行が同じ n を取ろうとしても、入れられるのは 1 つだけで、負けた側はその動画を呼ばない（この試行では not_seen）。
-3. **呼び出しの記録（1 呼び出し 1 ファイル・書き直さない）**: 取り置きに勝った側だけが、呼び出しの後に `{r2_prefix}video-calls/{video_id}/{n}.json` を作る。中身は `{"v":1,"video_id","n","model","model_role":"primary"|"fallback","outcome":"ok"|"retryable"|"final","error":<kind or null>,"text"?,"usage"?,"at"}`（text は ok の時だけ。8,000 文字で切る）。put は「まだ無い時だけ」の条件つき（`onlyIf: {etagDoesNotMatch: "*"}`）。n は取り置きで一意なので、正しく動いていれば競合しない。条件で書けなかった（R2 は null を返す）時と、put の例外の時は、その呼び出しの結果はこの試行に出さない（not_seen。呼び出しは記帳済み）。
+3. **呼び出しの記録（1 呼び出し 1 ファイル・書き直さない）**: 取り置きに勝った側だけが、呼び出しの後に `{r2_prefix}video-calls/{video_id}/{n}.json` を作る。中身は `{"v":1,"video_id","n","model","model_role":"primary"|"fallback","outcome":"ok"|"retryable"|"final","error":<kind or null>,"text"?,"usage"?,"at"}`（text は ok の時だけ。8,000 文字で切る）。put は条件なし（実装時の追記: Workers の R2 binding で `etagDoesNotMatch: "*"` を「まだ無い時だけ」に使えることは公式 docs に無いため、それに頼らない）。n は D1 の取り置きで一意なので、書き手は 1 つだけ。put が null を返した時と、put の例外の時は、その呼び出しの結果はこの試行に出さない（not_seen。呼び出しは記帳済み）。
 4. **動画の状態は記録から組み立てる**（毎試行・回収では行わない）: その動画の D1 の行（n = 1..3）と、R2 の呼び出しの記録を読み、次で決める。
    - ok の記録が 1 つでもある → note にする（n がいちばん小さい ok を採る）。以後は呼ばない。
    - final の記録がある → 呼ばない（not_seen）。
