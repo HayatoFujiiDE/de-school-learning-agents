@@ -1,0 +1,57 @@
+/* サポーター（docs/plans/supporter-view/contract-AD.md）: 帯・入力のしかた・サポーターの吹き出し・アイデアカード・作業台のアイデア枠・sup ルートの骨組み。
+   色は tokens.css の変数だけ。画面の中身の CSS は W2 が足す */
+
+/* ---------- 一緒に入っている間の帯（AD-5）: 通常の流れで .shell の上に 1 行 ---------- */
+.join-band{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;padding:6px 26px;background:var(--sand);color:var(--sand-ink);border-bottom:1px solid var(--line);font-size:12px;line-height:1.6}
+.join-band[hidden]{display:none}
+.join-band .jb-text{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;min-width:0}
+.join-band .jb-text strong{color:var(--ink);font-weight:700}
+.join-band .jb-text small{font-size:11px}
+.join-band .jb-ops{display:flex;gap:8px;flex-shrink:0}
+.join-band .btn.small{min-height:44px}
+html[data-mode="es"] .join-band .btn.small{min-height:48px}
+@media(max-width:700px){
+.join-band{flex-direction:column;align-items:stretch;padding:8px 14px;gap:6px}
+.join-band .jb-ops{justify-content:flex-end;flex-wrap:wrap}
+}
+
+/* ---------- 入力のしかた（AD-6） ---------- */
+.composer .segmented.stance{display:flex;flex-wrap:wrap;margin-bottom:10px;max-width:100%}
+.composer .segmented.stance button{min-height:44px;font-size:12px;flex:1 1 auto}
+.composer .segmented.stance button[aria-pressed="true"]{color:var(--ink);font-weight:600}
+html[data-mode="es"] .composer .segmented.stance button{min-height:48px}
+
+/* ---------- サポーターの吹き出し（3 人目） ---------- */
+.message.supporter .sup-avatar{width:30px;height:30px;border-radius:50%;background:var(--sand);color:var(--sand-ink);display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0;margin-top:2px}
+.message.supporter .sup-name{font-size:11px;color:var(--sand-ink);font-weight:600;line-height:1.4}
+.message.supporter .bubble{background:var(--sand);border:0}
+
+/* ---------- アイデアカード（AD-6）: 緑の薄い地 + 細い線 ---------- */
+.proposal-card.idea-card{background:var(--record-soft);border:1px solid var(--record)}
+.proposal-card.idea-card .pc-head{justify-content:space-between;color:var(--record)}
+.proposal-card.idea-card .idea-withdraw{min-height:44px;padding:0 4px}
+.proposal-card.idea-card:focus{outline:none}
+
+/* ---------- 作業台のアイデア枠（18-3）: 引用枠の場所に 読むだけ ---------- */
+.quote-frame.idea-frame{border-left-color:var(--record);background:var(--record-soft)}
+
+/* ---------- sup ルートのシェル（AD-4）: 下タブ帯は出さない ---------- */
+html.is-sup .tabbar{display:none}
+@media(max-width:700px){html.is-sup body{padding-bottom:0}}
+
+/* ---------- 骨組み（AD-7） ---------- */
+.sup-page{max-width:var(--page-max);margin:0 auto;min-width:0}
+.sup-page h1:focus{outline:none}
+.sup-head p{font-size:13px;color:var(--muted)}
+.sup-head-ops{flex-shrink:0}
+.sup-back{margin:0 0 4px}
+.sup-back .link-btn{min-height:44px;font-weight:600}
+.sup-tabs{display:flex;flex-wrap:wrap;max-width:100%;margin-bottom:20px}
+.sup-tabs a{display:inline-flex;align-items:center;min-height:44px;padding:7px 12px;border-radius:5px;font-size:12px;color:var(--muted);text-decoration:none}
+.sup-tabs a.active{background:var(--white);color:var(--ink);font-weight:600}
+.sup-page h2{font-size:15px}
+@media(max-width:700px){
+.sup-head{flex-direction:column;align-items:stretch}
+.sup-head p{font-size:12px}
+.sup-tabs a{flex:1 1 auto;justify-content:center;padding:7px 8px}
+}

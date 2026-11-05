@@ -25,7 +25,17 @@ for r in "$@"; do
       sw=$(printf '%s' "$hs" | awk '{print $2}'); iw=$(printf '%s' "$hs" | awk '{print $3}')
       if [ "$sw" -gt $((iw + 1)) ]; then hsr="OVER(${sw}>${iw})"; fail=1; else hsr="ok"; fi
     fi
-    printf '%-40s %4s  jserr=%s  forbidden=[%s]  hscroll=%s\n' "$r" "$W" "$errs" "$bad" "$hsr"
+    # サポーターのルート（contract-AD §18-11）: 取った DOM にそのルートの目印が無ければ FAIL（別のページへ落ちても通る、を防ぐ）
+    mark=""
+    case "$r" in
+      sup) grep -q 'data-sup-page="class"' "$TMP/dom.html" && mark="ok" || mark="MISSING(class)";;
+      sup/haruto) grep -q 'data-sup-page="kid:today"' "$TMP/dom.html" && mark="ok" || mark="MISSING(kid:today)";;
+      sup/haruto/in)
+        if grep -o '<[^>]*id="join-band"[^>]*>' "$TMP/dom.html" | grep -qv 'hidden' && grep -q 'class="message-list"' "$TMP/dom.html"; then mark="ok"; else mark="MISSING(join-band/message-list)"; fi;;
+      sup/haruto/*) tab="${r#sup/haruto/}"; grep -q "data-sup-page=\"kid:$tab\"" "$TMP/dom.html" && mark="ok" || mark="MISSING(kid:$tab)";;
+    esac
+    printf '%-40s %4s  jserr=%s  forbidden=[%s]  hscroll=%s%s\n' "$r" "$W" "$errs" "$bad" "$hsr" "${mark:+  mark=$mark}"
+    case "$mark" in MISSING*) fail=1;; esac
     [ "$errs" -gt 0 ] && fail=1
     [ -n "$bad" ] && fail=1
   done
@@ -50,6 +60,14 @@ case " $* " in *" trail"*)
   rv=$(grep -o 'TRAIL_TEST=[A-Z]*' "$TMP/trail-test.log")
   printf '%-40s %s\n' "trail-test" "${rv:-TRAIL_TEST=MISSING}"
   [ "$rv" = "TRAIL_TEST=PASS" ] || fail=1
+;; esac
+# サポーターの純関数テスト（contract-AD §AD-16 / 18-11）: sup で始まるルートを検査する時だけ。PASS の文字と終了コード 0 の両方を見る
+case " $* " in *" sup"*)
+  node "$(dirname "$0")/sup-test.js" > "$TMP/sup-test.log" 2>&1
+  src=$?
+  sv=$(grep -o 'SUP_TEST=[A-Z]*' "$TMP/sup-test.log")
+  printf '%-40s %s rc=%s\n' "sup-test" "${sv:-SUP_TEST=MISSING}" "$src"
+  { [ "$sv" = "SUP_TEST=PASS" ] && [ "$src" -eq 0 ]; } || fail=1
 ;; esac
 rm -rf "$TMP"
 printf 'CHECK_RESULT=%s\n' "$([ $fail -eq 0 ] && echo PASS || echo FAIL)"
