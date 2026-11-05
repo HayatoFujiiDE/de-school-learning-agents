@@ -1809,10 +1809,23 @@
     partial: 'チャンネル名が一部だけ一致しています。本人のチャンネルか確かめてください',
     mismatch: '職人が書いたチャンネル名と違います',
     not_found: '動画が見つかりません',
-    unknown: '公式の情報をまだ取れていません'
+    unknown: '公式の情報をまだ取れていません',
+    unknown_match: 'チャンネル名を照合できませんでした。本人のチャンネルか確かめてください'
   };
   /** リンクにしてよい author_url（Worker で確かめた形をもう一度: https://www.youtube.com/ の下だけ） */
-  var YT_AUTHOR_URL_RE = /^https:\/\/www\.youtube\.com\/(@[^\/?#\s]+|channel\/[A-Za-z0-9_-]+|c\/[^\/?#\s]+|user\/[^\/?#\s]+)$/;
+  var YT_AUTHOR_URL_RE = /^https:\/\/www\.youtube\.com\/(?:@([^\/?#\s]+)|channel\/[A-Za-z0-9_-]+|c\/([^\/?#\s]+)|user\/([^\/?#\s]+))$/;
+  /** 復号した後のハンドル・名前に入ってはいけない文字（制御文字・空白・/ \ ? # %。Worker の safeAuthorUrl と同じ規則） */
+  var YT_AUTHOR_SEGMENT_BAD_RE = /[\u0000-\u001F\u007F-\u009F\s\/\\?#%]/;
+  function safeAuthorHref(url) {
+    if (typeof url !== 'string') return false;
+    var m = YT_AUTHOR_URL_RE.exec(url);
+    if (!m) return false;
+    var seg = m[1] || m[2] || m[3];
+    if (seg === undefined) return true;
+    var decoded;
+    try { decoded = decodeURIComponent(seg); } catch (e) { return false; }
+    return !YT_AUTHOR_SEGMENT_BAD_RE.test(decoded);
+  }
   /** 確認画面の動画の欄の材料: notes = video_id → 記録（video_notes が無ければ null）、verdicts = id → 判定（検証が無ければ null、古い検証は 'old'） */
   function videoCtxOf(d) {
     var vn = d && d.video_notes;
@@ -1849,11 +1862,12 @@
     if (outcome === 'ok') {
       var name = typeof m.author_name === 'string' ? m.author_name : '';
       var url = typeof m.author_url === 'string' ? m.author_url : '';
-      var ch = url && YT_AUTHOR_URL_RE.test(url)
+      var ch = url && safeAuthorHref(url)
         ? '<a href="' + esc(url) + '" rel="noopener noreferrer" target="_blank" data-video-meta-link="1">' + esc(name) + '</a>'
         : esc(name);
       line = '<p data-video-meta="ok">YouTube の公式情報: ' + esc(typeof m.title === 'string' ? m.title : '') + ' / ' + ch + '</p>';
-      mark = m.channel_match === 'partial' || m.channel_match === 'mismatch' ? m.channel_match : '';
+      // 照合できなかった（正規化の後でどちらかの名前が空）時も印を出す
+      mark = m.channel_match === 'partial' || m.channel_match === 'mismatch' ? m.channel_match : m.channel_match === 'unknown' ? 'unknown_match' : '';
     }
     var markHtml = mark && vhas(VIDEO_META_MARK, mark)
       ? '<p class="' + (mark === 'unknown' ? 'muted' : 'err') + '" data-video-meta-mark="' + esc(mark) + '">' + esc(VIDEO_META_MARK[mark]) + '</p>'
