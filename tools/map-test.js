@@ -332,6 +332,18 @@ eq(MP.normalizeUi({ declinedNext: ['nx-lamp', 'nx-zz', 'nx-lamp'] }, null).decli
 eq(MP.normalizeUi({ pos: { made: { x: 1, y: 2, z: 9 }, fields: { x: 'a', y: 0, z: 1 } } }, null).pos, { made: null, fields: null }, 'normalizeUi 表示位置は 倍率 0.1〜2.0・数だけ');
 eq(MP.normalizeUi({ pos: { made: { x: 1, y: 2, z: 0.15 }, fields: { x: 0, y: 0, z: 0.05 } } }, null).pos, { made: { x: 1, y: 2, z: 0.15 }, fields: null }, 'normalizeUi 狭い枠で保存した 0.3 未満の倍率も保つ（床 0.1）');
 eq(MP.normalizeUi({ declined: ['p1'] }, null, { learned: [{ id: 'p1', src: 'person' }] }).declined, [], 'normalizeUi 人の言葉も外さない');
+// 表示位置の帳簿（再レビュー 2）: 作ったもので動かす → 200ms 以内に分野でも動かして保存に成功 → 作ったもので動かして保存に失敗 → 最後に保存できた位置（分野と一緒に書かれた位置）へ戻る
+var P0 = { made: { x: -100, y: -50, z: 0.6 }, fields: null };
+var led = MP.posSettle(null, P0, true).ok;
+eq(led, P0, 'posSettle 始まり = いまの保存値');
+var cur1 = { made: { x: -400, y: -120, z: 0.8 }, fields: { x: -30, y: -20, z: 0.5 } };
+var s1p = MP.posSettle(led, cur1, true);
+eq(s1p.ok, cur1, 'posSettle 保存に成功 → 全部の見方のいまの位置が「保存できた位置」（別の見方の保存で一緒に書かれた位置も）');
+var cur2 = { made: { x: -900, y: -300, z: 1.2 }, fields: { x: -30, y: -20, z: 0.5 } };
+var f1 = MP.posSettle(s1p.ok, cur2, false);
+eq([f1.cur.made, f1.cur.fields, f1.ok], [{ x: -400, y: -120, z: 0.8 }, { x: -30, y: -20, z: 0.5 }, s1p.ok], 'posSettle 保存に失敗 → 最後に保存できた位置へ戻す（古い位置へは戻らない）');
+eq(MP.posSettle({ made: 'x', fields: 3 }, null, false), { ok: { made: null, fields: null }, cur: { made: null, fields: null } }, 'posSettle 壊れた値は null');
+ok(MP.posSettle(led, cur1, true).ok.made !== cur1.made, 'posSettle 写しを返す（いまの位置を後で書き換えても帳簿は変わらない）');
 // いま効いている選択: グラフに無い id（保存値が古い）は選択なし（全部を薄くしない）
 eq([MP.selIn({ sel: { made: 'act:missing' } }, g, 'made'), MP.selIn({ sel: { made: 'act:act-py' } }, g, 'made'), MP.selIn({ sel: { fields: 'ln:ln-area' } }, g, 'fields'), MP.selIn(null, g, 'made')],
   [null, 'act:act-py', null, null], 'selIn グラフに無い・その見方に無い選択は「選択なし」');

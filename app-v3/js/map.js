@@ -352,6 +352,17 @@
     cur.sel[viewOk(view)] = typeof selBefore === 'string' ? selBefore : 'next:' + nextId;
     return cur;
   }
+  // 表示位置の帳簿（§AB-13 / AB-17）: ok = 見方ごとの「最後に保存できた位置」、cur = いまの位置。保存は des3.mapUi 全体を書くので、
+  // 成功したら全部の見方のいまの位置が「保存できた位置」になり、失敗したら全部の見方を保存できた位置へ戻す
+  function posSettle(ok, cur, saved) {
+    var out = { ok: { made: null, fields: null }, cur: { made: null, fields: null } };
+    ['made', 'fields'].forEach(function (v) {
+      var a = isObj(ok) && isObj(ok[v]) ? ok[v] : null, b = isObj(cur) && isObj(cur[v]) ? cur[v] : null, keep = saved ? b : a;
+      out.ok[v] = keep ? clone(keep) : null;
+      out.cur[v] = keep ? clone(keep) : null;
+    });
+    return out;
+  }
   // 単元につながる 学んだこと + 作ったもの（単元の詳細の「作ったものとのつながり」）
   function unitLinks(g, code) {
     var out = [];
@@ -366,7 +377,7 @@
   var pure = {
     progress: progress, overall: overall, isBlank: isBlank, lastDate: lastDate, dayNum: dayNum, graph: graph, related: related, peers: peers,
     viewNodes: viewNodes, edgesIn: edgesIn, defaultUi: defaultUi, normalizeUi: normalizeUi, selIn: selIn, select: select, deselect: deselect,
-    decline: decline, undecline: undecline, declineNext: declineNext, undeclineNext: undeclineNext, unitLinks: unitLinks, nodeById: nodeById, hasNode: hasNode
+    decline: decline, undecline: undecline, declineNext: declineNext, undeclineNext: undeclineNext, unitLinks: unitLinks, nodeById: nodeById, hasNode: hasNode, posSettle: posSettle
   };
   Object.keys(pure).forEach(function (k) { MP[k] = pure[k]; });
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
@@ -820,26 +831,26 @@
     if (frame.getAttribute('data-lod') !== lod) frame.setAttribute('data-lod', lod);
     thinLabels(page, v.z);
   }
-  // 表示位置の保存（動かし終わりから 200ms 後に 1 回）。失敗したら他の操作と同じく save_fail + 画面の状態（位置・倍率）を保存済みの値へ戻す
+  // 表示位置の保存（動かし終わりから 200ms 後に 1 回）。失敗したら他の操作と同じく save_fail + 画面の状態（位置・倍率）を保存済みの値へ戻す。
+  // 「最後に保存できた位置」は見方ごとに posSettle で持つ（別の見方の保存で一緒に書かれた位置も、保存できた位置になる）
   var posT = null;
   function savePos(view, v) {
     var u = mapUi(), m = ui();
     if (!u.pos) u.pos = { made: null, fields: null };
-    if (!m.posOk) m.posOk = {};
-    if (!(view in m.posOk)) m.posOk[view] = clone(u.pos[view] || null);
+    if (!m.posOk) m.posOk = posSettle(null, u.pos, true).ok;
     u.pos[view] = { x: Math.round(v.x * 10) / 10, y: Math.round(v.y * 10) / 10, z: r4(v.z) };
     clearTimeout(posT);
     posT = setTimeout(function () {
-      if (DES.store.save('mapUi')) {
-        m.posOk[view] = clone(mapUi().pos[view]);
+      var saved = DES.store.save('mapUi'), r = posSettle(m.posOk, mapUi().pos, saved);
+      m.posOk = r.ok;
+      if (saved) {
         if (S().saveFailed) { S().saveFailed = false; DES.app.renderSaveState(); }
         return;
       }
-      var prev = m.posOk[view];
-      mapUi().pos[view] = clone(prev);
+      mapUi().pos = r.cur;
       S().saveFailed = true;
       DES.app.renderSaveState();
-      var page = document.querySelector('.map-page.is-map[data-view="' + view + '"]');
+      var page = document.querySelector('.map-page.is-map'), pv = page && page.getAttribute('data-view'), prev = pv ? r.cur[pv] : null;
       if (page && page._L) {
         var s = frameSize(page.querySelector('.mp-frame'));
         applyView(page, prev ? MPC.clampView(prev, page._L.bounds, s.w, s.h, null, minOf(page)) : fitView(page), false);
@@ -889,6 +900,11 @@
     savePos(page.getAttribute('data-view'), page._v);
   }
   function unwatch() { var u = ui(); if (u.ro) { u.ro.disconnect(); u.ro = null; } }
+  // 地図を作り直す・ページを離れる前に、動かし方の受け口（window のリスナー・押している最中の状態）を外す
+  function detachMap(root) {
+    var p = root && root.querySelector ? root.querySelector('.map-page.is-map') : null;
+    if (p && p._detach) { p._detach(); p._detach = null; }
+  }
   function mountMap(page, view, keepV) {
     var frame = page.querySelector('.mp-frame'), L = page._L;
     sizeFrame(frame);
@@ -906,7 +922,7 @@
       }
     };
     page._api = api;
-    MPC.attach(frame, api);
+    page._detach = MPC.attach(frame, api).destroy;
     // Tab でたどったノードは枠の中へ
     frame.addEventListener('focusin', function (e) {
       var n = e.target && e.target.closest ? e.target.closest('.mp-n') : null;
@@ -1100,6 +1116,7 @@
     if (!page || page._key !== key) {
       var keepV = page && page._v ? page._v : null;
       unwatch();
+      detachMap(main);
       main.textContent = '';
       if (view === 'list') page = buildList(g);
       else {
@@ -1148,6 +1165,7 @@
     sec0.push(H('p', { class: 'mp-scope' }, T('mp_scope_note')));
     kids.push(H('section', { class: 'mp-basics', 'aria-labelledby': 'mp-prog-h' }, sec0));
     unwatch();
+    detachMap(main);
     main.textContent = '';
     main.appendChild(H('div', { class: 'map-page', 'data-view': 'basics' }, kids));
   }
@@ -1169,6 +1187,7 @@
     }))] : [H('p', { class: 'mp-none' }, T('mp_links_none'))];
     var backLabel = from ? T('mp_view_' + from) : T('mp_tab_basics');
     unwatch();
+    detachMap(main);
     main.textContent = '';
     main.appendChild(H('div', { class: 'map-page mp-unit', 'data-view': 'unit', 'data-unit': u.code }, [
       H('p', { class: 'mp-back' }, [H('a', { class: 'link-btn', href: from ? viewHash(from) : '#map/basics', 'aria-label': from ? T('mp_back_to', { view: backLabel }) : T('mp_back_basics') }, [H('span', { 'aria-hidden': 'true' }, '←'), H('span', null, backLabel)])]),
@@ -1247,7 +1266,7 @@
   MP.resetUi = function () {
     var u = ui();
     u.shown = null; u.missing = null; u.selCard = null;
-    if (DES.app.route() !== 'map') { u.lastUnit = null; u.unitFrom = null; }
+    if (DES.app.route() !== 'map') { u.lastUnit = null; u.unitFrom = null; detachMap(document.getElementById('main')); }
     unwatch();
   };
 
@@ -1264,7 +1283,7 @@
       return false;
     }
     S().saveFailed = false;
-    ui().posOk = { made: clone(next.pos ? next.pos.made : null), fields: clone(next.pos ? next.pos.fields : null) };
+    ui().posOk = posSettle(null, next.pos, true).ok;
     return true;
   }
   function setUi(next, o) { if (!saveUi(next)) return false; DES.app.commit(o || {}); return true; }
