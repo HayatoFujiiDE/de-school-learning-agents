@@ -43,7 +43,7 @@ html[data-mode="es"] .mp-views .segmented button{min-height:48px}
 
 /* ---------- 地図（§AB-2）: 枠の中だけが動く。ページは横スクロールしない・枠の上のピンチでブラウザ全体を拡大させない ---------- */
 .map-page.is-map{display:flex;flex-direction:column}
-.mp-frame{position:relative;overflow:hidden;height:520px;min-height:420px;border:1px solid var(--line);border-radius:16px;background:var(--white);touch-action:none;
+.mp-frame{position:relative;overflow:hidden;overflow:clip;height:520px;min-height:420px;border:1px solid var(--line);border-radius:16px;background:var(--white);touch-action:none;
   user-select:none;-webkit-user-select:none;cursor:grab;--inv:1}
 .mp-frame.is-dragging{cursor:grabbing}
 .mp-frame:focus-visible{outline:3px solid #a9590b;outline-offset:2px}

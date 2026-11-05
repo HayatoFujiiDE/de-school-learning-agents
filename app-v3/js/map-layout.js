@@ -204,11 +204,14 @@
 
   // ---------- 作ったものから（§AB-4） ----------
   function layoutMade(g) {
-    var made = g.nodes.made, learned = g.nodes.learned, units = g.nodes.units.filter(function (u) { return u.made.length > 0; });
+    // 学んだことのある作ったものだけで並べて詰め、学んだことの記録が無いもの（今日作り始めた活動・活動の無い作品）は最後に端へ置く
+    // （作り始めても、他の並びが動かない）
+    var made = g.nodes.made.filter(function (m) { return m.learned.length > 0; }), loose = g.nodes.made.filter(function (m) { return !m.learned.length; });
+    var learned = g.nodes.learned, units = g.nodes.units.filter(function (u) { return u.made.length > 0; });
     var unitIds = {}, nodes = {}, placed = [], sizes = {};
     units.forEach(function (u) { unitIds[u.id] = true; });
     var nexts = g.nodes.next;
-    made.concat(learned, units, nexts).forEach(function (n) { sizes[n.id] = MPL.size(n, 'made'); });
+    g.nodes.made.concat(learned, units, nexts).forEach(function (n) { sizes[n.id] = MPL.size(n, 'made'); });
     function put(id, b) { var bb = { id: id, x: b.x, y: b.y, w: b.w, h: b.h }; nodes[id] = bb; placed.push(bb); return bb; }
 
     // 1) 作ったもの: 同じ単元（重み 1）・学ぶ順 / 教科をまたぐ でつながる単元（0.5）が多いものどうしを近くに。まわりに学んだことの場所を空けて置く
@@ -292,7 +295,27 @@
     push(items, cx, cy, GAP + 2, 400);
     var fin2 = items.map(function (b, k) { return { id: b.id, x: cx[k] - b.w / 2, y: cy[k] - b.h / 2, w: b.w, h: b.h }; });
     if (!anyHit(fin2, GAP)) { nodes = {}; fin2.forEach(function (b) { nodes[b.id] = b; }); }
+
+    // 6) 学んだことの記録が無い作ったもの: 地図の上の端に横へ並べる（作ったものどうしの間合いを取る）
+    var list = Object.keys(nodes).map(function (id) { return nodes[id]; }), top = Infinity, mid = 0, madeBoxes = made.map(function (m) { return nodes[m.id]; }).filter(Boolean);
+    list.forEach(function (b) { top = Math.min(top, b.y); mid += (b.x + b.w / 2) / list.length; });
+    if (!list.length) top = 0;
+    loose.forEach(function (m) {
+      var s = sizes[m.id];
+      var b = place(s.w, s.h, mid, top - s.h / 2 - 2 * GAP, list, GAP, function (c) { return hubOk(c, madeBoxes); }, 4);
+      nodes[m.id] = { id: m.id, x: b.x, y: b.y, w: b.w, h: b.h };
+      list.push(nodes[m.id]);
+      madeBoxes.push(nodes[m.id]);
+    });
     return finish(nodes, []);
+  }
+  // 作ったものどうしの間合い（far で逆に拡大した題が重ならない）
+  function hubOk(b, others) {
+    for (var i = 0; i < others.length; i++) {
+      var o = others[i];
+      if (Math.abs((b.x + b.w / 2) - (o.x + o.w / 2)) < (b.w + o.w) / 2 + GAP + HUB.x && Math.abs((b.y + b.h / 2) - (o.y + o.h / 2)) < (b.h + o.h) / 2 + GAP + HUB.y) return false;
+    }
+    return true;
   }
 
   // ---------- 分野で見る（§AB-5） ----------
@@ -358,11 +381,7 @@
     function labelOk(b) {
       var F = { x: b.x + b.w / 2 - LABEL.w / 2, y: b.y + LABEL.top, w: LABEL.w, h: LABEL.h };
       for (var i = 0; i < names.length; i++) if (hit(F, names[i], 0)) return false;
-      for (i = 0; i < madeBoxes.length; i++) {
-        var o = madeBoxes[i];
-        if (Math.abs((b.x + b.w / 2) - (o.x + o.w / 2)) < (b.w + o.w) / 2 + GAP + HUB.x && Math.abs((b.y + b.h / 2) - (o.y + o.h / 2)) < (b.h + o.h) / 2 + GAP + HUB.y) return false;
-      }
-      return true;
+      return hubOk(b, madeBoxes);
     }
     function putNear(nd, codes, isMade) {
       var c = centroid(codes.map(function (code) { return nodes['unit:' + code] ? center(nodes['unit:' + code]) : null; }).filter(Boolean));
