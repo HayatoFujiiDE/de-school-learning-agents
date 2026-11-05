@@ -243,3 +243,9 @@ html[data-mode="es"] .sx-group-h,html[data-mode="es"] .sx-sub-h{font-size:11px}
 html[data-mode="es"] .sx-sublinks .link-btn,html[data-mode="es"] .sx-away-ops .link-btn,html[data-mode="es"] .sx-see,html[data-mode="es"] .sx-log li,html[data-mode="es"] .sx-fold .link-btn,html[data-mode="es"] .sx-away>.link-btn{font-size:12px}
 html[data-mode="es"] .self-page .btn.small,html[data-mode="es"] .self-sheet .btn.small,html[data-mode="es"] .self-page .link-btn,html[data-mode="es"] .srow-main,html[data-mode="es"] .sx-rnote{min-height:48px}
 html[data-mode="es"] .kidea-ops .sx-more,html[data-mode="es"] .sx-color{width:48px;height:48px}
+/* 作るの「自分を助ける道具」との紐づけ（contract-Y §Y-5）: 操作が増えても 390 で折り返す */
+.kidea-ops{flex-wrap:wrap}
+.kidea-hint{font-size:12px;color:var(--muted);line-height:1.6}
+.kidea-link{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
+.kidea-link .link-btn{min-height:44px;padding:0 6px;font-size:12px}
+.kfit-body .kidea-link{margin-top:2px}

@@ -429,6 +429,17 @@ window.DES = window.DES || {};
     st.kufu.scenes.forEach(function (s) { if (!s.gone) out.push({ id: s.id, own: true, data: s }); });
     return out;
   }
+  // 作るの「自分を助ける道具」との紐づけ（contract-Y §Y-5 / Y-8）: DES.state の活動・作品を読むだけ（ここから書き込まない）。
+  // linkId = 工夫の id か 'scene:' + 場面 id。label: 作品あり → saved_work / 作業中 → making / それ以外 → made_tool
+  function makeLink(linkId) {
+    var S = DS().state || {}, acts = S.activities || [], works = S.works || [], a = null, w = null, i;
+    for (i = 0; i < acts.length; i++) if (acts[i] && acts[i].selfLink === linkId) { a = acts[i]; break; }
+    if (!a) return null;
+    for (i = 0; i < works.length; i++) if (works[i] && works[i].actId === a.id) { w = works[i]; break; }
+    return { act: a, work: w, label: w ? 'saved_work' : (a.state === 'working' ? 'making' : 'made_tool') };
+  }
+  // 紐づけの対象はデータの kind 'tool' の工夫だけ（本人が足した工夫は対象外）
+  function isMakeIdea(x) { return !!x && !x.own && x.kind === 'tool'; }
 
   // 編集欄のキー → 持ち主の行・元の文・閉じたあとのフォーカス先
   function editorInfo(key) {
@@ -768,6 +779,8 @@ window.DES = window.DES || {};
     }
     if (adjusted || x.own) head.push(srcChip('own'));
     var kids = [H('div', { class: 'kidea-head' }, head), H('p', { class: 'kidea-text' }, ideaText(x.id))];
+    var link = isMakeIdea(x) ? makeLink(x.id) : null;
+    if (link) kids.push(makeLinkRow(link, x.id));
     if (s.status === 'trying' && s.note && !open) kids.push(H('p', { class: 'kidea-res' }, [srcChip('own'), H('span', { class: 'sx-btext' }, s.note)]));
     if (s.status === 'result' && s.result === 'meh') {
       kids.push(H('p', { class: 'kidea-res' }, [H('span', { class: 'chip' }, KX('r_meh')), s.note ? H('span', { class: 'sx-btext' }, s.note) : null]));
@@ -779,8 +792,13 @@ window.DES = window.DES || {};
         ? btn(KX('how_was'), 'sx-howwas', x.id, { fk: 'howwas:' + x.id, expanded: open })
         : btn(KX('try_btn'), 'sx-try', x.id, { fk: 'ktry:' + x.id });
       var title = ideaText(x.id);
+      // 作るで作る（紐づく活動が無い時だけ）/ 作品があり idle の時は「試してみる」の隣に hint（Y-8 の 7）
+      var hint = link && link.work && s.status === 'idle' ? H('span', { class: 'kidea-hint' }, KX('saved_hint')) : null;
+      var makeB = isMakeIdea(x) && !link ? btn(KX('make_btn'), 'sx-kmake', x.id, { kls: 'ghost', fk: 'kmake:' + x.id, icon: icon('make') }) : null;
       kids.push(H('div', { class: 'kidea-ops' }, [
         main,
+        hint,
+        makeB,
         H('button', { type: 'button', class: 'icon-btn sx-more', 'data-action': 'sx-kmenu', 'data-id': x.id, 'data-fk': 'kmore:' + x.id, 'aria-expanded': menu ? 'true' : 'false', 'aria-label': DS().t('row_ops', { title: title.slice(0, 20) }) }, [icon('more')])
       ]));
       if (open) {
@@ -803,6 +821,15 @@ window.DES = window.DES || {};
     return H('li', { class: 'kidea' + (x.own || adjusted ? ' f-own' : '') + (ui.flash === 'idea:' + x.id ? ' sx-enter' : ''), 'data-idea': x.id }, kids);
   }
 
+  // 紐づけの表示: --record の小チップ + 作業台を開く（DES.make.openAct）
+  function makeLinkRow(link, key) {
+    return H('div', { class: 'kidea-link' }, [
+      // 出所名の aria-label（srcChip と同じ考え方。文言は making / made_tool / saved_work）
+      H('span', { class: 'chip src-record sx-make-chip', 'aria-label': KX(link.label) }, [icon('make'), H('span', null, KX(link.label))]),
+      linkBtn(KX('open_bench'), 'sx-kbench', link.act.id, { fk: 'kbench:' + key })
+    ]);
+  }
+
   function sceneEl(sc) {
     var ek = ui.edit && ui.edit.key, d = sc.data, left = [], right = [];
     var sKey = 'scene:' + sc.id;
@@ -817,6 +844,9 @@ window.DES = window.DES || {};
     }
     if (d.basis) left.push(basisBlock(TX('basis'), d.basis));
     right.push(H('p', { class: 'ks-buddy' }, [bud(18, 'neutral'), H('span', null, sc.own ? KX('new_scene_buddy') : ST(d.buddy))]));
+    // 本人の場面の紐づけ（Y-8 の 6）: チップ + 作業台を開く だけ（試してみる・hint は出さない）
+    var sLink = sc.own ? makeLink('scene:' + sc.id) : null;
+    if (sLink) right.push(makeLinkRow(sLink, 'scene:' + sc.id));
     var list = ideasOfScene(sc.id), shown = [], away = [];
     list.forEach(function (x) {
       var s = ideaState(x.id);
@@ -825,8 +855,9 @@ window.DES = window.DES || {};
     });
     if (shown.length) right.push(H('ul', { class: 'kidea-list' }, shown.map(function (x) { return ideaRow(x, sc); })));
     if (sc.own && !list.length) {
-      right.push(H('div', { class: 'sx-react ks-kinds' }, ['ai', 'env', 'tool'].map(function (k) {
-        return btn(ST(SD().kufu.kinds[k]), 'sx-kprefill', sc.id, { arg: k, icon: KIND_ICON[k]() });
+      // 道具を作る は作るの tool の作業台へ（Y-5）。紐づく活動があれば出さない（チップ + 作業台を開く で開く）
+      right.push(H('div', { class: 'sx-react ks-kinds' }, (sLink ? ['ai', 'env'] : ['ai', 'env', 'tool']).map(function (k) {
+        return btn(ST(SD().kufu.kinds[k]), k === 'tool' ? 'sx-kscene-make' : 'sx-kprefill', sc.id, { arg: k, icon: KIND_ICON[k]() });
       })));
     }
     var iKey = 'idea:' + sc.id;
@@ -860,6 +891,7 @@ window.DES = window.DES || {};
             ek === 'oidea:' + x.id ? editorEl(ek) : H('p', { class: 'kfit-text' }, [ideaText(x.id), H('span', { class: 'kfit-meta' }, ' · ' + sceneName(sc.id) + (s.at ? ' · ' + md(s.at) : ''))]),
             seedNote ? H('p', { class: 'kfit-note' }, [srcChip(seedNote.src), H('span', null, seedNote.text)]) : null,
             !seedNote && s.note ? H('p', { class: 'kfit-note' }, [srcChip('own'), H('span', null, s.note)]) : null,
+            isMakeIdea(x) && makeLink(x.id) ? makeLinkRow(makeLink(x.id), x.id) : null,
             x.own && ek !== 'oidea:' + x.id ? H('div', { class: 'sx-react' }, [
               btn(TX('edit'), 'sx-edit', 'oidea:' + x.id, { kls: 'ghost', fk: 'fedit:' + x.id }),
               btn(TX('remove'), 'sx-kdel', x.id, { kls: 'ghost', fk: 'fdel:' + x.id })
@@ -1192,6 +1224,29 @@ window.DES = window.DES || {};
     var sid = aid(el), kind = el.getAttribute('data-arg'), kufu = SD().kufu;
     if (!kufu.prefill[kind]) return;
     toTalk(fmt(kufu.prefill[kind], { scene: sceneText(sid) }));
+  };
+  // 作るで作る（contract-Y §Y-5 / Y-8 の 5）: データの tool の工夫 → 作るの tool の作業台（同じ紐づけがあればそれを開く）。
+  // 引用の出所は、本人が工夫を直していなければ buddy、直していれば own
+  A['sx-kmake'] = function (el) {
+    var id = aid(el), d = dataIdea(id), M = DS().make;
+    if (!d || d.idea.kind !== 'tool' || !M || !M.openFromSelf) return;
+    closeTransient();
+    var e = st.kufu.ideas[id];
+    M.openFromSelf({ linkId: id, text: ideaText(id), variant: d.idea.variant || 'memo', src: e && e.text ? 'own' : 'buddy' });
+  };
+  // 本人が書いた場面の「道具を作る」: 場面の文を引用にして tool の作業台（本人の言葉）
+  A['sx-kscene-make'] = function (el) {
+    var sid = aid(el), o = ownScene(sid), M = DS().make;
+    if (!o || o.gone || !M || !M.openFromSelf) return;
+    closeTransient();
+    M.openFromSelf({ linkId: 'scene:' + sid, text: o.text, variant: 'memo', src: 'own' });
+  };
+  // 作業台を開く（紐づく活動。止めていれば作る側で再開）
+  A['sx-kbench'] = function (el) {
+    var M = DS().make;
+    if (!M || !M.openAct) return;
+    closeTransient();
+    M.openAct(aid(el));
   };
   A['sx-kdel'] = function (el) {
     var id = aid(el), o = findBy(st.kufu.own, id);
