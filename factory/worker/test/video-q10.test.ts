@@ -969,3 +969,150 @@ describe('§Q-10 7・10 予備のモデル', () => {
     expect(w).toContain('"GEMINI_VIDEO_FALLBACK_MODEL": "gemini-3.8-flash"');
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// §Q-10 1・6 試行の中の回数は、本物の呼び出し元（runSyncStep・lease → submitOne）が渡す verification_token で数える
+describe('§Q-10 1・6 試行の識別子（本物の呼び出し元の token）', () => {
+  const tokenNow = () => (one(db, "SELECT verification_token FROM material_versions WHERE id = 'v1'").verification_token ?? null) as string | null;
+  const rowNow = () => one(db, "SELECT verification_status, verify_phase, verification_token, verification_attempts FROM material_versions WHERE id = 'v1'");
+  const callAttempts = () => callKeys().map((k) => (JSON.parse(String(r2.get(k))) as Obj).attempt);
+  const myRows = () => vvRows().filter((r) => r.startsWith('vv:v1:'));
+  /** 今月の動画の枠を 985¢ 使った状態にする（n=1 の 10¢ は入り、n=2 は 1005¢ > 1000¢ で入らない） */
+  const holdMonthCap = () =>
+    db.prepare("INSERT INTO cost_ledger (id, day, kind, ref_id, cents, created_at) VALUES ('cap', ?, 'verify', 'vv:other:v1', 985, ?)").run(tokyoDay(), T0);
+  const releaseMonthCap = () => db.prepare("DELETE FROM cost_ledger WHERE id = 'cap'").run();
+
+  it('同期（runSyncStep）: 試行 A は 1 回（n=2 は上限で入らない）→ 検証係の API の失敗で pending・token NULL → 次の lease の試行 B は自分の token で 2 回（n=2・n=3）。生涯 3 回まで', async () => {
+    seed([video()]);
+    enable();
+    holdMonthCap();
+    const env = makeEnv(SYNC);
+    const g = scripted(['server']);
+    const leased: Array<string | null> = [];
+    const port = {
+      isFake: true,
+      listEventsPage: async () => ({ data: [], next: null }),
+      createMessage: async () => {
+        // 検証係の呼び出しの時点の lease の token（試行の識別子）
+        leased.push(tokenNow());
+        if (leased.length === 1) throw new Error('api_down');
+        return reportMsg([]);
+      },
+    } as unknown as FactoryPort;
+
+    // 試行 A: n=1 が 503 → 20 秒待ち → n=2 は月の上限で取り置けない → 検証係の API が失敗 → pending（token NULL）
+    expect(await runVerificationStep(env, port, { gemini: g.port, videoSleep: fakeSleep })).toMatch(/^retry:/);
+    expect(g.calls).toHaveLength(1);
+    expect(rowNow()).toMatchObject({ verification_status: 'pending', verification_token: null, verification_attempts: 1 });
+    const A = leased[0];
+    expect(typeof A).toBe('string');
+    expect(callAttempts()).toEqual([A]);
+    releaseMonthCap();
+
+    // 試行 B: 新しい token。A の 1 回は数えず、B の中で 2 回（n=2・n=3）
+    expect(await runVerificationStep(env, port, { gemini: g.port, videoSleep: fakeSleep })).toBe('done');
+    const B = leased[1];
+    expect(typeof B).toBe('string');
+    expect(B).not.toBe(A);
+    expect(g.calls).toHaveLength(3);
+    expect(callAttempts()).toEqual([A, B, B]);
+    expect(callRecord('v1', 3)).toMatchObject({ n: 3, outcome: 'retryable', attempt: B });
+    expect(myRows()).toEqual(['vv:v1:v1', 'vv:v1:v1:r2', 'vv:v1:v1:r3']);
+
+    // 試行 C: 生涯 3 回に達したので取り置きも呼び出しもしない
+    reverifyNow();
+    reserveTries = 0;
+    expect(await runVerificationStep(env, port, { gemini: g.port, videoSleep: fakeSleep })).toBe('done');
+    expect(leased[2]).not.toBe(B);
+    expect(g.calls).toHaveLength(3);
+    expect(reserveTries).toBe(0);
+    expect(myRows()).toHaveLength(3);
+  });
+
+  it('Batch（lease → submitOne）: 試行 A は 2 回（n=1・n=2）→ createBatch の失敗で pending・token NULL → 次の lease の試行 B は自分の token で n=3 を呼ぶ。生涯 3 回まで', async () => {
+    seed([video()]);
+    enable();
+    const env = makeEnv();
+    const g = scripted(['server']);
+    const bp = batchPort(reportMsg([]));
+    const p = bp.port as unknown as { createBatch: (params: unknown, o?: unknown) => Promise<unknown> };
+    const orig = p.createBatch.bind(bp.port);
+    const atCreate: Array<string | null> = [];
+    p.createBatch = async (params, o) => {
+      atCreate.push(tokenNow());
+      if (atCreate.length === 1) throw new Error('create_down');
+      return orig(params, o);
+    };
+    const step = () => runVerificationStep(env, bp.port, { deadline: Date.now() + 120_000, gemini: g.port, videoSleep: fakeSleep });
+
+    // 試行 A: n=1・n=2 とも 503（試行の中の 2 回）→ createBatch が失敗 → pending（token NULL）
+    expect(await step()).toContain('submit=retry:create:');
+    expect(g.calls).toHaveLength(2);
+    expect(rowNow()).toMatchObject({ verification_status: 'pending', verify_phase: null, verification_token: null, verification_attempts: 1 });
+    const A = atCreate[0];
+    expect(typeof A).toBe('string');
+    expect(callAttempts()).toEqual([A, A]);
+
+    // 試行 B: 新しい lease の token。A の 2 回は数えないので n=3 を呼べる（生涯の上限で試行の中の 2 回目は無い）
+    expect(await step()).toContain('submit=submitted');
+    const B = tokenNow();
+    expect(atCreate[1]).toBe(B);
+    expect(typeof B).toBe('string');
+    expect(B).not.toBe(A);
+    expect(rowNow()).toMatchObject({ verification_status: 'running', verify_phase: 'submitted', verification_attempts: 2 });
+    expect(g.calls).toHaveLength(3);
+    expect(callAttempts()).toEqual([A, A, B]);
+    expect(myRows()).toEqual(['vv:v1:v1', 'vv:v1:v1:r2', 'vv:v1:v1:r3']);
+    expect(sleeps).toEqual([VIDEO_RETRY_WAIT_MS]);
+    expect(bp.created).toHaveLength(1);
+
+    // さらに別の試行でも、生涯 3 回に達したので取り置きを試みない
+    reserveTries = 0;
+    await attempt(env, g.port);
+    expect(g.calls).toHaveLength(3);
+    expect(reserveTries).toBe(0);
+    expect(myRows()).toHaveLength(3);
+  });
+
+  it('同じ token: 1 回呼んで（retryable）中断（submit=no_time・to_submit のまま）→ 再開ではあと 1 回だけ（n=2）呼び、n=3 はその試行では取り置かない', async () => {
+    seed([video()]);
+    enable();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-05T03:00:00.000Z'));
+    holdMonthCap();
+    const env = makeEnv();
+    const g = scripted(['server']);
+    const { port, created } = batchPort(reportMsg([]));
+    // 計画（plan.json）の保存に 2 分かかる → 提出の前の残り時間の確かめ直しで no_time
+    onPut = (k) => {
+      if (k.endsWith('/plan.json')) vi.setSystemTime(Date.now() + 120_000);
+    };
+    const step = () => runVerificationStep(env, port, { deadline: Date.now() + 120_000, gemini: g.port, videoSleep: fakeSleep });
+
+    // 中断する試行: n=1 が 503 → 20 秒待ち → n=2 は月の上限で取り置けない（この試行の呼び出しは 1 回）
+    expect(await step()).toContain('submit=no_time');
+    const first = rowNow();
+    expect(first).toMatchObject({ verification_status: 'running', verify_phase: 'to_submit', verification_attempts: 1 });
+    const A = first.verification_token;
+    expect(typeof A).toBe('string');
+    expect(g.calls).toHaveLength(1);
+    expect(callAttempts()).toEqual([A]);
+    expect(myRows()).toEqual(['vv:v1:v1']);
+    expect(sleeps).toEqual([VIDEO_RETRY_WAIT_MS]);
+
+    // 再開（同じ token）: 前の 1 回を数えるので、あと 1 回（n=2）だけ。n=3 は取り置きも待ちもしない
+    releaseMonthCap();
+    onPut = null;
+    reserveTries = 0;
+    expect(await step()).toContain('submit=submitted');
+    expect(rowNow()).toMatchObject({ verification_token: A, verification_attempts: 1 });
+    expect(g.calls).toHaveLength(2);
+    expect(reserveTries).toBe(1);
+    expect(callAttempts()).toEqual([A, A]);
+    expect(callRecord('v1', 2)).toMatchObject({ n: 2, outcome: 'retryable', attempt: A });
+    expect(r2.has(callKey('v1', 3))).toBe(false);
+    expect(myRows()).toEqual(['vv:v1:v1', 'vv:v1:v1:r2']);
+    expect(sleeps).toEqual([VIDEO_RETRY_WAIT_MS]);
+    expect(created).toHaveLength(1);
+  });
+});
