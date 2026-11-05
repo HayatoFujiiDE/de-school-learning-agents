@@ -6,7 +6,7 @@
    重ならないことを確かめてから置くので、重なりは起こらない（MPL.overlaps で確かめられる）。
    - 作ったものから: 作ったもの（中心）を、同じ単元につながるものどうしが近くなる順に置く → そのまわりに学んだこと →
      その外に単元（2 つ以上の作ったものからつながる単元は、その学んだことの間 = 橋）→ これから作れそうなものは元の外側
-   - 分野で見る: 教科 × 領域の島（中に単元を全部）を、教科をまたぐ線・同じ作ったもの・同じ教科でつながる島どうしが近くなる順に置く →
+   - 分野で見る: 教科 × 領域の島（中に単元を全部）を、同じ作ったもの・同じ教科でつながる島どうしが近くなる順に置く →
      作ったもの・これから作れそうなものは、つながる単元の真ん中から島の外のいちばん近い空きへ（島と島の間に入る） */
 (function (root) {
   'use strict';
@@ -155,7 +155,6 @@
     return out;
   }
   function matrix(n) { var m = []; for (var i = 0; i < n; i++) { m[i] = []; for (var j = 0; j < n; j++) m[i][j] = 0; } return m; }
-  function unitLinkEdges(g) { return g.edges.filter(function (e) { return e.kind === 'order' || e.kind === 'cross'; }); }
 
   // ---------- 詰める（決定論の力学: ばね + 中心への弱い引力 + 箱の押し分け。回数は固定）----------
   // items = [{ id, x, y, w, h, mass }]（左上）。springs = [{ a, b, k }]（添字・自然長 0 = 引き寄せる。重なりは押し分けで止める）
@@ -226,16 +225,12 @@
     g.nodes.made.concat(learned, units, nexts).forEach(function (n) { sizes[n.id] = MPL.size(n, 'made'); });
     function put(id, b) { var bb = { id: id, x: b.x, y: b.y, w: b.w, h: b.h }; nodes[id] = bb; placed.push(bb); return bb; }
 
-    // 1) 作ったもの: 同じ単元（重み 1）・学ぶ順 / 教科をまたぐ でつながる単元（0.5）が多いものどうしを近くに。まわりに学んだことの場所を空けて置く
+    // 1) 作ったもの: 同じ単元につながる数（重み）が多いものどうしを近くに。まわりに学んだことの場所を空けて置く。
+    //    教科をまたぐ（§AD-1）・学ぶ順（§AD-9）の線をやめたので、どちらも重みに使わない（画面に出る線だけで並べる）
     var n = made.length, wt = matrix(n), idx = {};
     made.forEach(function (m, i) { idx[m.id] = i; });
     g.edges.forEach(function (e) {
       if (e.kind === 'peer' && idx[e.from] != null && idx[e.to] != null) { wt[idx[e.from]][idx[e.to]] += e.units.length; wt[idx[e.to]][idx[e.from]] += e.units.length; }
-    });
-    unitLinkEdges(g).forEach(function (e) {
-      var a = g.nodes.units.filter(function (u) { return u.id === e.from; })[0], b = g.nodes.units.filter(function (u) { return u.id === e.to; })[0];
-      if (!a || !b) return;
-      a.made.forEach(function (x) { b.made.forEach(function (y) { if (x !== y && idx[x] != null && idx[y] != null) { wt[idx[x]][idx[y]] += 0.5; wt[idx[y]][idx[x]] += 0.5; } }); });
     });
     var RX = 205, RY = 165, hubs = [], hubC = {};
     order(n, wt).forEach(function (i) {
@@ -348,14 +343,13 @@
       isl.push({ id: s.id, sub: s.sub, area: s.area, units: ids, local: local, w: 2 * I.px + cols * SZ.unit.w + (cols - 1) * I.gap, h: y + I.bottom });
     });
     // 2) 島を置く: 教科ごとに縦 1 列（領域の順に上から）。列の並びは、隣り合う教科どうしのつながり
-    //    （教科をまたぐ線 + 両方につながる作ったもの）の和がいちばん大きい並び（同じなら教科の順で先のもの）。
+    //    （両方につながる作ったもの）の和がいちばん大きい並び（同じなら教科の順で先のもの）。
     //    列と列の間は作ったものが入る幅を空ける（作ったものは、つながる島どうしの間に入る）
     var subs = [];
     isl.forEach(function (s) { if (subs.indexOf(s.sub) < 0) subs.push(s.sub); });
     var sw = matrix(subs.length), subOf = {};
     isl.forEach(function (s) { s.units.forEach(function (id) { subOf[id] = subs.indexOf(s.sub); }); });
     function link(a, b) { if (a != null && b != null && a !== b) { sw[a][b] += 1; sw[b][a] += 1; } }
-    unitLinkEdges(g).forEach(function (e) { if (e.kind === 'cross') link(subOf[e.from], subOf[e.to]); });
     g.nodes.made.forEach(function (m) {
       var hs = [];
       m.units.forEach(function (code) { var k = subOf['unit:' + code]; if (k != null && hs.indexOf(k) < 0) hs.push(k); });

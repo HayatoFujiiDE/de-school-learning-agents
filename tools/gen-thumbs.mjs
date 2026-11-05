@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 作るの提案（contract-app §AD-5）と作品展示（§AF）の写真風サムネイルを作る。node 単体・依存なし。
+// 作るの提案（contract-app §AE-5）と作品展示（§AG）の写真風サムネイルを作る。node 単体・依存なし。
 //
 // 実行はふじさんの通常ターミナルで（agent からは --dry-run だけ）:
 //   node tools/gen-thumbs.mjs --dry-run      呼ばずに対象と件数だけ出す（鍵も読まない）
@@ -34,7 +34,7 @@ const API_URL = 'https://api.openai.com/v1/images/generations';
 const MAX_CALLS = 17;
 const TIMEOUT_MS = 180_000;
 
-// プロンプトの共通の約束（contract-app §AD-5 verbatim。illust は後半を替える）
+// プロンプトの共通の約束（contract-app §AE-5 verbatim。illust は後半を替える）
 const RULE = '人物・顔・手・文字・ロゴ・商標のあるキャラクターを入れない。';
 const TAIL_PHOTO = RULE + '子どもの机の上で撮った自然光の写真のように。';
 const TAIL_ILLUST = RULE + 'やわらかい水彩のイラストで。';
@@ -83,7 +83,7 @@ function writeThumbs() {
   const list = {};
   for (const t of TARGETS) { const rel = existing(t); if (rel) list[t.id] = rel; }
   const body = Object.keys(list).map((id) => '  ' + JSON.stringify(id) + ': ' + JSON.stringify(list[id])).join(',\n');
-  const src = '/* 作るの提案（§AD-5）・作品展示（§AF）の画像の一覧。tools/gen-thumbs.mjs が画像と一緒に書き出す（存在するファイルだけ）。\n' +
+  const src = '/* 作るの提案（§AE-5）・作品展示（§AG）の画像の一覧。tools/gen-thumbs.mjs が画像と一緒に書き出す（存在するファイルだけ）。\n' +
     '   一覧に無い id はカテゴリの線画。 */\n' +
     'window.DES = window.DES || {};\n' +
     'window.DES.thumbs = {' + (body ? '\n' + body + '\n' : '') + '};\n';

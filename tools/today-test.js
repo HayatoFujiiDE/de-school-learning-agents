@@ -17,12 +17,12 @@ var SEED = 'od-seed', SIGN = 'od-sign';
 
 // ---------- 題材（§X-3） ----------
 var topics = TDD.topics;
-// §AE-1 / AE-6: 作る・ためすは既存 9 + 新 3 = 12 本で fit ごとに 4 本（kind の無いお題 = make）
-eq(topics.length, 12, 'AE-6 作る・ためすは 12 本');
-['near', 'next', 'new'].forEach(function (f) { eq(TDD.pool(f).length, 4, 'AE-6 fit ' + f + ' は 4 本'); });
-eq(topics.filter(function (t) { return TDD.kindOf(t) !== 'make'; }).length, 0, 'AE-1 kind の無い既存のお題は make');
+// §AF-1 / AF-6: 作る・ためすは既存 9 + 新 3 = 12 本で fit ごとに 4 本（kind の無いお題 = make）
+eq(topics.length, 12, 'AF-6 作る・ためすは 12 本');
+['near', 'next', 'new'].forEach(function (f) { eq(TDD.pool(f).length, 4, 'AF-6 fit ' + f + ' は 4 本'); });
+eq(topics.filter(function (t) { return TDD.kindOf(t) !== 'make'; }).length, 0, 'AF-1 kind の無い既存のお題は make');
 eq(topics.slice(9).map(function (t) { return [t.id, t.fit, t.makeTheme, t.makeVariant]; }),
-  [['od-ath-winter', 'near', 'ath', 'ice'], ['od-stop-leaf', 'next', 'stop', 'draw'], ['od-story-snow', 'new', 'story', 'short']], 'AE-3 作る・ためすに足す 3 本（題材・案・fit）');
+  [['od-ath-winter', 'near', 'ath', 'ice'], ['od-stop-leaf', 'next', 'stop', 'draw'], ['od-story-snow', 'new', 'story', 'short']], 'AF-3 作る・ためすに足す 3 本（題材・案・fit）');
 var ids = topics.map(function (t) { return t.id; });
 eq(ids.filter(function (id, i) { return ids.indexOf(id) !== i; }), [], 'X-3 id が重ならない');
 var titles = topics.map(function (t) { return t.title[0]; });
@@ -40,7 +40,7 @@ var season = topics.filter(function (t) { return /落ち葉|どんぐり|夕方|
 ok(season >= 5, 'X-3 11 月の季節のお題が 5 本以上（' + season + '）');
 var likes = topics.filter(function (t) { return /マイクラ|Python|回路|ゲーム|ブロック|建物|塔/.test(t.title[0] + t.reason[0]); }).length;
 ok(likes >= 6, 'X-3 本人の好き（マイクラ・Python・回路）につながるお題（' + likes + '）');
-eq(topics.filter(function (t) { return t.fit === 'near'; }).map(function (t) { return t.makeTheme; }).sort(), ['ath', 'circuit', 'mc', 'py'], 'X-3 near の 4 本は作るの題材（既存 3 + §AE の ath）');
+eq(topics.filter(function (t) { return t.fit === 'near'; }).map(function (t) { return t.makeTheme; }).sort(), ['ath', 'circuit', 'mc', 'py'], 'X-3 near の 4 本は作るの題材（既存 3 + §AF の ath）');
 topics.forEach(function (t) {
   ['title', 'firstStep', 'need', 'reason'].forEach(function (k) {
     ok(Array.isArray(t[k]) && t[k].length === 2 && t[k][0] && t[k][1], 'X-3 ' + t.id + ' の ' + k + ' は [中, 小]');
@@ -51,8 +51,8 @@ topics.forEach(function (t) {
   ok(t.find && t.find.hints.length === 3 && t.find.photos.length >= 1, 'X-3 ' + t.id + ' の手がかり 3 つ・ダミー写真');
   ok(t.play && t.play.sliders.length >= 1 && t.play.sliders.length <= 2 && typeof t.play.result === 'function', 'X-3 ' + t.id + ' のスライダー 1〜2 本 + 結果の関数');
   if (t.makeTheme) {
-    // 題材（§AD の stop / ath / story を含む）は作るに必ずある（統合後。レビューへの裁定で必須に戻した）
-    ok(MD.THEMES.indexOf(t.makeTheme) >= 0, 'AE-3 ' + t.id + ' の題材 ' + t.makeTheme + ' は MD.THEMES にある');
+    // 題材（§AE の stop / ath / story を含む）は作るに必ずある（統合後。レビューへの裁定で必須に戻した）
+    ok(MD.THEMES.indexOf(t.makeTheme) >= 0, 'AF-3 ' + t.id + ' の題材 ' + t.makeTheme + ' は MD.THEMES にある');
     ok(MD.THEMES.indexOf(t.makeTheme) >= 0 && MD.theme(t.makeTheme).variants.indexOf(t.makeVariant) >= 0, 'X-3 ' + t.id + ' の題材と案は作るにある');
   } else {
     ok(t.makeTheme === null && t.makeSteps.length >= 3 && t.makeSteps.length <= 4 && t.makeSteps.every(function (s) { return s[0] && s[1]; }), 'X-3 ' + t.id + ' は makeSteps 3〜4 個（[中, 小]）');
@@ -314,17 +314,17 @@ eq(TD.restoreFound(s0, { id: SEED, index: 0, item: { photo: 'zz', time: 't' } })
 eq(TD.restoreFound(rf.state, { id: SEED, index: 9, item: { photo: 'p2', line: 'b', time: 't' } }).tried[SEED].found.map(function (f) { return f.line; }), ['a', 'c', 'b'], 'restoreFound 位置が範囲外なら末尾');
 
 // ======================================================================
-// §AE 今日のお題の種類（対話のお題 9 本・作る・ためすの 3 本・純関数）
+// §AF 今日のお題の種類（対話のお題 9 本・作る・ためすの 3 本・純関数）
 // ======================================================================
 var DL = TDD.dialogs, PAIR = function (p) { return Array.isArray(p) && p.length === 2 && typeof p[0] === 'string' && typeof p[1] === 'string' && !!p[0] && !!p[1]; };
-eq(DL.length, 9, 'AE-1 対話のお題 9 本');
-eq(TDD.KINDS, ['news', 'talk', 'philo'], 'AE-1 種類');
-TDD.KINDS.forEach(function (k) { eq(TDD.kindPool(k).length, 3, 'AE-1 ' + k + ' は 3 本'); });
+eq(DL.length, 9, 'AF-1 対話のお題 9 本');
+eq(TDD.KINDS, ['news', 'talk', 'philo'], 'AF-1 種類');
+TDD.KINDS.forEach(function (k) { eq(TDD.kindPool(k).length, 3, 'AF-1 ' + k + ' は 3 本'); });
 var dids = DL.map(function (d) { return d.id; });
-eq(dids.filter(function (id, i) { return dids.indexOf(id) !== i || TDD.get(id); }), [], 'AE-3 対話のお題の id は重ならない（作る・ためすとも）');
-eq(DL.filter(function (d) { return d.heavy; }).map(function (d) { return d.id; }), ['od-news-election'], 'AE-6 heavy は od-news-election だけ');
+eq(dids.filter(function (id, i) { return dids.indexOf(id) !== i || TDD.get(id); }), [], 'AF-3 対話のお題の id は重ならない（作る・ためすとも）');
+eq(DL.filter(function (d) { return d.heavy; }).map(function (d) { return d.id; }), ['od-news-election'], 'AF-6 heavy は od-news-election だけ');
 DL.forEach(function (d) {
-  var nm = 'AE-3 ' + d.id;
+  var nm = 'AF-3 ' + d.id;
   ok(TDD.KINDS.indexOf(d.kind) >= 0 && typeof d.heavy === 'boolean' && d.source === 'buddy', nm + ' の kind / heavy / source');
   ok(d.kind === 'news' ? PAIR(d.date) : d.date === null, nm + ' の date（news だけ [中, 小]）');
   ['title', 'lead', 'reason'].forEach(function (k) { ok(PAIR(d[k]), nm + ' の ' + k + ' は [中, 小]'); });
@@ -342,11 +342,11 @@ DL.forEach(function (d) {
   ok(PAIR(d.next.talk) && PAIR(d.next.makeTitle) && d.next.makeSteps.length >= 3 && d.next.makeSteps.length <= 4 && d.next.makeSteps.every(PAIR), nm + ' の次の一歩（話す・作る題・手順 3〜4）');
   ok(twoColor(TDD.cardArt(d)) && /^<svg class="mk-art/.test(TDD.cardArt(d)), nm + ' の絵は 2 色の線画');
 });
-ok(TDD.cardArt(DL[0]) !== TDD.cardArt(DL[1]), 'AE-2 絵はお題ごとに 1 つ');
+ok(TDD.cardArt(DL[0]) !== TDD.cardArt(DL[1]), 'AF-2 絵はお題ごとに 1 つ');
 // 文言の禁止: 評価語 + 「版」
 var dText = JSON.stringify(DL);
-ok(!/点数|ランキング|順位|評価|成績|レベル|集中力|得意|苦手|上手|成長|頑張|すごい|版|データがありません|学びのバディ/.test(dText), 'AE 対話のお題に評価の語・「版」が無い');
-// 作る・ためすの 3 本: 作るに題材が無い間（§AD の着地前）も結果 1 行が決定論で出て、NaN / undefined を含まない
+ok(!/点数|ランキング|順位|評価|成績|レベル|集中力|得意|苦手|上手|成長|頑張|すごい|版|データがありません|学びのバディ/.test(dText), 'AF 対話のお題に評価の語・「版」が無い');
+// 作る・ためすの 3 本: 作るに題材が無い間（§AE の着地前）も結果 1 行が決定論で出て、NaN / undefined を含まない
 ['od-ath-winter', 'od-stop-leaf', 'od-story-snow'].forEach(function (id) {
   var t = TDD.get(id), s1 = t.play.sliders[0], s2 = t.play.sliders[1], bad = [];
   for (var a = s1.min; a <= s1.max; a++) for (var b = s2.min; b <= s2.max; b++) {
@@ -354,89 +354,89 @@ ok(!/点数|ランキング|順位|評価|成績|レベル|集中力|得意|苦�
     var r = TD.play(t, v).result;
     if (/NaN|undefined|null/.test(r.join('|'))) bad.push(JSON.stringify(v));
   }
-  eq(bad, [], 'AE-3 ' + id + ' の結果 1 行に NaN / undefined が出ない');
+  eq(bad, [], 'AF-3 ' + id + ' の結果 1 行に NaN / undefined が出ない');
 });
-eq(TD.play(TDD.get('od-stop-leaf'), { frames: 2, fps: 2 }).result[0].indexOf('12 コマ ÷ 1 秒に 8 コマ = 1.5 秒') >= 0, true, 'AE-3 コマ撮りの結果 = §AD の計算（12 ÷ 8 = 1.5 秒）');
+eq(TD.play(TDD.get('od-stop-leaf'), { frames: 2, fps: 2 }).result[0].indexOf('12 コマ ÷ 1 秒に 8 コマ = 1.5 秒') >= 0, true, 'AF-3 コマ撮りの結果 = §AE の計算（12 ÷ 8 = 1.5 秒）');
 
-// ---------- §AE-6 純関数 ----------
+// ---------- §AF-6 純関数 ----------
 var d0 = TD.initial();
-eq(d0.dslots, { news: 'od-news-mmx', talk: 'od-talk-rule', philo: 'od-philo-ai' }, 'AE-6 initial dslots は種類ごとに 1 本');
-eq([d0.drot, d0.think, d0.circle], [{ news: 0, talk: 0, philo: 0 }, {}, []], 'AE-6 initial drot / think / circle');
-eq(d0.slots, s0.slots, 'AE-6 initial 作る・ためすの 3 枚は既存どおり');
+eq(d0.dslots, { news: 'od-news-mmx', talk: 'od-talk-rule', philo: 'od-philo-ai' }, 'AF-6 initial dslots は種類ごとに 1 本');
+eq([d0.drot, d0.think, d0.circle], [{ news: 0, talk: 0, philo: 0 }, {}, []], 'AF-6 initial drot / think / circle');
+eq(d0.slots, s0.slots, 'AF-6 initial 作る・ためすの 3 枚は既存どおり');
 // swapKind
 var w1 = TD.swapKind(d0, 'news');
-eq([w1.dslots.news, w1.drot.news, w1.dslots.talk, w1.dslots.philo], ['od-news-bosai', 1, d0.dslots.talk, d0.dslots.philo], 'AE-6 swapKind 同じ種類の次へ・他の種類は変えない');
-eq(w1.slots, d0.slots, 'AE-6 swapKind 作る・ためすは変えない');
-eq(d0.dslots.news, 'od-news-mmx', 'AE-6 swapKind 元を変えない');
+eq([w1.dslots.news, w1.drot.news, w1.dslots.talk, w1.dslots.philo], ['od-news-bosai', 1, d0.dslots.talk, d0.dslots.philo], 'AF-6 swapKind 同じ種類の次へ・他の種類は変えない');
+eq(w1.slots, d0.slots, 'AF-6 swapKind 作る・ためすは変えない');
+eq(d0.dslots.news, 'od-news-mmx', 'AF-6 swapKind 元を変えない');
 var w3 = TD.swapKind(TD.swapKind(w1, 'news'), 'news');
-eq([w3.dslots.news, w3.drot.news], ['od-news-mmx', 0], 'AE-6 swapKind 一巡で最初に戻る');
-eq(TD.swapKind(d0, 'make'), d0, 'AE-6 swapKind 無い種類は同じ state');
+eq([w3.dslots.news, w3.drot.news], ['od-news-mmx', 0], 'AF-6 swapKind 一巡で最初に戻る');
+eq(TD.swapKind(d0, 'make'), d0, 'AF-6 swapKind 無い種類は同じ state');
 var wb = JSON.parse(freeze(d0)); wb.dslots.philo = 'od-none'; wb.drot.philo = 2;
-eq(TD.swapKind(wb, 'philo').dslots.philo, 'od-philo-ship', 'AE-6 swapKind 知らないお題が出ていたら回転の位置のお題へ（既存の swap と同じ）');
+eq(TD.swapKind(wb, 'philo').dslots.philo, 'od-philo-ship', 'AF-6 swapKind 知らないお題が出ていたら回転の位置のお題へ（既存の swap と同じ）');
 // keep は種類を問わない
-eq(TD.keep(d0, 'od-philo-ship').kept, ['od-philo-ship'], 'AE-2 対話のお題もとっておける');
+eq(TD.keep(d0, 'od-philo-ship').kept, ['od-philo-ship'], 'AF-2 対話のお題もとっておける');
 // markOpen / isOpened
 var PH = 'od-philo-ai', mo = TD.markOpen(d0, PH, 'facts');
-eq([TD.isOpened(d0, PH), TD.isOpened(mo, PH), mo.think[PH].opened], [false, true, { facts: true, views: false, asks: false, mine: false }], 'AE-6 markOpen 開いた入口を記録');
-eq(TD.markOpen(mo, PH, 'facts'), mo, 'AE-6 markOpen 2 回目は同じ state');
-eq([TD.markOpen(d0, PH, 'watch'), TD.markOpen(d0, 'od-seed', 'facts')], [d0, d0], 'AE-6 markOpen 無い入口・作るのお題は同じ state');
+eq([TD.isOpened(d0, PH), TD.isOpened(mo, PH), mo.think[PH].opened], [false, true, { facts: true, views: false, asks: false, mine: false }], 'AF-6 markOpen 開いた入口を記録');
+eq(TD.markOpen(mo, PH, 'facts'), mo, 'AF-6 markOpen 2 回目は同じ state');
+eq([TD.markOpen(d0, PH, 'watch'), TD.markOpen(d0, 'od-seed', 'facts')], [d0, d0], 'AF-6 markOpen 無い入口・作るのお題は同じ state');
 // pickAsk
 var pa = TD.pickAsk(d0, PH, 'self');
-eq([pa.think[PH].ask, pa.think[PH].opened.asks], ['self', true], 'AE-6 pickAsk 選んだ問いを記録');
-eq(TD.pickAsk(pa, PH, 'open').think[PH].ask, 'open', 'AE-6 pickAsk 選び直せる');
-eq([TD.pickAsk(d0, PH, 'x'), TD.pickAsk(d0, 'od-none', 'check')], [d0, d0], 'AE-6 pickAsk 無い段・お題は同じ state');
+eq([pa.think[PH].ask, pa.think[PH].opened.asks], ['self', true], 'AF-6 pickAsk 選んだ問いを記録');
+eq(TD.pickAsk(pa, PH, 'open').think[PH].ask, 'open', 'AF-6 pickAsk 選び直せる');
+eq([TD.pickAsk(d0, PH, 'x'), TD.pickAsk(d0, 'od-none', 'check')], [d0, d0], 'AF-6 pickAsk 無い段・お題は同じ state');
 // putMark: 前のものを残す・新しいものが上・line は 80 字・立場は stances か none
 var pm1 = TD.putMark(d0, PH, { stance: 's1', line: '  考える力が大事  ', time: '11/6 10:20' });
-eq(pm1.think[PH].marks, [{ id: 'mk1', stance: 's1', line: '考える力が大事', time: '11/6 10:20' }], 'AE-6 putMark 1 件');
+eq(pm1.think[PH].marks, [{ id: 'mk1', stance: 's1', line: '考える力が大事', time: '11/6 10:20' }], 'AF-6 putMark 1 件');
 var pm2 = TD.putMark(pm1, PH, { stance: 'none', line: '', time: '11/6 10:30' });
-eq(pm2.think[PH].marks.map(function (m) { return [m.id, m.stance, m.line]; }), [['mk2', 'none', null], ['mk1', 's1', '考える力が大事']], 'AE-6 putMark 置き直すと前のものも残り、新しいものが上（まだ決めない・1 行は任意）');
-eq(pm2.think[PH].opened.mine, true, 'AE-6 putMark 自分の考えを開いた記録');
-eq(TD.putMark(d0, PH, { stance: 's1', line: new Array(120).join('あ'), time: 't' }).think[PH].marks[0].line.length, 80, 'AE-6 putMark line は 80 字で切る');
-eq([TD.putMark(d0, PH, { stance: 's9', time: 't' }), TD.putMark(d0, PH, { line: 'x', time: 't' }), TD.putMark(d0, 'od-seed', { stance: 's1' })], [d0, d0, d0], 'AE-6 putMark 立場が無い・違う・作るのお題は同じ state');
-eq(freeze(pm1.think[PH].marks.length), '1', 'AE-6 putMark 元を変えない');
+eq(pm2.think[PH].marks.map(function (m) { return [m.id, m.stance, m.line]; }), [['mk2', 'none', null], ['mk1', 's1', '考える力が大事']], 'AF-6 putMark 置き直すと前のものも残り、新しいものが上（まだ決めない・1 行は任意）');
+eq(pm2.think[PH].opened.mine, true, 'AF-6 putMark 自分の考えを開いた記録');
+eq(TD.putMark(d0, PH, { stance: 's1', line: new Array(120).join('あ'), time: 't' }).think[PH].marks[0].line.length, 80, 'AF-6 putMark line は 80 字で切る');
+eq([TD.putMark(d0, PH, { stance: 's9', time: 't' }), TD.putMark(d0, PH, { line: 'x', time: 't' }), TD.putMark(d0, 'od-seed', { stance: 's1' })], [d0, d0, d0], 'AF-6 putMark 立場が無い・違う・作るのお題は同じ state');
+eq(freeze(pm1.think[PH].marks.length), '1', 'AF-6 putMark 元を変えない');
 // removeMark / restoreMark
 var rm1 = TD.removeMark(pm2, PH, 'mk1');
-eq([rm1.state.think[PH].marks.map(function (m) { return m.id; }), rm1.undo.index, rm1.undo.item.id], [['mk2'], 1, 'mk1'], 'AE-6 removeMark 外す（元に戻す情報）');
-eq(TD.restoreMark(rm1.state, rm1.undo).think[PH].marks.map(function (m) { return m.id; }), ['mk2', 'mk1'], 'AE-6 restoreMark 元の位置に戻る');
-eq(TD.removeMark(pm2, PH, 'mk9'), null, 'AE-6 removeMark 無い id は null');
+eq([rm1.state.think[PH].marks.map(function (m) { return m.id; }), rm1.undo.index, rm1.undo.item.id], [['mk2'], 1, 'mk1'], 'AF-6 removeMark 外す（元に戻す情報）');
+eq(TD.restoreMark(rm1.state, rm1.undo).think[PH].marks.map(function (m) { return m.id; }), ['mk2', 'mk1'], 'AF-6 restoreMark 元の位置に戻る');
+eq(TD.removeMark(pm2, PH, 'mk9'), null, 'AF-6 removeMark 無い id は null');
 var rmA = TD.removeMark(pm2, PH, 'mk2'), afterPut = TD.putMark(rmA.state, PH, { stance: 's2', time: 't' });
 // mk2 を外す → 新しく置く（mk2 がまた使われる）→ 元に戻す: 戻した方は新しい id になり、重ならない
 var ids3 = TD.restoreMark(afterPut, rmA.undo).think[PH].marks.map(function (m) { return m.id; });
-eq([ids3.length, ids3.filter(function (x, i) { return ids3.indexOf(x) !== i; })], [3, []], 'AE-6 restoreMark id が重なったら新しい id（3 件・重ならない）');
+eq([ids3.length, ids3.filter(function (x, i) { return ids3.indexOf(x) !== i; })], [3, []], 'AF-6 restoreMark id が重なったら新しい id（3 件・重ならない）');
 // toCircle / fromCircle
 var c1 = TD.toCircle(d0, PH, { ask: 'open', time: '11/6 10:40' });
-eq(c1.circle, [{ id: PH, ask: 'open', time: '11/6 10:40' }], 'AE-6 toCircle 問いと選んだ問い');
-eq(TD.toCircle(c1, PH, { ask: 'open', time: 'x' }), c1, 'AE-6 toCircle 同じなら同じ state');
-eq(TD.toCircle(c1, PH, { ask: null, time: 'x' }).circle, [{ id: PH, ask: null, time: '11/6 10:40' }], 'AE-6 toCircle 入っていれば選んだ問いだけ替える');
+eq(c1.circle, [{ id: PH, ask: 'open', time: '11/6 10:40' }], 'AF-6 toCircle 問いと選んだ問い');
+eq(TD.toCircle(c1, PH, { ask: 'open', time: 'x' }), c1, 'AF-6 toCircle 同じなら同じ state');
+eq(TD.toCircle(c1, PH, { ask: null, time: 'x' }).circle, [{ id: PH, ask: null, time: '11/6 10:40' }], 'AF-6 toCircle 入っていれば選んだ問いだけ替える');
 var c2 = TD.toCircle(c1, 'od-talk-ai', { time: 't' });
-eq(c2.circle.map(function (c) { return c.id; }), ['od-talk-ai', PH], 'AE-6 toCircle 新しいものが先頭');
+eq(c2.circle.map(function (c) { return c.id; }), ['od-talk-ai', PH], 'AF-6 toCircle 新しいものが先頭');
 var fc = TD.fromCircle(c2, PH);
-eq([fc.state.circle.length, fc.undo.index], [1, 1], 'AE-6 fromCircle 外す');
-eq(TD.toCircle(fc.state, fc.undo.item.id, fc.undo.item, fc.undo.index).circle, c2.circle, 'AE-6 fromCircle → toCircle(位置) で元に戻る');
-eq([TD.fromCircle(d0, PH), TD.toCircle(d0, 'od-seed', {})], [null, d0], 'AE-6 fromCircle 無い・toCircle 作るのお題は同じ');
-eq(TD.inCircle(c1, PH), true, 'AE-6 inCircle');
-// normalize（AE-5: 無い時・形が違う時は、その項目だけ初期値）
+eq([fc.state.circle.length, fc.undo.index], [1, 1], 'AF-6 fromCircle 外す');
+eq(TD.toCircle(fc.state, fc.undo.item.id, fc.undo.item, fc.undo.index).circle, c2.circle, 'AF-6 fromCircle → toCircle(位置) で元に戻る');
+eq([TD.fromCircle(d0, PH), TD.toCircle(d0, 'od-seed', {})], [null, d0], 'AF-6 fromCircle 無い・toCircle 作るのお題は同じ');
+eq(TD.inCircle(c1, PH), true, 'AF-6 inCircle');
+// normalize（AF-5: 無い時・形が違う時は、その項目だけ初期値）
 var old = { slots: s0.slots, kept: [SEED], tried: {}, rot: { near: 0, next: 0, new: 0 } };
 var no = TD.normalize(old);
-eq([no.kept, no.dslots, no.drot, no.think, no.circle], [[SEED], d0.dslots, d0.drot, {}, []], 'AE-5 前の保存データ（dslots なし）→ 既存はそのまま・足した項目は初期値');
+eq([no.kept, no.dslots, no.drot, no.think, no.circle], [[SEED], d0.dslots, d0.drot, {}, []], 'AF-5 前の保存データ（dslots なし）→ 既存はそのまま・足した項目は初期値');
 var full = TD.toCircle(TD.putMark(TD.pickAsk(TD.swapKind(TD.keep(d0, PH), 'talk'), PH, 'check'), PH, { stance: 's2', line: 'x', time: 't' }), PH, { ask: 'check', time: 't' });
-eq(freeze(TD.normalize(JSON.parse(freeze(full)))), freeze(full), 'AE-5 normalize 正しい値はそのまま');
+eq(freeze(TD.normalize(JSON.parse(freeze(full)))), freeze(full), 'AF-5 normalize 正しい値はそのまま');
 var nb1 = JSON.parse(freeze(full)); nb1.dslots = { news: 'od-talk-ai', talk: 'od-talk-ai', philo: PH };
-eq([TD.normalize(nb1).dslots, TD.normalize(nb1).drot, TD.normalize(nb1).think[PH].ask], [d0.dslots, full.drot, 'check'], 'AE-5 dslots の種類が合わなければ dslots だけ初期値');
+eq([TD.normalize(nb1).dslots, TD.normalize(nb1).drot, TD.normalize(nb1).think[PH].ask], [d0.dslots, full.drot, 'check'], 'AF-5 dslots の種類が合わなければ dslots だけ初期値');
 var nb2 = JSON.parse(freeze(full)); nb2.drot = { news: -1 };
-eq([TD.normalize(nb2).drot, TD.normalize(nb2).dslots], [d0.drot, full.dslots], 'AE-5 drot が壊れたら drot だけ初期値');
+eq([TD.normalize(nb2).drot, TD.normalize(nb2).dslots], [d0.drot, full.dslots], 'AF-5 drot が壊れたら drot だけ初期値');
 var nb3 = JSON.parse(freeze(full)); nb3.think = { 'od-none': {}, 'od-philo-ai': { opened: { facts: 'yes', mine: true }, ask: 'zz', marks: [{ id: 'mk1', stance: 's9', line: 'a', time: 't' }, { id: 'mk2', stance: 's1', line: 3, time: 't' }, { id: 'mk3', stance: 'none', line: null, time: 't' }, { id: 'mk3', stance: 's1', line: 'dup', time: 't' }] } };
-eq(TD.normalize(nb3).think, { 'od-philo-ai': { opened: { facts: false, views: false, asks: false, mine: true }, ask: null, marks: [{ id: 'mk3', stance: 'none', line: null, time: 't' }] } }, 'AE-5 think は形の合うものだけ');
+eq(TD.normalize(nb3).think, { 'od-philo-ai': { opened: { facts: false, views: false, asks: false, mine: true }, ask: null, marks: [{ id: 'mk3', stance: 'none', line: null, time: 't' }] } }, 'AF-5 think は形の合うものだけ');
 var nb4 = JSON.parse(freeze(full)); nb4.think = 'x'; nb4.circle = [{ id: 'od-none', time: 't' }, { id: PH, ask: 'zz', time: 't' }, { id: PH, ask: null, time: 't' }, { id: PH, ask: 'self', time: 't' }, 3];
-eq([TD.normalize(nb4).think, TD.normalize(nb4).circle, TD.normalize(nb4).kept], [{}, [{ id: PH, ask: null, time: 't' }], full.kept], 'AE-5 think が壊れたら think だけ初期値・circle は知っているお題だけ（重なりなし）');
+eq([TD.normalize(nb4).think, TD.normalize(nb4).circle, TD.normalize(nb4).kept], [{}, [{ id: PH, ask: null, time: 't' }], full.kept], 'AF-5 think が壊れたら think だけ初期値・circle は知っているお題だけ（重なりなし）');
 var nb5 = JSON.parse(freeze(full)); nb5.circle = 'x'; nb5.kept = [PH, 'od-none', SEED];
-eq([TD.normalize(nb5).circle, TD.normalize(nb5).kept], [[], [PH, SEED]], 'AE-5 circle が壊れたら circle だけ初期値・kept は種類を問わず知っているお題');
-// 作ってみる（AE-4 の 5）: 外で作る活動（題 = next.makeTitle・手順 = next.makeSteps）。2 回目は同じ活動
+eq([TD.normalize(nb5).circle, TD.normalize(nb5).kept], [[], [PH, SEED]], 'AF-5 circle が壊れたら circle だけ初期値・kept は種類を問わず知っているお題');
+// 作ってみる（AF-4 の 5）: 外で作る活動（題 = next.makeTitle・手順 = next.makeSteps）。2 回目は同じ活動
 var dmk = TDD.makeOdaiOf(TDD.getDialog(PH)), ra = M.fromOdai(dmk, { id: 'a-d1', mode: 'js', now: '10:20', acts: [], recText: 'r' });
-eq([ra.act.title, ra.act.stepsKind, ra.act.theme, ra.act.steps, ra.act.odaiId], [TDD.getDialog(PH).next.makeTitle[0], 'ext', 'odai', TDD.getDialog(PH).next.makeSteps, PH], 'AE-4 作ってみる → 外で作る活動（題・手順は次の一歩のもの）');
+eq([ra.act.title, ra.act.stepsKind, ra.act.theme, ra.act.steps, ra.act.odaiId], [TDD.getDialog(PH).next.makeTitle[0], 'ext', 'odai', TDD.getDialog(PH).next.makeSteps, PH], 'AF-4 作ってみる → 外で作る活動（題・手順は次の一歩のもの）');
 var rb = M.fromOdai(dmk, { id: 'a-d2', acts: [ra.act] });
-ok(!rb.created && rb.id === 'a-d1', 'AE-4 作ってみる 2 回目は同じ活動');
-eq(M.fromOdai(TDD.makeOdaiOf(TDD.getDialog('od-talk-rule')), { id: 'a-d3', mode: 'es', acts: [] }).act.title, TDD.getDialog('od-talk-rule').next.makeTitle[1], 'AE-4 作ってみる 小学生表示なら小の題');
+ok(!rb.created && rb.id === 'a-d1', 'AF-4 作ってみる 2 回目は同じ活動');
+eq(M.fromOdai(TDD.makeOdaiOf(TDD.getDialog('od-talk-rule')), { id: 'a-d3', mode: 'es', acts: [] }).act.title, TDD.getDialog('od-talk-rule').next.makeTitle[1], 'AF-4 作ってみる 小学生表示なら小の題');
 
 // ---------- 画面の文言 key が i18n.js にある（console.warn を出さない） ----------
 var i18n = fs.readFileSync(path.join(__dirname, '../app-v3/js/i18n.js'), 'utf8');
@@ -460,7 +460,7 @@ function fakeStore(st, failKey) {
 }
 var TDSRC = fs.readFileSync(path.join(__dirname, '../app-v3/js/today.js'), 'utf8');
 function handlerSrc(name) { var i = TDSRC.indexOf("A['" + name + "'] = function"); if (i < 0) return ''; var j = TDSRC.indexOf("\n  A['", i + 10); var k = TDSRC.indexOf('\n  function ', i + 10); var e = [j, k].filter(function (x) { return x > 0; }); return TDSRC.slice(i, e.length ? Math.min.apply(null, e) : i + 3000); }
-t('裁定 12 §AD の題材（stop / ath / story）は MD.THEMES に必ずある', function () {
+t('裁定 12 §AE の題材（stop / ath / story）は MD.THEMES に必ずある', function () {
   ['stop', 'ath', 'story'].forEach(function (th) { ok(MD.THEMES.indexOf(th) >= 0, '裁定 12 ' + th + ' は MD.THEMES にある'); });
 });
 t('裁定 1 対話のお題の「作ってみる」: 保存できなければ活動を足さず、作業台へ移らない', function () {

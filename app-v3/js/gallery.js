@@ -1,4 +1,4 @@
-/* 作品展示（#gallery 一覧 / #gallery/<itemId> 詳細）: contract-app §AF。§W-4 の「見せる」とは別の操作（見せるは変えない）。
+/* 作品展示（#gallery 一覧 / #gallery/<itemId> 詳細）: contract-app §AG。§W-4 の「見せる」とは別の操作（見せるは変えない）。
    展示に並ぶもの = 他の人の作品の見本（gallery-data.js）+ 自分が出している作品。並びは新しい順だけ。反応の数・人気順・件数は出さない。
    呼び名・ひとことは利用者の入力なので、必ず DES.h の文字列子要素（textContent）で出す。DES.raw には固定の SVG だけを渡す。
    通知やバッジを他の画面に出さない（#gallery を開いた時だけ分かる）。返事と見本の声かけは #gallery を開いた時の決定論（G.settle）。
@@ -35,7 +35,7 @@
   }
   function newestFirst(list) { return byTime(list, -1); }
 
-  // ---------- 状態（§AF-6） ----------
+  // ---------- 状態（§AG-6） ----------
   function initial() {
     return { v: 1, name: null, auto: false, mine: {}, reacts: {}, notes: [], calls: [], inbox: [], promises: [], seeded: false };
   }
@@ -104,14 +104,14 @@
     return S;
   }
 
-  // ---------- 展示に並ぶもの（§AF-2 / AF-3） ----------
+  // ---------- 展示に並ぶもの（§AG-2 / AG-3） ----------
   function catalogCat(id) {
     var d = DES.data, hit = null;
     if (!id || !d || !Array.isArray(d.catalog)) return null;
     d.catalog.forEach(function (c) { (c.items || []).forEach(function (it) { if (it.id === id) hit = c.id; }); });
     return hit && GD.CATS.indexOf(hit) >= 0 ? hit : null;
   }
-  // 提案から作った作品（§AD-4。theme 'project'）の種類: 提案のカテゴリ（作品の projectId → 無ければ acts の中の作品の actId の活動の projectId
+  // 提案から作った作品（§AE-4。theme 'project'）の種類: 提案のカテゴリ（作品の projectId → 無ければ acts の中の作品の actId の活動の projectId
   // → 無ければ写真のカテゴリ）。保存データは書き換えない。レビューへの裁定
   function projectCat(w, acts) {
     if (!w || w.theme !== 'project') return null;
@@ -123,7 +123,7 @@
   // 自分の作品の種類: 提案のカテゴリ → catalog の id → 題材 → ものづくり（acts = 活動の一覧。省略可）
   function catOf(w, acts) { return projectCat(w, acts) || catalogCat(w && w.catalogId) || GD.THEME_CAT[w && w.theme] || 'craft'; }
   // 出している = 1 つずつ出した（in）か、自動が入で完成の作品（外した out は出さない）。
-  // 写真から入れた作品（from 'capture'）は自動では出さない（顔や名前が写っていないかを本人が見てから 1 つずつ。§AF-2）
+  // 写真から入れた作品（from 'capture'）は自動では出さない（顔や名前が写っていないかを本人が見てから 1 つずつ。§AG-2）
   function isIn(state, w) {
     if (!w || !state) return false;
     var m = state.mine && state.mine[w.id];
@@ -155,7 +155,7 @@
   // 並んでいる種類（チップ。GD.CATS の順）
   function cats(list) { return GD.CATS.filter(function (c) { return list.some(function (it) { return it.cat === c; }); }); }
 
-  // ---------- 出す・外す（§AF-2） ----------
+  // ---------- 出す・外す（§AG-2） ----------
   function put(state, workId, time) {
     if (!isStr(workId) || !workId) return state;
     var m = state.mine[workId];
@@ -180,7 +180,7 @@
     return S;
   }
 
-  // ---------- 反応（§AF-4。押すと入る・もう一度で外れる） ----------
+  // ---------- 反応（§AG-4。押すと入る・もう一度で外れる） ----------
   function react(state, id, kind) {
     if (KINDS.indexOf(kind) < 0 || !isStr(id) || !id) return state;
     var S = clone(state), cur = S.reacts[id] || [], i = cur.indexOf(kind);
@@ -197,7 +197,7 @@
     return out;
   }
 
-  // ---------- 番人（§AF-4。モックの決定論）: hold にするのは (a) 語の一覧 (b) 7 けた以上の数字 (c) http・@・住所・電話・LINE (d) 同じ文字 8 回以上 ----------
+  // ---------- 番人（§AG-4。モックの決定論）: hold にするのは (a) 語の一覧 (b) 7 けた以上の数字 (c) http・@・住所・電話・LINE (d) 同じ文字 8 回以上 ----------
   function guard(text) {
     var raw = String(text == null ? '' : text), t = raw.normalize ? raw.normalize('NFKC') : raw, low = t.toLowerCase();
     if (GD.BAD_WORDS.some(function (w) { return t.indexOf(w) >= 0 || raw.indexOf(w) >= 0; })) return 'hold';
@@ -211,7 +211,7 @@
     return 'ok';
   }
 
-  // ---------- ひとこと（§AF-4）: 80 字で切る・番人の結果を state に持つ ----------
+  // ---------- ひとこと（§AG-4）: 80 字で切る・番人の結果を state に持つ ----------
   function addNote(state, o) {
     o = o || {};
     var text = cut(trim(o.text), NOTE_MAX);
@@ -222,7 +222,7 @@
   }
   // 「送る」を押せるか: 下書きがあり、どの作品のひとことも送信待ちでない時だけ（レビューへの裁定）
   function canSend(draft, sending) { return !!trim(draft) && !sending; }
-  // 入力欄の値をコードポイントで 80 字までにする（入力欄も保存も同じ数え方。§AF-4）
+  // 入力欄の値をコードポイントで 80 字までにする（入力欄も保存も同じ数え方。§AG-4）
   function fitNote(v) { return cut(String(v == null ? '' : v), NOTE_MAX); }
   function removeNote(state, noteId) {
     var i = idx(state.notes, noteId);
@@ -244,7 +244,7 @@
     return byTime(out, 1);
   }
 
-  // ---------- 声かけ（§AF-5）。同じ作品には 1 つまで ----------
+  // ---------- 声かけ（§AG-5）。同じ作品には 1 つまで ----------
   function call(state, o) {
     o = o || {};
     if (CALLS.indexOf(o.kind) < 0 || !isStr(o.itemId) || !o.itemId || !isStr(o.id)) return state;
@@ -457,7 +457,7 @@
     return box;
   }
 
-  // ---------- 一覧（§AF-3） ----------
+  // ---------- 一覧（§AG-3） ----------
   function card(it) {
     return H('a', { class: 'gl-card' + (it.mine ? ' is-mine' : ''), href: '#gallery/' + it.id, 'data-fk': 'glc:' + it.id }, [
       artEl(it, 'gl-card-art'),
@@ -511,7 +511,7 @@
         nameRow
       ]),
       H('label', { class: 'gl-auto', for: 'gl-auto' }, [H('input', { type: 'checkbox', id: 'gl-auto', 'data-ui': 'gl-auto', checked: st.auto === true, 'aria-describedby': 'gl-auto-capture' }), H('span', null, T('gl_auto'))]),
-      // 切替の下の 1 行（§AF-2）: 写真から入れた作品は自動では出さない
+      // 切替の下の 1 行（§AG-2）: 写真から入れた作品は自動では出さない
       H('p', { class: 'hint gl-auto-note', id: 'gl-auto-capture' }, T('gl_auto_capture'))
     ];
     var ib = inboxSec(), ps = promiseSec();
@@ -529,7 +529,7 @@
     main.appendChild(H('div', { class: 'gallery-page' }, kids));
   }
 
-  // ---------- 詳細（§AF-4 / AF-5） ----------
+  // ---------- 詳細（§AG-4 / AG-5） ----------
   function textBlock(label, text) { return H('div', { class: 'gl-text' }, [H('p', { class: 'gl-text-k' }, label), H('p', { class: 'gl-text-v' }, text)]); }
   function reactSec(it) {
     var who = reactors(S().gallery, it.id, GD.reacts), kids;
@@ -582,7 +582,7 @@
     kids.push(H('div', { class: 'gl-note-form', 'data-fk': 'gl-note-form' }, [
       H('label', { for: 'gl-note' }, T('gl_note_label')),
       H('div', { class: 'gl-note-row' }, [
-        // 字数はコードポイントで数える（UTF-16 で数える入力欄の上限の属性は使わず、入力のたびに fitNote で切る。§AF-4）
+        // 字数はコードポイントで数える（UTF-16 で数える入力欄の上限の属性は使わず、入力のたびに fitNote で切る。§AG-4）
         H('input', { id: 'gl-note', type: 'text', 'data-ui': 'gl-note', 'data-id': it.id, value: draft, autocomplete: 'off',
           readonly: sending, 'aria-busy': sending ? 'true' : null, 'aria-describedby': 'gl-note-need' }),
         btn(T('gl_note_send'), 'gl-note-send', { id: it.id, kls: 'primary', icon: 'send', disabled: dis })
@@ -667,7 +667,7 @@
   // ルートが変わったら一時的な UI を閉じる（app.js の closeTransient から）。絞り込みと下書きは残す
   G.resetUi = function () { var u = ui(); u.shownDetail = null; u.missing = null; u.entered = false; u.pick = {}; };
 
-  // ---------- 作品の詳細の節「作品展示」（works.js から。§AF-2 の 1 つずつ） ----------
+  // ---------- 作品の詳細の節「作品展示」（works.js から。§AG-2 の 1 つずつ） ----------
   G.workBlock = function (w) {
     var st = S().gallery;
     if (isIn(st, w)) {

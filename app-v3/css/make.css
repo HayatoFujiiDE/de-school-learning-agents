@@ -369,7 +369,7 @@ html[data-mode="es"] .studio-chat .message .bubble,html[data-mode="es"] .mk-comp
 html[data-mode="es"] .cr-what,html[data-mode="es"] .result-line,html[data-mode="es"] .step-line,html[data-mode="es"] .card-title,html[data-mode="es"] .roles-sum{font-size:14px}
 html[data-mode="es"] .card-desc,html[data-mode="es"] .cr-result,html[data-mode="es"] .card-src,html[data-mode="es"] .face-note,html[data-mode="es"] .untested,html[data-mode="es"] .card-note{font-size:12px}
 
-/* ---------- §AD 作るを広げる（入口の組の入れ替え・こんなのも作れる） ---------- */
+/* ---------- §AE 作るを広げる（入口の組の入れ替え・こんなのも作れる） ---------- */
 .sample-options.is-fading,.pj-grid.is-fading{opacity:0;transition:opacity .15s ease}
 .sample-options.is-fadein,.pj-grid.is-fadein{animation:mk-fadein .15s ease-out}
 @keyframes mk-fadein{from{opacity:0}to{opacity:1}}

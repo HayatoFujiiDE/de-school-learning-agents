@@ -1,4 +1,4 @@
-/* 作品展示の純関数テスト（contract-app §AF-7）+ 見本データ（§AF-6）。node tools/gallery-test.js → 最後に GALLERY_TEST=PASS|FAIL */
+/* 作品展示の純関数テスト（contract-app §AG-7）+ 見本データ（§AG-6）。node tools/gallery-test.js → 最後に GALLERY_TEST=PASS|FAIL */
 'use strict';
 var path = require('path');
 var fs = require('fs');
@@ -13,9 +13,9 @@ function ok(cond, name) {
 function eq(a, b, name) { ok(JSON.stringify(a) === JSON.stringify(b), name + '  (got ' + JSON.stringify(a) + ', want ' + JSON.stringify(b) + ')'); }
 function freeze(v) { return JSON.stringify(v); }
 
-// ---------- 見本データ（§AF-6） ----------
+// ---------- 見本データ（§AG-6） ----------
 var ids = GD.items.map(function (x) { return x.id; });
-eq(ids, ['g-clay-walk', 'g-ice-course', 'g-rain-novel', 'g-lamp', 'g-4koma', 'g-coaster', 'g-stamp', 'g-coin-game'], 'AF-6 見本 8 件の id');
+eq(ids, ['g-clay-walk', 'g-ice-course', 'g-rain-novel', 'g-lamp', 'g-4koma', 'g-coaster', 'g-stamp', 'g-coin-game'], 'AG-6 見本 8 件の id');
 var want = {
   'g-clay-walk': ['そらまめ', 'media', '粘土のカエルが歩く動画', 'とぶ前に、少ししゃがむところ', 'ok', 'photo'],
   'g-ice-course': ['ペンギン号', 'minecraft', '氷ですべるアスレチック', '最後の足場だけ、わざと小さくしたところ', null, 'photo'],
@@ -27,27 +27,27 @@ var want = {
   'g-coin-game': ['ペンギン号', 'programming', 'コインを集めるゲーム', 'コインが 10 枚で色が変わるところ', null, 'line']
 };
 GD.items.forEach(function (x) {
-  eq([x.name, x.cat, x.title, x.like, x.answers || null, x.art], want[x.id], 'AF-6 ' + x.id + ' の中身が契約どおり');
-  ok(GD.CATS.indexOf(x.cat) >= 0, 'AF-6 ' + x.id + ' の種類が 7 種のどれか');
-  ok(G.timeKey(x.time) > 0, 'AF-6 ' + x.id + ' に展示の時刻');
-  ok(!('grade' in x) && !('realName' in x) && !('face' in x), 'AF-6 ' + x.id + ' は呼び名だけ（学年・本当の名前・顔を持たない）');
+  eq([x.name, x.cat, x.title, x.like, x.answers || null, x.art], want[x.id], 'AG-6 ' + x.id + ' の中身が契約どおり');
+  ok(GD.CATS.indexOf(x.cat) >= 0, 'AG-6 ' + x.id + ' の種類が 7 種のどれか');
+  ok(G.timeKey(x.time) > 0, 'AG-6 ' + x.id + ' に展示の時刻');
+  ok(!('grade' in x) && !('realName' in x) && !('face' in x), 'AG-6 ' + x.id + ' は呼び名だけ（学年・本当の名前・顔を持たない）');
 });
-eq(GD.reacts.length, 6, 'AF-6 見本の反応 6 件');
-eq(GD.notes.length, 4, 'AF-6 見本のひとこと 4 件');
-ok(GD.reacts.some(function (r) { return r.itemId === 'g-clay-walk' && r.kind === 'how' && r.name === 'ペンギン号'; }), 'AF-6 g-clay-walk に「どうやったの？」= ペンギン号');
-ok(GD.notes.some(function (n) { return n.itemId === 'g-clay-walk' && n.name === 'あおい星' && n.text === 'しゃがむ所、何コマ使ったの？'; }), 'AF-6 ひとこと「しゃがむ所、何コマ使ったの？」= あおい星');
-ok(GD.notes.some(function (n) { return n.itemId === 'g-clay-walk' && n.name === 'そらまめ' && n.text === '3 コマだよ'; }), 'AF-6 作者の返事「3 コマだよ」= そらまめ');
-GD.reacts.concat(GD.notes).forEach(function (r) { ok(ids.indexOf(r.itemId) >= 0, 'AF-6 見本の反応・ひとことは見本の作品を指す ' + r.itemId); });
-GD.notes.forEach(function (n) { eq(G.guard(n.text), 'ok', 'AF-6 見本のひとことは番人を通る ' + n.id); });
-ok(GD.BAD_WORDS.length >= 12 && GD.BAD_WORDS.length <= 24, 'AF-4 番人の語の一覧は 15 語ほど（' + GD.BAD_WORDS.length + '）');
+eq(GD.reacts.length, 6, 'AG-6 見本の反応 6 件');
+eq(GD.notes.length, 4, 'AG-6 見本のひとこと 4 件');
+ok(GD.reacts.some(function (r) { return r.itemId === 'g-clay-walk' && r.kind === 'how' && r.name === 'ペンギン号'; }), 'AG-6 g-clay-walk に「どうやったの？」= ペンギン号');
+ok(GD.notes.some(function (n) { return n.itemId === 'g-clay-walk' && n.name === 'あおい星' && n.text === 'しゃがむ所、何コマ使ったの？'; }), 'AG-6 ひとこと「しゃがむ所、何コマ使ったの？」= あおい星');
+ok(GD.notes.some(function (n) { return n.itemId === 'g-clay-walk' && n.name === 'そらまめ' && n.text === '3 コマだよ'; }), 'AG-6 作者の返事「3 コマだよ」= そらまめ');
+GD.reacts.concat(GD.notes).forEach(function (r) { ok(ids.indexOf(r.itemId) >= 0, 'AG-6 見本の反応・ひとことは見本の作品を指す ' + r.itemId); });
+GD.notes.forEach(function (n) { eq(G.guard(n.text), 'ok', 'AG-6 見本のひとことは番人を通る ' + n.id); });
+ok(GD.BAD_WORDS.length >= 12 && GD.BAD_WORDS.length <= 24, 'AG-4 番人の語の一覧は 15 語ほど（' + GD.BAD_WORDS.length + '）');
 GD.CATS.forEach(function (c) {
   var svg = GD.lineArt(c);
-  ok(/^<svg [^>]*viewBox="0 0 240 150"/.test(svg) && /<\/svg>$/.test(svg), 'AF-6 種類の線画 ' + c);
-  ok(/#ed922c/.test(svg), 'AF-6 種類の線画は強調に橙 ' + c);
+  ok(/^<svg [^>]*viewBox="0 0 240 150"/.test(svg) && /<\/svg>$/.test(svg), 'AG-6 種類の線画 ' + c);
+  ok(/#ed922c/.test(svg), 'AG-6 種類の線画は強調に橙 ' + c);
 });
-eq(GD.PREP_STEPS.map(function (s) { return s[0]; }), ['何を一緒に作るか話す', '分けてやる所を決める', '合わせて見る'], 'AF-5 先に準備するの手順（verbatim）');
+eq(GD.PREP_STEPS.map(function (s) { return s[0]; }), ['何を一緒に作るか話す', '分けてやる所を決める', '合わせて見る'], 'AG-5 先に準備するの手順（verbatim）');
 
-// ---------- 状態（§AF-6 の形）と normalize ----------
+// ---------- 状態（§AG-6 の形）と normalize ----------
 var s0 = G.initial();
 eq(s0, { v: 1, name: null, auto: false, mine: {}, reacts: {}, notes: [], calls: [], inbox: [], promises: [], seeded: false }, 'G.initial の形');
 eq(G.normalize(null), s0, 'normalize null → 初期値');
@@ -76,7 +76,7 @@ eq(n.seeded, true, 'normalize seeded');
 var n2 = G.normalize({ name: 'あいうえおかきくけこさしす', auto: 'yes', mine: [], notes: {}, seeded: 1, calls: [{ id: 'c1', itemId: 'g-lamp', kind: 'teach', state: 'sent', time: 't' }] });
 eq([n2.name, n2.auto, n2.mine, n2.notes, n2.seeded, n2.calls.length], [null, false, {}, [], false, 1], 'normalize 形が違う項目だけ初期値（他は残す）');
 
-// ---------- 呼び名（§AF-2） ----------
+// ---------- 呼び名（§AG-2） ----------
 eq(G.setName(s0, '  ほし  ').name, 'ほし', 'setName 前後の空白を取る');
 eq(G.setName(s0, ''), s0, 'setName 空は変えない');
 eq(G.setName(s0, '   '), s0, 'setName 空白だけは変えない');
@@ -87,7 +87,7 @@ var sn = G.setName(s0, 'ほし');
 eq(G.setName(sn, 'ほし'), sn, 'setName 同じ呼び名は同じ state');
 eq(freeze(s0), freeze(G.initial()), 'setName 元の state を変えない');
 
-// ---------- 展示に並ぶもの（§AF-2 / AF-3） ----------
+// ---------- 展示に並ぶもの（§AG-2 / AG-3） ----------
 var works = [
   { id: 'wa', title: '完成の作品', status: 'done', theme: 'py', date: '11/1', atTime: '10:30', like: '好き', craft: null, roles: { own: 2, ai: 1 }, art: null, from: 'make' },
   { id: 'wb', title: '試作の作品', status: 'trial', theme: 'mc', date: '11/2', atTime: '10:00', like: null, craft: null, roles: { own: 1, ai: 0 }, art: null, from: 'make' },
@@ -106,11 +106,11 @@ eq(ip.length, 9, 'items 試作も 1 つずつなら出せる');
 eq(ip[0].id, 'my-wb', 'items 新しい順（今出したものが先頭）');
 ok(ip[0].mine && ip[0].workId === 'wb' && ip[0].name === 'ほし' && ip[0].cat === 'minecraft', 'items 自分の作品は呼び名・種類つき');
 eq(G.items(sp, works.filter(function (w) { return w.id !== 'wb'; }), GD.items).length, 8, 'items 作品から外した作品は展示からも消える');
-// 自動（§AF-2 まとめて）
+// 自動（§AG-2 まとめて）
 var sa = G.setAuto(sn, true);
 eq(G.setAuto(sa, true), sa, 'setAuto 同じなら同じ state');
 var ia = G.items(sa, works, GD.items).filter(function (x) { return x.mine; }).map(function (x) { return x.workId; });
-eq(ia.sort(), ['wa'], 'items 自動が入なら完成の作品だけ（試作・写真から入れた作品は自動では出さない。§AF-2 改訂）');
+eq(ia.sort(), ['wa'], 'items 自動が入なら完成の作品だけ（試作・写真から入れた作品は自動では出さない。§AG-2 改訂）');
 var tk = G.take(sa, 'wa', '11/2 10:25');
 ok(tk && tk.state.mine.wa.state === 'out', 'take 自動で並んでいる作品も out にする');
 eq(G.items(tk.state, works, GD.items).filter(function (x) { return x.mine; }).map(function (x) { return x.workId; }), [], 'items 外した作品は自動が入でも出さない');
@@ -149,7 +149,7 @@ eq(who.how, [{ name: 'ペンギン号', mine: false }], 'reactors 見本の押�
 eq(G.reactors(r1, 'g-lamp', GD.reacts).like, [{ name: null, mine: true }], 'reactors 自分（呼び名は描く時に読む）');
 ok(Object.keys(who).every(function (k) { return Array.isArray(who[k]); }), 'reactors 数でなく呼び名の並び');
 
-// ---------- 番人（§AF-4 (a)〜(d)） ----------
+// ---------- 番人（§AG-4 (a)〜(d)） ----------
 eq(G.guard('しゃがむ所、何コマ使ったの？'), 'ok', 'guard ふつうのひとことは ok');
 eq(G.guard('すてきな色だね'), 'ok', 'guard ok');
 eq(G.guard('なんかバカみたい'), 'hold', 'guard (a) 語の一覧');
@@ -192,7 +192,7 @@ eq(G.restoreNote(rm.state, rm.undo).notes.map(function (x) { return x.id; }), ['
 eq(G.restoreNote(a3, rm.undo), a3, 'restoreNote もうあれば同じ state');
 eq(G.removeNote(a3, 'zz'), null, 'removeNote 無い id は null');
 
-// ---------- 声かけ・返事（§AF-5） ----------
+// ---------- 声かけ・返事（§AG-5） ----------
 var c1 = G.call(sn, { id: 'gc1', itemId: 'g-clay-walk', kind: 'together', time: '11/2 10:20' });
 eq(c1.calls, [{ id: 'gc1', itemId: 'g-clay-walk', kind: 'together', state: 'sent', time: '11/2 10:20' }], 'call 届ける');
 eq(G.call(c1, { id: 'gc2', itemId: 'g-clay-walk', kind: 'teach', time: 't' }), c1, 'call 同じ作品には 1 つまで');
@@ -254,23 +254,23 @@ G.KINDS.forEach(function (k) { keys['gl_r_' + k] = true; });
 G.CALLS.forEach(function (k) { keys['gl_c_' + k] = true; });
 ['gl_name_empty', 'gl_name_long', 'gl_inbox_toast', 'gl_call_ok', 'gl_call_later', 'gl_auto_on', 'gl_auto_off', 'gl_inbox_ok_toast', 'gl_inbox_later_toast', 'origin_gallery'].forEach(function (k) { keys[k] = true; });
 var missing = Object.keys(keys).filter(function (k) { return !new RegExp('\\n\\s+' + k + ": \\['[^']+', '[^']+'\\]").test(i18n); });
-eq(missing, [], 'AF 使う key が i18n.js に [中, 小] である');
-var block = i18n.split('// ---- §AF ----')[1] || '';
-ok(block.length > 0, 'AF i18n は // ---- §AF ---- の塊');
+eq(missing, [], 'AG 使う key が i18n.js に [中, 小] である');
+var block = i18n.split('// ---- §AG ----')[1] || '';
+ok(block.length > 0, 'AG i18n は // ---- §AG ---- の塊');
 var afLines = block.split('\n').filter(function (l) { return /^\s+(gl_|gallery|origin_gallery)/.test(l); });
-ok(afLines.length > 50, 'AF i18n の行（' + afLines.length + '）');
-ok(!/点数|ランキング|順位|評価|成績|レベル|集中力|得意|苦手|上手|成長|頑張|すごい|版|人気|いいね数/.test(afLines.join('\n')), 'AF の文言に評価の語・「版」・人気が無い');
-eq(i18n.indexOf("gl_sub: ['教室のみんなが、見せてもいいよと出した作品。見られるのは、同じ教室の人とサポーターだけ'") > 0, true, 'AF-1 見出しの下の 1 文（verbatim）');
-eq(i18n.indexOf("gl_sub2: ['サポーターは、展示のやりとりを全部見られるよ'") > 0, true, 'AF-1 小さく 1 行（verbatim）');
-eq(i18n.indexOf("gl_held: ['このひとことは、サポーターが先に読むことになったよ'") > 0, true, 'AF-4 届けない時の 1 文（verbatim）');
-eq(i18n.indexOf("gl_reading: ['AI が先に読んでいるよ'") > 0, true, 'AF-4 先に読んでいる（verbatim）');
+ok(afLines.length > 50, 'AG i18n の行（' + afLines.length + '）');
+ok(!/点数|ランキング|順位|評価|成績|レベル|集中力|得意|苦手|上手|成長|頑張|すごい|版|人気|いいね数/.test(afLines.join('\n')), 'AG の文言に評価の語・「版」・人気が無い');
+eq(i18n.indexOf("gl_sub: ['教室のみんなが、見せてもいいよと出した作品。見られるのは、同じ教室の人とサポーターだけ'") > 0, true, 'AG-1 見出しの下の 1 文（verbatim）');
+eq(i18n.indexOf("gl_sub2: ['サポーターは、展示のやりとりを全部見られるよ'") > 0, true, 'AG-1 小さく 1 行（verbatim）');
+eq(i18n.indexOf("gl_held: ['このひとことは、サポーターが先に読むことになったよ'") > 0, true, 'AG-4 届けない時の 1 文（verbatim）');
+eq(i18n.indexOf("gl_reading: ['AI が先に読んでいるよ'") > 0, true, 'AG-4 先に読んでいる（verbatim）');
 var browser = gsrc.split('ここから下はブラウザ専用')[1] || '';
 var raws = browser.match(/DES\.raw\(([^)]*)\)/g) || [];
-ok(raws.length > 0 && raws.every(function (r) { return /^DES\.raw\((DES\.icon\(n|GD\.lineArt\(it\.cat|svg \|\| GD\.lineArt\(cat)\)$/.test(r); }), 'AF DES.raw に渡すのは固定の SVG・アイコンだけ（' + raws.join(' / ') + '）');
-ok(!/innerHTML|insertAdjacentHTML|outerHTML/.test(gsrc), 'AF innerHTML を使わない');
-ok(!/\bfetch\(|XMLHttpRequest/.test(gsrc + fs.readFileSync(path.join(__dirname, '../app-v3/js/gallery-data.js'), 'utf8')), 'AF fetch を使わない');
-ok(/\(DES\.thumbs \|\| \{\}\)\[id\]/.test(gsrc), 'AF DES.thumbs が無くても落ちない');
-ok(!/badge|count\b/i.test(browser.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'AF 件数のバッジを作らない');
+ok(raws.length > 0 && raws.every(function (r) { return /^DES\.raw\((DES\.icon\(n|GD\.lineArt\(it\.cat|svg \|\| GD\.lineArt\(cat)\)$/.test(r); }), 'AG DES.raw に渡すのは固定の SVG・アイコンだけ（' + raws.join(' / ') + '）');
+ok(!/innerHTML|insertAdjacentHTML|outerHTML/.test(gsrc), 'AG innerHTML を使わない');
+ok(!/\bfetch\(|XMLHttpRequest/.test(gsrc + fs.readFileSync(path.join(__dirname, '../app-v3/js/gallery-data.js'), 'utf8')), 'AG fetch を使わない');
+ok(/\(DES\.thumbs \|\| \{\}\)\[id\]/.test(gsrc), 'AG DES.thumbs が無くても落ちない');
+ok(!/badge|count\b/i.test(browser.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'AG 件数のバッジを作らない');
 
 // ---------- レビューへの裁定（contract-app 末尾「直す（実装）」/「契約の方を直した」）----------
 function t(name, fn) { try { fn(); } catch (e) { fail += 1; console.log('NG  ' + name + '  (例外 ' + e.message + ')'); } }
@@ -306,21 +306,21 @@ t('裁定 9 展示の絵: 保存された作品の絵の形が違う時は、種
   var wa = gsrc.slice(gsrc.indexOf('function workArt'), gsrc.indexOf('function artEl'));
   ok(/safeArt\(/.test(wa) && /catch \(e\)/.test(wa), '裁定 9 workArt は形を確かめ、例外でも線画に替える');
 });
-t('契約 AF-2: 写真から入れた作品は自動では展示に出さない + 切替の下の 1 行', function () {
+t('契約 AG-2: 写真から入れた作品は自動では展示に出さない + 切替の下の 1 行', function () {
   var st = G.setAuto(G.initial(), true);
   var cap = { id: 'w-cap', title: '写真', status: 'done', from: 'capture', theme: 'mc' }, mk = { id: 'w-mk', title: '作った', status: 'done', from: 'make', theme: 'mc' };
-  eq([G.isIn(st, cap), G.isIn(st, mk)], [false, true], 'AF-2 自動では写真から入れた作品を出さない');
-  eq(G.isIn(G.put(st, 'w-cap', 't'), cap), true, 'AF-2 1 つずつなら出せる');
-  eq(G.items(st, [cap, mk], []).map(function (it) { return it.id; }), ['my-w-mk'], 'AF-2 自動の並びに写真から入れた作品は無い');
-  ok(i18n.indexOf("gl_auto_capture: ['写真から入れた作品は、1 つずつ出してね'") > 0, 'AF-2 切替の下の 1 行（verbatim）');
+  eq([G.isIn(st, cap), G.isIn(st, mk)], [false, true], 'AG-2 自動では写真から入れた作品を出さない');
+  eq(G.isIn(G.put(st, 'w-cap', 't'), cap), true, 'AG-2 1 つずつなら出せる');
+  eq(G.items(st, [cap, mk], []).map(function (it) { return it.id; }), ['my-w-mk'], 'AG-2 自動の並びに写真から入れた作品は無い');
+  ok(i18n.indexOf("gl_auto_capture: ['写真から入れた作品は、1 つずつ出してね'") > 0, 'AG-2 切替の下の 1 行（verbatim）');
   var rl = gsrc.slice(gsrc.indexOf('function renderList'), gsrc.indexOf('// ---------- 詳細'));
-  ok(rl.indexOf("T('gl_auto_capture')") > rl.indexOf("T('gl_auto')"), 'AF-2 1 行は切替の下');
+  ok(rl.indexOf("T('gl_auto_capture')") > rl.indexOf("T('gl_auto')"), 'AG-2 1 行は切替の下');
 });
-t('契約 AF-4: ひとことの字数は入力欄も保存もコードポイント', function () {
+t('契約 AG-4: ひとことの字数は入力欄も保存もコードポイント', function () {
   var e81 = Array(82).join('😀');
-  eq([Array.from(G.fitNote(e81)).length, G.fitNote('abc')], [80, 'abc'], 'AF-4 入力欄の値はコードポイントで 80 字まで');
+  eq([Array.from(G.fitNote(e81)).length, G.fitNote('abc')], [80, 'abc'], 'AG-4 入力欄の値はコードポイントで 80 字まで');
   var ns = gsrc.slice(gsrc.indexOf('function notesSec'), gsrc.indexOf('function callSec'));
-  ok(!/maxlength/.test(ns) && /fitNote\(t\.value\)/.test(gsrc), 'AF-4 入力欄は UTF-16 の maxlength を使わず、入力のたびにコードポイントで切る');
+  ok(!/maxlength/.test(ns) && /fitNote\(t\.value\)/.test(gsrc), 'AG-4 入力欄は UTF-16 の maxlength を使わず、入力のたびにコードポイントで切る');
 });
 t('確認レビュー 2 展示の種類: projectId の無い作品は actId の活動の projectId から', function () {
   var a = M.fromProject(MD.project('pj-novel-3'), { id: 'a-r2', mode: 'js', now: '10:20', acts: [] }).act;
