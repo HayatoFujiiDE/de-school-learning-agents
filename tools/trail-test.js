@@ -226,6 +226,11 @@ ok(n7.stage !== bare.base, 'Z-5 作業対象は写し');
 var none = clone(bare); none.base = null; none.stage = null;
 var n8 = M.fromTrail(none, { id: 'a-none2', now: '10:20', mode: 'js' });
 eq([n8.theme, n8.candidate, n8.shelf.length, n8.origin], ['circuit', true, 3, 'trail'], 'Z-5 始まりが分からない時は同じ題材の仮の案');
+// 自己理解の工夫から（題材 tool・selfLink）: 同じ紐づけ・同じ言葉（出所つき）から
+var sa = M.fromSelf({ id: 'a-self', linkId: 'k-1', text: '話す前にメモを見る', src: 'buddy', variant: 'memo', mode: 'js', now: '10:20' }), saBefore = freeze(sa);
+var n9 = M.fromTrail(sa, { id: 'a-self2', now: '10:20', mode: 'js' });
+eq(freeze(sa), saBefore, 'fromTrail 自己理解の活動を変えない');
+eq([n9.theme, n9.selfLink, n9.quote, n9.origin, n9.fromActId, n9.stage && n9.stage.variant, n9.changes.length], ['tool', 'k-1', sa.quote, 'trail', 'a-self', sa.base.variant, 0], 'Z-5 自己理解から: 同じ紐づけ・同じ言葉（出所つき）・同じ案から');
 eq(M.fromTrail(null, { id: 'x' }), null, 'fromTrail 活動なし → null');
 eq(M.fromTrail(py, {}), null, 'fromTrail id なし → null');
 

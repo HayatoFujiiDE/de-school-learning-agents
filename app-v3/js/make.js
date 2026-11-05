@@ -873,8 +873,8 @@
   };
   Object.keys(pure).forEach(function (k) { M[k] = pure[k]; });
   // ---------- あしあと（CONTRACT-v3 §Z-5 / Z-14）: 「もう一度試す」= 同じ始まりから新しい活動。元の活動 a は変えない（既存の活動を再利用しない） ----------
-  // 始まりの選び方: お題（odaiId）→ 見本（sampleId）→ 言葉（quote）→ 外の記録（ext / build = 同じ手順の空の活動）→ 始めの作業対象（base）→ 同じ題材の仮の案。
-  // 題材の分け方は既存の fromOdai / fromSample / fromText に任せる。新しい活動は origin 'trail'・fromActId = a.id・catalogId / odaiId を引き継ぐ。
+  // 始まりの選び方: お題（odaiId）→ 自己理解の紐づけ（selfLink）→ 見本（sampleId）→ 言葉（quote）→ 外の記録（ext / build = 同じ手順の空の活動）→ 始めの作業対象（base）→ 同じ題材の仮の案。
+  // 題材の分け方は既存の fromOdai / fromSelf / fromSample / fromText に任せる。新しい活動は origin 'trail'・fromActId = a.id・catalogId / odaiId / selfLink を引き継ぐ。
   // o: { id, now, mode, works, odai（お題の定義。無ければ DES.todayData から）, recText（お題の記録 1 行。作った時点の表示の文字列） }
   function fromTrail(a, o) {
     o = o || {};
@@ -882,6 +882,10 @@
     var K = DES.todayData, od = a.odaiId ? (o.odai || (K && K.get ? K.get(a.odaiId) : null)) : null, n = null;
     var base = { id: o.id, now: o.now, mode: o.mode, origin: 'trail', catalogId: a.catalogId || null };
     if (od) { var r = fromOdai(od, { id: o.id, now: o.now, mode: o.mode, acts: [], recText: o.recText }); n = r ? r.act : null; }
+    else if (isSelfLink(a.selfLink)) {
+      n = fromSelf({ id: o.id, linkId: a.selfLink, text: a.quote ? a.quote.text : '', src: a.quote ? a.quote.src : null, variant: a.base && a.base.variant,
+        mode: o.mode, now: o.now, works: o.works });
+    }
     else if (a.sampleId && sampleDef(a.sampleId)) n = fromSample(a.sampleId, base);
     else if (a.quote && a.quote.text) { base.works = o.works; n = fromText(a.quote.text, base); }
     else if (a.stepsKind === 'ext' || a.stepsKind === 'build') {
