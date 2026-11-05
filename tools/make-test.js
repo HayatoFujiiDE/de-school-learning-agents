@@ -987,6 +987,23 @@ t('Y-6 作品に残す: tool の絵と題材', function () {
   ok(/^<svg/.test(MD.art(sw.work.art.stage)), 'Y-6 作品の絵は tool の線画');
 });
 
+t('Y-9 tool の「どこが違う？」: 選択肢の key と任せる操作の対応', function () {
+  eq(M.TOOL_ASPECT, ['one', 'fix', 'redo', 'redo', 'redo'], 'Y-9 TOOL_ASPECT');
+  var a = fself();
+  eq(M.changeOptsKey(a), 'change_opts_tool', 'Y-9 tool は change_opts_tool');
+  eq(M.changeOptsKey(sample('mc')), 'change_opts', 'Y-9 マイクラは change_opts のまま');
+  eq(M.changeOptsKey({ theme: 'odai' }), 'change_opts', 'Y-9 odai は change_opts のまま');
+  // 作業対象 = 見本（sample）: one = まとめる数 +1 / fix = 間かく +1 / redo = 次の案
+  var want = [['value', { count: 4, every: 2 }], ['value', { count: 3, every: 3 }], ['draft', 'nudge'], ['draft', 'nudge'], ['draft', 'nudge']];
+  [0, 1, 2, 3, 4].forEach(function (i) {
+    var r = M.leave(a, 'aspect', { aspect: i }), c = r.act.shelf[0];
+    eq([r.opt, c.kind, c.kind === 'value' ? c.values : c.variant], [M.TOOL_ASPECT[i], want[i][0], want[i][1]], 'Y-9 aspect ' + i + ' → ' + M.TOOL_ASPECT[i]);
+  });
+  eq(M.leave(sample('mc'), 'aspect', { aspect: 0 }).opt, 'redo', 'Y-9 マイクラの aspect は ASPECT_OPT のまま（形 → redo）');
+  eq(M.leave(sample('mc'), 'aspect', { aspect: 3 }).opt, 'one', 'Y-9 マイクラの aspect は ASPECT_OPT のまま（動き → one）');
+  eq(M.leave(a, 'aspect', { aspect: 99 }).opt, 'redo', 'Y-9 範囲外は 4（それ以外）に丸める（境界）');
+});
+
 console.log('make-test: ' + pass + ' passed, ' + fail + ' failed');
 console.log('MAKE_TEST=' + (fail === 0 ? 'PASS' : 'FAIL'));
 process.exitCode = fail === 0 ? 0 : 1;
