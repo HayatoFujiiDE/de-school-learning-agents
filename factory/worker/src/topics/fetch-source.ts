@@ -173,10 +173,18 @@ export async function fetchSource(url: string, quote: string, o: FetchSourceOpti
   }
 }
 
-/** 取得した本文（HTML かテキスト）に引用があるか（T-5 の 2 の正規化） */
+/** 照合する引用の最小の長さ（正規化した後。T-1 の quote 20 字） */
+export const QUOTE_MIN_CHARS = 20;
+
+/**
+ * 取得した本文（HTML かテキスト）に引用があるか（T-5 の 2 の正規化）。Worker の fetch と、生成の応答の web_fetch の結果の照合が共に使う。
+ * タグ・文字参照を除くのは本文の側だけ。引用には空白と全角半角の正規化だけを当て、正規化した後が 20 字未満なら探さずに not_found
+ * （司令塔の裁定 2026-11-06: <b></b> や &amp; で水増しした引用が縮んで、どのページにも見つかることを防ぐ）
+ */
 export function quoteOutcome(raw: string, quote: string): SourceFetchOutcome {
+  const q = normalizeForQuote(quote);
+  if (Array.from(q).length < QUOTE_MIN_CHARS) return { result: 'not_found', excerpt: null };
   const text = normalizeForQuote(htmlToText(raw));
-  const q = normalizeForQuote(htmlToText(quote));
   const excerpt = excerptAround(text, q);
   return excerpt === null ? { result: 'not_found', excerpt: null } : { result: 'found', excerpt };
 }

@@ -144,6 +144,12 @@ describe('validateTopicBody: sources', () => {
     n2.facts[1].source_ids = ['s9'];
     bad(n2, 'unknown_source_ref');
   });
+  it('quote に <・>・& を含むと不合格（quote_markup。司令塔の裁定 2026-11-06）', () => {
+    const n = newsBody(D);
+    bad({ ...n, sources: [{ ...n.sources[0], quote: '本文<b></b><b></b><b></b>' }] }, 'quote_markup');
+    bad({ ...n, sources: [{ ...n.sources[0], quote: '&amp;&amp;&amp;&amp;本文' }] }, 'quote_markup');
+    bad({ ...n, sources: [{ ...n.sources[0], quote: 'a > b という関係が成り立つと説明されています。' }] }, 'quote_markup');
+  });
   it('URL は T-5 の規則、quote は 20〜200 字', () => {
     const n = newsBody(D);
     bad({ ...n, sources: [{ ...n.sources[0], url: 'http://src.example.org/a' }] }, 'source_url');

@@ -153,6 +153,8 @@ export function validateTopicBody(body: unknown, opts: ValidateOptions): string[
       if (typeof s.url !== 'string' || !checkSourceUrl(s.url)) r.add('source_url');
       if (!okStr(s.name, TEXT_LIMITS.sourceName)) r.add('source_name');
       if (typeof s.quote !== 'string' || chars(s.quote.trim()) < 20 || chars(s.quote) > 200) r.add('source_quote');
+      // 引用に < > & を入れない（司令塔の裁定 2026-11-06。タグ・文字参照を除くと数文字に縮み、ほとんどのページに「見つかる」ため）
+      else if (/[<>&]/.test(s.quote)) r.add('quote_markup');
     }
   }
   const referenced = new Set<string>();
