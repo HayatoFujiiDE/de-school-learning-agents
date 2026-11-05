@@ -439,6 +439,8 @@
   }
   MD.photoArt = function (photo) {
     if (!photo) return '';
+    // 今日のお題から作った外の記録（theme 'odai'）はお題の線画（today-data.js が MD.odaiPhotoArt を置く）。無ければ写真の枠だけ（3 題材の絵を出さない）
+    if (photo.theme === 'odai') return MD.odaiPhotoArt ? MD.odaiPhotoArt(photo) : wrap(corners(), 'is-photo');
     var n = photo.n || 0, inner;
     if (photo.theme === 'py') {
       inner = pyArt(['catch', 'dodge', 'coin', 'maze'][n % 4], { speed: 2, count: 4 + (n % 2) * 2 });
