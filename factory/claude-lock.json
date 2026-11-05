@@ -16,8 +16,8 @@
     "./claude/environments/cloud.yaml": {
       "kind": "environment",
       "id": "env_01Mrm4nNyypF4B2pjaxhdXSJ",
-      "hash": "0f81103cff80b548029ec80f1e1188b6",
-      "remote_hash": "de484c1cf5def4c01e9febef7c5c2426"
+      "hash": "48a9caf6906912a8812d2b45ac9a066f",
+      "remote_hash": "febc1c703ea4d33296350c939150a6c3"
     }
   }
 }
