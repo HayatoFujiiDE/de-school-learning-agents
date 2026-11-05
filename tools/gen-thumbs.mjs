@@ -31,7 +31,7 @@ const SOURCES = [
   "factory/worker/src/openai.ts:47  IMAGES_URL = 'https://api.openai.com/v1/images/generations'（同じ本文の形: model / prompt / size / quality / output_format / background / n）",
 ];
 const API_URL = 'https://api.openai.com/v1/images/generations';
-const MAX_CALLS = 18;
+const MAX_CALLS = 17;
 const TIMEOUT_MS = 180_000;
 
 // プロンプトの共通の約束（contract-app §AD-5 verbatim。illust は後半を替える）
@@ -39,7 +39,7 @@ const RULE = '人物・顔・手・文字・ロゴ・商標のあるキャラク
 const TAIL_PHOTO = RULE + '子どもの机の上で撮った自然光の写真のように。';
 const TAIL_ILLUST = RULE + 'やわらかい水彩のイラストで。';
 
-// 対象（固定の 18 枚 = 提案の photo・illust 10 枚 + 作品展示 8 枚）
+// 対象（固定の 17 枚 = 提案の photo・illust 10 枚 + 作品展示の photo・illust 7 枚）
 const TARGETS = [
   { id: 'pj-stop-moon', dir: 'make', style: 'photo', prompt: '黒い紙の上に、白い紙を丸く切って作った月の満ち欠けが 8 つ、左から右へ順に並んでいる。横に小さなスタンドに立てたタブレットとはさみ。' },
   { id: 'pj-mc-ath', dir: 'make', style: 'photo', prompt: '四角いブロックだけでできた空中アスレチックコースのミニチュア模型。四角い足場が間をあけて並び、そのうち 1 つは緑のはねるブロック。' },
@@ -58,7 +58,6 @@ const TARGETS = [
   { id: 'g-4koma', dir: 'gallery', style: 'illust', prompt: '4 つのコマに分かれた紙。どのコマにも、ふとんで丸くなって寝ているねこが描かれている。' },
   { id: 'g-coaster', dir: 'gallery', style: 'photo', prompt: 'ダンボールで作った、3 回曲がるビー玉コースター。いちばん下に小さなベルが付いている。' },
   { id: 'g-stamp', dir: 'gallery', style: 'illust', prompt: 'しっぽをふる丸い動物のスタンプが 2 つ。左と右でしっぽの向きがちがう。' },
-  { id: 'g-coin-game', dir: 'gallery', style: 'photo', prompt: 'ノートパソコンの画面に、金色のコインが並んだ横向きのゲームの画面が映っている。' },
 ];
 
 function promptOf(t) { return t.prompt + (t.style === 'illust' ? TAIL_ILLUST : TAIL_PHOTO); }

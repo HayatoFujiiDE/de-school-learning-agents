@@ -2,6 +2,8 @@
    一覧 = お題 3 枚（fit near / next / new が 1 枚ずつ。fit は画面に出さない）+ とっておいたお題。
    詳細 = 問い・なぜ出したか・印 + 4 つの入口（短い動画を見る / 実物を探す / 試して遊ぶ / 作ってみる）。同時に開く入口は 1 つ。
    お題は #today を開いた時だけ出す（バッジ・通知・他画面への差し込みはしない。§X-5）。回数・連続日数・完了は出さない。
+   §AE（contract-app）: 一覧は 2 段（話す・考える = news / talk / philo が 1 枚ずつ、作る・ためす = 上の 3 枚）+ とっておいた + サークル対話に持っていく問い。
+   対話のお題の詳細 = 前提を読む / いろいろな考えを見る / 問いを選ぶ / 自分の考えを置く + 考えのあしあと + 次の一歩（バディと話す / サークル対話 / 作ってみる）。
    純関数（TD.initial / swap / keep / unkeep / markEntry / addFound / toggleHint / play / normalize …）は DOM と DES.t に触れず、
    node からも読める（tools/today-test.js）。変更は DES.app.change → DES.store.save → 再描画 の 1 経路（des3.odai を足す）。 */
 (function (root) {
@@ -11,6 +13,8 @@
   var MD = DES.makeData || (typeof require === 'function' ? require('./make-data.js') : null);
   var TD = DES.today = DES.today || {};
   var FITS = TDD.FITS, ENTRIES = ['watch', 'find', 'play', 'make'];
+  // §AE 対話のお題: 種類（news / talk / philo）・問いの段（check / self / open）・詳細の入口（前提 / 考え / 問い / 自分の考え）
+  var KINDS = TDD.KINDS, LEVELS = TDD.LEVELS, OPENS = ['facts', 'views', 'asks', 'mine'], LINE_MAX = 80;
 
   // ---------- 小道具 ----------
   function clone(v) { return v == null ? v : JSON.parse(JSON.stringify(v)); }
@@ -18,11 +22,43 @@
   function isNat(n) { return typeof n === 'number' && isFinite(n) && n >= 0 && Math.floor(n) === n; }
   function trim(v) { return String(v == null ? '' : v).replace(/^\s+|\s+$/g, ''); }
   function valid(id) { return typeof id === 'string' && !!TDD.get(id); }
+  function validD(id) { return typeof id === 'string' && !!TDD.getDialog(id); }
+  function validAny(id) { return valid(id) || validD(id); }
 
   // ---------- 状態（§X-4）: { slots: [id,id,id], kept: [id], tried: { id: { entries, found, checks } }, rot: { near, next, new } } ----------
   // rot = その fit のプールで、いまスロットに出ている位置。slots[i] は FITS[i] のプールから
+  // §AE-5 で足す: dslots { news, talk, philo } / drot（同じ形の回転の位置）/ think { id: { opened, ask, marks } } / circle [{ id, ask, time }]
   function initial() {
-    return { slots: FITS.map(function (f) { return TDD.pool(f)[0]; }), kept: [], tried: {}, rot: { near: 0, next: 0, new: 0 } };
+    var dslots = {}, drot = {};
+    KINDS.forEach(function (k) { dslots[k] = TDD.kindPool(k)[0]; drot[k] = 0; });
+    return { slots: FITS.map(function (f) { return TDD.pool(f)[0]; }), kept: [], tried: {}, rot: { near: 0, next: 0, new: 0 },
+      dslots: dslots, drot: drot, think: {}, circle: [] };
+  }
+  function blankThink() { return { opened: { facts: false, views: false, asks: false, mine: false }, ask: null, marks: [] }; }
+  function isStance(o, sid) { return sid === 'none' || !!TDD.stanceOf(o, sid); }
+  function cleanThink(t, o) {
+    if (!isObj(t)) return null;
+    var out = blankThink(), seen = {};
+    if (isObj(t.opened)) OPENS.forEach(function (k) { out.opened[k] = t.opened[k] === true; });
+    out.ask = LEVELS.indexOf(t.ask) >= 0 ? t.ask : null;
+    if (Array.isArray(t.marks)) {
+      t.marks.forEach(function (m) {
+        if (!isObj(m) || typeof m.id !== 'string' || seen[m.id] || !isStance(o, m.stance) || !(m.line == null || typeof m.line === 'string') || typeof m.time !== 'string') return;
+        seen[m.id] = true;
+        var line = m.line ? trim(m.line).slice(0, LINE_MAX) : '';
+        out.marks.push({ id: m.id, stance: m.stance, line: line || null, time: m.time });
+      });
+    }
+    return out;
+  }
+  function cleanCircle(list) {
+    var out = [];
+    list.forEach(function (c) {
+      if (!isObj(c) || !validD(c.id) || typeof c.time !== 'string' || !(c.ask == null || LEVELS.indexOf(c.ask) >= 0)) return;
+      if (out.some(function (x) { return x.id === c.id; })) return;
+      out.push({ id: c.id, ask: c.ask == null ? null : c.ask, time: c.time });
+    });
+    return out;
   }
   function blankTried() { return { entries: { watch: false, find: false, play: false, make: false }, found: [], checks: [] }; }
   function cleanTried(t, odai) {
@@ -43,7 +79,7 @@
   function normalize(raw) {
     var d = initial();
     if (!isObj(raw)) return d;
-    var out = { slots: d.slots, kept: [], tried: {}, rot: d.rot };
+    var out = { slots: d.slots, kept: [], tried: {}, rot: d.rot, dslots: d.dslots, drot: d.drot, think: {}, circle: [] };
     // slots: 3 枚とも知っているお題で、near / next / new の順に合っているものだけ
     if (Array.isArray(raw.slots) && raw.slots.length === FITS.length && raw.slots.every(function (id, i) { return valid(id) && TDD.get(id).fit === FITS[i]; })) out.slots = raw.slots.slice();
     // rot: near / next / new がどれも 0 以上の整数（プールの長さで折り返す）
@@ -51,8 +87,8 @@
       out.rot = {};
       FITS.forEach(function (f) { out.rot[f] = raw.rot[f] % TDD.pool(f).length; });
     }
-    // kept: 配列なら知っているお題だけ（重なりなし）
-    if (Array.isArray(raw.kept)) raw.kept.forEach(function (id) { if (valid(id) && out.kept.indexOf(id) < 0) out.kept.push(id); });
+    // kept: 配列なら知っているお題だけ（重なりなし。§AE: 種類を問わない）
+    if (Array.isArray(raw.kept)) raw.kept.forEach(function (id) { if (validAny(id) && out.kept.indexOf(id) < 0) out.kept.push(id); });
     // tried: オブジェクトなら、お題ごとに形の合うものだけ
     if (isObj(raw.tried)) {
       Object.keys(raw.tried).forEach(function (id) {
@@ -60,6 +96,23 @@
         if (t) out.tried[id] = t;
       });
     }
+    // §AE-5: dslots は 3 種類とも、その種類の知っているお題 / drot は 3 種類とも 0 以上の整数（プールの長さで折り返す）
+    if (isObj(raw.dslots) && KINDS.every(function (k) { return validD(raw.dslots[k]) && TDD.getDialog(raw.dslots[k]).kind === k; })) {
+      out.dslots = {};
+      KINDS.forEach(function (k) { out.dslots[k] = raw.dslots[k]; });
+    }
+    if (isObj(raw.drot) && KINDS.every(function (k) { return isNat(raw.drot[k]); })) {
+      out.drot = {};
+      KINDS.forEach(function (k) { out.drot[k] = raw.drot[k] % TDD.kindPool(k).length; });
+    }
+    // think: お題ごとに形の合うものだけ / circle: 知っているお題だけ（重なりなし）
+    if (isObj(raw.think)) {
+      Object.keys(raw.think).forEach(function (id) {
+        var o = TDD.getDialog(id), t = o ? cleanThink(raw.think[id], o) : null;
+        if (t) out.think[id] = t;
+      });
+    }
+    if (Array.isArray(raw.circle)) out.circle = cleanCircle(raw.circle);
     return out;
   }
   // 別のお題を見る: そのスロットだけ、同じ fit の次のお題へ（他のスロットに出ているものは飛ばす）。一巡したら最初に戻る。
@@ -84,7 +137,7 @@
   function isKeptIn(state, id) { return !!(state && Array.isArray(state.kept) && state.kept.indexOf(id) >= 0); }
   // とっておく（新しいものが先頭。at を渡すとその位置へ = 外すの元に戻す）
   function keep(state, id, at) {
-    if (!valid(id) || isKeptIn(state, id)) return state;
+    if (!validAny(id) || isKeptIn(state, id)) return state;
     var S = clone(state);
     S.kept.splice(Math.max(0, Math.min(at == null ? 0 : at | 0, S.kept.length)), 0, id);
     return S;
@@ -154,9 +207,110 @@
     return { values: v, art: TDD.drawArt(odai.art, v), result: odai.play.result(v) };
   }
 
+  // ---------- §AE-6 対話のお題 ----------
+  // 別のお題を見る（種類ごと）: そのカードだけ、同じ種類の次のお題へ。一巡したら最初に戻る。差し替えられない時は同じ state
+  function swapKind(state, kind) {
+    if (KINDS.indexOf(kind) < 0 || !state || !isObj(state.dslots)) return state;
+    var pool = TDD.kindPool(kind), cur = state.dslots[kind], start = pool.indexOf(cur);
+    if (start < 0) start = isObj(state.drot) && isNat(state.drot[kind]) ? (state.drot[kind] + pool.length - 1) % pool.length : -1;
+    var j = (start + 1 + pool.length) % pool.length;
+    if (!pool.length || pool[j] === cur) return state;
+    var S = clone(state);
+    S.dslots[kind] = pool[j];
+    if (!isObj(S.drot)) S.drot = {};
+    S.drot[kind] = j;
+    return S;
+  }
+  function thinkOf(S, id) {
+    if (!isObj(S.think)) S.think = {};
+    if (!S.think[id]) S.think[id] = blankThink();
+    return S.think[id];
+  }
+  // 入口を開いた記録（画面に回数や完了は出さない。1 つでも開いたら「次の一歩」が出る）
+  function markOpen(state, id, entry) {
+    if (!validD(id) || OPENS.indexOf(entry) < 0) return state;
+    var t = state.think && state.think[id];
+    if (t && t.opened && t.opened[entry]) return state;
+    var S = clone(state);
+    thinkOf(S, id).opened[entry] = true;
+    return S;
+  }
+  function isOpened(state, id) {
+    var t = state && state.think && state.think[id];
+    return !!(t && t.opened && OPENS.some(function (k) { return t.opened[k]; }));
+  }
+  // 問いを選ぶ（選び直せる）
+  function pickAsk(state, id, level) {
+    if (!validD(id) || LEVELS.indexOf(level) < 0) return state;
+    var t = state.think && state.think[id];
+    if (t && t.ask === level && t.opened && t.opened.asks) return state;
+    var S = clone(state), th = thinkOf(S, id);
+    th.ask = level;
+    th.opened.asks = true;
+    return S;
+  }
+  function nextMarkId(marks) {
+    var n = 0;
+    marks.forEach(function (m) { var k = /^mk(\d+)$/.exec(m.id); if (k && +k[1] > n) n = +k[1]; });
+    return 'mk' + (n + 1);
+  }
+  // 自分の考えを置く: 新しいものが上。前のものは残す（考えが変わったことが見える）。line は 80 字で切る（空なら null）
+  function putMark(state, id, m) {
+    var o = TDD.getDialog(id);
+    if (!o || !m || !isStance(o, m.stance)) return state;
+    var S = clone(state), th = thinkOf(S, id), line = trim(m.line).slice(0, LINE_MAX);
+    th.marks.unshift({ id: nextMarkId(th.marks), stance: m.stance, line: line || null, time: String(m.time || '') });
+    th.opened.mine = true;
+    return S;
+  }
+  // 外す + 元に戻す（元の位置へ。id が重なっていたら新しい id にする）
+  function removeMark(state, id, markId) {
+    var t = state && state.think && state.think[id], i = -1;
+    if (t && Array.isArray(t.marks)) t.marks.forEach(function (m, j) { if (i < 0 && m.id === markId) i = j; });
+    if (i < 0) return null;
+    var S = clone(state), item = S.think[id].marks.splice(i, 1)[0];
+    return { state: S, undo: { id: id, index: i, item: clone(item) } };
+  }
+  function restoreMark(state, u) {
+    var o = u && TDD.getDialog(u.id);
+    if (!o || !isObj(u.item) || !isStance(o, u.item.stance)) return state;
+    var S = clone(state), th = thinkOf(S, u.id), item = clone(u.item);
+    if (th.marks.some(function (m) { return m.id === item.id; })) item.id = nextMarkId(th.marks);
+    th.marks.splice(Math.max(0, Math.min(u.index | 0, th.marks.length)), 0, item);
+    return S;
+  }
+  // サークル対話に持っていく（お題 + 選んだ問いがあればその段）。新しいものが先頭（at を渡すとその位置 = 外すの元に戻す）。
+  // 既に入っていれば、選んだ問いだけ今のものに替える
+  function inCircle(state, id) { return !!(state && Array.isArray(state.circle) && state.circle.some(function (c) { return c.id === id; })); }
+  function toCircle(state, id, o, at) {
+    if (!validD(id)) return state;
+    o = o || {};
+    var ask = LEVELS.indexOf(o.ask) >= 0 ? o.ask : null, S;
+    if (inCircle(state, id)) {
+      var cur = state.circle.filter(function (c) { return c.id === id; })[0];
+      if (cur.ask === ask) return state;
+      S = clone(state);
+      S.circle.forEach(function (c) { if (c.id === id) c.ask = ask; });
+      return S;
+    }
+    S = clone(state);
+    if (!Array.isArray(S.circle)) S.circle = [];
+    S.circle.splice(Math.max(0, Math.min(at == null ? 0 : at | 0, S.circle.length)), 0, { id: id, ask: ask, time: String(o.time || '') });
+    return S;
+  }
+  function fromCircle(state, id) {
+    var i = -1;
+    if (state && Array.isArray(state.circle)) state.circle.forEach(function (c, j) { if (i < 0 && c.id === id) i = j; });
+    if (i < 0) return null;
+    var S = clone(state), item = S.circle.splice(i, 1)[0];
+    return { state: S, undo: { index: i, item: clone(item) } };
+  }
+
   var pure = {
     initial: initial, normalize: normalize, swap: swap, keep: keep, unkeep: unkeep, markEntry: markEntry, isStarted: isStarted,
-    addFound: addFound, removeFound: removeFound, restoreFound: restoreFound, toggleHint: toggleHint, play: play, isKept: isKeptIn, FITS: FITS, ENTRIES: ENTRIES
+    addFound: addFound, removeFound: removeFound, restoreFound: restoreFound, toggleHint: toggleHint, play: play, isKept: isKeptIn, FITS: FITS, ENTRIES: ENTRIES,
+    swapKind: swapKind, markOpen: markOpen, isOpened: isOpened, pickAsk: pickAsk, putMark: putMark, removeMark: removeMark, restoreMark: restoreMark,
+    toCircle: toCircle, fromCircle: fromCircle, inCircle: inCircle, KINDS: KINDS, LEVELS: LEVELS, OPENS: OPENS, LINE_MAX: LINE_MAX
   };
   Object.keys(pure).forEach(function (k) { TD[k] = pure[k]; });
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
@@ -195,6 +349,8 @@
   function ui() {
     var u = DES.ui;
     if (!u.td) u.td = { open: {}, play: {}, own: null, dlg: null, shownDetail: null, missing: null, fresh: null, pendingFocus: null };
+    // §AE: dmine = 自分の考えの入力中の値（お題ごと { stance, line }。保存しない）/ dfresh = 替えたばかりの対話のカード（種類）
+    if (!u.td.dmine) u.td.dmine = {};
     return u.td;
   }
   function dlgEl() { return document.getElementById('today-dialog'); }
@@ -260,19 +416,51 @@
       ])
     ]);
   }
+  // ---------- §AE-2 対話のカード（話す・考える） ----------
+  // 種類のチップ（news は右に日付）
+  function kindEl(o) {
+    return H('p', { class: 'odai-kind' }, [H('span', { class: 'chip k-kind k-' + o.kind }, T('td_kind_' + o.kind)),
+      o.date ? H('span', { class: 'odai-date' }, T('td_news_date', { date: pick(o.date) })) : null]);
+  }
+  // 印: サポーターと読む（heavy の時）+ 出所（バディが作ったお題）
+  function dmarksEl(o) {
+    var out = [];
+    if (o.heavy) out.push(H('span', { class: 'chip k-safety' }, T('td_heavy')));
+    out.push(chip('ai', T('td_src_buddy'), T('ai_proposal') + ' ' + T('td_src_buddy')));
+    return H('div', { class: 'odai-marks' }, out);
+  }
+  function dcard(o, kind, fresh) {
+    return H('article', { class: 'odai-card is-talk' + (fresh ? ' swap-in' : ''), 'data-fk': 'dodai:' + kind, 'data-odai': o.id, 'aria-labelledby': 'dodai-q-' + kind }, [
+      H('div', { class: 'odai-art' }, [DES.raw(TDD.cardArt(o))]),
+      H('div', { class: 'odai-body' }, [
+        kindEl(o),
+        H('h2', { class: 'odai-q', id: 'dodai-q-' + kind }, pick(o.title)),
+        H('p', { class: 'odai-lead' }, [H('span', { class: 'odai-k' }, T('td_lead') + ': '), H('span', null, pick(o.lead))]),
+        whyEl(o),
+        dmarksEl(o),
+        H('div', { class: 'odai-ops' }, [
+          H('a', { class: 'btn orange', href: '#today/' + o.id, 'data-fk': 'dtry:' + o.id }, T('td_think')),
+          keepBtn(o),
+          btn(T('td_other'), 'td-dswap', { arg: kind, kls: 'ghost', attrs: { 'aria-label': T('td_other') + ': ' + pick(o.title) } })
+        ])
+      ])
+    ]);
+  }
+  function anyTopic(id) { return TDD.get(id) || TDD.getDialog(id); }
   function keptSec() {
     var kept = S().odai.kept;
     if (!kept.length) return null;
     return H('section', { class: 'odai-kept', 'aria-labelledby': 'td-kept-h' }, [
       H('div', { class: 'section-head' }, [H('h2', { id: 'td-kept-h', tabindex: '-1', 'data-fk': 'td-kept-h' }, T('td_kept_h'))]),
       H('ul', { class: 'kept-list' }, kept.map(function (id) {
-        var o = TDD.get(id);
+        var o = anyTopic(id), talk = !!o.kind;
         return H('li', { class: 'kept-item' }, [
           H('span', { class: 'kept-thumb' }, [DES.raw(TDD.cardArt(o))]),
           H('div', { class: 'kept-text' }, [
+            talk ? kindEl(o) : null,
             H('h3', null, pick(o.title)),
             H('div', { class: 'kept-ops' }, [
-              H('a', { class: 'btn small', href: '#today/' + id, 'data-fk': 'ktry:' + id }, T('td_try')),
+              H('a', { class: 'btn small', href: '#today/' + id, 'data-fk': 'ktry:' + id }, T(talk ? 'td_think' : 'td_try')),
               btn(T('remove'), 'td-unkeep', { id: id, kls: 'ghost', attrs: { 'aria-label': T('remove') + ': ' + pick(o.title) } })
             ])
           ])
@@ -280,17 +468,46 @@
       }))
     ]);
   }
+  // サークル対話に持っていく問い（入っている時だけ。お題の問い + 選んだ問いがあればその文）
+  function circleSec() {
+    var list = S().odai.circle;
+    if (!list.length) return null;
+    return H('section', { class: 'odai-kept odai-circle', 'aria-labelledby': 'td-circle-h' }, [
+      H('div', { class: 'section-head' }, [H('h2', { id: 'td-circle-h', tabindex: '-1', 'data-fk': 'td-circle-h' }, T('td_circle_h'))]),
+      H('ul', { class: 'kept-list' }, list.map(function (c) {
+        var o = TDD.getDialog(c.id), a = c.ask ? TDD.askOf(o, c.ask) : null;
+        return H('li', { class: 'kept-item' }, [
+          H('span', { class: 'kept-thumb' }, [DES.raw(TDD.cardArt(o))]),
+          H('div', { class: 'kept-text' }, [
+            kindEl(o),
+            H('h3', null, pick(o.title)),
+            a ? H('p', { class: 'circle-ask' }, [H('span', { class: 'odai-k' }, T('td_ask_chosen') + ': '), H('span', null, pick(a.text))]) : null,
+            H('div', { class: 'kept-ops' }, [
+              H('a', { class: 'btn small', href: '#today/' + c.id, 'data-fk': 'ctry:' + c.id }, T('td_think')),
+              btn(T('remove'), 'td-uncircle', { id: c.id, kls: 'ghost', attrs: { 'aria-label': T('remove') + ': ' + pick(o.title) } })
+            ])
+          ])
+        ]);
+      }))
+    ]);
+  }
   function renderList(main) {
-    var u = ui();
+    var u = ui(), st = S().odai;
     main.textContent = '';
     var kids = [
       H('div', { class: 'page-head' }, [H('div', null, [H('h1', { tabindex: '-1', 'data-fk': 'today-h' }, T('today')), H('p', null, T('td_sub'))])]),
-      H('div', { class: 'odai-cards' }, S().odai.slots.map(function (id, i) { return card(TDD.get(id), i, u.fresh === i); }))
+      H('section', { class: 'odai-sec', 'aria-labelledby': 'td-sec-talk' }, [H('h2', { class: 'odai-sec-h', id: 'td-sec-talk' }, T('td_sec_talk')),
+        H('div', { class: 'odai-cards' }, KINDS.map(function (k) { return dcard(TDD.getDialog(st.dslots[k]), k, u.dfresh === k); }))]),
+      H('section', { class: 'odai-sec', 'aria-labelledby': 'td-sec-make' }, [H('h2', { class: 'odai-sec-h', id: 'td-sec-make' }, T('td_sec_make')),
+        H('div', { class: 'odai-cards' }, st.slots.map(function (id, i) { return card(TDD.get(id), i, u.fresh === i); }))])
     ];
     var k = keptSec();
     if (k) kids.push(k);
+    var c = circleSec();
+    if (c) kids.push(c);
     main.appendChild(H('div', { class: 'today-page' }, kids));
     u.fresh = null;
+    u.dfresh = null;
   }
 
   // ---------- 詳細（§X-2） ----------
@@ -398,11 +615,133 @@
     if (u.shownDetail !== o.id) { u.shownDetail = o.id; var h = main.querySelector('h1'); if (h) h.focus(); }
   }
 
+  // ---------- §AE-4 対話のお題の詳細 ----------
+  var DENTRY_ICON = { facts: 'record', views: 'chat', asks: 'quote', mine: 'check' };
+  function dentries(o) { return OPENS.filter(function (k) { return k !== 'views' || o.views.length > 0; }); }
+  function dentriesEl(o, open) {
+    var list = dentries(o);
+    return H('section', { class: 'td-entries', 'aria-labelledby': 'td-entries-h' }, [
+      H('h2', { id: 'td-entries-h' }, T('td_entries_h')),
+      H('div', { class: 'td-entry-grid n' + list.length }, list.map(function (k) {
+        var on = open === k, label = k === 'facts' && o.kind === 'news' ? T('td_e_facts_news') : T('td_e_' + k);
+        return H('button', { class: 'td-entry' + (on ? ' on' : ''), type: 'button', id: 'td-e-' + k, 'data-action': 'td-dentry', 'data-id': o.id, 'data-arg': k,
+          'aria-expanded': on ? 'true' : 'false', 'aria-controls': on ? 'td-panel' : null }, [icon(DENTRY_ICON[k]), H('strong', null, label), H('span', null, T('td_d_' + k))]);
+      }))
+    ]);
+  }
+  // 出典の名前（リンク）。href はデータ内の定数の URL だけ
+  function srcEl(o, s) {
+    var links = [];
+    TDD.srcIds(s).forEach(function (sid) {
+      var x = TDD.sourceOf(o, sid);
+      if (!x) return;
+      if (links.length) links.push('・');
+      links.push(H('a', { class: 'td-src-link', href: x.url, target: '_blank', rel: 'noopener noreferrer' }, x.name));
+    });
+    return links.length ? H('span', { class: 'td-src-of' }, [T('td_src') + ': '].concat(links)) : null;
+  }
+  function fmtChecked(o) {
+    var c = o.sources.length ? String(o.sources[0].checked).split('-') : null;
+    return c ? T('td_checked', { date: T('td_date_full', { y: +c[0], m: +c[1], d: +c[2] }) }) : '';
+  }
+  function factsEl(o) {
+    var hasSrc = o.facts.some(function (f) { return TDD.srcIds(f.src).length > 0; });
+    return [
+      H('ul', { class: 'td-facts' }, o.facts.map(function (f) { return H('li', null, [H('span', null, pick(f.text)), srcEl(o, f.src)]); })),
+      hasSrc ? H('p', { class: 'td-checked' }, fmtChecked(o)) : null
+    ];
+  }
+  function viewsEl(o) {
+    return [
+      H('ul', { class: 'td-views' }, o.views.map(function (v) {
+        return H('li', { class: 'td-view' }, [H('strong', null, pick(v.who)), H('p', null, pick(v.stance)), srcEl(o, v.src)]);
+      })),
+      H('p', { class: 'td-views-more' }, T('td_views_more'))
+    ];
+  }
+  function asksEl(o, th) {
+    var cur = th ? th.ask : null;
+    return [H('fieldset', { class: 'td-choices' }, [H('legend', null, T('td_asks_legend'))].concat(o.asks.map(function (a) {
+      var id = 'td-ask-' + a.level;
+      return H('label', { class: 'td-hint td-choice', for: id }, [
+        H('input', { type: 'radio', id: id, name: 'td-ask', value: a.level, 'data-ui': 'td-ask', 'data-id': o.id, checked: cur === a.level }),
+        H('span', null, pick(a.text))]);
+    })))];
+  }
+  function stanceLabel(o, sid) { var s = TDD.stanceOf(o, sid); return s ? pick(s.label) : T('td_stance_none'); }
+  function mineOf(id) { var m = ui().dmine; if (!m[id]) m[id] = { stance: null, line: '' }; return m[id]; }
+  function mineEl(o, th) {
+    var mine = mineOf(o.id), a = th && th.ask ? TDD.askOf(o, th.ask) : null, dis = !mine.stance, kids = [];
+    if (a) kids.push(H('div', { class: 'td-chosen' }, [H('span', { class: 'odai-k' }, T('td_ask_chosen')), H('p', null, pick(a.text))]));
+    var opts = o.stances.map(function (s) { return { id: s.id, label: pick(s.label) }; }).concat([{ id: 'none', label: T('td_stance_none') }]);
+    kids.push(H('fieldset', { class: 'td-choices' }, [H('legend', null, T('td_stance_legend'))].concat(opts.map(function (s) {
+      var id = 'td-stance-' + s.id;
+      return H('label', { class: 'td-hint td-choice', for: id }, [
+        H('input', { type: 'radio', id: id, name: 'td-stance', value: s.id, 'data-ui': 'td-stance', 'data-id': o.id, checked: mine.stance === s.id }),
+        H('span', null, s.label)]);
+    }))));
+    kids.push(H('div', { class: 'inline-edit td-mine-line' }, [
+      H('label', { for: 'td-mark-line' }, T('td_mark_line')),
+      H('input', { id: 'td-mark-line', type: 'text', maxlength: String(LINE_MAX), 'data-ui': 'td-mark-line', 'data-id': o.id, value: mine.line, autocomplete: 'off' })
+    ]));
+    kids.push(H('p', { class: 'hint td-mark-need', id: 'td-mark-need', hidden: !dis }, T('td_mark_need')));
+    kids.push(H('div', { class: 'actions' }, [btn(T('td_mark_put'), 'td-mark-put', { id: o.id, kls: 'orange td-put', disabled: dis, attrs: { 'aria-describedby': 'td-mark-need' } })]));
+    return kids;
+  }
+  function dpanelEl(o, k, th) {
+    var kids = k === 'facts' ? factsEl(o) : (k === 'views' ? viewsEl(o) : (k === 'asks' ? asksEl(o, th) : mineEl(o, th)));
+    return H('section', { class: 'td-panel card', id: 'td-panel', 'aria-labelledby': 'td-e-' + k, 'data-fk': 'td-panel:' + k, tabindex: '-1' }, kids);
+  }
+  // 考えのあしあと（新しいものが上。時刻・立場・1 行。1 件ずつ外せる）
+  function marksSec(o, th) {
+    if (!th || !th.marks.length) return null;
+    return H('section', { class: 'td-marks', 'aria-labelledby': 'td-marks-h' }, [
+      H('h2', { id: 'td-marks-h', tabindex: '-1', 'data-fk': 'td-marks-h' }, T('td_marks_h')),
+      H('ol', { class: 'td-mark-list' }, th.marks.map(function (m) {
+        var lb = stanceLabel(o, m.stance);
+        return H('li', { class: 'td-mark' }, [H('span', { class: 'td-time' }, m.time), H('strong', null, lb), m.line ? H('span', { class: 'td-mark-line' }, m.line) : null,
+          btn(T('remove'), 'td-mark-del', { id: o.id, arg: m.id, kls: 'ghost', attrs: { 'aria-label': T('remove') + ': ' + lb } })]);
+      }))
+    ]);
+  }
+  // 次の一歩（入口を 1 つでも開いたら）: バディと話す / サークル対話に持っていく / 作ってみる
+  function nextSec(o) {
+    var inC = inCircle(S().odai, o.id), hasAct = !!actFor(o.id);
+    return H('section', { class: 'td-next', 'aria-labelledby': 'td-next-h' }, [
+      H('h2', { id: 'td-next-h' }, T('td_next_h')),
+      H('div', { class: 'td-next-ops' }, [
+        btn(T('td_next_talk'), 'td-dtalk', { id: o.id, icon: 'talk' }),
+        btn(T(inC ? 'td_next_circle_on' : 'td_next_circle'), 'td-dcircle', { id: o.id, icon: inC ? 'check' : 'chat', kls: inC ? 'is-on' : '', attrs: { 'aria-pressed': inC ? 'true' : 'false' } }),
+        btn(T(hasAct ? 'resume_make' : 'td_e_make'), 'td-dmake', { id: o.id, icon: 'make' })
+      ])
+    ]);
+  }
+  function renderDialog(main, o) {
+    var u = ui(), st = S().odai, th = st.think[o.id], open = u.open[o.id] || null;
+    if (open && dentries(o).indexOf(open) < 0) open = null;
+    main.textContent = '';
+    var info = [kindEl(o), H('h1', { tabindex: '-1', 'data-fk': 'td-h:' + o.id }, pick(o.title))];
+    if (o.heavy) info.push(H('p', { class: 'td-heavy-note' }, T('td_heavy_note')));
+    info.push(whyEl(o), dmarksEl(o), H('div', { class: 'td-head-ops' }, [keepBtn(o)]));
+    var kids = [
+      H('p', { class: 'td-back' }, [H('a', { class: 'link-btn', href: '#today', 'data-action': 'td-back', 'data-id': o.id, 'aria-label': T('td_back') }, [H('span', { 'aria-hidden': 'true' }, '←'), H('span', null, T('today'))])]),
+      H('div', { class: 'td-head' }, [H('figure', { class: 'td-hero' }, [DES.raw(TDD.cardArt(o))]), H('div', { class: 'td-info' }, info)]),
+      dentriesEl(o, open)
+    ];
+    if (open) kids.push(dpanelEl(o, open, th));
+    var ms = marksSec(o, th);
+    if (ms) kids.push(ms);
+    if (isOpened(st, o.id)) kids.push(nextSec(o));
+    main.appendChild(H('div', { class: 'today-page odai-detail is-talk', 'data-odai': o.id }, kids));
+    if (u.shownDetail !== o.id) { u.shownDetail = o.id; var h = main.querySelector('h1'); if (h) h.focus(); }
+  }
+
   TD.render = function (main, arg) {
     var u = ui();
     if (arg) {
-      var o = TDD.get(arg);
+      var o = TDD.get(arg), d = o ? null : TDD.getDialog(arg);
       if (o) renderDetail(main, o);
+      else if (d) renderDialog(main, d);
       else {
         // 無い id は一覧へ（履歴に残さない）+ トースト
         renderList(main);
@@ -413,7 +752,7 @@
     if (u.pendingFocus) { var n = main.querySelector('[data-fk="' + esc(u.pendingFocus) + '"]'); if (n) { u.pendingFocus = null; n.focus(); } }
   };
   // ルートが変わったら一時的な UI を閉じる（app.js の closeTransient から）。pendingFocus は戻った先で使うので残す
-  TD.resetUi = function () { var u = ui(); u.open = {}; u.play = {}; u.own = null; u.shownDetail = null; u.missing = null; u.fresh = null; };
+  TD.resetUi = function () { var u = ui(); u.open = {}; u.play = {}; u.own = null; u.shownDetail = null; u.missing = null; u.fresh = null; u.dfresh = null; u.dmine = {}; };
 
   // ---------- 見つけた写真を残す（小さなダイアログ。ダミーの線画から 1 枚 + 任意の 1 行） ----------
   function renderDlg() {
@@ -496,8 +835,118 @@
   A['td-unkeep'] = function (el) { unkeepWithUndo(el.getAttribute('data-id')); };
   A['td-back'] = function (el) {
     var id = el.getAttribute('data-id'), st = S().odai;
-    ui().pendingFocus = st.slots.indexOf(id) >= 0 ? 'try:' + id : (isKept(id) ? 'ktry:' + id : 'today-h');
+    var inD = KINDS.some(function (k) { return st.dslots[k] === id; });
+    ui().pendingFocus = st.slots.indexOf(id) >= 0 ? 'try:' + id : (inD ? 'dtry:' + id : (isKept(id) ? 'ktry:' + id : (inCircle(st, id) ? 'ctry:' + id : 'today-h')));
     window.location.hash = '#today';
+  };
+
+  // ---------- §AE 対話のお題の操作 ----------
+  // 保存してから描き直す。保存に失敗したら画面の状態を戻し、save_fail を出す（共通の約束）
+  function putOdai(next, o) {
+    var prev = S().odai;
+    if (next === prev) return false;
+    S().odai = next;
+    if (!DES.store.save('odai')) {
+      S().odai = prev;
+      S().saveFailed = true;
+      DES.app.commit(o);
+      DES.app.toast(T('save_fail'));
+      return false;
+    }
+    S().saveFailed = false;
+    DES.app.commit(o);
+    return true;
+  }
+  // 別のお題を見る（種類ごと）: 作る・ためすのカードと同じ 150ms のクロスフェード
+  A['td-dswap'] = function (el) {
+    var k = el.getAttribute('data-arg'), next = swapKind(S().odai, k);
+    if (next === S().odai) return;
+    var sel = '.odai-card[data-fk="dodai:' + esc(k) + '"]', old = motionOK() ? document.querySelector(sel) : null, ghost = old ? ghostOf(old) : null;
+    ui().dfresh = ghost ? k : null;
+    if (!putOdai(next)) return;
+    var c = ghost && document.querySelector(sel);
+    if (c) {
+      c.appendChild(ghost);
+      setTimeout(function () { if (ghost.parentNode) ghost.parentNode.removeChild(ghost); }, 200);
+    }
+  };
+  // 入口を開く（同時に 1 つ。もう一度押すと閉じる）。開いたことは記録に残す
+  A['td-dentry'] = function (el) {
+    var id = el.getAttribute('data-id'), k = el.getAttribute('data-arg'), u = ui();
+    u.open[id] = u.open[id] === k ? null : k;
+    if (!u.open[id] || !putOdai(markOpen(S().odai, id, k))) DES.app.commit();
+    var p = u.open[id] && document.getElementById('td-panel');
+    if (p && p.scrollIntoView) p.scrollIntoView({ block: 'nearest' });
+  };
+  function syncMine(id) {
+    var dis = !mineOf(id).stance, b = document.querySelector('[data-action="td-mark-put"]'), h = document.getElementById('td-mark-need');
+    if (b) b.disabled = dis;
+    if (h) h.hidden = !dis;
+  }
+  // 自分の考えを置く → 考えのあしあとに 1 件（入力中の 1 行は空に戻す。立場の選択は残す）
+  A['td-mark-put'] = function (el) {
+    var id = el ? el.getAttribute('data-id') : null;
+    if (!id) { var b = document.querySelector('[data-action="td-mark-put"]'); id = b ? b.getAttribute('data-id') : null; }
+    var mine = id ? mineOf(id) : null;
+    if (!mine || !mine.stance) return;
+    var next = putMark(S().odai, id, { stance: mine.stance, line: mine.line, time: stamp() }), line = mine.line;
+    mine.line = '';
+    if (!putOdai(next, { sel: '[data-action="td-mark-put"]' })) { mine.line = line; DES.app.render(); return; }
+    var put = document.querySelector('[data-action="td-mark-put"]');
+    if (put) put.focus();
+    DES.app.toast(T('td_mark_toast'));
+  };
+  A['td-mark-del'] = function (el) {
+    var id = el.getAttribute('data-id'), mid = el.getAttribute('data-arg'), r = removeMark(S().odai, id, mid);
+    if (!r) return;
+    var left = r.state.think[id].marks;
+    if (!putOdai(r.state, { sel: left.length ? '[data-action="td-mark-del"][data-arg="' + esc(left[Math.min(r.undo.index, left.length - 1)].id) + '"]' : '[data-action="td-dentry"][data-arg="mine"]' })) return;
+    DES.app.toast(T('td_mark_removed'), { label: T('undo_restore'), fn: function () {
+      putOdai(restoreMark(S().odai, r.undo), { sel: '[data-action="td-mark-del"][data-id="' + esc(id) + '"]' });
+    } });
+  };
+  // バディと話す: 話す画面の下書き（S().draft）に next.talk を入れて #talk へ（下書きがあれば改行して足す）
+  A['td-dtalk'] = function (el) {
+    var o = TDD.getDialog(el.getAttribute('data-id'));
+    if (!o) return;
+    var line = pick(o.next.talk);
+    DES.app.change(function () {
+      var cur = String((S().draft && S().draft.text) || '').replace(/\s+$/, '');
+      S().draft = { text: cur ? cur + '\n' + line : line, scroll: (S().draft && S().draft.scroll) || 0 };
+    });
+    DES.app.toast(T('prefilled'));
+    DES.ui.focusComposer = true;
+    window.location.hash = '#talk';
+  };
+  function uncircleWithUndo(id, focusSel) {
+    var r = fromCircle(S().odai, id);
+    if (!r) return;
+    if (!putOdai(r.state, { sel: focusSel, focusFn: function () { return S().odai.circle.length ? 'td-circle-h' : (DES.app.routeArg() ? 'td-h:' + id : 'today-h'); } })) return;
+    DES.app.toast(T('td_circle_removed'), { label: T('undo_restore'), fn: function () {
+      putOdai(toCircle(S().odai, r.undo.item.id, r.undo.item, r.undo.index), { sel: '[data-action="td-dcircle"][data-id="' + esc(id) + '"],[data-action="td-uncircle"][data-id="' + esc(id) + '"]' });
+    } });
+  }
+  // サークル対話に持っていく ⇔ 入れてある（押し直すと外す。元に戻す付き）。予定表は変えない
+  A['td-dcircle'] = function (el) {
+    var id = el.getAttribute('data-id'), st = S().odai;
+    if (inCircle(st, id)) { uncircleWithUndo(id, '[data-action="td-dcircle"][data-id="' + esc(id) + '"]'); return; }
+    var th = st.think[id];
+    if (!putOdai(toCircle(st, id, { ask: th ? th.ask : null, time: stamp() }))) return;
+    DES.app.toast(T('td_circle_toast'));
+  };
+  A['td-uncircle'] = function (el) { uncircleWithUndo(el.getAttribute('data-id'), null); };
+  // 作ってみる: DES.make.openOdai と同じ移動（同じお題の活動があればそれを開く）。題 = next.makeTitle・手順 = next.makeSteps の外で作る活動
+  A['td-dmake'] = function (el) {
+    var o = TDD.getDialog(el.getAttribute('data-id')), mk = TDD.makeOdaiOf(o);
+    if (!mk) return;
+    var m = DES.mode();
+    var r = DES.make.fromOdai(mk, { id: DES.plan.newId('a'), mode: m, now: DES.data.now, acts: S().activities,
+      recText: T('td_make_rec', { q: pick(o.title), step: pick(o.next.makeSteps[0]) }) });
+    if (!r) return;
+    if (r.created) {
+      DES.app.change(function () { S().activities = [r.act].concat(S().activities); });
+      if (window.location.hash !== '#make/' + r.id) window.location.hash = '#make/' + r.id; else DES.app.render();
+    } else DES.make.openAct(r.id);
   };
   // 入口を開く（同時に 1 つ。もう一度押すと閉じる）。開いたことは記録に残す
   A['td-entry'] = function (el) {
@@ -618,15 +1067,20 @@
         patchPlay(o);
       } else if (k === 'td-own' && u.own) { u.own.text = t.value; syncOwn(); }
       else if (k === 'td-found-line' && u.dlg) u.dlg.line = t.value;
+      else if (k === 'td-mark-line') mineOf(t.getAttribute('data-id')).line = t.value;
     });
     document.addEventListener('change', function (e) {
-      var t = e.target;
-      if (!t || !t.getAttribute || t.getAttribute('data-ui') !== 'td-hint') return;
-      var id = t.getAttribute('data-id'), i = +t.getAttribute('data-arg');
+      var t = e.target, k = t && t.getAttribute ? t.getAttribute('data-ui') : null, id = k ? t.getAttribute('data-id') : null;
+      // §AE: 問いを選ぶ（記録して描き直す・フォーカスは選んだラジオに残る）/ 立場を選ぶ（入力中の値。「置く」を使えるようにする）
+      if (k === 'td-ask') { putOdai(pickAsk(S().odai, id, t.value), { sel: '#td-ask-' + esc(t.value) }); return; }
+      if (k === 'td-stance') { mineOf(id).stance = t.value; syncMine(id); return; }
+      if (k !== 'td-hint') return;
+      var i = +t.getAttribute('data-arg');
       setOdai(toggleHint(S().odai, id, i));
     });
     document.addEventListener('keydown', function (e) {
       var t = e.target, k = t && t.getAttribute ? t.getAttribute('data-ui') : null;
+      if (e.key === 'Enter' && !e.isComposing && k === 'td-mark-line') { e.preventDefault(); A['td-mark-put'](document.querySelector('[data-action="td-mark-put"]')); return; }
       if (e.key === 'Enter' && !e.isComposing && k === 'td-own') { e.preventDefault(); A['td-own-ok'](); return; }
       if (e.key === 'Enter' && !e.isComposing && k === 'td-found-line') { e.preventDefault(); A['td-found-ok'](); return; }
       if (e.key === 'Escape' && ui().own && !document.querySelector('dialog[open]') && DES.app.route() === 'today') { e.preventDefault(); A['td-own-cancel'](); }

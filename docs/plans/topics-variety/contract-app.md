@@ -181,8 +181,8 @@ find [{scenes:5,voice:1}, {scenes:3,voice:2}]
 - 画像ファイルの置き場: `app-v3/img/make/<id>.webp`（提案）、`app-v3/img/gallery/<id>.webp`（§AF）。どのファイルがあるかは `app-v3/js/thumbs.js` の一覧 `DES.thumbs = { '<id>': 'img/make/<id>.webp', … }` で持つ（初期は空の `{}`。`tools/gen-thumbs.mjs` が画像と一緒に書き出す）。一覧に無い id は線画。`<img>` の読み込みに失敗した時（`error`）も線画に替える。
 - 画像には `alt` に題を入れ、右下に小さく「AI が作ったイメージ」の印を重ねる（AI が作った絵を、本人や教室の写真と混ぜない）。
 - `tools/gen-thumbs.mjs`（node 単体・依存なし。実行はふじさんの通常ターミナル。鍵は環境変数 `OPENAI_API_KEY` から読み、標準出力・エラー文・ファイルに書かない）:
-  - 作る対象は本書の固定の一覧（提案のうち `photo`・`illust` の 10 枚 + §AF の展示 8 枚 = 18 枚）。対象の id・ファイル名・プロンプトはスクリプト内の定数。
-  - 1 回の実行で API を呼ぶのは最大 18 回（定数 `MAX_CALLS`）。出力ファイルが既にある id は呼ばない（やり直しても同じ絵に二重に払わない）。`--only <id>` で 1 枚だけ。`--dry-run` は呼ばずに対象と件数だけ出す。
+  - 作る対象は本書の固定の一覧（提案のうち `photo`・`illust` の 10 枚 + §AF の展示のうち `photo`・`illust` の 7 枚 = 17 枚）。対象の id・ファイル名・プロンプトはスクリプト内の定数。
+  - 1 回の実行で API を呼ぶのは最大 17 回（定数 `MAX_CALLS`）。出力ファイルが既にある id は呼ばない（やり直しても同じ絵に二重に払わない）。`--only <id>` で 1 枚だけ。`--dry-run` は呼ばずに対象と件数だけ出す。
   - 429・quota・認証エラーが 1 回出たらその場で止まり、終了コード 1。自動で再試行しない。
   - モデル・大きさ・質は `factory/worker/src/images.ts` が使っている値に合わせる（実装担当が同ファイルを読んで同じモデル名を定数に置き、根拠の行を出力に書く）。大きさは横長。保存は webp（API が webp を返せない時は png で保存し、一覧もその拡張子にする）。
   - プロンプトの共通の約束（各プロンプトの末尾に付ける verbatim）: `人物・顔・手・文字・ロゴ・商標のあるキャラクターを入れない。子どもの机の上で撮った自然光の写真のように。`（`illust` は後半を `やわらかい水彩のイラストで。` に替える）
@@ -206,7 +206,7 @@ find [{scenes:5,voice:1}, {scenes:3,voice:2}]
 - 変更: `app-v3/js/make-data.js` / `make.js` / `i18n.js` / `css/make.css` / `index.html`（`thumbs.js` の読み込み）/ `tools/make-test.js`。新規: `app-v3/js/thumbs.js`（`DES.thumbs = {}`）/ `tools/gen-thumbs.mjs` / `app-v3/img/make/.gitkeep`。
 - `today-data.js`・`today.js`・`works.js`・`app.js` は §AD では変えない（お題と展示は別の節・別の担当）。
 - テスト（`tools/make-test.js` に足す）: `pickTheme` の新しい期待値（「マイクラのアスレチック作りたい」→ `ath` を含む）/ 全題材 × 全案で隣り合う値の線画が一致しない（既存の全題材ループに 3 題材が入って通る）/ `MD.result`・`MD.code`・`MD.desc` が 3 題材の全案で `NaN`・`undefined`・別題材の語を含まない / `M.samplePage` / `M.projectPage` / `M.fromProject`（2 回目は同じ id）/ 見本の作品 7 件が作られる / 提案 12 件の必須項目がそろっている。
-- 検証コマンド: `node tools/make-test.js`（`MAKE_TEST=PASS`）/ `node tools/today-test.js`（`TODAY_TEST=PASS` のまま）/ `sh tools/check.sh talk plan make works today self paused`（`CHECK_RESULT=PASS`）/ `node tools/gen-thumbs.mjs --dry-run`（対象 18 件・呼び出し 0 回）。
+- 検証コマンド: `node tools/make-test.js`（`MAKE_TEST=PASS`）/ `node tools/today-test.js`（`TODAY_TEST=PASS` のまま）/ `sh tools/check.sh talk plan make works today self paused`（`CHECK_RESULT=PASS`）/ `node tools/gen-thumbs.mjs --dry-run`（対象 17 件・呼び出し 0 回）。
 
 ### AD-8 受け入れ（操作ループ）
 
@@ -328,7 +328,7 @@ find [{scenes:5,voice:1}, {scenes:3,voice:2}]
 - reason: AI と一緒に作ることがふえてきたから
 - facts: 「世界経済フォーラムの 2025 年の報告は、働く人に必要な力のおよそ 4 割が 2030 年までに変わる、と会社が見ているとしている」(s1) / 「文部科学省は 2024 年 12 月、学校での生成 AI の使い方のガイドライン（Ver.2.0）を公表した」(s3)
 - views: 「世界経済フォーラム」—「会社がいちばん大事だと答えた力は『分析的に考える力』。10 社のうち 7 社が欠かせないとした」(s1) / 「OECD（経済協力開発機構）」—「これから必要な力として『新しい価値をつくる』『対立やジレンマに折り合いをつける』『責任をもって行動する』の 3 つを挙げている」(s2) / 「文部科学省」—「AI を使う時も人が中心であること、情報を確かめて使いこなす力を育てることを基本にしている」(s3)
-- asks: check 中「3 つの考えは、それぞれ『どんな力』を大事だと言っている？」小「3 つの 考えは、どんな 力が 大じだと 言っている？」/ self 中「自分がふだんやっていることで、AI に任せたくないことは？」小「AI に やってほしくない、自分で やりたい ことは？」/ open 中「AI が自分より上手にできることを、それでも自分でやる意味はある？」小「AI の ほうが 上手でも、自分で やるのは なぜ？」
+- asks: check 中「3 つの考えは、それぞれ『どんな力』を大事だと言っている？」小「3 つの 考えは、どんな 力が 大じだと 言っている？」/ self 中「自分がふだんやっていることで、AI に任せたくないことは？」小「AI に やってほしくない、自分で やりたい ことは？」/ open 中「AI のほうが速く正確にできることを、それでも自分でやる意味はある？」小「AI の ほうが はやく できても、自分で やるのは なぜ？」
 - stances: 「考える力」/「人と折り合う力」/「確かめて使いこなす力」/「ほかの力」
 - sources: s1「世界経済フォーラム Future of Jobs Report 2025」https://www.weforum.org/publications/the-future-of-jobs-report-2025/in-full/3-skills-outlook/ ・ s2「OECD Learning Compass 2030」https://search.oecd.org/education/2030-project/teaching-and-learning/learning/transformative-competencies ・ s3「文部科学省 学校現場における生成 AI の利用について」https://www.mext.go.jp/a_menu/other/mext_02412.html
 - next: talk「人にしかできないことって何か、話したい」/ makeTitle「『人にしかできないこと』のポスターを作る」/ makeSteps「自分の考えを 1 文にする」「理由を 2 つ書く」「絵か図を足す」「教室にはる場所を決める」
