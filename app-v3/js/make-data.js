@@ -600,7 +600,7 @@
     // Python の小さなゲーム（見本から）: 本人の試す 4 回 + バディの値 1 回 + 田中さんと 1 回 → 「変わってきたところ」が見える
     var s0 = pyStage('sample', 2, 3), s1 = pyStage('sample', 3, 3), s2 = pyStage('sample', 3, 5), s3 = pyStage('sample', 4, 5), s4 = pyStage('sample', 4, 6), s5 = pyStage('sample', 3, 6);
     var py = {
-      id: 'act-py', title: 'Python の小さなゲーム', origin: 'sample', theme: 'py', catalogId: 'prog-python', sampleId: 'py',
+      id: 'act-py', day: '10/30', title: 'Python の小さなゲーム', origin: 'sample', theme: 'py', catalogId: 'prog-python', sampleId: 'py',
       quote: null, stage: cp(s5), base: cp(s0), baseTime: '10:20', ext: null, baseVis: null, stepsKind: 'theme', candidate: false,
       steps: MD.stepsFor('py', 'catch'), stepIdx: 2, next: null,
       changes: [
@@ -627,7 +627,7 @@
     // 電球がつく回路（作品の「写真・スクショを入れる」から。写真 1 枚 = 変化 1 つ）
     var cap = MD.capture('cap-circuit');
     var circuit = {
-      id: 'act-cap', title: pick(cap.title, 'js'), origin: 'works', theme: 'circuit', catalogId: cap.catalogId, sampleId: null,
+      id: 'act-cap', day: '11/1', title: pick(cap.title, 'js'), origin: 'works', theme: 'circuit', catalogId: cap.catalogId, sampleId: null,
       quote: null, stage: null, base: null, baseTime: '10:10',
       ext: { link: null, photos: [{ id: 'act-cap-ph1', theme: 'circuit', n: cap.n, kind: 'photo', time: '10:12' }], visible: ['act-cap-ph1'] },
       baseVis: [], stepsKind: 'ext', candidate: false, steps: cp(MD.theme('circuit').extSteps), stepIdx: 1, next: null,

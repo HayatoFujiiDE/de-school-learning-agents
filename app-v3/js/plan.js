@@ -518,7 +518,10 @@
       rec(X('rec_add', { start: res.row.start, title: res.row.title }));
     }, { focus: 'row:' + newId });
   };
-  act.addFirst = function (actId) {
+  // 取り組みを予定に入れる（グリッドの「入れる」）。外から呼べる（あしあと §Z-6 は o = { undo: true, after: 戻した後のフォーカス }）。
+  // o.undo の時だけトーストに「戻す」（5 秒: 入れた行を外し、記録は消さず「「{title}」を戻した」を足す — R-6 と同じ）。o 無しは従来どおり
+  act.addFirst = function (actId, o) {
+    o = o || {};
     var item = P.item(actId), newId = P.newId('p');
     if (!item) return;
     DES.app.change(function () {
@@ -531,8 +534,18 @@
       ui().actor = newId;
       var line = X('rec_add', { start: res.row.start, title: res.row.title });
       rec(line);
-      DES.app.toast(line);
+      DES.app.toast(line, o.undo ? { label: T('undo'), fn: function () { act.unadd(newId, o.after); } } : null);
     });
+  };
+  act.unadd = function (id, after) {
+    var r = find(S().plan, id);
+    if (!r) return;
+    DES.app.change(function () {
+      S().plan = S().plan.filter(function (x) { return x.id !== id; });
+      if (ui().actor === id) ui().actor = null;
+      rec(X('rec_undo', { title: r.title }));
+      DES.app.toastHide();
+    }, after);
   };
   act.keepTomorrow = function (actId) {
     DES.app.change(function () {
