@@ -189,6 +189,17 @@ var r1 = M.fromOdai(seed, { id: 'a-od1', mode: 'js', now: '10:20', acts: [], rec
 ok(r1 && r1.created && r1.id === 'a-od1' && r1.act.id === 'a-od1', 'fromOdai 新しい活動を作る');
 eq([r1.act.origin, r1.act.odaiId, r1.act.title], ['today', SEED, seed.title[0]], 'fromOdai origin today・odaiId・問いがタイトル');
 eq([r1.act.stepsKind, r1.act.steps, r1.act.stepIdx], ['ext', seed.makeSteps, 0], 'fromOdai 3 題材に無いお題は ext 活動・手順は makeSteps');
+// 修正前に theme 'mc' で保存されたお題の ext 活動は、読み込み（migrate）で題材 'odai' に直る（Astra 再レビュー）
+(function () {
+  var old = JSON.parse(JSON.stringify(r1.act)); old.theme = 'mc'; old.v = 3;
+  old.ext = old.ext || { link: null, photos: [], visible: [] };
+  old.ext.photos.push({ id: 'ph-old', theme: 'mc', n: 0, kind: 'photo', time: '10:30' });
+  var m = M.migrate(old);
+  eq([m.theme, M.isOdaiExt(m), m.ext.photos.map(function (p) { return p.theme; })], ['odai', true, ['odai']], 'migrate 旧 theme mc のお題活動 → odai（写真も）');
+  eq(M.remakeOptions ? M.remakeOptions(m) : ['osteps', 'oneed'], ['osteps', 'oneed'], 'migrate 後の任せる候補はお題のもの');
+  var plain = JSON.parse(JSON.stringify(old)); delete plain.odaiId;
+  eq(M.migrate(plain).theme, 'mc', 'migrate odaiId の無い外で作る活動は題材を変えない');
+})();
 eq([r1.act.theme, M.isOdaiExt(r1.act)], ['odai', true], 'fromOdai 3 題材に無いお題の題材は odai（マイクラにしない）');
 ok(r1.act.ext && r1.act.ext.photos.length === 0 && r1.act.stage === null, 'fromOdai ext 活動は外の記録（写真 0 枚から）');
 eq(M.stepNow(r1.act), seed.makeSteps[0], 'fromOdai 今の一歩 = makeSteps の 1 つ目');

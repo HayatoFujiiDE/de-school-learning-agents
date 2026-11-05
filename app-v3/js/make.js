@@ -743,7 +743,16 @@
     return y;
   }
   // 前の版の活動の移行（§U-12 指摘 6）。消して作り直さず、不足欄だけを補う。resolve(m) は返事の文を作る（今の表示で）
+  // お題から作った外で作る活動は題材 'odai'（修正前の branch で theme 'mc' のまま保存された活動を直す。Astra 再レビュー）
+  function fixOdaiTheme(a) {
+    if (!a || !a.odaiId || a.stepsKind !== 'ext' || a.theme === ODAI_THEME) return a;
+    var A = clone(a);
+    A.theme = ODAI_THEME;
+    if (A.ext && A.ext.photos) A.ext.photos.forEach(function (p) { p.theme = ODAI_THEME; });
+    return A;
+  }
   function migrate(a, resolve) {
+    a = fixOdaiTheme(a);
     if (a && a.v >= SCHEMA) return a;
     var A = clone(a);
     // 作業対象の主の種類で決める（§U-12 補足 3）: 見本・バディの試作なら theme（写真があっても）、外の記録だけなら ext / build
