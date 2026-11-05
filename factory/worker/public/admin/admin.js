@@ -1705,6 +1705,20 @@
   };
   var WAIT_TEXT = { paused: '検証待ち（停止中）', daily_cap: '検証待ち（日次上限）', inflight: '検証待ち（順番）' };
   var IMAGE_RE = /\.(svg|png|webp)$/i;
+  // 検証係の図ごとの判定（§O-12 d）: [文, pill の色]
+  var FIG_VERDICT = { ok: ['検証係: 問題なし', 'green'], problem: ['検証係: 指摘あり', 'red'], unclear: ['検証係: 判断できず', 'yellow'], not_seen: ['検証係: 未確認（容量）', 'gray'] };
+  /** verification.figures（無い・古い検証は null） */
+  function figuresOf(d) {
+    var f = d && d.verification && d.verification.figures;
+    return Array.isArray(f) ? f : null;
+  }
+  /** サムネイルの下の判定の pill と reason（判定の無い path は空） */
+  function figVerdictHtml(f) {
+    if (!f || !Object.prototype.hasOwnProperty.call(FIG_VERDICT, f.verdict)) return '';
+    var t = FIG_VERDICT[f.verdict];
+    return '<p class="thumb-fig" data-fig-verdict="' + esc(f.verdict) + '">' + pill(t[0], t[1]) + '</p>' +
+      (f.reason ? '<p class="thumb-cap" data-fig-reason="1">' + esc(f.reason) + '</p>' : '');
+  }
   var ACTIVE_JOB = ['queued', 'creating', 'running', 'needs_answer', 'budget_reached'];
   var DECISION_LABEL = { approve: '承認', 'return': '差し戻し', reject: '却下' };
   var AUTO_REVIEWER = 'system:auto-triage';
@@ -1846,12 +1860,17 @@
       var imgs = imageFiles(d.version.material);
       var gen = {};
       (Array.isArray(d.generated_images) ? d.generated_images : []).forEach(function (g) { if (g && typeof g.path === 'string') gen[g.path] = g; });
-      extra = '<div class="rv-figs"><span class="muted">図・画像 ' + imgs.length + ' 枚（検証係は図を見ません。すべて見てください）</span>' +
+      var figs = figuresOf(d), figBy = {};
+      (figs || []).forEach(function (f) { if (f && typeof f.path === 'string') figBy[f.path] = f; });
+      extra = '<div class="rv-figs"><span class="muted">図・画像 ' + imgs.length + ' 枚' +
+        (figs ? '（検証係も図を見ています。判定はサムネイルの下。最後はあなたがすべて見てください）' : '（この版の検証係は図を見ていません。すべて見てください）') + '</span>' +
         (imgs.length ? '<div class="thumbs">' + imgs.map(function (p) {
           var a = '<a href="' + esc(base + p) + '" target="_blank" rel="noopener noreferrer" title="' + esc(p) + '"><img class="thumb" alt="' + esc(p) + '" src="' + esc(base + p) + '"></a>';
           var g = Object.prototype.hasOwnProperty.call(gen, p) ? gen[p] : null;
-          // 生成した絵はサムネイルの下に「生成: 正確さ・prompt の先頭 80 字」（§O-7 6）
-          return g ? '<div class="thumb-gen" data-gen="1">' + a + '<p class="thumb-cap">' + esc(genCaption(g)) + '</p></div>' : a;
+          var f = Object.prototype.hasOwnProperty.call(figBy, p) ? figBy[p] : null;
+          if (!g && !f) return a;
+          // 生成した絵はサムネイルの下に「生成: 正確さ・prompt の先頭 80 字」（§O-7 6）、その下に検証係の判定（§O-12 d）
+          return '<div class="thumb-gen"' + (g ? ' data-gen="1"' : '') + '>' + a + (g ? '<p class="thumb-cap">' + esc(genCaption(g)) + '</p>' : '') + figVerdictHtml(f) + '</div>';
         }).join('') + '</div>' : '') + '</div>';
     }
     if (tri.present && AUTO_KEYS.indexOf(k) >= 0 && AUTO_HINT[k]) extra += '<p class="muted">' + esc(AUTO_HINT[k]) + '</p>';
@@ -1884,6 +1903,14 @@
     }).join('');
   }
 
+  /** 詳細の検証の行に足す図の数（figures がある時だけ。§O-12 d） */
+  function figCountsText(figs) {
+    if (!figs) return '';
+    var c = { ok: 0, problem: 0, unclear: 0, not_seen: 0 };
+    figs.forEach(function (f) { if (f && Object.prototype.hasOwnProperty.call(c, f.verdict)) c[f.verdict]++; });
+    return ' / 図 ok ' + c.ok + ' / 指摘 ' + c.problem + ' / 判断できず ' + c.unclear + ' / 未確認 ' + c.not_seen;
+  }
+
   function detailsHtml(d) {
     var v = d.version, checks = v.checks || {};
     var red = function (arr) { return arr && arr.length; };
@@ -1900,7 +1927,7 @@
         unref.map(function (n) { return '<li class="pre">' + esc(n) + '</li>'; }).join('') + '</ul></div>' : '') +
       '<p>費用: 制作 ' + fmtCents(v.list_cost_cents) + ' / 検証 ' + fmtCents(d.verify_cost_cents) + ' ・ 採点: ' + esc(v.grader_result || '—') + (v.grader_explanation ? ' — ' + esc(v.grader_explanation) : '') +
         (d.job && d.job.console_url ? ' ・ <a href="' + esc(d.job.console_url) + '" target="_blank" rel="noopener noreferrer">Console</a>' : '') + '</p>' +
-      (ver ? '<p class="muted">検証 attempt ' + esc(ver.attempt) + ' / 確か ' + esc(ver.confirmed) + ' 仮説 ' + esc(ver.hypothesis) + ' 未確認 ' + esc(ver.unverified) + ' 食い違い ' + esc(ver.contradicted) + '</p>' : '') +
+      (ver ? '<p class="muted">検証 attempt ' + esc(ver.attempt) + ' / 確か ' + esc(ver.confirmed) + ' 仮説 ' + esc(ver.hypothesis) + ' 未確認 ' + esc(ver.unverified) + ' 食い違い ' + esc(ver.contradicted) + figCountsText(figuresOf(d)) + '</p>' : '') +
       (ver && ver.overall_note ? '<p class="muted">検証係のメモ: ' + esc(ver.overall_note) + '</p>' : '') +
       '<div class="grid2"><div><h3>selfcheck.md（自己点検）</h3>' + renderMd(v.selfcheck_md) + '</div><div><h3>adapt-rules.md（変えてよい範囲）</h3>' + renderMd(v.adapt_rules_md) + '</div></div>' +
       '<h3>機械検査の詳細（checks_json）</h3><pre>' + esc(JSON.stringify(checks, null, 2)) + '</pre>';

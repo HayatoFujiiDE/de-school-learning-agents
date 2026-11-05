@@ -102,7 +102,9 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
     ),
   );
   const ver = await latestVerification(db, vid);
-  const report = ver ? parseJsonField<{ verdicts?: Array<{ claim_id: string; verdict: string; reason: string; opened_urls: string[] }>; overall_note?: string }>(ver.result_json, {}) : null;
+  const report = ver
+    ? parseJsonField<{ verdicts?: Array<{ claim_id: string; verdict: string; reason: string; opened_urls: string[] }>; overall_note?: string; figures?: unknown }>(ver.result_json, {})
+    : null;
   const claims = parseJsonField<{ claims?: Array<Record<string, unknown>> }>(v.claims_json, {}).claims ?? [];
   const history = await all<{ id: string; attempt: number; contradicted: number; created_at: string }>(
     db,
@@ -178,6 +180,8 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
           unverified: ver.unverified,
           contradicted: ver.contradicted,
           overall_note: report?.overall_note ?? null,
+          // §O-12 d: 図ごとの判定（result_json に figures が無い古い検証は null）
+          figures: figuresOf(report?.figures),
           cost_cents: ver.cost_cents,
           created_at: ver.created_at,
         }
@@ -188,6 +192,14 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
     triage,
     generated_images: generatedImages,
   });
+}
+
+/** result_json の figures → API の形（{path, verdict, reason}[]）。配列でなければ null（§O-12 d） */
+function figuresOf(raw: unknown): Array<{ path: string; verdict: string; reason: string }> | null {
+  if (!Array.isArray(raw)) return null;
+  return (raw as Array<Record<string, unknown> | null>)
+    .filter((f): f is Record<string, unknown> => !!f && typeof f === 'object' && typeof f.path === 'string')
+    .map((f) => ({ path: f.path as string, verdict: typeof f.verdict === 'string' ? f.verdict : '', reason: typeof f.reason === 'string' ? f.reason : '' }));
 }
 
 export async function reviewFile(c: RouteCtx, vid: string, rawPath: string): Promise<Response> {

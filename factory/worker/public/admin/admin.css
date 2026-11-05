@@ -93,6 +93,7 @@ pre { white-space: pre-wrap; word-break: break-word; background: var(--paper); p
 .thumb-gen { display: flex; flex-direction: column; gap: 4px; width: 160px; }
 .thumb-gen .thumb { width: 160px; }
 .thumb-cap { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); word-break: break-word; }
+.thumb-fig { margin: 0; }
 /* ---- 画像の生成（§O-5 e）---- */
 .img-table td { vertical-align: middle; }
 .img-over { color: var(--red); font-weight: 700; }

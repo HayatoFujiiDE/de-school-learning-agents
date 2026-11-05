@@ -39,7 +39,7 @@ interface Call {
   batch_id?: string;
   custom_id?: string;
   /** 検証係の batch（§L-2）だけ: 1 件目の user 文の claims_json と、送った assistant turn の数 */
-  verify?: { claims_text: string; assistant_turns: number };
+  verify?: { claims_text: string; assistant_turns: number; figures?: string[] };
   /** smoke の制御 /__fake/session-append（§O-8 smoke）だけ: 足すファイル（本文は記録に持つ）・status・list_cost・識別子 */
   append?: { key: string; files: Array<{ filename: string; content: string }>; status?: string; list_cost?: string };
 }
@@ -245,6 +245,31 @@ function paginate<T>(items: T[], page: string | null, prefix: string): { data: T
   return { data: items.slice(start, end), next: end < items.length ? `${prefix}${end}` : null };
 }
 
+/** user message の content（文字列、または content block の配列）の text をつなぐ（検証係の入力は §O-12 から配列） */
+function userText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return (content as Array<{ type?: unknown; text?: unknown }>)
+    .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text as string)
+    .join('\n');
+}
+
+/** 検証係の入力の図の一覧（`# 図・画像（` の見出しに続く `- {path}` 行）から、渡された図の path（容量のため渡していないものを除く） */
+function fakeShownFigures(text: string): string[] {
+  const i = text.indexOf('# 図・画像（');
+  if (i < 0) return [];
+  const out: string[] = [];
+  for (const line of text.slice(i).split('\n').slice(1)) {
+    if (!line.startsWith('- ')) break;
+    if (line.includes('（容量のため画像は渡していません')) continue;
+    const rest = line.slice(2);
+    const j = rest.indexOf(': ');
+    out.push(j < 0 ? rest : rest.slice(0, j));
+  }
+  return out;
+}
+
 function extractTagged(text: string, tag: string): string | null {
   const m = new RegExp(`<${tag}>\\n?([\\s\\S]*?)\\n?</${tag}>`).exec(text);
   return m ? m[1] : null;
@@ -323,7 +348,7 @@ export function createFakePort(env: Env): FactoryPort {
     },
     async createMessage(params: MessageCreateParamsNonStreaming): Promise<Message> {
       if (params.model === SCOUT_MODEL) return scoutMessage(db, params);
-      const content = typeof params.messages[0]?.content === 'string' ? params.messages[0].content : '';
+      const content = userText(params.messages[0]?.content);
       await appendCall(db, {
         op: 'messages.create',
         at: nowIso(),
@@ -342,7 +367,7 @@ export function createFakePort(env: Env): FactoryPort {
           container: typeof params.container === 'string' ? params.container : null,
         },
       });
-      return verifierReply(params.model, extractTagged(content, 'claims_json') ?? '{"claims":[]}', params.messages.filter((m) => m.role === 'assistant').length);
+      return verifierReply(params.model, extractTagged(content, 'claims_json') ?? '{"claims":[]}', params.messages.filter((m) => m.role === 'assistant').length, fakeShownFigures(content));
     },
     // ---- 入口（§K-8）----
     async xaiResponses(req) {
@@ -358,7 +383,7 @@ export function createFakePort(env: Env): FactoryPort {
       const r = params.requests[0];
       if (r && isVerifierParams(r.params)) {
         // 検証係（§L-2）: 1 ターン = 1 batch。claims と assistant turn の数を残し、retrieve / results で検証係の応答を作る
-        const first = r.params.messages[0]?.content;
+        const first = userText(r.params.messages[0]?.content);
         await appendCall(db, {
           op: 'batches.create',
           at: nowIso(),
@@ -376,8 +401,9 @@ export function createFakePort(env: Env): FactoryPort {
             messages: r.params.messages.length,
           },
           verify: {
-            claims_text: extractTagged(typeof first === 'string' ? first : '', 'claims_json') ?? '{"claims":[]}',
+            claims_text: extractTagged(first, 'claims_json') ?? '{"claims":[]}',
             assistant_turns: r.params.messages.filter((m) => m.role === 'assistant').length,
+            figures: fakeShownFigures(first),
           },
         });
         const now = new Date();
@@ -427,7 +453,7 @@ export function createFakePort(env: Env): FactoryPort {
         if (Number(k.fake_results_bytes ?? 0) > (o?.maxBytes ?? BATCH_RESULTS_MAX_BYTES)) return [];
         const rt = typeof k.fake_batch_result === 'string' ? k.fake_batch_result : 'succeeded';
         if (rt !== 'succeeded') return [{ custom_id: c.custom_id ?? '', result: { type: rt } } as unknown as MessageBatchIndividualResponse];
-        const message = verifierReply(VERIFIER_FAKE_MODEL, c.verify.claims_text, c.verify.assistant_turns);
+        const message = verifierReply(VERIFIER_FAKE_MODEL, c.verify.claims_text, c.verify.assistant_turns, c.verify.figures ?? []);
         return [{ custom_id: c.custom_id ?? '', result: { type: 'succeeded', message } } as unknown as MessageBatchIndividualResponse];
       }
       const fx = JSON.parse(FIXTURE_FILES['meeting/results.json'] ?? '{}') as {
@@ -506,9 +532,10 @@ function fakeKeys(claimsText: string): Record<string, unknown> {
 /**
  * 検証係の応答（同期の messages.create と Batch の results で共通）。
  * claims.json の各 claim に fixture 専用キー fake_verdict があればそれを、無ければ confirmed を返す。
- * 最上位の fake_pause_turns: n があれば、assistant の turn が n 未満の間は container 付きの pause_turn を返す
+ * 最上位の fake_pause_turns: n があれば、assistant の turn が n 未満の間は container 付きの pause_turn を返す。
+ * figures は入力の図の一覧のうち渡された図（§O-12）。すべて ok を返す
  */
-function verifierReply(model: string, claimsText: string, assistantTurns: number): Message {
+function verifierReply(model: string, claimsText: string, assistantTurns: number, figures: string[] = []): Message {
   let claims: Array<{ id: string; fake_verdict?: string }> = [];
   let pauseTurns = 0;
   try {
@@ -544,7 +571,7 @@ function verifierReply(model: string, claimsText: string, assistantTurns: number
     role: 'assistant',
     model,
     container: pauseTurns > 0 ? fakeContainer : null,
-    content: [{ type: 'tool_use', id: 'toolu_fake_1', name: 'report_verdicts', input: { verdicts, overall_note: 'fake' }, caller: { type: 'direct' } }],
+    content: [{ type: 'tool_use', id: 'toolu_fake_1', name: 'report_verdicts', input: { verdicts, overall_note: 'fake', figures: figures.map((path) => ({ path, verdict: 'ok', reason: 'fake: 図を確かめた' })) }, caller: { type: 'direct' } }],
     stop_reason: 'tool_use',
     stop_sequence: null,
     usage: { input_tokens: 12000, output_tokens: 800, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },

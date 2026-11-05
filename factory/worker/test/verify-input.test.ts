@@ -28,6 +28,8 @@ function r2(files: Record<string, string>, pageSize = 2, unreadable: string[] = 
 }
 
 const v = { id: 'v1', material_id: 'm1', r2_prefix: 'p/', claims_json: '{"claims":[{"id":"c1"}]}' };
+/** content block の配列の text をつなぐ（§O-12 から buildUserContent は配列を返す） */
+const textOf = (out: unknown) => (Array.isArray(out) ? (out as Array<{ type: string; text?: string }>).filter((b) => b.type === 'text').map((b) => b.text).join('\n') : String(out));
 
 describe('buildUserContent', () => {
   it('parts/** の md・html・svg をすべて入れ、claims.json / adapt-rules.md・他の拡張子は parts 本文に入れない', async () => {
@@ -39,8 +41,9 @@ describe('buildUserContent', () => {
       'p/parts/p2/data.json': 'JSON本文',
       'p/adapt-rules.md': 'ADAPT',
     });
-    const out = await buildUserContent({ R2: bucket }, v);
-    expect(out).not.toBeNull();
+    const res = await buildUserContent({ R2: bucket }, v);
+    expect(res).not.toBeNull();
+    const out = textOf(res);
     expect(out).toContain('MD本文');
     expect(out).toContain('SVG本文');
     expect(out).toContain('HTML本文');
@@ -57,7 +60,7 @@ describe('buildUserContent', () => {
       'p/parts/p1/b.svg': '<svg/>',
       'p/parts/extra.md': 'manifest に無い本文',
     });
-    const out = await buildUserContent({ R2: bucket }, v);
+    const out = textOf(await buildUserContent({ R2: bucket }, v));
     const extraPartRead = reads.includes('p/parts/extra.md');
     expect(manifest).not.toContain('parts/extra.md');
     expect(extraPartRead).toBe(true);
