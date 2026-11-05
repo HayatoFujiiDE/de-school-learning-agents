@@ -1,5 +1,5 @@
 /* 作る の中身（CONTRACT-v3 §U-1 / U-2 / U-3、design-v3 §5-1 / §6-2 / §6-9 / §6-10 / §7）。
-   題材は 3 つだけ: マイクラのコマンド例 / Python の小さなゲーム / 回路の電気。各題材に仮の案 3 つ（固定）。
+   題材は 4 つ: マイクラのコマンド例 / Python の小さなゲーム / 回路の電気 / 自分を助ける道具（contract-Y。入口の見本と写真には出さない）。各題材に仮の案 3 つ（固定）。
    図は数値だけから組み立てる線画 SVG（墨 + オリーブ、光と星だけ橙）。利用者の入力は図に入れない。
    文言は [js, es] の組。返事の型は design-v3 §7 の表どおり（題材ごとに変わる語だけ {param} などで差し込む）。
    node からも読めるようにしてある（tools/make-test.js）。 */
@@ -11,7 +11,7 @@
   var INK = '#292c29', OLIVE = '#524e44', ORANGE = '#ed922c', SAND = '#f1ece3', PAPER = '#ffffff', SOFT = '#fbecd7', MID = '#e4ded1';
 
   // ---------- 題材 ----------
-  MD.THEMES = ['mc', 'py', 'circuit'];
+  MD.THEMES = ['mc', 'py', 'circuit', 'tool'];
   var THEME = {
     mc: {
       sample: 'cube', ideas: ['tower', 'bridge', 'roof'], capIdea: 'roof', variants: ['cube', 'tower', 'bridge', 'roof'],
@@ -51,6 +51,21 @@
       stepBase: [['電圧を変える', 'でんあつをかえる'], ['抵抗を変える', 'ていこうをかえる'], ['スイッチを足す', 'スイッチをたす']],
       extSteps: [['写真を入れる', '写真を入れる'], ['スイッチを足す', 'スイッチをたす']],
       find: [{ volt: 2, ohm: 1 }, { volt: 3, ohm: 3 }]
+    },
+    // 自分を助ける道具（contract-Y §Y-2 verbatim）。入口は自己理解の工夫と思いつき入力だけ（MD.samples / MD.captures には足さない）
+    tool: {
+      sample: 'memo', ideas: ['nudge', 'oneby', 'board'], capIdea: 'board', variants: ['memo', 'nudge', 'oneby', 'board'],
+      topic: ['自分を助ける道具', '自分をたすける道具'],
+      effect: ['手もとに出るもの', '手もとに出るもの'], aim: ['出かた', '出かた'],
+      changeable: [['まとめる数', 'まとめる数'], ['間かく', 'あいだ']],
+      params: [
+        { key: 'count', label: ['まとめる数', 'まとめる数'], min: 1, max: 5, def: 3 },
+        { key: 'every', label: ['間かく', 'あいだ'], min: 0, max: 4, def: 1,
+          names: [['1 分', '1 分'], ['3 分', '3 分'], ['5 分', '5 分'], ['10 分', '10 分'], ['話が終わったら', '話がおわったら']], vals: [1, 3, 5, 10, 0] }
+      ],
+      stepBase: [['まとめる数を変える', 'まとめる数をかえる'], ['間かくを決める', 'あいだをきめる'], ['サークル対話で使ってみる', 'サークル対話でつかってみる']],
+      extSteps: [['写真を入れる', '写真を入れる'], ['使った場面を書く', 'つかった場面を書く']],
+      find: [{ count: 2, every: 1 }, { count: 4, every: 3 }]
     }
   };
   MD.theme = function (id) { return THEME[id] || THEME.mc; };
@@ -78,7 +93,11 @@
     'circuit.single': { title: ['回路の電気', '回路のでんき'], values: { volt: 1, ohm: 2 } },
     'circuit.series': { title: ['電池 2 個の回路', '電池 2 この回路'], values: { volt: 1, ohm: 2 } },
     'circuit.bulbs': { title: ['電球 2 個の回路', '電球 2 この回路'], values: { volt: 2, ohm: 2 } },
-    'circuit.switch': { title: ['スイッチ付きの回路', 'スイッチつきの回路'], values: { volt: 1, ohm: 2 }, step3: ['電球を 2 個にする', '電球を 2 こにする'] }
+    'circuit.switch': { title: ['スイッチ付きの回路', 'スイッチつきの回路'], values: { volt: 1, ohm: 2 }, step3: ['電球を 2 個にする', '電球を 2 こにする'] },
+    'tool.memo':  { title: ['論点メモ', 'ろんてんメモ'], values: { count: 3, every: 2 } },
+    'tool.nudge': { title: ['ひとこと合図', 'ひとことの合図'], values: { count: 1, every: 1 }, step3: ['合図の言葉を決める', 'あいずのことばをきめる'] },
+    'tool.oneby': { title: ['ひとつずつリスト', 'ひとつずつリスト'], values: { count: 1, every: 4 }, step3: ['次を出す合図を決める', 'つぎを出すあいずをきめる'] },
+    'tool.board': { title: ['話の地図', '話のちず'], values: { count: 4, every: 2 }, step3: ['真ん中に書くことを決める', 'まん中に書くことをきめる'] }
   };
   MD.variant = function (theme, v) { return VARIANT[theme + '.' + v] || VARIANT[theme + '.' + MD.theme(theme).sample]; };
   MD.variantValues = function (theme, v) { return JSON.parse(JSON.stringify(MD.variant(theme, v).values)); };
@@ -112,6 +131,13 @@
       steps: { title: ['回路の手順', '回路の手じゅん'], lines: [['1. 電池ボックスに電池を入れる', '1. 電池ボックスに電池を入れる'], ['2. 抵抗をつなぐ', '2. ていこうをつなぐ'], ['3. 電球をつないで、スイッチを入れる', '3. 電球をつないで、スイッチを入れる']],
         alt: { title: ['回路の手順（スイッチ）', '回路の手じゅん（スイッチ）'], lines: [['1. 電池ボックスに電池を入れる', '1. 電池ボックスに電池を入れる'], ['2. スイッチと抵抗をつなぐ', '2. スイッチとていこうをつなぐ'], ['3. 電球をつないで、スイッチを入れる', '3. 電球をつないで、スイッチを入れる']] } },
       cmd: { variant: 'switch', values: { volt: 1, ohm: 2 } }
+    },
+    tool: {
+      calc: { title: ['使う時間', 'つかう時間'], lines: [['サークル対話は 20 分', 'サークル対話は 20 分'], ['5 分ごとなら、まとめは 4 回', '5 分ごとなら、まとめは 4 回'], ['論点 3 つ × 4 回 = カード 12 枚', 'カード 3 まい × 4 回 = 12 まい']],
+        alt: { title: ['使う時間（10 分ごと）', 'つかう時間（10 分ごと）'], lines: [['サークル対話は 20 分', 'サークル対話は 20 分'], ['10 分ごとなら、まとめは 2 回', '10 分ごとなら、まとめは 2 回'], ['論点 3 つ × 2 回 = カード 6 枚', 'カード 3 まい × 2 回 = 6 まい']] } },
+      steps: { title: ['論点メモの使い方', 'ろんてんメモのつかいかた'], lines: [['1. 聞いたことを 1 行ずつメモに入れる', '1. 聞いたことを 1 行ずつメモに入れる'], ['2. 5 分たったら AI が論点に分ける', '2. 5 分たったら AI がカードに分ける'], ['3. 気になるカードに印を付ける', '3. 気になるカードにしるしをつける']],
+        alt: { title: ['論点メモの使い方（話の地図）', 'ろんてんメモのつかいかた（話のちず）'], lines: [['1. 聞いたことを 1 行ずつメモに入れる', '1. 聞いたことを 1 行ずつメモに入れる'], ['2. AI が真ん中の問いから枝を伸ばす', '2. AI がまん中の問いから枝をのばす'], ['3. 自分の考えを枝に足す', '3. 自分の考えを枝にたす']] } },
+      cmd: { variant: 'board', values: { count: 4, every: 2 } }
     }
   };
 
@@ -170,6 +196,20 @@
   }
   MD.mcCount = mcCount;
   function fmt(s, vars) { return String(s).replace(/\{(\w+)\}/g, function (all, k) { return vars && vars[k] != null ? String(vars[k]) : all; }); }
+  // 自分を助ける道具（contract-Y §Y-2）: 間かくの分数（vals。0 = 話が終わったら）
+  function toolMin(every) { var p = param('tool', 'every'), m = p.vals[every]; return m == null ? p.vals[p.def] : m; }
+  MD.toolMin = toolMin;
+  // 「{n} 分ごと」/「話の終わり」（コード・説明。モード共通）
+  function toolEs(every) { var m = toolMin(every); return m === 0 ? '話の終わり' : m + ' 分ごと'; }
+  var TOOL_RESULT = {
+    memo: ['{E}、話を {count} つの論点カードにまとめる', '{E}、話を {count} つのカードにまとめる'],
+    nudge: ['{E}、「いまの話を {count} 行で」と手もとに出す', '{E}、「いまの話を {count} 行で」と手もとに出す'],
+    oneby: ['決めることを {count} つずつ出して、{E}次を出す', 'きめることを {count} つずつ出して、{E}つぎを出す'],
+    board: ['{E}、話を {count} 本の枝の図に書き足す', '{E}、話を {count} 本のえだの図に書きたす']
+  };
+  var TOOL_CODE = { memo: 'メモ → AI → 論点 × {count}（{Es}）', nudge: '時計 → 合図「いまの話を {count} 行で」（{Es}）', oneby: 'リスト → {count} 件ずつ表示（{Es}）', board: 'メモ → AI → 枝 × {count}（{Es}）' };
+  var TOOL_DESC = { memo: '論点 {count}', nudge: '{count} 行', oneby: '{count} 件ずつ', board: '枝 {count}' };
+  function toolVariant(va) { return TOOL_RESULT[va] ? va : THEME.tool.sample; }
 
   // 結果 1 行（「試す」で確かめたこと）
   MD.result = function (stage, mode) {
@@ -189,6 +229,11 @@
       var how = va === 'coin' ? pick(['1 秒に {sp} マス流れる', '1 びょうに {sp} マスながれる'], mode)
         : va === 'maze' ? pick(['1 秒に {sp} マス進む', '1 びょうに {sp} マス進む'], mode) : pick(['1 秒に {sp} マス落ちる', '1 びょうに {sp} マスおちる'], mode);
       return fmt(what + ' ' + how, { c: v.count, sp: v.speed });
+    }
+    if (t === 'tool') {
+      // E = 「{n} 分ごとに」/ 話が終わったら（params の names）。oneby は「…、{E}次を出す」（読点を重ねない）
+      var m = toolMin(v.every), E = m === 0 ? MD.valueLabel('tool', 'every', v.every, mode) : m + ' 分ごとに';
+      return fmt(pick(TOOL_RESULT[toolVariant(va)], mode), { E: E, count: v.count });
     }
     var c = circuitNums(va, v);
     return fmt(pick(['電流 {I} mA · 明るさ {B}%', 'でんりゅう {I} mA · 明るさ {B}%'], mode), c);
@@ -213,6 +258,7 @@
       var name = va === 'dodge' ? 'rocks' : va === 'coin' ? 'coins' : va === 'maze' ? 'branches' : 'stars';
       return 'speed = ' + v.speed + '\n' + name + ' = ' + v.count + '\nplayer.move(speed)';
     }
+    if (t === 'tool') return fmt(TOOL_CODE[toolVariant(va)], { count: v.count, Es: toolEs(v.every) });
     var c = circuitNums(va, v);
     return c.V + ' V ÷ ' + c.R + ' Ω = ' + c.I + ' mA';
   };
@@ -229,6 +275,7 @@
       return fmt(pick(['{blk}。{s}×{s}×{s}', '{blk}。{s}×{s}×{s}'], mode), { blk: blk, s: v.size });
     }
     if (t === 'py') return fmt(pick(['速さ {sp}・数 {c}', 'はやさ {sp}・数 {c}'], mode), { sp: v.speed, c: v.count });
+    if (t === 'tool') return fmt(TOOL_DESC[toolVariant(va)], { count: v.count }) + ' · ' + toolEs(v.every);
     return MD.valueLabel('circuit', 'volt', v.volt, mode) + ' · ' + MD.valueLabel('circuit', 'ohm', v.ohm, mode);
   };
 
@@ -389,12 +436,66 @@
     }
     return wrap(out);
   }
+  // 自分を助ける道具（contract-Y §Y-2）: まとめる数 = カード・行・枝の数、間かく = 右上の時計の弧と文字（{n}分 / おわり）。顔・人物は描かない
+  function toolMarks(v) { return { items: Math.max(1, v.count || 1), every: toolMin(v.every) }; }
+  function toolClock(m) {
+    var cx = 212, cy = 24, r = 10, out = '';
+    out += '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="' + PAPER + '" stroke="' + INK + '" stroke-width="1.2"/>';
+    if (m > 0) {
+      // 間かくの分だけ橙の弧（1 分 = 6 度。10 分 = 60 度）
+      var a = (-90 + m * 6) * Math.PI / 180, ex = cx + Math.cos(a) * (r - 2.5), ey = cy + Math.sin(a) * (r - 2.5);
+      out += '<path d="M' + cx + ' ' + cy + ' L' + cx + ' ' + (cy - r + 2.5) + ' A' + (r - 2.5) + ' ' + (r - 2.5) + ' 0 0 1 ' + r1(ex) + ' ' + r1(ey) + ' Z" fill="' + ORANGE + '" stroke="none"/>';
+      out += line(cx, cy, r1(ex), r1(ey), INK, 1.2);
+    } else {
+      // 話が終わったら: 針を止めた印（短い横線 2 本）
+      out += line(cx - 4, cy - 2, cx + 4, cy - 2, INK, 1.4) + line(cx - 4, cy + 2, cx + 4, cy + 2, INK, 1.4);
+    }
+    out += line(cx, cy, cx, cy - r + 3, INK, 1.2);
+    out += '<text x="' + (cx - r - 5) + '" y="' + (cy + 4) + '" font-size="10" text-anchor="end" fill="' + OLIVE + '">' + (m > 0 ? m + '分' : 'おわり') + '</text>';
+    return out;
+  }
+  function textLines(x, y, w, h, n, col) {
+    var out = '', gap = h / (n + 1);
+    for (var i = 0; i < n; i++) { var yy = y + gap * (i + 1), ww = w * (i % 2 ? 0.7 : 0.9); out += line(x, yy, x + ww, yy, col || OLIVE, 1.6); }
+    return out;
+  }
+  function toolArt(variant, v) {
+    var mk = toolMarks(v), n = mk.items, out = '', i;
+    if (variant === 'nudge') {
+      out += rect(34, 40, 150, 84, PAPER, ' rx="14"') + poly([[60, 123], [52, 140], [80, 123]], PAPER) + line(61, 123, 79, 123, PAPER, 2);
+      out += textLines(52, 46, 114, 72, n, INK);
+    } else if (variant === 'oneby') {
+      for (i = 3; i >= 1; i--) out += rect(50 + i * 7, 52 - i * 6, 128, 78, i === 1 ? SAND : MID, ' rx="6"');
+      out += rect(50, 52, 128, 78, PAPER, ' rx="6"') + rect(50, 52, 6, 78, ORANGE, ' rx="2"');
+      out += textLines(66, 54, 100, 74, n, INK);
+    } else if (variant === 'board') {
+      var cx = 108, cy = 90;
+      for (i = 0; i < n; i++) {
+        var a = (-90 + (360 / n) * i + (n % 2 ? 0 : 180 / n)) * Math.PI / 180, ex = cx + Math.cos(a) * 52, ey = cy + Math.sin(a) * 44;
+        out += line(cx, cy, ex, ey, OLIVE, 1.4) + rect(ex - 9, ey - 6, 18, 12, PAPER, ' rx="2"');
+      }
+      out += '<circle cx="' + cx + '" cy="' + cy + '" r="15" fill="' + SOFT + '" stroke="' + INK + '" stroke-width="1.4"/>' + line(cx - 7, cy, cx + 7, cy, INK, 1.4);
+    } else {
+      // memo: 左に罫線のメモ → 右に論点カード（縦に count 枚）
+      out += rect(18, 34, 70, 100, PAPER, ' rx="4"') + poly([[74, 34], [88, 48], [74, 48]], SAND);
+      for (i = 0; i < 6; i++) out += line(26, 56 + i * 12, 80, 56 + i * 12, OLIVE, 0.9);
+      out += line(96, 84, 120, 84, INK, 1.6) + poly([[120, 79], [128, 84], [120, 89]], INK);
+      var top = 44, avail = 96, ch = Math.min(18, (avail - (n - 1) * 6) / n);
+      for (i = 0; i < n; i++) {
+        var y = top + i * (ch + 6) + (avail - (n * ch + (n - 1) * 6)) / 2;
+        out += rect(138, y, 82, ch, i === 0 ? SOFT : PAPER, ' rx="3"') + line(146, y + ch / 2, 146 + (i % 2 ? 40 : 56), y + ch / 2, OLIVE, 1.2);
+      }
+    }
+    out += toolClock(mk.every);
+    return wrap(out);
+  }
   MD.art = function (stage) {
     if (!stage) return '';
     if (stage.kind === 'note') return '';
     var v = stage.values || MD.variantValues(stage.theme, stage.variant);
     if (stage.theme === 'py') return pyArt(stage.variant, v);
     if (stage.theme === 'circuit') return circuitArt(stage.variant, v);
+    if (stage.theme === 'tool') return toolArt(stage.variant, v);
     return mcArt(stage.variant, v);
   };
   // 図に出している量（テスト用。線画と同じ計算）
@@ -403,6 +504,7 @@
     var v = stage.values || MD.variantValues(stage.theme, stage.variant);
     if (stage.theme === 'py') return JSON.stringify(pyMarks(v));
     if (stage.theme === 'circuit') return JSON.stringify(circuitMarks(stage.variant, v));
+    if (stage.theme === 'tool') return JSON.stringify(toolMarks(v));
     return JSON.stringify({ blocks: mcCount(stage.variant, v.size), kind: v.block });
   };
   // 「本人が試して結果が出た」の返事（§7 の型。題材で変わる名詞・動詞だけ差し込む）。key = 変えた値、from = 変える前の値
@@ -414,6 +516,16 @@
     else if (t === 'mc') { vars.effect = 'できる形'; vars.aim = '形'; vars.how = up ? 'ブロックがふえた' : 'ブロックがへった'; }
     else if (t === 'py' && key === 'speed') { vars.effect = pick(va.mover, 'js') + 'の動き'; vars.aim = '動き'; vars.how = up ? 'はやく動いた' : 'ゆっくり動いた'; }
     else if (t === 'py') { vars.effect = pick(va.thing, 'js') + 'の数'; vars.aim = '数'; vars.how = pick(va.thing, 'es') + (up ? 'がふえた' : 'がへった'); }
+    else if (t === 'tool' && key === 'every') {
+      // 間かくは分で比べる（0 = 話の終わりは最も長い扱い）
+      var mf = toolMin(from), mt = toolMin(to);
+      if (mf === 0) mf = Infinity;
+      if (mt === 0) mt = Infinity;
+      vars.effect = '出る間かく'; vars.aim = '間かく'; vars.how = mt < mf ? 'よく出るようになった' : '出るのがゆっくりになった';
+    } else if (t === 'tool') {
+      var noun = stage.variant === 'board' ? '枝' : (stage.variant === 'nudge' ? '行' : 'カード');
+      vars.effect = 'まとめる数'; vars.aim = '数'; vars.how = noun + (up ? 'がふえた' : 'がへった');
+    }
     else {
       var before = JSON.parse(JSON.stringify(v));
       before[key] = from;
@@ -446,6 +558,9 @@
       inner = pyArt(['catch', 'dodge', 'coin', 'maze'][n % 4], { speed: 2, count: 4 + (n % 2) * 2 });
     } else if (photo.theme === 'circuit') {
       inner = circuitArt(['series', 'switch', 'bulbs', 'single'][n % 4], { volt: 1, ohm: 2 });
+    } else if (photo.theme === 'tool') {
+      // 写真から tool を作る経路は無い（§Y-7）。万一来ても道具の線画にする（マイクラの写真に落とさない）
+      inner = toolArt(['memo', 'nudge', 'oneby', 'board'][n % 4], { count: 3, every: 2 });
     } else {
       return wrap(mcShot(n % MD.PHOTO_COUNT) + corners(), 'is-photo');
     }
