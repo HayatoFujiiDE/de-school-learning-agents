@@ -34,7 +34,7 @@ html[data-mode="es"] .mp-uname,html[data-mode="es"] .mp-tabs .segmented button,h
 .mp-chip[aria-pressed="false"] .mp-sw{opacity:.45}
 .mp-chip:disabled{opacity:.4}
 .mp-chipsep{flex-shrink:0;width:1px;align-self:stretch;margin:6px 4px;background:var(--line)}
-/* 枠の右上: 全体で見る（§AE-2）+ 大きく見る */
+/* 枠の右上: 全体で見る（§AH-2）+ 大きく見る */
 .mp-tr{position:absolute;z-index:4;top:13px;right:13px;display:flex;gap:6px}
 .mp-bigbtn,.mp-allbtn{min-height:44px;padding:0 14px;box-shadow:0 2px 8px #292c2914}
 .mp-allbtn .ico{width:16px;height:16px}
@@ -117,7 +117,7 @@ html[data-mode="es"] .mp-bigbtn,html[data-mode="es"] .mp-lgbtn{min-height:48px}
 .mp-n.is-made .mp-sub{margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mp-n .mp-chips{display:flex;gap:4px;margin-top:2px}
 .mp-n .mp-bandrow{display:flex;align-items:center;gap:6px;height:13px}
-/* 作ったものから の算数の単元: 小さな帯は near の時だけ（§AE-2。分野で見るは いつも） */
+/* 作ったものから の算数の単元: 小さな帯は near の時だけ（§AH-2。分野で見るは いつも） */
 .mp-frame[data-view="made"]:not([data-lod="near"]) .mp-n .mp-bandrow{display:none}
 .mp-n .mp-bandrow .mp-pct{font-size:11px;line-height:13px;min-width:0}
 .mp-band.is-mini{gap:2px;flex-wrap:nowrap}
@@ -257,7 +257,7 @@ html[data-mode="es"] .mp-rel{min-height:48px}
 .mp-pct{font-size:11px;color:var(--muted);font-weight:600;font-variant-numeric:tabular-nums;min-width:34px}
 .mp-scope{font-size:12px;color:var(--muted);line-height:1.8}
 
-/* ---------- 全体の画面（§AE-1）: 上 = 全体の帯（全単元を 1 マスずつ）+ 凡例 / 下 = 教科ごとの段 ---------- */
+/* ---------- 全体の画面（§AH-1）: 上 = 全体の帯（全単元を 1 マスずつ）+ 凡例 / 下 = 教科ごとの段 ---------- */
 .map-page.is-all{display:grid;gap:22px}
 .map-page.is-all>.mp-headrow{margin-bottom:0}
 .mpo-linksbtn{min-height:44px}
@@ -320,7 +320,7 @@ html[data-mode="es"] .mpo-xname{font-size:14px}
 .mpo-xcards{grid-template-columns:minmax(0,1fr)}
 }
 
-/* ---------- 遷移（§AE-3 / AE-4）: 重ね面 1 枚。古い画面と単元の札。動かすのは transform と opacity だけ ---------- */
+/* ---------- 遷移（§AH-3 / AH-4）: 重ね面 1 枚。古い画面と単元の札。動かすのは transform と opacity だけ ---------- */
 .mpx-ovl{position:fixed;inset:0;z-index:35;pointer-events:none;overflow:hidden}
 .mpx-ghost{position:absolute;inset:0;overflow:hidden}
 .mpx-gsp{position:relative;width:100%}
@@ -405,7 +405,7 @@ html[data-mode="es"] .mp-frame[data-lod="far"] .mp-n.is-made .mp-label{font-size
 
 /* ---------- 大きく見る（§AC-6）: 左メニュー・topbar・説明 1 文を隠し、見出しの行を小さく（h1 18px）。体験モックの帯は残す ---------- */
 /* 隠すのはシェルの左メニュー（#sidebar）だけ。≤ 700 の引き出し（#nav-drawer の中の .sidebar）は下タブの「もっと」から今までどおり開ける */
-/* 効かせるのは今の画面（#main・#topbar）だけ。遷移の重ね面の中の古い画面と上の帯の写しには効かせない（§AE-4: 大きく見るが付いても測った位置のまま薄くなる） */
+/* 効かせるのは今の画面（#main・#topbar）だけ。遷移の重ね面の中の古い画面と上の帯の写しには効かせない（§AH-4: 大きく見るが付いても測った位置のまま薄くなる） */
 html.mp-big #sidebar,html.mp-big #topbar{display:none}
 html.mp-big .shell{grid-template-columns:minmax(0,1fr)}
 html.mp-big .content{max-width:none;padding:4px 16px 0}

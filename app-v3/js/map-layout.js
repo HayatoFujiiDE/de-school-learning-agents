@@ -80,7 +80,7 @@
       var kids = mode === 'fields' ? (n.material ? 3 : 2) : 3, kidsMid = mode === 'fields' ? (n.material ? 2 : 1) : 2;
       h = 2 * s.py + 2 + maxLines(n.name, s.name, iw) * s.name * s.lh + 2 * s.basic * s.blh + (kids - 1) * s.gap;
       hm = 2 * s.py + 2 + midLines(n.name, iw) * MID.px * s.lh + (kidsMid - 1) * s.gap;
-      // 算数の帯: 分野で見る = いつも / 作ったものから = near の時だけ（§AE-2。near の箱だけ 1 段ぶん高く）
+      // 算数の帯: 分野で見る = いつも / 作ったものから = near の時だけ（§AH-2。near の箱だけ 1 段ぶん高く）
       if (mode === 'fields') { if (n.material) { h += s.band; hm += s.band; } } else { h += s.eb; hm += MID.px * MID.eblh; if (n.material) h += s.band + s.gap; }
       return { w: s.w, h: Math.ceil(Math.max(h, hm)) };
     }
