@@ -1,7 +1,8 @@
-/* 学びマップ（#map 作ったものから / #map/fields 分野で見る / #map/list リスト / #map/basics 基礎学習 / #map/u/<code> 単元）:
-   CONTRACT-v3 §Y（基礎学習・単元・手がかりの約束）+ §AB（つながりを拡大縮小できる 1 枚の地図に。§Y-2 の 3 列と線を置き換え）。
+/* 学びマップ（#map 作ったものから / #map/flow 流れで見る / #map/fields 分野で見る / #map/list リスト / #map/basics 基礎学習 / #map/u/<code> 単元）:
+   CONTRACT-v3 §Y（基礎学習・単元・手がかりの約束）+ §AB（つながりを拡大縮小できる 1 枚の地図に）+ §AC（画面の使い方: 見出しの右に切替・
+   枠の中にチップ・大きく見る・流れで見る = §Y-2 の 3 列を 1 つの見方として戻す・作ったものだけ）。
    主役は「作ったもの」。作ったもの → そこで学んだこと（手がかり。記録 1 つを場面として必ず伴う）→ つながる単元 を基本の線に、
-   作ったものどうし（同じ単元）・学ぶ順・教科をまたぐ・これから作れそう の 4 種のつながりを、チップで選んで重ねる。
+   学ぶ順・教科をまたぐ・これから作れそう の 3 種のつながりを、チップで選んで重ねる（作ったものどうしの線は §AC-13 でやめた）。
    多くても読めるように: 倍率で出す量を変える（far / mid / near）/ 種類を選ぶ / 1 つ選ぶとそこだけ濃く / 詳細パネル。
    学んだことは判定ではなく手がかり。数・達成・順位・おすすめ度は出さない。
    純関数（MP.progress / overall / graph / related / peers / normalizeUi / select / decline …）は DOM と DES.t に触れず、
@@ -16,8 +17,10 @@
   var MPC = DES.mapCanvas || (typeof require === 'function' ? require('./map-canvas.js') : null);
   var MP = DES.map = DES.map || {};
   var SRC = ['own', 'person', 'buddy'];
-  var VIEWS = ['made', 'fields', 'list'];
-  var CHIPS = ['peer', 'order', 'cross', 'next'];
+  // 見方は 4 つ（§AC-3 の順）。流れで見る = §Y-2 の左 → 右の 3 列（§AC-8）
+  var VIEWS = ['made', 'flow', 'fields', 'list'];
+  // つながりのチップは 3 つ（§AC-13: 作ったものどうしの線とチップはやめた。保存済みの chips.peer は読み捨てる）
+  var CHIPS = ['order', 'cross', 'next'];
   var MADE = { act: 1, work: 1, past: 1 };
 
   // ---------- 小道具 ----------
@@ -169,7 +172,8 @@
           via: m.learned.filter(function (lid) { return lx[lid].units.indexOf(code) >= 0; }) });
       });
     });
-    // 作ったものどうし = 同じ単元につながる
+    // 作ったものどうし = 同じ単元につながる。§AC-13 で線としては描かない（edgesIn で落とす）が、
+    // 並び（map-layout.js の重み）と「前に作ったものとのつながり」（MP.peers）がこれを読むので、グラフには残す
     for (var i = 0; i < made.length; i++) {
       for (var j = i + 1; j < made.length; j++) {
         var shared = made[i].units.filter(function (c) { return made[j].units.indexOf(c) >= 0; });
@@ -212,7 +216,7 @@
   function nodeById(g, id) { return g && typeof id === 'string' ? (index(g)[id] || null) : null; }
   function hasNode(g, id) { return !!nodeById(g, id); }
   function isMade(n) { return !!n && !!MADE[n.kind]; }
-  // その見方に出すノード: 作ったものから / リスト = 作ったもの・学んだこと・作ったものとつながる単元・これから / 分野で見る = 作ったもの・全単元・これから
+  // その見方に出すノード: 作ったものから / 流れで見る / リスト = 作ったもの・学んだこと・作ったものとつながる単元・これから / 分野で見る = 作ったもの・全単元・これから
   function viewNodes(g, view) {
     var out = {};
     if (!g) return out;
@@ -222,13 +226,14 @@
     if (view !== 'fields') g.nodes.learned.forEach(function (n) { out[n.id] = true; });
     return out;
   }
+  // その見方に描く線。作ったものどうし（peer）はどの見方にも描かない（§AC-13）
   function edgesIn(g, view) {
     var vn = viewNodes(g, view), v = view === 'fields' ? 'fields' : 'made';
-    return g ? g.edges.filter(function (e) { return e.views.indexOf(v) >= 0 && vn[e.from] && vn[e.to]; }) : [];
+    return g ? g.edges.filter(function (e) { return e.kind !== 'peer' && e.views.indexOf(v) >= 0 && vn[e.from] && vn[e.to]; }) : [];
   }
   // 選んだノードとつながるもの（種類ごと）。選んだノードのつながりは、チップが off の種類も含めて全部（§AB-3-3）。自分は含めない
   function related(g, id) {
-    var out = { nodes: [], edges: [], kinds: { base: [], mu: [], peer: [], order: [], cross: [], next: [] } };
+    var out = { nodes: [], edges: [], kinds: { base: [], mu: [], order: [], cross: [], next: [] } };
     var n = nodeById(g, id);
     if (!n) return out;
     var E = g.edges, nodes = {}, seen = {};
@@ -245,7 +250,12 @@
     if (isMade(n)) {
       from(id, 'base').forEach(function (e) { add(e); from(e.to, 'base').forEach(add); });
       from(id, 'mu').forEach(add);
-      touch(id, 'peer').forEach(add);
+      // 同じ単元を通ってつながる作ったものも濃く（§AC-13）。線は 作ったもの → 単元 ← 作ったもの の基本の線
+      n.units.forEach(function (code) {
+        var uid = 'unit:' + code;
+        to(uid, 'base').forEach(function (e) { var l = nodeById(g, e.from); if (l && l.madeId !== id) { add(e); to(e.from, 'base').forEach(add); } });
+        to(uid, 'mu').forEach(function (e) { if (e.from !== id) add(e); });
+      });
       E.forEach(function (e) {
         if (e.kind === 'next' && (n.learned.indexOf(e.from) >= 0 || (e.from.indexOf('unit:') === 0 && n.units.indexOf(e.from.slice(5)) >= 0))) add(e);
       });
@@ -258,7 +268,6 @@
       to(id, 'mu').forEach(add);
       touch(id, 'order').forEach(add);
       touch(id, 'cross').forEach(add);
-      E.forEach(function (e) { if (e.kind === 'peer' && e.units.indexOf(n.code) >= 0) add(e); });
       from(id, 'next').forEach(add);
     } else if (n.kind === 'next') {
       to(id, 'next').forEach(function (e) { add(e); if (e.from.indexOf('ln:') === 0) to(e.from, 'base').forEach(add); });
@@ -283,7 +292,7 @@
   // des3.mapUi を整える（§AB-13）。壊れた値はその欄だけ初期値。
   // 選択は見方ごと（その見方に無いノードは null）。外せるのはバディの見立てと これから作れそうなもの だけ。表示位置は 作ったものから / 分野で見る ごと
   function defaultUi() {
-    return { view: 'made', sel: { made: null, fields: null, list: null }, chips: { peer: true, order: false, cross: false, next: false }, declined: [], declinedNext: [], pos: { made: null, fields: null } };
+    return { view: 'made', sel: { made: null, flow: null, fields: null, list: null }, chips: { order: false, cross: false, next: false }, declined: [], declinedNext: [], pos: { made: null, fields: null }, big: false, only: false };
   }
   function normalizeUi(raw, g, opt) {
     opt = opt || {};
@@ -302,6 +311,9 @@
         var p = raw.pos[v];
         if (isObj(p) && fin(p.x) && fin(p.y) && fin(p.z) && p.z >= MPC.FLOOR && p.z <= MPC.MAX) out.pos[v] = { x: p.x, y: p.y, z: p.z };
       });
+      // 大きく見る（§AC-6）・作ったものだけ（§AC-14）: 真偽値だけ
+      if (typeof raw.big === 'boolean') out.big = raw.big;
+      if (typeof raw.only === 'boolean') out.only = raw.only;
     }
     if (g) {
       VIEWS.forEach(function (v) { if (out.sel[v] != null && !viewNodes(g, v)[out.sel[v]]) out.sel[v] = null; });
@@ -374,7 +386,81 @@
     return out;
   }
 
+  // ---------- 流れで見る（§AC-8）: 左 = 作ったもの（新しい順）+ これから作れそう / 中 = 学んだこと / 右 = 作ったものとつながる単元 ----------
+  // 元の順: 学んだことは作ったものの順、単元は上から最初に出てくる順（線が交わりにくい）
+  function flowCols(g) {
+    var out = { made: [], next: [], learned: [], units: [] }, seen = {};
+    if (!g) return out;
+    out.made = g.nodes.made.map(function (n) { return n.id; });
+    out.next = g.nodes.next.map(function (n) { return n.id; });
+    g.nodes.made.forEach(function (m) {
+      m.learned.forEach(function (lid) {
+        var l = nodeById(g, lid);
+        if (!l) return;
+        out.learned.push(lid);
+        l.units.forEach(function (c) { var uid = 'unit:' + c; if (!seen[uid]) { seen[uid] = true; out.units.push(uid); } });
+      });
+    });
+    return out;
+  }
+  // 流れで見るで濃くするもの: 選んだノードの つながり のうち、作ったもの → 学んだこと → 単元 の線（base）と これから作れそう（next）でたどれる相手。
+  // 学ぶ順・教科をまたぐ（チップの種類）はこの見方では線を出さないので含めない。edges は描く線（base）だけ
+  function flowRel(g, sel) {
+    if (!sel || !viewNodes(g, 'flow')[sel]) return null;
+    var r = related(g, sel), nodes = {}, out = { nodes: [], edges: [] };
+    r.kinds.base.concat(r.kinds.next).forEach(function (eid) {
+      var e = null;
+      for (var i = 0; i < g.edges.length && !e; i++) if (g.edges[i].id === eid) e = g.edges[i];
+      if (!e) return;
+      if (e.from !== sel) nodes[e.from] = true;
+      if (e.to !== sel) nodes[e.to] = true;
+    });
+    out.nodes = r.nodes.filter(function (id) { return nodes[id]; });
+    out.edges = r.kinds.base.slice();
+    return out;
+  }
+  // 列ごとの並び（§AC-9）。選択なし = 元の順 / 選択あり = 選んだもの・つながる相手が先、その中は元の順（決定論）
+  function flowOrder(g, selId) {
+    var cols = flowCols(g), rel = flowRel(g, selId);
+    if (!rel) return cols;
+    var on = {};
+    on[selId] = true;
+    rel.nodes.forEach(function (id) { on[id] = true; });
+    Object.keys(cols).forEach(function (k) {
+      cols[k] = cols[k].filter(function (id) { return on[id]; }).concat(cols[k].filter(function (id) { return !on[id]; }));
+    });
+    return cols;
+  }
+  // 地図に出すもの（§AC-14）: o = { only, selId, view }。only が off = その見方のノードと線すべて /
+  // on = 作ったものだけ（線なし）。on のまま 1 つ選ぶと、その 1 つにつながるノードと線だけを足す。並び・位置は変えない（出すか隠すかだけ）。
+  // 作ったものを選んだ時は、その作ったもの自身の 学んだこと → 単元（と これから）だけ。同じ単元を通ってつながる他の作ったものの
+  // 学んだこと・線（§AC-13 で濃くするもの）は足さない（作ったもの自体はもう出ている）
+  function visible(g, o) {
+    o = o || {};
+    var view = o.view === 'fields' ? 'fields' : 'made', vn = viewNodes(g, view), es = edgesIn(g, view), out = { nodes: [], edges: [] };
+    if (!g) return out;
+    var order = allNodes(g).map(function (n) { return n.id; }).filter(function (id) { return vn[id]; });
+    if (!o.only) { out.nodes = order; out.edges = es.map(function (e) { return e.id; }); return out; }
+    var keepN = {}, keepE = {};
+    g.nodes.made.forEach(function (m) { if (vn[m.id]) keepN[m.id] = true; });
+    if (typeof o.selId === 'string' && vn[o.selId]) {
+      var r = related(g, o.selId), sn = nodeById(g, o.selId), mine = isMade(sn);
+      keepN[o.selId] = true;
+      r.nodes.forEach(function (id) {
+        var x = nodeById(g, id);
+        if (!vn[id] || (mine && x && x.kind === 'learned' && x.madeId !== o.selId)) return;
+        keepN[id] = true;
+      });
+      r.edges.forEach(function (id) { keepE[id] = true; });
+      if (mine) es.forEach(function (e) { var f = nodeById(g, e.from); if (keepE[e.id] && f && isMade(f) && e.from !== o.selId) keepE[e.id] = false; });
+    }
+    out.nodes = order.filter(function (id) { return keepN[id]; });
+    out.edges = es.filter(function (e) { return keepE[e.id] && keepN[e.from] && keepN[e.to]; }).map(function (e) { return e.id; });
+    return out;
+  }
+
   var pure = {
+    flowCols: flowCols, flowRel: flowRel, flowOrder: flowOrder, visible: visible,
     progress: progress, overall: overall, isBlank: isBlank, lastDate: lastDate, dayNum: dayNum, graph: graph, related: related, peers: peers,
     viewNodes: viewNodes, edgesIn: edgesIn, defaultUi: defaultUi, normalizeUi: normalizeUi, selIn: selIn, select: select, deselect: deselect,
     decline: decline, undecline: undecline, declineNext: declineNext, undeclineNext: undeclineNext, unitLinks: unitLinks, nodeById: nodeById, hasNode: hasNode, posSettle: posSettle
@@ -602,9 +688,11 @@
     return '';
   }
 
-  // ---------- 見出し + タブ（§Y-1）+ 見方（§AB-1） ----------
-  function viewHash(v) { return v === 'fields' ? '#map/fields' : (v === 'list' ? '#map/list' : '#map'); }
-  function head(tab, view) {
+  // ---------- 見出しの行（§AC-2）: 左に h1 + 説明 1 文、同じ行の右端にタブ（つながり / 基礎学習）と見方の切替（下端ぞろえ）。
+  // 幅が足りない時（< 1024）は見出しの下に折り返す。基礎学習・単元詳細ではタブだけ ----------
+  function viewHash(v) { return v === 'flow' || v === 'fields' || v === 'list' ? '#map/' + v : '#map'; }
+  function isMapView(v) { return v === 'made' || v === 'fields'; }
+  function switches(tab, view) {
     var tabs = H('div', { class: 'studio-tabs mp-tabs' }, [H('div', { class: 'segmented', role: 'group', 'aria-label': T('mp_tabs_label') }, ['links', 'basics'].map(function (k) {
       var on = k === tab;
       return H('button', { type: 'button', class: on ? 'active' : null, 'data-action': 'mp-tab', 'data-arg': k, 'aria-current': on ? 'page' : null }, T(k === 'links' ? 'mp_tab_links' : 'mp_tab_basics'));
@@ -613,54 +701,65 @@
       var on = v === view;
       return H('button', { type: 'button', class: on ? 'active' : null, 'data-action': 'mp-view', 'data-arg': v, 'aria-current': on ? 'page' : null }, T('mp_view_' + v));
     }))]);
-    return [
+    return H('div', { class: 'mp-switch' }, [tabs, views]);
+  }
+  function head(tab, view) {
+    return [H('div', { class: 'mp-headrow' }, [
       H('div', { class: 'page-head mp-head' }, [H('div', null, [H('h1', { tabindex: '-1', 'data-fk': 'mp-h' }, T('map')), H('p', null, T('mp_head_sub'))])]),
-      H('div', { class: 'mp-bar' }, [tabs, views])
-    ];
+      switches(tab, view)
+    ])];
   }
 
-  // ---------- 線の見本（凡例とチップの中。色だけに頼らず形で分ける: 実線 細 / 実線 太 / 点線 / 二重 / 破線） ----------
+  // ---------- 線の見本（凡例とチップの中。色だけに頼らず形で分ける: 実線 細 / 点線 / 二重 / 破線） ----------
   function swatch(k) {
     var d = 'M2 6H30', body = k === 'cross' ? '<path class="o" d="' + d + '"/><path class="i" d="' + d + '"/>' : '<path d="' + d + '"/>';
     return DES.raw('<svg class="mp-sw k-' + k + '" viewBox="0 0 32 12" aria-hidden="true" focusable="false">' + body + '</svg>');
   }
-  // 凡例: 基本の線 + ノードのしるし（far の点）。見方ごとに出す項目を変える（分野で見るは学んだことを出さない）。
-  // 1 行に収まらない幅では「しるしの見方」の開閉（既定は閉）にする（fitLegend）
+  // 枠の左上: 切替「作ったものだけ」（§AC-14。線の見本なし・間を空ける）+ つながりのチップ 3 つ（§AC-4 / AC-13）
+  function chipPanel() {
+    var u = mapUi();
+    return H('div', { class: 'mp-chippanel mp-ovl-top' }, [
+      H('button', { type: 'button', class: 'opt-chip mp-chip mp-onlybtn', 'data-action': 'mp-only', 'aria-pressed': u.only ? 'true' : 'false' }, T('mp_only')),
+      H('span', { class: 'mp-chipsep', 'aria-hidden': 'true' }),
+      H('div', { class: 'mp-chips', role: 'group', 'aria-label': T('mp_chips_label') }, CHIPS.map(function (k) {
+        return H('button', { type: 'button', class: 'opt-chip mp-chip', 'data-action': 'mp-chip', 'data-arg': k, 'aria-pressed': u.chips[k] ? 'true' : 'false', disabled: u.only }, [swatch(k), H('span', null, T('mp_k_' + k))]);
+      }))
+    ]);
+  }
+  // 枠の右上: 大きく見る / もとの大きさ（§AC-6）
+  function bigKids(on) { return [icon(on ? 'shrink' : 'expand'), H('span', null, T(on ? 'mp_big_off' : 'mp_big'))]; }
+  function bigBtn() {
+    var on = !!mapUi().big;
+    return H('button', { type: 'button', class: 'btn mp-bigbtn mp-ovl-top', 'data-action': 'mp-big', 'aria-pressed': on ? 'true' : 'false' }, bigKids(on));
+  }
+  // 枠の左下: 「しるしの見方」→ 小さな面（線の見本 + ノードの見本）。Esc と外側クリックで閉じ、ボタンにフォーカスが戻る（§AC-4）
   function legend(view) {
-    var items = [H('span', { class: 'mp-lg' }, [swatch('base'), H('span', null, T(view === 'fields' ? 'mp_k_base_fields' : 'mp_k_base'))])];
+    var items = [['base', view === 'fields' ? 'mp_k_base_fields' : 'mp_k_base']].concat(CHIPS.map(function (k) { return [k, 'mp_k_' + k]; })).map(function (p) {
+      return H('span', { class: 'mp-lg' }, [swatch(p[0]), H('span', null, T(p[1]))]);
+    });
     (view === 'fields' ? [] : [['learned', 'mp_kind_learned']]).concat([['unit', 'mp_kind_unit'], ['ext', 'mp_lg_unit_ext'], ['next', 'mp_kind_next']]).forEach(function (p) {
       items.push(H('span', { class: 'mp-lg' }, [H('span', { class: 'mp-mk k-' + p[0], 'aria-hidden': 'true' }), H('span', null, T(p[1]))]));
     });
-    return H('details', { class: 'mp-key', open: true }, [H('summary', { class: 'mp-key-sum' }, T('mp_lg_toggle')), H('div', { class: 'mp-key-items' }, items)]);
-  }
-  function chipsBar(view) {
-    var u = mapUi();
-    return H('div', { class: 'mp-chipbar' }, [
-      H('div', { class: 'opt-chips mp-chips', role: 'group', 'aria-label': T('mp_chips_label') }, CHIPS.map(function (k) {
-        return H('button', { type: 'button', class: 'opt-chip mp-chip', 'data-action': 'mp-chip', 'data-arg': k, 'aria-pressed': u.chips[k] ? 'true' : 'false' }, [swatch(k), H('span', null, T('mp_k_' + k))]);
-      })),
-      legend(view)
+    var open = !!ui().legendOpen;
+    return H('div', { class: 'mp-lgwrap' }, [
+      H('div', { class: 'mp-lgpop', id: 'mp-lgpop', role: 'group', 'aria-label': T('mp_lg_toggle'), hidden: !open }, items),
+      H('button', { type: 'button', class: 'btn mp-lgbtn', 'data-action': 'mp-legend', 'aria-expanded': open ? 'true' : 'false', 'aria-controls': 'mp-lgpop' }, T('mp_lg_toggle'))
     ]);
   }
-  function fitLegend(page) {
-    var d = page && page.querySelector('.mp-key'), bar = page && page.querySelector('.mp-chipbar');
-    if (!d || !bar || !d.isConnected) return;
-    var items = d.querySelector('.mp-key-items');
-    d.classList.remove('is-folded');
-    d.open = true;
-    var fits = items.scrollWidth <= bar.clientWidth + 0.5;
-    d.classList.toggle('is-folded', !fits);
-    if (!fits) d.open = !!ui().legendOpen;
-    if (!d._bound) {
-      d._bound = true;
-      d.addEventListener('toggle', function () { if (d.classList.contains('is-folded')) ui().legendOpen = d.open; });
-    }
+  function setLegend(open, focusBtn) {
+    ui().legendOpen = !!open;
+    var page = document.querySelector('.map-page.is-map');
+    if (!page) return;
+    var b = page.querySelector('.mp-lgbtn'), p = page.querySelector('.mp-lgpop');
+    if (b) b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (p) p.hidden = !open;
+    if (focusBtn && b) b.focus();
   }
 
   // ---------- 地図（§AB-2）: 枠 > 動く板（線の SVG・島・ノード）+ 右下の操作 + 詳細パネル ----------
   function svgEl(tag, at) { var e = document.createElementNS(SVGNS, tag); Object.keys(at).forEach(function (k) { e.setAttribute(k, at[k]); }); return e; }
-  var EDGE_RANK = { base: 0, mu: 0, order: 1, next: 2, peer: 3, cross: 4 };
-  var BEND = { peer: 0.16, order: -0.12, cross: 0.12, next: -0.14 };
+  var EDGE_RANK = { base: 0, mu: 0, order: 1, next: 2, cross: 4 };
+  var BEND = { order: -0.12, cross: 0.12, next: -0.14 };
   function pathD(e, a, b) {
     var x1 = a.x + a.w / 2, y1 = a.y + a.h / 2, x2 = b.x + b.w / 2, y2 = b.y + b.h / 2;
     if (!BEND[e.kind]) return 'M' + x1 + ' ' + y1 + 'L' + x2 + ' ' + y2;
@@ -740,7 +839,6 @@
   }
   function buildMapPage(view, g, L) {
     var kids = head('links', view);
-    kids.push(chipsBar(view));
     // 重なりの順: 島の囲み（いちばん下）→ 線 → 島の名前 → ノード（線は島の中の単元まで見え、島の名前は線に隠れない）
     var vp = H('div', { class: 'mp-vp', style: 'width:' + L.bounds.w + 'px;height:' + L.bounds.h + 'px' }), names = [];
     if (view === 'fields') L.islands.forEach(function (s) {
@@ -762,7 +860,9 @@
       ]),
       detailSection()
     ]);
-    kids.push(frame, H('p', { id: 'mp-frame-hint', class: 'sr-only' }, T('mp_frame_hint')));
+    // 枠の上に重ねる部品（チップ・大きく見る・しるしの見方）は枠の外の兄弟に置く（地図の動かし方の受け口に入らない。§AC-4 / AC-6）
+    // ≤ 700 はチップだけ枠の上の 1 行（mp-stage-in が枠の位置の基準）
+    kids.push(H('div', { class: 'mp-stage', 'data-view': view }, [chipPanel(), H('div', { class: 'mp-stage-in' }, [bigBtn(), frame, legend(view)])]), H('p', { id: 'mp-frame-hint', class: 'sr-only' }, T('mp_frame_hint')));
     var page = H('div', { class: 'map-page is-map', 'data-view': view }, kids);
     page._labels = labelItems(g, L, view, vp);
     return page;
@@ -808,13 +908,28 @@
   function r4(n) { return Math.round(n * 10000) / 10000; }
   // 全体を見る の余白（狭い枠では小さく）と、その枠の倍率の下限 = min(0.3, 全体が入る倍率)（床 0.1）
   function fitPad(w) { return Math.max(8, Math.min(20, Math.round(w * 0.03))); }
+  // 枠の上端に重ねた部品（チップの面・大きく見る）の下端まで = 全体を見る・開いた時に地図を置かない上の余白（§AC-4）
+  function topInset(page) {
+    var frame = page.querySelector('.mp-frame');
+    if (!frame || !frame.isConnected) return 0;
+    var fr = frame.getBoundingClientRect(), t = 0;
+    Array.prototype.forEach.call(page.querySelectorAll('.mp-ovl-top'), function (el) {
+      var r = el.getBoundingClientRect();
+      if (r.height && r.top >= fr.top - 1 && r.top < fr.top + fr.height / 2) t = Math.max(t, r.bottom - fr.top);
+    });
+    return Math.round(t);
+  }
+  function fitTop(page, s) { return Math.max(0, topInset(page) + 6 - fitPad(s.w)); }
   function minOf(page) {
     var frame = page.querySelector('.mp-frame'), L = page._L;
     if (!frame || !L) return MPC.MIN;
     var s = frameSize(frame);
-    return MPC.minZoom(L.bounds, s.w, s.h, fitPad(s.w));
+    return MPC.minZoom(L.bounds, s.w, s.h - fitTop(page, s), fitPad(s.w));
   }
-  function fitView(page) { var s = frameSize(page.querySelector('.mp-frame')); return MPC.fit(page._L.bounds, s.w, s.h, fitPad(s.w)); }
+  function fitView(page) {
+    var s = frameSize(page.querySelector('.mp-frame')), t = fitTop(page, s), v = MPC.fit(page._L.bounds, s.w, s.h - t, fitPad(s.w));
+    return { x: v.x, y: v.y + t, z: v.z };
+  }
   function applyView(page, v, smooth) {
     var frame = page.querySelector('.mp-frame'), vp = frame && frame.querySelector('.mp-vp');
     if (!vp) return;
@@ -858,12 +973,14 @@
       DES.app.toast(T('save_fail'));
     }, 200);
   }
-  // 枠の高さ = ページの残りの高さいっぱい（最小 420px。≤ 700 は下タブ帯の分を除く）
+  // 枠の高さ = 画面の下端 − 枠の上端 − 16px（最小 420px。≤ 700 は下タブ帯の分も除く。§AC-5）
   function sizeFrame(frame) {
     if (!frame || !frame.isConnected) return;
     var top = frame.getBoundingClientRect().top + (window.scrollY || window.pageYOffset || 0);
-    var h = Math.max(420, Math.round(window.innerHeight - top - (narrow() ? 56 + 14 : 24)));
+    var h = Math.max(420, Math.round(window.innerHeight - top - 16 - (narrow() ? 56 : 0)));
     if (frame._h !== h) { frame._h = h; frame.style.height = h + 'px'; }
+    var page = frame.closest('.map-page');
+    if (page) frame.style.setProperty('--ovl', topInset(page) + 'px');
   }
   // 詳細パネルで隠れている分（≥ 1024 = 右 / それ未満 = 下のシート）
   function inset(frame) {
@@ -932,6 +1049,7 @@
     frame.addEventListener('click', function (e) {
       if (e.defaultPrevented || !e.target || !e.target.closest) return;
       if (e.target.closest('.mp-n, .mp-ctrl, .mp-detail, button, a')) return;
+      if (ui().legendOpen) return;
       if (selIn(mapUi(), graphNow(), view)) closeSel(view, null);
     });
     unwatch();
@@ -1024,25 +1142,55 @@
   }
 
   // ---------- 選択・チップの反映（作り直さずに書き換える: 濃淡は 150ms で入れ替わり、フォーカスと見出しの aria-live を保つ） ----------
+  function cardMode(view) { return view === 'list' || (view === 'flow' && narrow()); }
   function applyState(page, g, view) {
-    var u = mapUi(), sel = selIn(u, g, view), rel = sel ? related(g, sel) : null, rn = {}, re = {};
+    var u = mapUi(), sel = selIn(u, g, view), only = isMapView(view) && !!u.only;
+    var rel = sel ? (view === 'flow' ? flowRel(g, sel) : related(g, sel)) : null, rn = {}, re = {};
     if (rel) { rel.nodes.forEach(function (id) { rn[id] = true; }); rel.edges.forEach(function (id) { re[id] = true; }); }
+    // 作ったものだけ（§AC-14）: 出すものだけ残す（濃淡は付けない）。隠したノードは Tab の順にも入らない（display:none）
+    var vis = null, vn = {}, ve = {};
+    if (only) { vis = visible(g, { only: true, selId: sel, view: view }); vis.nodes.forEach(function (id) { vn[id] = true; }); vis.edges.forEach(function (id) { ve[id] = true; }); }
     Array.prototype.forEach.call(page.querySelectorAll('.mp-n[data-id], .mp-node[data-id]'), function (b) {
       var id = b.getAttribute('data-id');
       b.setAttribute('aria-pressed', id === sel ? 'true' : 'false');
-      b.classList.toggle('is-on', !!sel && (id === sel || !!rn[id]));
+      b.classList.toggle('is-on', !only && !!sel && (id === sel || !!rn[id]));
+      if (b.classList.contains('mp-n')) b.classList.toggle('is-hid', only && !vn[id]);
     });
-    Array.prototype.forEach.call(page.querySelectorAll('.mp-e'), function (p) { p.classList.toggle('is-on', !!re[p.getAttribute('data-edge')]); });
-    Array.prototype.forEach.call(page.querySelectorAll('[data-action="mp-chip"]'), function (c) { c.setAttribute('aria-pressed', u.chips[c.getAttribute('data-arg')] ? 'true' : 'false'); });
-    var frame = page.querySelector('.mp-frame');
+    Array.prototype.forEach.call(page.querySelectorAll('.mp-e'), function (p) {
+      var id = p.getAttribute('data-edge');
+      p.classList.toggle('is-on', only ? !!ve[id] : !!re[id]);
+      p.classList.toggle('is-vis', only && !!ve[id]);
+    });
+    // 流れで見るの線の濃淡は描き直しのたびに選択から決める（drawFlow）
+    page._fon = re;
+    Array.prototype.forEach.call(page.querySelectorAll('[data-action="mp-chip"]'), function (c) {
+      c.setAttribute('aria-pressed', u.chips[c.getAttribute('data-arg')] ? 'true' : 'false');
+      c.disabled = only;
+    });
+    var ob = page.querySelector('[data-action="mp-only"]');
+    if (ob) ob.setAttribute('aria-pressed', only ? 'true' : 'false');
+    var bb = page.querySelector('[data-action="mp-big"]');
+    if (bb && bb.getAttribute('aria-pressed') !== (u.big ? 'true' : 'false')) {
+      bb.setAttribute('aria-pressed', u.big ? 'true' : 'false');
+      bb.textContent = '';
+      bigKids(!!u.big).forEach(function (k) { bb.appendChild(k); });
+    }
+    var frame = page.querySelector('.mp-frame'), stage = page.querySelector('.mp-stage');
     if (frame) {
-      frame.classList.toggle('has-sel', !!sel);
+      // 詳細パネル（≥ 1024）は枠の上端に重ねた部品の下から（チップ・大きく見るを隠さない。§AC-4）
+      frame.style.setProperty('--ovl', topInset(page) + 'px');
+      frame.classList.toggle('has-sel', !!sel && !only);
+      frame.classList.toggle('is-only', only);
+      frame.classList.toggle('has-panel', !!sel);
       CHIPS.forEach(function (k) { frame.classList.toggle('c-' + k, !!u.chips[k]); });
     }
+    if (stage) stage.classList.toggle('has-panel', !!sel);
+    var flow = page.querySelector('.mp-flow');
+    if (flow) { flow.classList.toggle('has-sel', !!sel); placeFlow(page, g, sel); }
     var d = page.querySelector('.mp-detail');
     if (!d) return;
-    var n = sel ? nodeById(g, sel) : null, card = null;
-    if (view === 'list' && n) {
+    var n = sel ? nodeById(g, sel) : null, card = null, cards = cardMode(view);
+    if (cards && n) {
       var cs = page.querySelectorAll('.mp-card-li'), i;
       for (i = 0; i < cs.length && !card; i++) if (cs[i].getAttribute('data-card') === ui().selCard && cs[i].querySelector('.mp-node[data-id="' + esc(sel) + '"]')) card = cs[i];
       for (i = 0; i < cs.length && !card; i++) if (cs[i].querySelector('.mp-node[data-id="' + esc(sel) + '"]')) card = cs[i];
@@ -1052,14 +1200,15 @@
       page._dk = dk;
       if (n) fillDetail(d, g, n, view);
       d.hidden = !n;
-      if (view === 'list') {
+      if (cards) {
         d.hidden = !card;
         if (card && d.parentNode !== card) card.appendChild(d);
       }
     }
   }
 
-  // ---------- リスト（§AB-7）: 作ったもの 1 つ = カード 1 枚（学んだこと → 単元、前に作ったものとのつながり）+ これから作れそうなもの ----------
+  // ---------- リスト（§AB-7）: 作ったもの 1 つ = カード 1 枚（学んだこと → 単元、前に作ったものとのつながり）+ これから作れそうなもの。
+  // 流れで見るの ≤ 700 も同じカード一覧（§AC-8）----------
   function listNode(g, n, arg) {
     var kids = [H('span', { class: 'sr-only' }, kindLabel(n.kind) + ': ')];
     if (isMade(n)) {
@@ -1078,11 +1227,14 @@
     return H('button', { type: 'button', class: cls, 'data-action': 'mp-sel', 'data-id': n.id, 'data-arg': arg, 'aria-pressed': 'false' }, kids);
   }
   function arrowDown() { return H('span', { class: 'mp-arrow', 'aria-hidden': 'true' }, [icon('down')]); }
-  function buildList(g) {
-    var kids = head('links', 'list');
+  function emptyBlock() {
+    return H('div', { class: 'mp-empty' }, [H('p', { class: 'empty-line' }, T('mp_empty')), H('p', null, [H('a', { class: 'link-btn', href: '#make' }, [icon('make'), H('span', null, T('mp_to_make'))])])]);
+  }
+  function buildList(g, view) {
+    var kids = head('links', view);
     if (!g.nodes.made.length) {
-      kids.push(H('div', { class: 'mp-empty' }, [H('p', { class: 'empty-line' }, T('mp_empty')), H('p', null, [H('a', { class: 'link-btn', href: '#make' }, [icon('make'), H('span', null, T('mp_to_make'))])])]));
-      return H('div', { class: 'map-page', 'data-view': 'list' }, kids);
+      kids.push(emptyBlock());
+      return H('div', { class: 'map-page', 'data-view': view }, kids);
     }
     kids.push(H('ol', { class: 'mp-cards' }, g.nodes.made.map(function (m) {
       var ck = 'c:' + m.id;
@@ -1106,19 +1258,103 @@
         }))]));
     }
     kids.push(detailSection());
-    return H('div', { class: 'map-page', 'data-view': 'list' }, kids);
+    return H('div', { class: 'map-page is-cards', 'data-view': view }, kids);
   }
 
-  // ---------- つながりの 3 つの見方の描画 ----------
+  // ---------- 流れで見る（§AC-8 / §Y-2）: 左 → 右の 3 列と線。ページとして縦にスクロール（拡大縮小なし）。列の見出しは上に貼り付く。
+  // 詳細は ≥ 1024 = 右の貼り付く列（340px）/ それ未満 = 下からのシート。グラフ・詳細・保存は地図と同じもの（二重に持たない）----------
+  function buildFlow(g) {
+    var kids = head('links', 'flow');
+    if (!g.nodes.made.length) { kids.push(emptyBlock()); return H('div', { class: 'map-page', 'data-view': 'flow' }, kids); }
+    var cols = flowCols(g), svg = svgEl('svg', { class: 'mp-flines', 'aria-hidden': 'true', focusable: 'false' });
+    function col(k, list) { return H('div', { class: 'mp-fcol', 'data-col': k }, list.map(function (id) { return listNode(g, nodeById(g, id), 'flow'); })); }
+    var fcols = H('div', { class: 'mp-fcols' }, [col('made', cols.made.concat(cols.next)), col('learned', cols.learned), col('units', cols.units)]);
+    fcols.insertBefore(svg, fcols.firstChild);
+    var fhead = H('div', { class: 'mp-fhead', 'aria-hidden': 'true' }, ['mp_col_acts', 'mp_col_learned', 'mp_col_units'].map(function (k) { return H('div', { class: 'mp-colhead' }, T(k)); }));
+    kids.push(H('div', { class: 'mp-flow' }, [H('div', { class: 'mp-fmain' }, [fhead, fcols]), detailSection()]));
+    var page = H('div', { class: 'map-page is-flow', 'data-view': 'flow' }, kids);
+    page._edges = edgesIn(g, 'flow').filter(function (e) { return e.kind === 'base'; });
+    return page;
+  }
+  // 線: 左の箱の右端 → 右の箱の左端（ゆるい S 字）。並べ替え・幅の変化・字の読み込みで引き直す
+  function drawFlow(page) {
+    var fc = page && page.querySelector('.mp-fcols'), svg = fc && fc.querySelector('.mp-flines');
+    if (!svg || !fc.isConnected) return;
+    var box = fc.getBoundingClientRect(), on = page._fon || {};
+    svg.setAttribute('width', Math.round(box.width));
+    svg.setAttribute('height', Math.round(box.height));
+    svg.textContent = '';
+    // 薄い線を先に、濃い線を後に（濃い線が上に重なる）
+    (page._edges || []).slice().sort(function (a, b) { return (on[a.id] ? 1 : 0) - (on[b.id] ? 1 : 0); }).forEach(function (e) {
+      var a = fc.querySelector('.mp-node[data-id="' + esc(e.from) + '"]'), b = fc.querySelector('.mp-node[data-id="' + esc(e.to) + '"]');
+      if (!a || !b) return;
+      var ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+      var x1 = ra.right - box.left, y1 = ra.top + ra.height / 2 - box.top, x2 = rb.left - box.left, y2 = rb.top + rb.height / 2 - box.top, dx = Math.max(10, (x2 - x1) / 2);
+      svg.appendChild(svgEl('path', { class: 'mp-fe' + (on[e.id] ? ' is-on' : ''), 'data-edge': e.id,
+        d: 'M' + r1(x1) + ' ' + r1(y1) + 'C' + r1(x1 + dx) + ' ' + r1(y1) + ' ' + r1(x2 - dx) + ' ' + r1(y2) + ' ' + r1(x2) + ' ' + r1(y2) }));
+    });
+  }
+  // 選んだら列ごとに、つながる相手を上に寄せる（選択を外すと元の順。§AC-8 / MP.flowOrder）。動きは FLIP（reduced-motion では即時）。
+  // 並びが変わって列の上端が画面より上なら、列の上端までスクロールを戻す（寄せた相手が見える）
+  function placeFlow(page, g, sel) {
+    var fc = page.querySelector('.mp-fcols');
+    if (!fc) return;
+    var ord = flowOrder(g, sel), key = JSON.stringify(ord), first = page._ord == null;
+    if (page._ord === key) { drawFlow(page); return; }
+    page._ord = key;
+    var ae = document.activeElement, anim = !first && motionOK(), before = {};
+    var nodes = fc.querySelectorAll('.mp-node[data-id]');
+    if (anim) Array.prototype.forEach.call(nodes, function (b) { before[b.getAttribute('data-id')] = b.getBoundingClientRect().top; });
+    [['made', ord.made.concat(ord.next)], ['learned', ord.learned], ['units', ord.units]].forEach(function (p) {
+      var c = fc.querySelector('.mp-fcol[data-col="' + p[0] + '"]');
+      p[1].forEach(function (id) { var b = c.querySelector('.mp-node[data-id="' + esc(id) + '"]'); if (b) c.appendChild(b); });
+    });
+    if (ae && ae.isConnected && document.activeElement !== ae) ae.focus({ preventScroll: true });
+    var svg = fc.querySelector('.mp-flines');
+    if (anim) {
+      var moved = [];
+      Array.prototype.forEach.call(nodes, function (b) {
+        var dy = (before[b.getAttribute('data-id')] || 0) - b.getBoundingClientRect().top;
+        if (Math.abs(dy) < 1) return;
+        b.style.transition = 'none';
+        b.style.transform = 'translateY(' + Math.round(dy) + 'px)';
+        moved.push(b);
+      });
+      void fc.offsetHeight;
+      moved.forEach(function (b) { b.style.transition = 'transform .22s ease-out'; b.style.transform = ''; });
+      svg.classList.add('is-moving');
+      clearTimeout(page._flipT);
+      page._flipT = setTimeout(function () {
+        moved.forEach(function (b) { b.style.transition = ''; });
+        svg.classList.remove('is-moving');
+        drawFlow(page);
+      }, 240);
+    }
+    drawFlow(page);
+    if (!first && sel) {
+      var top = page.querySelector('.mp-fmain').getBoundingClientRect().top;
+      if (top < 0) window.scrollTo({ top: Math.max(0, top + (window.scrollY || window.pageYOffset || 0) - 8), behavior: motionOK() ? 'smooth' : 'auto' });
+    }
+  }
+  function watchFlow(page) {
+    var fc = page.querySelector('.mp-fcols'), u = ui();
+    unwatch();
+    if (!fc) return;
+    if (window.ResizeObserver) { u.ro = new ResizeObserver(function () { if (fc.isConnected) drawFlow(page); }); u.ro.observe(fc); }
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { if (fc.isConnected) drawFlow(page); });
+  }
+
+  // ---------- つながりの 4 つの見方の描画 ----------
   function renderLinks(main, view) {
-    var g = graphNow(), key = [view, DES.mode(), shape(g)].join('|');
+    var g = graphNow(), cards = cardMode(view), key = [view, DES.mode(), shape(g), view === 'flow' ? (cards ? 's' : 'w') : ''].join('|');
     var page = main.querySelector('.map-page[data-view="' + view + '"]');
     if (!page || page._key !== key) {
       var keepV = page && page._v ? page._v : null;
       unwatch();
       detachMap(main);
       main.textContent = '';
-      if (view === 'list') page = buildList(g);
+      if (cards) page = buildList(g, view);
+      else if (view === 'flow') page = buildFlow(g);
       else {
         var L = layoutOf(view);
         page = buildMapPage(view, g, L);
@@ -1126,15 +1362,12 @@
       }
       page._key = key;
       main.appendChild(page);
-      if (view !== 'list') {
-        fitLegend(page);
-        mountMap(page, view, keepV);
-        if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { if (page.isConnected) fitLegend(page); });
-      }
-    } else if (view !== 'list') sizeFrame(page.querySelector('.mp-frame'));
+      if (isMapView(view)) mountMap(page, view, keepV);
+      else if (view === 'flow' && !cards) watchFlow(page);
+    } else if (isMapView(view)) sizeFrame(page.querySelector('.mp-frame'));
     applyState(page, g, view);
     var u = ui();
-    if (u.reveal && view !== 'list') { var id = u.reveal; u.reveal = null; centerNode(page, id, false); }
+    if (u.reveal && isMapView(view)) { var id = u.reveal; u.reveal = null; centerNode(page, id, false); }
   }
 
   // ---------- 基礎学習（§Y-3）: 4 領域を段に・学習指導要領の順で固定。マス = 左 問題 / 右 説明 ----------
@@ -1191,7 +1424,7 @@
     main.textContent = '';
     main.appendChild(H('div', { class: 'map-page mp-unit', 'data-view': 'unit', 'data-unit': u.code }, [
       H('p', { class: 'mp-back' }, [H('a', { class: 'link-btn', href: from ? viewHash(from) : '#map/basics', 'aria-label': from ? T('mp_back_to', { view: backLabel }) : T('mp_back_basics') }, [H('span', { 'aria-hidden': 'true' }, '←'), H('span', null, backLabel)])]),
-      H('h1', { tabindex: '-1', 'data-fk': 'mp-uh:' + u.code }, pick(u.name)),
+      H('div', { class: 'mp-headrow is-unit' }, [H('h1', { tabindex: '-1', 'data-fk': 'mp-uh:' + u.code }, pick(u.name)), switches('basics')]),
       H('p', { class: 'mp-where' }, T('mp_unit_where', { area: pick(area.name) })),
       H('div', { class: 'mp-ubar is-head' }, [band(u), H('span', { class: 'mp-pct' }, pr.pct + '%')]),
       H('section', { class: 'mp-sec', 'aria-labelledby': 'mp-items-h' }, [H('h2', { id: 'mp-items-h' }, T('mp_items_h')), items]),
@@ -1228,8 +1461,14 @@
     if (k.href) cands.push('a[href="' + esc(k.href) + '"]');
     for (var i = 0; i < cands.length; i++) { var n = firstShown(main, cands[i]); if (n) { n.focus(); return; } }
   }
+  // 大きく見る（§AC-6）: 地図系の見方で des3.mapUi.big の時だけ。左メニュー・topbar・説明 1 文を隠す（html の class。学びマップを離れたら外す）
+  function applyBig() {
+    var v = DES.app.route() === 'map' ? viewOfArg(DES.app.routeArg()) : null;
+    document.documentElement.classList.toggle('mp-big', isMapView(v) && !!mapUi().big);
+  }
   MP.render = function (main, arg) {
     var fk = focusKeyOf(main);
+    applyBig();
     renderView(main, arg);
     restoreFocus(main, fk);
     var u = ui();
@@ -1246,7 +1485,7 @@
       if (t) t.focus();
     }
   };
-  function viewOfArg(arg) { return !arg ? 'made' : (arg === 'fields' || arg === 'list' ? arg : null); }
+  function viewOfArg(arg) { return !arg ? 'made' : (arg === 'flow' || arg === 'fields' || arg === 'list' ? arg : null); }
   function renderView(main, arg) {
     var u = ui(), m = /^u\/(.+)$/.exec(arg || ''), view = viewOfArg(arg);
     if (m) {
@@ -1265,8 +1504,8 @@
   // ルートが変わったら一時的な UI を閉じる（app.js の closeTransient から）
   MP.resetUi = function () {
     var u = ui();
-    u.shown = null; u.missing = null; u.selCard = null;
-    if (DES.app.route() !== 'map') { u.lastUnit = null; u.unitFrom = null; detachMap(document.getElementById('main')); }
+    u.shown = null; u.missing = null; u.selCard = null; u.legendOpen = false;
+    if (DES.app.route() !== 'map') { u.lastUnit = null; u.unitFrom = null; detachMap(document.getElementById('main')); document.documentElement.classList.remove('mp-big'); }
     unwatch();
   };
 
@@ -1330,6 +1569,29 @@
     var page = document.querySelector('.map-page.is-map');
     if (page && next.sel[view]) centerNode(page, id, true);
   };
+  // 作ったものだけ（§AC-14）: 出すか隠すかだけ（並び・位置・倍率は変えない）
+  A['mp-only'] = function () {
+    var next = normalizeUi(mapUi(), null);
+    next.only = !next.only;
+    setUi(next, { sel: '[data-action="mp-only"]' });
+  };
+  A['mp-legend'] = function () { setLegend(!ui().legendOpen, false); };
+  // 大きく見る / もとの大きさ（§AC-6）: 切替の前後で地図の中心（世界の点）を保つ。フォーカスは同じボタンに残る
+  A['mp-big'] = function () {
+    var view = curView(), page = document.querySelector('.map-page.is-map'), c = null;
+    if (!isMapView(view)) return;
+    if (page && page._v) { var f0 = frameSize(page.querySelector('.mp-frame')), v0 = page._v; c = { x: (f0.w / 2 - v0.x) / v0.z, y: (f0.h / 2 - v0.y) / v0.z, z: v0.z }; }
+    var next = normalizeUi(mapUi(), null);
+    next.big = !next.big;
+    if (!setUi(next, { sel: '[data-action="mp-big"]' })) return;
+    page = document.querySelector('.map-page.is-map');
+    if (!page || !c || !page._L) return;
+    var frame = page.querySelector('.mp-frame');
+    sizeFrame(frame);
+    var s2 = frameSize(frame);
+    applyView(page, MPC.clampView({ x: s2.w / 2 - c.x * c.z, y: s2.h / 2 - c.y * c.z, z: c.z }, page._L.bounds, s2.w, s2.h, null, minOf(page)), false);
+    savePos(view, page._v);
+  };
   A['mp-close'] = function () { var v = curView(); if (v) closeSel(v, null); };
   A['mp-chip'] = function (el) {
     var k = el.getAttribute('data-arg'), next = normalizeUi(mapUi(), null);
@@ -1383,19 +1645,26 @@
   A['mp-show'] = function (el) { MP.show(el.getAttribute('data-id')); };
   A['mp-start'] = function () { DES.app.toast(T('mp_start_toast')); };
 
-  // Esc で選択を外す（フォーカスはそのノードに残す）。窓の高さが変わったら枠の高さも
+  // Esc: しるしの見方 → 詳細パネル（選択）→ 大きく見る の順に 1 つずつ閉じる（§AC-4 / AC-6）。窓の大きさが変わったら枠の高さ・流れの線も
   MP.bind = function () {
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
       var view = curView();
-      if (!view || document.querySelector('dialog[open]') || !selIn(mapUi(), graphNow(), view)) return;
-      e.preventDefault();
-      closeSel(view, null);
+      if (!view || document.querySelector('dialog[open]')) return;
+      if (ui().legendOpen && isMapView(view)) { e.preventDefault(); setLegend(false, true); return; }
+      if (selIn(mapUi(), graphNow(), view)) { e.preventDefault(); closeSel(view, null); return; }
+      if (isMapView(view) && mapUi().big) { e.preventDefault(); A['mp-big'](); }
+    });
+    // しるしの見方の外側を押したら閉じて、ボタンへフォーカスを戻す（押した先が別の操作の部品なら、そちらに任せる）
+    document.addEventListener('click', function (e) {
+      if (!ui().legendOpen || !e.target || !e.target.closest || e.target.closest('.mp-lgwrap')) return;
+      setLegend(false, !e.target.closest('button, a, input, textarea, select'));
     });
     window.addEventListener('resize', function () {
-      if (!curView()) return;
-      sizeFrame(document.querySelector('.mp-frame'));
-      fitLegend(document.querySelector('.map-page.is-map'));
+      var v = curView();
+      if (!v) return;
+      if (isMapView(v)) sizeFrame(document.querySelector('.mp-frame'));
+      if (v === 'flow') drawFlow(document.querySelector('.map-page.is-flow'));
     });
   };
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : this));
