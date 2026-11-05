@@ -586,7 +586,7 @@
     return out;
   }
 
-  // ---------- 全体の帯（§AE-1 / AE-5）: 学ぶ内容の全部（小 4 の算数・理科・国語・社会の全単元 = 分野で見ると同じ集合）を 1 マスずつ ----------
+  // ---------- 全体の帯（§AH-1 / AH-5）: 学ぶ内容の全部（小 4 の算数・理科・国語・社会の全単元 = 分野で見ると同じ集合）を 1 マスずつ ----------
   // 帯の並び = 分野で見るの島の順（教科 → 領域 → 単元。算数は学習指導要領の順）
   function bandUnits() {
     var out = [];
@@ -617,7 +617,7 @@
     });
     return out;
   }
-  // 札が飛ぶ計画（§AE-3 / AE-4）。fromRects / toRects = { id: { x, y, w, h } }（画面の px）。決定論（同じ入力で同じ出力）。
+  // 札が飛ぶ計画（§AH-3 / AH-4）。fromRects / toRects = { id: { x, y, w, h } }（画面の px）。決定論（同じ入力で同じ出力）。
   // opts: order（飛ぶ順 = 帯の並び）/ bounds（出発点の範囲 = 地図の枠。中心がこの外のノードは、枠の端のいちばん近い所から出る = offscreen）/
   //   toBounds（行き先の範囲。外なら端の いちばん近い所へ = landOff）/ start・stagger（1 つずつずらす）・spread（ずらしの合計の上限。多い時は詰める）・dur
   function isRect(r) { return isObj(r) && fin(r.x) && fin(r.y) && fin(r.w) && fin(r.h) && r.w >= 0 && r.h >= 0; }
@@ -667,7 +667,7 @@
     decline: decline, undecline: undecline, declineNext: declineNext, undeclineNext: undeclineNext, unitLinks: unitLinks, nodeById: nodeById, hasNode: hasNode, posSettle: posSettle
   };
   pure.MOVE_MAX = MOVE_MAX;
-  // 遷移の時間（§AE-3 / AE-4。ms）: 地図と全体の出入り / 札（作ったものから・分野で見る → 全体）/ 1 つだけ / 逆向き / 印 / 下の札の帯
+  // 遷移の時間（§AH-3 / AH-4。ms）: 地図と全体の出入り / 札（作ったものから・分野で見る → 全体）/ 1 つだけ / 逆向き / 印 / 下の札の帯
   pure.XT = { fade: 350, inDelay: 200, start: 80, stagger: 25, spread: 580, dur: 640, single: 200, singleDur: 700, rStart: 120, rSpread: 560, rDur: 700, mark: 250, sweep: 300, steps: 16, bend: 0.16 };
   Object.keys(pure).forEach(function (k) { MP[k] = pure[k]; });
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
@@ -896,7 +896,7 @@
   // 幅が足りない時（< 1024）は見出しの下に折り返す。基礎学習・単元詳細ではタブだけ ----------
   function viewHash(v) { return v === 'flow' || v === 'fields' || v === 'concepts' || v === 'list' ? '#map/' + v : '#map'; }
   function isMapView(v) { return v === 'made' || v === 'fields'; }
-  // 全体の画面（基礎学習）では、タブの左に「つながりで見る」（§AE-4。最後に使った地図系の見方へ逆向きに飛ぶ）
+  // 全体の画面（基礎学習）では、タブの左に「つながりで見る」（§AH-4。最後に使った地図系の見方へ逆向きに飛ぶ）
   function switches(tab, view, toLinks) {
     var tabs = H('div', { class: 'studio-tabs mp-tabs' }, [H('div', { class: 'segmented', role: 'group', 'aria-label': T('mp_tabs_label') }, ['links', 'basics'].map(function (k) {
       var on = k === tab;
@@ -939,7 +939,7 @@
     var on = !!mapUi().big;
     return H('button', { type: 'button', class: 'btn mp-bigbtn', 'data-action': 'mp-big', 'aria-pressed': on ? 'true' : 'false' }, bigKids(on));
   }
-  // 枠の右上: 「全体で見る」（格子 + 文字。§AE-2）→ 大きく見る の左
+  // 枠の右上: 「全体で見る」（格子 + 文字。§AH-2）→ 大きく見る の左
   function topRight() {
     return H('div', { class: 'mp-tr mp-ovl-top' }, [H('button', { type: 'button', class: 'btn mp-allbtn', 'data-action': 'mp-overview' }, [icon('grid'), H('span', null, T('mp_overview'))]), bigBtn()]);
   }
@@ -1008,7 +1008,7 @@
     } else if (n.kind === 'unit') {
       if (view !== 'fields') kids.push(H('span', { class: 'mp-eb' }, unitHead(n)));
       kids.push(H('span', { class: 'mp-t' }, pick(n.name)));
-      // 算数の単元は小さな帯（分野で見る = いつも / 作ったものから = near の時だけ。§AE-2。出し分けは map.css）
+      // 算数の単元は小さな帯（分野で見る = いつも / 作ったものから = near の時だけ。§AH-2。出し分けは map.css）
       if (n.material) { var u = MPD.unit(n.code); kids.push(H('span', { class: 'mp-bandrow' }, [band(u, true), H('span', { class: 'mp-pct' }, progress(u, MPD.progress).pct + '%')])); }
       kids.push(H('span', { class: 'mp-sub' }, basicLine(n)));
     } else {
@@ -1474,7 +1474,7 @@
       }
       // 算数は「基礎学習で見る」、他教科は教材がこれからの 1 文（リンクなし）
       if (n.material) ops.push(H('a', { class: 'btn small orange', href: '#map/u/' + n.code, 'data-action': 'mp-unit', 'data-id': n.code }, [H('span', null, T('mp_see_basic'))]));
-      // 全体の中で見る（§AE-2）: その単元だけを目立たせて全体の画面へ（札が 1 つだけ飛ぶ）
+      // 全体の中で見る（§AH-2）: その単元だけを目立たせて全体の画面へ（札が 1 つだけ飛ぶ）
       ops.push(btn(T('mp_inall'), 'mp-inall', { id: n.code, icon: 'grid' }));
       ops.push(btn(T('mp_talk'), 'mp-talk', { id: n.id, icon: 'chat' }));
     } else if (n.kind === 'next') {
@@ -1826,7 +1826,7 @@
     if (u.reveal && isMapView(view)) { var id = u.reveal; u.reveal = null; centerNode(page, id, false); }
   }
 
-  // ---------- 全体の画面 `#map/basics`（§AE-1。§Y-3 の画面を置き換え。項目の印・帯・% の決まりは §Y-3 のまま）----------
+  // ---------- 全体の画面 `#map/basics`（§AH-1。§Y-3 の画面を置き換え。項目の印・帯・% の決まりは §Y-3 のまま）----------
   // 上 = 全体の帯（全単元を 1 マスずつ。教科ごとに少し間を空けて教科名を下に）+ 凡例 1 行（4 つの見本 + 単元の数）/
   // 下 = 教科ごとの段（算数 = 領域ごとの段・名前 + 項目の帯 + %。理科・国語・社会 = 単元の札）。作ったものでふれた単元には印（橙の丸 + 作ったものの絵 最大 3）
   function stName(state) { return T({ none: 'mp_st_none', touched: 'mp_st_touched', doing: 'mp_st_doing', done: 'mp_st_done' }[state]); }
@@ -1862,7 +1862,7 @@
       return H('span', { class: 'mpo-lg' }, [cellBox(sample[k], 'is-sample'), H('span', null, T('mp_lg_count', { label: stName(k), n: n[k] }))]);
     }));
   }
-  // 作ったものでふれた印（ボタン。押すと逆向きに飛んで、つながりでその単元を選んだ状態へ §AE-4）
+  // 作ったものでふれた印（ボタン。押すと逆向きに飛んで、つながりでその単元を選んだ状態へ §AH-4）
   function touchMark(g, c, u) {
     if (!c || !c.touched) return null;
     var arts = c.madeIds.slice(0, 3).map(function (id) { var a = nodeArt(nodeById(g, id)); return a ? H('span', { class: 'mpo-thumb' }, [DES.raw(a)]) : null; }).filter(Boolean);
@@ -1919,7 +1919,7 @@
       kids.push(H('section', { class: 'mpo-subj', 'data-sub': sj.id, 'aria-labelledby': 'mpo-sj-' + sj.id }, sec));
     });
     kids.push(H('p', { class: 'mp-scope' }, T('mp_scope_note')));
-    // 遷移の終わりに読み上げる 1 文の置き場（§AE-3-5。先に置いておく = 文を入れた時に読まれる）
+    // 遷移の終わりに読み上げる 1 文の置き場（§AH-3-5。先に置いておく = 文を入れた時に読まれる）
     kids.push(H('p', { class: 'sr-only', id: 'mpx-live', 'aria-live': 'polite' }));
     var page = H('div', { class: 'map-page is-all', 'data-view': 'basics' }, kids);
     page._key = key;
@@ -1961,7 +1961,7 @@
   }
 
   // ======================================================================
-  // §AE-3 / AE-4 遷移: つながり ⇄ 全体（基礎学習）をひと続きに。
+  // §AH-3 / AH-4 遷移: つながり ⇄ 全体（基礎学習）をひと続きに。
   // 重ね面は 1 枚（.mpx-ovl: position:fixed・pointer-events:none・aria-hidden・inert）。中身 = 古い画面（そのままの位置で薄くなる）+ 単元の札。
   // 動かすのは transform と opacity だけ（Web Animations API）。タイマーは使わない: 時間はすべてアニメーションの delay で決め、
   // 終わりは「時間を数えるだけのアニメーション」の finished で受ける（途中のこまは document.getAnimations() で止めて・進めて確かめられる）。
@@ -2171,7 +2171,7 @@
     if (free && (n || h1)) (n || h1).focus({ preventScroll: true });
   }
 
-  // ---------- つながり → 全体（§AE-3）。o.single = 「全体の中で見る」の単元 code（その 1 つの札だけが飛ぶ）----------
+  // ---------- つながり → 全体（§AH-3）。o.single = 「全体の中で見る」の単元 code（その 1 つの札だけが飛ぶ）----------
   function goAll(o) {
     o = o || {};
     if (X) xEnd(X, 'skip');
@@ -2312,7 +2312,7 @@
     a.finished.then(function () { xEnd(x, 'end'); }, function () { xEnd(x, 'skip'); });
   }
 
-  // ---------- 全体 → つながり（§AE-4）。o.sel = 作ったものでふれた印の単元 code（その単元を選んだ状態で着く）----------
+  // ---------- 全体 → つながり（§AH-4）。o.sel = 作ったものでふれた印の単元 code（その単元を選んだ状態で着く）----------
   function goLinks(o) {
     o = o || {};
     if (X) xEnd(X, 'skip');
@@ -2557,8 +2557,8 @@
 
   // ---------- 操作 ----------
   var A = DES.actions = DES.actions || {};
-  // 上のタブ。地図系の見方（作ったものから・分野で見る）から「基礎学習」= 札が飛ぶ遷移（§AE-2）。流れで見る・概念で見る・リストからは動きなしで全体の画面へ。
-  // 全体の画面から「つながり」= 最後の見方が地図系なら逆向きの遷移（§AE-4）、それ以外の見方なら今までどおりその見方へ（動きなし）
+  // 上のタブ。地図系の見方（作ったものから・分野で見る）から「基礎学習」= 札が飛ぶ遷移（§AH-2）。流れで見る・概念で見る・リストからは動きなしで全体の画面へ。
+  // 全体の画面から「つながり」= 最後の見方が地図系なら逆向きの遷移（§AH-4）、それ以外の見方なら今までどおりその見方へ（動きなし）
   A['mp-tab'] = function (el) {
     var k = el.getAttribute('data-arg'), view = curView(), arg = DES.app.routeArg();
     if (k === 'basics' && isMapView(view)) { goAll({}); return; }

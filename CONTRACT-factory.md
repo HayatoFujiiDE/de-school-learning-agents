@@ -1278,3 +1278,7 @@ v3.5（2026-11-04 段階 0 の実測。最初の本物の session sesn_01Jfui3ap
 54. 予算に当たった job の増額（2026-11-05 オーナー指示「許可したら増額して進むようにして」）: §B-4-d の「Worker からは増額しない」を「運営の明示操作だけが増額する」（§B-4-f `raise-budget`）に置き換え。1 job $50 まで・日次上限・paused を通し、増額の update 自体が作業を再開させる（公式 managed-agents/budgets）。cron・webhook・職人からは増額しない。同日、deny 上限の入口判定（Issue #1、ebf9d9d）を §B-4 0-b の例外として追記済み
 55. 画像生成 段階 2（§O）: 計画 v1〜v9 と旧下書き §M-2 は Astra high で REVISE を繰り返した（指摘 69 件）。RCA の根本原因は、要件（1 素材 8 枚・月 $30）より強い保証（実費の数値上界・試行ごとの精算・結果の到達保証）を自作して合格条件にし、session の events が示す「結果が届いたか」を Worker の状態で推測したこと。§O は保証を G1〜G3 に絞り、精算・通知・枠の状態を持たない形で書き直し、3 回目の Astra high で GO。旧下書きの司令塔の裁定 3（超過の iax 記帳）は取り下げ、6（15 分で is_error）は回数で終端にする形へ変えた。日次上限は取り置きの時だけ判定する（「毎回掛ける」は司令塔の解釈で、オーナーの決定ではなかった）。既存の欠陥（tooManyDenies の後始末）は Issue #2
 56. §O の実装レビュー（Astra high 2 本、2026-11-05）への裁定: (a) 画像の大きさの上限を取り込みの 1 ファイル上限（`MAX_FILE_BYTES` = 2 MiB）にそろえる。R の表の「4 MiB 超」を改め、超えた画像は依頼を failed `too_large` にする（done にすると取り込みで素材全体が弾かれるため）。応答本文の上限 4 MiB はそのままで、切れたら status に依らず `bad_response`（usage は読めない → usage_missing の停止） (b) 同じ path に別の image_id を書いた material.json は `bad_image_ref`（後の参照を検査せずに通さない）。検証係の入力は版の job の done の依頼だけを読む (c) `MAKER_CUSTOM_TOOLS` は循環 import を避けて文字列で持つ
+
+## §T お題のストック（v3.12。2026-11-06 凍結。§J の「『今日のお題』（`topics`）は本スライスに含めない」と §R-35 の「`topics` は別裁定へ」を置き換える）
+
+正本: `docs/plans/topics-variety/contract-T.md`（v2.2。Astra high 3 回の指摘への裁定は同 T-16）。素材の §B-6（`publishSwitch` が唯一の切替・人の承認）は変えない。お題は別の表と別の関数（`src/topics/gate.ts`）で扱う。

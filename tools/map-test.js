@@ -538,68 +538,68 @@ eq(MP.decline({ sel: { made: 'ln:ln-moon-frames' } }, g, 'made', 'ln:ln-moon-fra
 eq(MP.unitLinks(g, 'M4-C-01').map(function (x) { return [x.learned.id, x.made.id]; }), [['ln:ln-stars', 'act:act-py'], ['ln:ln-speed', 'act:act-py'], ['ln:ln-bead-repeat', 'past:past-beads'], ['ln:ln-moon-frames', 'past:past-moon']], 'unitLinks 変わり方 ← 学んだこと ← 作ったもの');
 eq(MP.unitLinks(g, 'M4-A-05'), [], 'unitLinks つながりの無い単元 = []');
 
-// ---------- 全体の帯（§AE-1 / AE-5）: MP.bandUnits / MP.coverage ----------
+// ---------- 全体の帯（§AH-1 / AH-5）: MP.bandUnits / MP.coverage ----------
 var BU = MP.bandUnits();
-eq(BU.length, MPD.allUnits().length, 'AE-1 全体の帯 = 全単元（分野で見ると同じ集合）');
-eq(BU.map(function (u) { return u.code; }).sort(), MPD.allUnits().map(function (u) { return u.code; }).sort(), 'AE-1 全体の帯の単元の集合 = 分野で見る');
-eq(BU.map(function (u) { return u.sub; }).filter(function (s, i, a) { return i === 0 || a[i - 1] !== s; }), ['math', 'sci', 'jpn', 'soc'], 'AE-1 全体の帯は 算数 → 理科 → 国語 → 社会 の順（教科ごとにまとまる）');
-eq(BU.filter(function (u) { return u.sub === 'math'; }).map(function (u) { return u.code; }), MPD.areas.reduce(function (o, a) { return o.concat(MPD.units.filter(function (u) { return u.area === a.id; }).map(function (u) { return u.code; })); }, []), 'AE-1 算数は領域の順・学習指導要領の順のまま');
+eq(BU.length, MPD.allUnits().length, 'AH-1 全体の帯 = 全単元（分野で見ると同じ集合）');
+eq(BU.map(function (u) { return u.code; }).sort(), MPD.allUnits().map(function (u) { return u.code; }).sort(), 'AH-1 全体の帯の単元の集合 = 分野で見る');
+eq(BU.map(function (u) { return u.sub; }).filter(function (s, i, a) { return i === 0 || a[i - 1] !== s; }), ['math', 'sci', 'jpn', 'soc'], 'AH-1 全体の帯は 算数 → 理科 → 国語 → 社会 の順（教科ごとにまとまる）');
+eq(BU.filter(function (u) { return u.sub === 'math'; }).map(function (u) { return u.code; }), MPD.areas.reduce(function (o, a) { return o.concat(MPD.units.filter(function (u) { return u.area === a.id; }).map(function (u) { return u.code; })); }, []), 'AH-1 算数は領域の順・学習指導要領の順のまま');
 var CV = MP.coverage(g, BU);
 function cvOf(c, id) { return c.units.filter(function (x) { return x.id === id; })[0]; }
-eq(CV.units.map(function (x) { return x.id; }), BU.map(function (u) { return u.code; }), 'AE-5 coverage は渡した単元の順');
-eq(cvOf(CV, 'M4-A-01'), { id: 'M4-A-01', subject: 'math', touched: true, madeIds: ['past:past-box'], done: 4, total: 4, state: 'done', both: true }, 'AE-5 大きな数 = 基礎学習で終えた + 作ったものでふれた（両方）');
-eq(cvOf(CV, 'M4-A-03'), { id: 'M4-A-03', subject: 'math', touched: false, madeIds: [], done: 4, total: 5, state: 'doing', both: false }, 'AE-5 わり算の筆算 = 進めている（4/5・作ったものとはつながっていない）');
-eq(cvOf(CV, 'M4-B-03'), { id: 'M4-B-03', subject: 'math', touched: true, madeIds: ['act:act-build', 'past:past-leaf', 'past:past-maze'], done: 1, total: 5, state: 'doing', both: true }, 'AE-5 面積 = 進めている（1/5）+ ふれた（作ったもの 3）');
-eq(cvOf(CV, 'M4-A-02').state, 'doing', 'AE-5 がい数 = 終えた項目 0 でも、問題・説明の印があれば 進めている');
-eq(cvOf(CV, 'M4-A-05'), { id: 'M4-A-05', subject: 'math', touched: false, madeIds: [], done: 0, total: 3, state: 'none', both: false }, 'AE-5 分数 = これから');
-eq(cvOf(CV, 'S4-A-01'), { id: 'S4-A-01', subject: 'sci', touched: true, madeIds: ['act:act-cap'], done: 0, total: 0, state: 'touched', both: false }, 'AE-5 電流の働き（教材なし）= 作ったものでふれた だけ');
-eq(CV.counts, { none: 11, touched: 22, doing: 5, done: 3, both: 7 }, 'AE-5 印ごとの数（ふれた = 両方を含む）');
-eq(CV.byState, { none: 11, touched: 15, doing: 5, done: 3 }, 'AE-5 state ごとの数（合計 = 単元の数）');
-eq(CV.byState.none + CV.byState.touched + CV.byState.doing + CV.byState.done, BU.length, 'AE-5 state はどの単元にも 1 つ');
-ok(CV.units.every(function (x) { return x.touched === (x.madeIds.length > 0) && x.both === (x.touched && (x.state === 'doing' || x.state === 'done')) && (x.state !== 'touched' || x.touched); }), 'AE-5 touched / both / state が食い違わない');
-ok(CV.units.every(function (x) { var n = MP.nodeById(g, 'unit:' + x.id); return x.touched === !!(n && n.made.length); }), 'AE-5 ふれた = 学んだことを通って作ったものにつながる単元');
+eq(CV.units.map(function (x) { return x.id; }), BU.map(function (u) { return u.code; }), 'AH-5 coverage は渡した単元の順');
+eq(cvOf(CV, 'M4-A-01'), { id: 'M4-A-01', subject: 'math', touched: true, madeIds: ['past:past-box'], done: 4, total: 4, state: 'done', both: true }, 'AH-5 大きな数 = 基礎学習で終えた + 作ったものでふれた（両方）');
+eq(cvOf(CV, 'M4-A-03'), { id: 'M4-A-03', subject: 'math', touched: false, madeIds: [], done: 4, total: 5, state: 'doing', both: false }, 'AH-5 わり算の筆算 = 進めている（4/5・作ったものとはつながっていない）');
+eq(cvOf(CV, 'M4-B-03'), { id: 'M4-B-03', subject: 'math', touched: true, madeIds: ['act:act-build', 'past:past-leaf', 'past:past-maze'], done: 1, total: 5, state: 'doing', both: true }, 'AH-5 面積 = 進めている（1/5）+ ふれた（作ったもの 3）');
+eq(cvOf(CV, 'M4-A-02').state, 'doing', 'AH-5 がい数 = 終えた項目 0 でも、問題・説明の印があれば 進めている');
+eq(cvOf(CV, 'M4-A-05'), { id: 'M4-A-05', subject: 'math', touched: false, madeIds: [], done: 0, total: 3, state: 'none', both: false }, 'AH-5 分数 = これから');
+eq(cvOf(CV, 'S4-A-01'), { id: 'S4-A-01', subject: 'sci', touched: true, madeIds: ['act:act-cap'], done: 0, total: 0, state: 'touched', both: false }, 'AH-5 電流の働き（教材なし）= 作ったものでふれた だけ');
+eq(CV.counts, { none: 11, touched: 22, doing: 5, done: 3, both: 7 }, 'AH-5 印ごとの数（ふれた = 両方を含む）');
+eq(CV.byState, { none: 11, touched: 15, doing: 5, done: 3 }, 'AH-5 state ごとの数（合計 = 単元の数）');
+eq(CV.byState.none + CV.byState.touched + CV.byState.doing + CV.byState.done, BU.length, 'AH-5 state はどの単元にも 1 つ');
+ok(CV.units.every(function (x) { return x.touched === (x.madeIds.length > 0) && x.both === (x.touched && (x.state === 'doing' || x.state === 'done')) && (x.state !== 'touched' || x.touched); }), 'AH-5 touched / both / state が食い違わない');
+ok(CV.units.every(function (x) { var n = MP.nodeById(g, 'unit:' + x.id); return x.touched === !!(n && n.made.length); }), 'AH-5 ふれた = 学んだことを通って作ったものにつながる単元');
 // 「違う」で外したものは数えない
 var gD = MP.graph(MPD.learned, acts, works, ['ln-area', 'ln-maze-area', 'ln-leaf-area'], OPT), CVD = MP.coverage(gD, BU);
-eq(cvOf(CVD, 'M4-B-03'), { id: 'M4-B-03', subject: 'math', touched: false, madeIds: [], done: 1, total: 5, state: 'doing', both: false }, 'AE-5 面積の見立てを全部「違う」で外す → ふれた から外れる（基礎学習の印は残る）');
-eq(cvOf(MP.coverage(MP.graph(MPD.learned, acts, works, ['ln-area'], OPT), BU), 'M4-B-03').madeIds, ['past:past-leaf', 'past:past-maze'], 'AE-5 1 つだけ外すと、その作ったものだけ数えない');
-eq(CVD.counts.touched, CV.counts.touched - 1, 'AE-5 外した分だけ ふれた単元の数が減る');
+eq(cvOf(CVD, 'M4-B-03'), { id: 'M4-B-03', subject: 'math', touched: false, madeIds: [], done: 1, total: 5, state: 'doing', both: false }, 'AH-5 面積の見立てを全部「違う」で外す → ふれた から外れる（基礎学習の印は残る）');
+eq(cvOf(MP.coverage(MP.graph(MPD.learned, acts, works, ['ln-area'], OPT), BU), 'M4-B-03').madeIds, ['past:past-leaf', 'past:past-maze'], 'AH-5 1 つだけ外すと、その作ったものだけ数えない');
+eq(CVD.counts.touched, CV.counts.touched - 1, 'AH-5 外した分だけ ふれた単元の数が減る');
 // 進み具合が空なら 基礎学習の印は無い。グラフが無ければ ふれた も無い
-ok(MP.coverage(g, BU, {}).units.every(function (x) { return x.state === (x.touched ? 'touched' : 'none'); }), 'AE-5 進み具合が空 → 印は ふれた だけ');
-eq(MP.coverage(null, null).counts.touched, 0, 'AE-5 グラフなし → ふれた 0（単元は全体の帯の既定）');
-eq(MP.coverage(null, null).units.length, BU.length, 'AE-5 単元を渡さなければ全体の帯');
-eq(MP.coverage(g, [MPD.unit('M4-A-01'), MPD.unit('M4-A-01'), null, { code: 3 }]).units.map(function (x) { return x.id; }), ['M4-A-01'], 'AE-5 同じ単元・壊れた単元は 1 回・捨てる');
-eq(JSON.stringify(MP.coverage(g, BU)), JSON.stringify(CV), 'AE-5 coverage は決定論');
+ok(MP.coverage(g, BU, {}).units.every(function (x) { return x.state === (x.touched ? 'touched' : 'none'); }), 'AH-5 進み具合が空 → 印は ふれた だけ');
+eq(MP.coverage(null, null).counts.touched, 0, 'AH-5 グラフなし → ふれた 0（単元は全体の帯の既定）');
+eq(MP.coverage(null, null).units.length, BU.length, 'AH-5 単元を渡さなければ全体の帯');
+eq(MP.coverage(g, [MPD.unit('M4-A-01'), MPD.unit('M4-A-01'), null, { code: 3 }]).units.map(function (x) { return x.id; }), ['M4-A-01'], 'AH-5 同じ単元・壊れた単元は 1 回・捨てる');
+eq(JSON.stringify(MP.coverage(g, BU)), JSON.stringify(CV), 'AH-5 coverage は決定論');
 
-// ---------- 札が飛ぶ計画（§AE-3 / AE-4 / AE-5）: MP.flightPlan / MP.flightKeys ----------
+// ---------- 札が飛ぶ計画（§AH-3 / AH-4 / AH-5）: MP.flightPlan / MP.flightKeys ----------
 function R(x, y, w, h) { return { x: x, y: y, w: w, h: h }; }
 var FP = MP.flightPlan({ a: R(100, 100, 40, 20), b: R(300, 120, 40, 20), c: R(10, 10, 5, 5) }, { a: R(10, 10, 30, 34), b: R(50, 10, 30, 34), z: R(0, 0, 1, 1) }, { order: ['b', 'a', 'z', 'a', 'c'] });
-eq(FP.map(function (p) { return p.id; }), ['b', 'a'], 'AE-5 flightPlan は order の順・出発点と行き先の両方がある札だけ（同じ id は 1 回）');
-eq(FP.map(function (p) { return p.delay; }), [80, 105], 'AE-5 flightPlan 1 つずつ 25ms ずらす（既定の開始 80ms）');
-eq(FP[0].dur, 640, 'AE-5 flightPlan 既定の飛ぶ時間 640ms（600〜700）');
-eq([FP[0].from, FP[0].to, FP[0].offscreen, FP[0].landOff], [R(300, 120, 40, 20), R(50, 10, 30, 34), false, false], 'AE-5 flightPlan 出発点 = ノードの箱 / 行き先 = マスの箱');
+eq(FP.map(function (p) { return p.id; }), ['b', 'a'], 'AH-5 flightPlan は order の順・出発点と行き先の両方がある札だけ（同じ id は 1 回）');
+eq(FP.map(function (p) { return p.delay; }), [80, 105], 'AH-5 flightPlan 1 つずつ 25ms ずらす（既定の開始 80ms）');
+eq(FP[0].dur, 640, 'AH-5 flightPlan 既定の飛ぶ時間 640ms（600〜700）');
+eq([FP[0].from, FP[0].to, FP[0].offscreen, FP[0].landOff], [R(300, 120, 40, 20), R(50, 10, 30, 34), false, false], 'AH-5 flightPlan 出発点 = ノードの箱 / 行き先 = マスの箱');
 var many = {}, cells = {}, ord = [];
 for (var i = 0; i < 34; i++) { many['u' + i] = R(i * 10, 300, 20, 20); cells['u' + i] = R(i * 30, 10, 28, 34); ord.push('u' + i); }
 var FPM = MP.flightPlan(many, cells, { order: ord });
-ok(near(FPM[33].delay - FPM[0].delay, 580, 0.11) && FPM.every(function (p, k) { return k === 0 || p.delay > FPM[k - 1].delay; }), 'AE-5 flightPlan 札が多い時はずらしの合計を 580ms までに詰める（34 こ: ' + FPM[1].delay + '…' + FPM[33].delay + '）');
+ok(near(FPM[33].delay - FPM[0].delay, 580, 0.11) && FPM.every(function (p, k) { return k === 0 || p.delay > FPM[k - 1].delay; }), 'AH-5 flightPlan 札が多い時はずらしの合計を 580ms までに詰める（34 こ: ' + FPM[1].delay + '…' + FPM[33].delay + '）');
 var FP22 = MP.flightPlan(many, cells, { order: ord.slice(0, 22) });
-eq(FP22[21].delay - FP22[0].delay, 21 * 25, 'AE-5 flightPlan 22 こまでは 25ms ずつのまま');
+eq(FP22[21].delay - FP22[0].delay, 21 * 25, 'AH-5 flightPlan 22 こまでは 25ms ずつのまま');
 // 画面（枠）の外のノードは、枠の端のいちばん近い所から出る
 var OFF = MP.flightPlan({ l: R(-200, 50, 20, 10), d: R(500, 900, 20, 10), in: R(100, 100, 20, 10) }, { l: R(0, 0, 10, 10), d: R(0, 0, 10, 10), in: R(0, 0, 10, 10) }, { order: ['l', 'd', 'in'], bounds: R(0, 0, 400, 300) });
-eq(OFF.map(function (p) { return [p.id, p.from, p.offscreen]; }), [['l', R(-10, 50, 20, 10), true], ['d', R(390, 295, 20, 10), true], ['in', R(100, 100, 20, 10), false]], 'AE-5 flightPlan 画面の外 = 枠の端のいちばん近い所（大きさはそのまま）');
-eq(MP.flightPlan({ a: R(0, 0, 10, 10) }, { a: R(900, 50, 10, 10) }, { toBounds: R(0, 0, 400, 300) })[0].to, R(395, 50, 10, 10), 'AE-5 flightPlan 行き先が枠の外なら端へ（landOff）');
-ok(MP.flightPlan({ a: R(0, 0, 10, 10) }, { a: R(900, 50, 10, 10) }, { toBounds: R(0, 0, 400, 300) })[0].landOff === true, 'AE-5 flightPlan landOff');
-eq(MP.flightPlan({ a: R(0, 0, 10, 10) }, { a: R(9, 9, 1, 1) }, { start: 200, dur: 700, stagger: 10 }).map(function (p) { return [p.delay, p.dur]; }), [[200, 700]], 'AE-5 flightPlan 開始・時間を渡せる（全体の中で見る）');
-eq(MP.flightPlan({ a: { x: 'x' } }, { a: R(0, 0, 1, 1) }), [], 'AE-5 flightPlan 壊れた箱は捨てる');
-eq(MP.flightPlan(null, undefined, null), [], 'AE-5 flightPlan 何も無ければ空');
-eq(JSON.stringify(MP.flightPlan(many, cells, { order: ord, bounds: R(0, 0, 200, 200) })), JSON.stringify(MP.flightPlan(many, cells, { order: ord, bounds: R(0, 0, 200, 200) })), 'AE-5 flightPlan は決定論');
+eq(OFF.map(function (p) { return [p.id, p.from, p.offscreen]; }), [['l', R(-10, 50, 20, 10), true], ['d', R(390, 295, 20, 10), true], ['in', R(100, 100, 20, 10), false]], 'AH-5 flightPlan 画面の外 = 枠の端のいちばん近い所（大きさはそのまま）');
+eq(MP.flightPlan({ a: R(0, 0, 10, 10) }, { a: R(900, 50, 10, 10) }, { toBounds: R(0, 0, 400, 300) })[0].to, R(395, 50, 10, 10), 'AH-5 flightPlan 行き先が枠の外なら端へ（landOff）');
+ok(MP.flightPlan({ a: R(0, 0, 10, 10) }, { a: R(900, 50, 10, 10) }, { toBounds: R(0, 0, 400, 300) })[0].landOff === true, 'AH-5 flightPlan landOff');
+eq(MP.flightPlan({ a: R(0, 0, 10, 10) }, { a: R(9, 9, 1, 1) }, { start: 200, dur: 700, stagger: 10 }).map(function (p) { return [p.delay, p.dur]; }), [[200, 700]], 'AH-5 flightPlan 開始・時間を渡せる（全体の中で見る）');
+eq(MP.flightPlan({ a: { x: 'x' } }, { a: R(0, 0, 1, 1) }), [], 'AH-5 flightPlan 壊れた箱は捨てる');
+eq(MP.flightPlan(null, undefined, null), [], 'AH-5 flightPlan 何も無ければ空');
+eq(JSON.stringify(MP.flightPlan(many, cells, { order: ord, bounds: R(0, 0, 200, 200) })), JSON.stringify(MP.flightPlan(many, cells, { order: ord, bounds: R(0, 0, 200, 200) })), 'AH-5 flightPlan は決定論');
 var FK = MP.flightKeys(R(100, 400, 180, 100), R(300, 10, 30, 34), 16, 0.16);
-eq(FK.length, 17, 'AE-3 flightKeys = 16 こま + 1');
-eq([FK[0].x, FK[0].y, FK[0].w, FK[0].h], [100, 400, 180, 100], 'AE-3 flightKeys 最初 = 出発点の箱');
-ok(near(FK[16].x, 300) && near(FK[16].y, 10) && near(FK[16].w, 30) && near(FK[16].h, 34), 'AE-3 flightKeys 最後 = 行き先のマスの箱');
-ok(FK.every(function (k, i) { return i === 0 || (k.offset > FK[i - 1].offset && k.w < FK[i - 1].w + 1e-9); }), 'AE-3 flightKeys こまは時間の順・飛びながら小さくなる（マスの大きさへ）');
+eq(FK.length, 17, 'AH-3 flightKeys = 16 こま + 1');
+eq([FK[0].x, FK[0].y, FK[0].w, FK[0].h], [100, 400, 180, 100], 'AH-3 flightKeys 最初 = 出発点の箱');
+ok(near(FK[16].x, 300) && near(FK[16].y, 10) && near(FK[16].w, 30) && near(FK[16].h, 34), 'AH-3 flightKeys 最後 = 行き先のマスの箱');
+ok(FK.every(function (k, i) { return i === 0 || (k.offset > FK[i - 1].offset && k.w < FK[i - 1].w + 1e-9); }), 'AH-3 flightKeys こまは時間の順・飛びながら小さくなる（マスの大きさへ）');
 var mid = MP.flightKeys(R(0, 100, 10, 10), R(400, 100, 10, 10), 16, 0.16)[8];
-ok(mid.y + mid.h / 2 < 105 - 20, 'AE-3 flightKeys ゆるい弧（横に飛ぶ時は上へふくらむ）: 真ん中の y ' + (mid.y + mid.h / 2));
-ok(near(MP.flightKeys(R(0, 0, 10, 10), R(100, 0, 40, 40), 2, 0)[1].w, 20, 1e-9), 'AE-3 flightKeys 大きさは比で変わる（真ん中 = 相乗平均）');
+ok(mid.y + mid.h / 2 < 105 - 20, 'AH-3 flightKeys ゆるい弧（横に飛ぶ時は上へふくらむ）: 真ん中の y ' + (mid.y + mid.h / 2));
+ok(near(MP.flightKeys(R(0, 0, 10, 10), R(100, 0, 40, 40), 2, 0)[1].w, 20, 1e-9), 'AH-3 flightKeys 大きさは比で変わる（真ん中 = 相乗平均）');
 
 // ---------- 文言（§Y-7 / §AB-14）: key が i18n.js に [中, 小] である・禁止語なし ----------
 var i18n = fs.readFileSync(path.join(__dirname, '../app-v3/js/i18n.js'), 'utf8');
@@ -639,14 +639,14 @@ ok(/stroke-dasharray:7 5/.test(cssSrc) && !/k-cross|k-order/.test(cssSrc) && !/k
 ok(!/mp_k_cross/.test(i18n) && !/教科をまたぐ/.test(i18n), 'AD-1 文言から「教科をまたぐ」を消した');
 ok(!/#ed922c|--orange/.test(cssSrc.split('\n').filter(function (l) { return /mp-e\b|mp-e\.|mp-sw|mp-sq/.test(l); }).join('\n')), 'AB-3 / Y-3 線とマスに橙を使わない');
 
-// §AE-7 の文言（[中, 小] の組を verbatim）・「達成」を画面に出さない・新しい key も学びマップの 1 か所
+// §AH-7 の文言（[中, 小] の組を verbatim）・「達成」を画面に出さない・新しい key も学びマップの 1 か所
 var AE7 = [['mp_overview', '全体で見る', 'ぜんたいで 見る'], ['mp_inall', '全体の中で見る', 'ぜんたいの 中で 見る'], ['mp_to_links', 'つながりで見る', 'つながりで 見る'],
   ['mp_st_touched', '作ったものでふれた', '作ったもので ふれた'], ['mp_st_doing', '基礎学習で進めている', 'きそ学習で すすめている'], ['mp_st_done', '基礎学習で終えた', 'きそ学習で おえた'], ['mp_st_none', 'これから', 'これから']];
-eq(AE7.filter(function (k) { return i18n.indexOf('    ' + k[0] + ": ['" + k[1] + "', '" + k[2] + "'],") < 0; }).map(function (k) { return k[0]; }), [], 'AE-7 新しい文言は [中, 小] の組そのまま');
-ok(/mp_overall: \['算数 4 年の基礎学習/.test(i18n), 'AE-1 算数の全体 % は「算数 4 年の基礎学習」と対象を明記');
-ok(!/達成/.test(i18n.split('\n').filter(function (l) { return /^\s+mp_/.test(l); }).join('\n')), 'AE-7 学びマップの文言に「達成」を出さない');
-ok(/pointer-events:none/.test((cssSrc.match(/\.mpx-ovl\{[^}]*\}/) || [''])[0]) && /position:fixed/.test((cssSrc.match(/\.mpx-ovl\{[^}]*\}/) || [''])[0]) && /'aria-hidden': 'true'/.test((mapSrc.match(/function xOverlay[\s\S]*?\n  }/) || [''])[0]), 'AE-3 重ね面は position:fixed・pointer-events:none・aria-hidden');
-ok(!/setTimeout|setInterval|requestAnimationFrame/.test((mapSrc.match(/function xBeginAll[\s\S]*?\n  }\n/) || ['x'])[0] + (mapSrc.match(/function xBeginLinks[\s\S]*?\n  }\n/) || ['x'])[0] + (mapSrc.match(/function xPace[\s\S]*?\n  }\n/) || ['x'])[0]), 'AE-3 遷移の時間はアニメーションの delay だけで決める（タイマーなし = 止めて・進めて確かめられる）');
+eq(AE7.filter(function (k) { return i18n.indexOf('    ' + k[0] + ": ['" + k[1] + "', '" + k[2] + "'],") < 0; }).map(function (k) { return k[0]; }), [], 'AH-7 新しい文言は [中, 小] の組そのまま');
+ok(/mp_overall: \['算数 4 年の基礎学習/.test(i18n), 'AH-1 算数の全体 % は「算数 4 年の基礎学習」と対象を明記');
+ok(!/達成/.test(i18n.split('\n').filter(function (l) { return /^\s+mp_/.test(l); }).join('\n')), 'AH-7 学びマップの文言に「達成」を出さない');
+ok(/pointer-events:none/.test((cssSrc.match(/\.mpx-ovl\{[^}]*\}/) || [''])[0]) && /position:fixed/.test((cssSrc.match(/\.mpx-ovl\{[^}]*\}/) || [''])[0]) && /'aria-hidden': 'true'/.test((mapSrc.match(/function xOverlay[\s\S]*?\n  }/) || [''])[0]), 'AH-3 重ね面は position:fixed・pointer-events:none・aria-hidden');
+ok(!/setTimeout|setInterval|requestAnimationFrame/.test((mapSrc.match(/function xBeginAll[\s\S]*?\n  }\n/) || ['x'])[0] + (mapSrc.match(/function xBeginLinks[\s\S]*?\n  }\n/) || ['x'])[0] + (mapSrc.match(/function xPace[\s\S]*?\n  }\n/) || ['x'])[0]), 'AH-3 遷移の時間はアニメーションの delay だけで決める（タイマーなし = 止めて・進めて確かめられる）');
 
 console.log('map-test: ' + pass + ' passed, ' + fail + ' failed');
 console.log('MAP_TEST=' + (fail === 0 ? 'PASS' : 'FAIL'));
