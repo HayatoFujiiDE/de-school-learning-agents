@@ -44,6 +44,8 @@
 - 保存する `VerdictReport.figures` は、検証係の判定に、Worker が `not_seen` の各 path を `{path, verdict:'not_seen', reason:''}` で足し、path 昇順に並べたもの（F1）。`verifications.result_json` に入る。列（confirmed 等の数）は変えない。
 - Batch 経路: 会話の最初のターンを作る時に figures 集合と not_seen を決め、回収時の検査に必要な「見せた図の path 一覧」と not_seen を再計算できるようにする（R2 の会話 JSON から再計算するか、版から同じ手順で決め直す。決定的であること。同じ版で同じ R2 内容なら同じ集合）。
 
+- 旧形式の会話（§O-12 の前に出した Batch。保存した会話の最初の user content が文字列）を回収した時、版に図（svg / png / webp）が 1 枚でもあれば、report の中身に関係なく `claim_set_mismatch` で失敗させる（再試行で新しい形の入力を作り直す）。図が 0 枚の版は従来どおり受け入れる。`not_seen` は「容量のため見せなかった」時だけに使い、旧形式の未表示には使わない（Astra high R1 BLOCKING）。
+
 ## d. 確認画面（`GET /api/review/:version_id` と admin.js）
 
 - API: `verification` に `figures: [{path, verdict, reason}] | null` を足す（result_json に figures が無い古い検証は null）。
