@@ -239,7 +239,7 @@
     var works = S().works || [], g = group(works);
     main.textContent = '';
     var kids = [H('div', { class: 'page-head' }, [
-      H('div', null, [H('h1', { tabindex: '-1', 'data-fk': 'works-h' }, T('works'))]),
+      H('div', null, [H('h1', { tabindex: '-1', 'data-fk': 'works-h' }, T('works')), H('p', null, T('works_sub'))]),
       // 作品 0 件の時は破線の枠だけ（同じ操作を 2 つ並べない。§U-12 (f)）
       works.length ? H('div', { class: 'actions' }, [H('button', { class: 'btn orange', type: 'button', 'data-action': 'wk-open', 'data-arg': 'head' }, [icon('camera'), H('span', null, T('add_capture'))])]) : null
     ])];

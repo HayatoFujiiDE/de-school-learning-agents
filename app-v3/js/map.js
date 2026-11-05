@@ -325,7 +325,7 @@
   // ---------- 見出し + タブ（§Y-1） ----------
   function head(view) {
     return [
-      H('div', { class: 'page-head mp-head' }, [H('div', null, [H('h1', { tabindex: '-1', 'data-fk': 'mp-h' }, T('map'))])]),
+      H('div', { class: 'page-head mp-head' }, [H('div', null, [H('h1', { tabindex: '-1', 'data-fk': 'mp-h' }, T('map')), H('p', null, T('mp_head_sub'))])]),
       H('div', { class: 'studio-tabs mp-tabs' }, [H('div', { class: 'segmented', role: 'group', 'aria-label': T('mp_tabs_label') }, ['links', 'basics'].map(function (k) {
         var on = k === view;
         return H('button', { type: 'button', class: on ? 'active' : null, 'data-action': 'mp-tab', 'data-arg': k, 'aria-current': on ? 'page' : null }, T(k === 'links' ? 'mp_tab_links' : 'mp_tab_basics'));
@@ -396,7 +396,8 @@
     kids.push(H('h3', { class: 'mp-rel-h' }, T('mp_related_h')));
     kids = kids.concat(relList(g, rel));
     var ops = [];
-    if (n.kind === 'act' || n.kind === 'work') ops.push(btn(T('mp_make_this'), 'mp-make', { id: n.id, kls: 'orange', icon: 'make', disabled: n.kind === 'work', title: T('story_lost') }));
+    // 活動のある作ってきたものは「続きを作る」、活動の無いもの（作品だけ）は今のまま「これで作る」（§AA-4）
+    if (n.kind === 'act' || n.kind === 'work') ops.push(btn(T(n.kind === 'act' ? 'resume_make' : 'mp_make_this'), 'mp-make', { id: n.id, kls: 'orange', icon: 'make', disabled: n.kind === 'work', title: T('story_lost') }));
     if (n.kind === 'unit' && n.material) ops.push(H('a', { class: 'btn small orange', href: '#map/u/' + n.code }, [H('span', null, T('mp_see_basic'))]));
     ops.push(btn(T('mp_talk'), 'mp-talk', { id: n.id, icon: 'chat' }));
     if (n.kind === 'learned' && n.src === 'buddy') ops.push(btn(T('decline'), 'mp-decline', { id: n.id, kls: 'ghost' }));
@@ -584,8 +585,16 @@
     restoreFocus(main, fk);
     var u = ui();
     // 開いたら見出しへ（タブ・単元を開いた時も）。同じ画面の描き直しでは動かさない。見つからなかった引数は移った先で
-    if (u.redirect) { u.redirect = false; return; }
-    if (u.shown !== (arg || '')) { u.shown = arg || ''; var h = main.querySelector('h1'); if (h) h.focus(); }
+    if (u.redirect) { u.redirect = false; u.lastUnit = null; return; }
+    if (u.shown !== (arg || '')) {
+      u.shown = arg || '';
+      // 単元から戻った時は、開く元になった単元の行（基礎学習）/ つながり のノードへ（作品・お題と同じ。§AA-6）。元が無ければ h1
+      var mu = /^u\/(.+)$/.exec(u.shown), from = u.lastUnit, t = null;
+      u.lastUnit = mu ? mu[1] : null;
+      if (from && !mu) t = firstShown(main, '[data-fk="mp-u:' + esc(from) + '"]') || firstShown(main, '.mp-node[data-id="unit:' + esc(from) + '"][aria-pressed="true"]') || firstShown(main, '.mp-node[data-id="unit:' + esc(from) + '"]');
+      if (!t) t = main.querySelector('h1');
+      if (t) t.focus();
+    }
   };
   function renderView(main, arg) {
     var u = ui(), m = /^u\/(.+)$/.exec(arg || ''), view = !arg ? 'links' : (arg === 'basics' ? 'basics' : (m ? 'unit' : null));
@@ -601,7 +610,7 @@
     }
   }
   // ルートが変わったら一時的な UI を閉じる（app.js の closeTransient から）
-  MP.resetUi = function () { var u = ui(); u.shown = null; u.missing = null; u.selCard = null; unwatch(); };
+  MP.resetUi = function () { var u = ui(); u.shown = null; u.missing = null; u.selCard = null; if (DES.app.route() !== 'map') u.lastUnit = null; unwatch(); };
 
   // ---------- 保存（失敗したら save_fail + 画面の状態を戻す） ----------
   function saveUi(next) {

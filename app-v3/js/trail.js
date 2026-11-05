@@ -388,7 +388,7 @@
   TR.render = function (main) {
     var u = ui(), d = view(), f = (S().trail && S().trail.filter) || 'all';
     main.textContent = '';
-    var kids = [H('div', { class: 'page-head' }, [H('div', null, [H('h1', { tabindex: '-1', 'data-fk': 'trail-h' }, T('trail'))])])];
+    var kids = [H('div', { class: 'page-head' }, [H('div', null, [H('h1', { tabindex: '-1', 'data-fk': 'trail-h' }, T('trail')), H('p', null, T('tr_sub'))])])];
     var be = buddyEl(buddyLine(d.cards, d.list.length > 0));
     if (be) kids.push(be);
     if (d.cards.length) kids.push(resumeEl(d.cards));

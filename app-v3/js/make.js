@@ -1172,7 +1172,7 @@
         H('p', { class: 'muted' }, last ? tx(last.what) + ' · ' + today() + ' ' + last.time : T('origin_' + (a.origin || 'make'))),
         nx ? H('p', { class: 'project-next' }, T('next_line') + ': ' + tx(nx)) : null
       ]),
-      H('button', { class: 'btn primary small', type: 'button', 'data-action': 'mk-open', 'data-id': a.id }, T('resume_make'))
+      H('button', { class: 'btn orange small', type: 'button', 'data-action': 'mk-open', 'data-id': a.id }, T('resume_make'))
     ]);
   }
   function changeableText(theme) { return MD.theme(theme).changeable.map(function (p) { return MD.pick(p, mode()); }).join('・'); }
@@ -1263,7 +1263,7 @@
   function studioHeader(a, b) {
     var u = mk(), side = S().makeSide, editing = u.edit && u.edit.type === 'title' && u.edit.act === a.id;
     var titleEl = editing ? inlineEdit('title', a.id, T('edit_title'), u.edit.value)
-      : H('h1', { class: 'studio-title' }, [H('button', { class: 'title-btn', type: 'button', 'data-action': 'mk-title-edit', 'data-id': a.id, 'data-fk': 'title:' + a.id }, a.title)]);
+      : H('h1', { class: 'studio-title', tabindex: '-1' }, [H('button', { class: 'title-btn', type: 'button', 'data-action': 'mk-title-edit', 'data-id': a.id, 'data-fk': 'title:' + a.id }, a.title)]);
     var acts = [];
     if ((b === 'xl' || b === 'l') && side.chatHidden) acts.push(btn(T('unfold_chat'), 'mk-fold-chat', { id: a.id, kls: 'ghost', icon: 'chat' }));
     if (b === 'm') acts.push(btn(T('to_consult'), 'mk-to-consult', { id: a.id, kls: 'ghost', icon: 'chat' }));
@@ -1591,7 +1591,9 @@
     layout.appendChild(chat);
     layout.appendChild(stageEl(a, b));
     if (shelfCol) layout.appendChild(shelfEl(a, false));
-    main.appendChild(H('div', { class: 'studio', 'data-act': a.id }, [studioHeader(a, b), b === 's' ? tabsEl(a) : null, layout]));
+    // 見出しの上に戻るリンク（作品・お題・単元と同じ部品。§AA-3）
+    var back = H('p', { class: 'mk-back' }, [H('a', { class: 'link-btn', href: '#make', 'aria-label': T('back_make') }, [H('span', { 'aria-hidden': 'true' }, '←'), H('span', null, T('make'))])]);
+    main.appendChild(H('div', { class: 'studio', 'data-act': a.id }, [back, studioHeader(a, b), b === 's' ? tabsEl(a) : null, layout]));
     keptComposer = null;
     // 相談列は新しい返事が来た時だけ末尾へ。それ以外の再描画では読んでいた位置を保つ
     var ml = document.getElementById('mk-messages');
@@ -1608,8 +1610,16 @@
       a = demo(id, { now: DES.data.now, mode: mode(), works: S().works });
       if (a) { S().activities = [a].concat(S().activities); if (!DES.store.save('activities')) S().saveFailed = true; }
     }
-    if (!a) { window.location.replace('#make'); return; }
+    // 無い id は一覧へ（履歴に残さない）+ トースト（作品・お題と同じ。§AA-3）
+    if (!a) {
+      renderEntry(main);
+      if (u.missing !== id) { u.missing = id; DES.app.toast(T('not_found_work')); }
+      window.location.replace('#make');
+      return;
+    }
     renderStudio(main, a);
+    // 開いたら h1 へ（作品・お題の詳細と同じ）。同じ作業台の描き直しでは動かさない
+    if (u.shownStudio !== a.id) { u.shownStudio = a.id; var h = main.querySelector('.studio h1'); if (h) h.focus(); }
     if (sub && !u.opened[arg]) {
       u.opened[arg] = true;
       if (sub === 'save') openSave(a.id, null);
@@ -1620,6 +1630,7 @@
   M.resetUi = function () {
     var u = mk(), r = DES.app.route();
     u.edit = null; u.headMenu = false; u.remakeFor = null; u.compare = null; u.opened = {}; u.flashStep = null; u.dot = { stage: false, consult: false };
+    u.shownStudio = null; u.missing = null;
     if (r !== 'make') { u.makeFirst = null; u.makeFrom = null; }
   };
 
