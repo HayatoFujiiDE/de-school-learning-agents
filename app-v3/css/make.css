@@ -149,6 +149,7 @@ html[data-mode="es"] .step-line .next-set{min-height:48px}
 .resume-note{display:flex;gap:8px;align-items:flex-start;margin-top:12px;padding:10px 12px;border-left:3px solid var(--ai);background:var(--ai-soft);border-radius:0 10px 10px 0;font-size:12px;line-height:1.8}
 .resume-note .des-buddy{margin-top:3px}
 .quote-frame{margin-top:12px;padding:10px 12px;background:#fff;border:1px solid var(--line);border-left:3px solid var(--own);border-radius:0 10px 10px 0;display:grid;gap:6px;min-width:0}
+.quote-frame.is-ai{border:1px dashed var(--ai);border-radius:10px}
 .quote-frame:focus{outline:none}
 .quote-frame:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
 .qf-text{font-size:13px;line-height:1.8;overflow-wrap:anywhere;white-space:pre-wrap}

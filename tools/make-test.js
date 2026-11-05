@@ -827,6 +827,196 @@ t('W-6 見本の作品', function () {
   ok(!/版|点数|ランキング|順位|評価|成績|レベル|集中力|得意|苦手|上手|成長|頑張|すごい/.test(text), 'W-7 見本に「版」と評価の語が無い');
 });
 
+// ======================================================================
+// contract-Y: 4 つ目の題材「自分を助ける道具」（tool）と自己理解からの入口
+// ======================================================================
+t('Y-3 pickTheme: 論点 / 道具 / 整理 / 合図 は既存の判定より前に tool', function () {
+  eq(M.pickTheme('論点を整理する道具'), 'tool', 'Y-3 論点を整理する道具 → tool');
+  eq(M.pickTheme('マイクラの道具'), 'tool', 'Y-8-9 マイクラの道具 → tool（複合入力は tool 優先）');
+  eq(M.pickTheme('マイクラの家'), 'mc', 'Y-3 マイクラの家 → mc のまま');
+  eq(M.pickTheme('合図を出したい'), 'tool', 'Y-3 合図 → tool');
+  eq(M.pickTheme('メモを整理'), 'tool', 'Y-3 整理 → tool');
+  eq(M.pickTheme('Python のゲーム'), 'py', 'Y-3 Python は py のまま');
+  eq(M.pickTheme('絵を描きたい'), 'mc', 'Y-3 どれも無ければマイクラのまま');
+  var c = M.fromText('論点を整理する道具', { id: 'yt1', now: '10:20', mode: 'js' });
+  eq([c.theme, c.title, c.shelf.map(function (k) { return k.theme + '.' + k.variant; })], ['tool', '自分を助ける道具', ['tool.nudge', 'tool.oneby', 'tool.board']], 'Y-3 思いつきから tool の仮の案 3 つ');
+});
+t('Y-0 入口の見本・写真は 3 つのまま（tool を出さない）', function () {
+  eq(MD.THEMES, ['mc', 'py', 'circuit', 'tool'], 'Y-1 MD.THEMES に tool');
+  eq(MD.samples.map(function (x) { return x.theme; }), ['mc', 'py', 'circuit'], 'Y-0 見本は 3 枚のまま');
+  eq(MD.captures.map(function (x) { return x.theme; }), ['mc', 'py', 'circuit'], 'Y-0 作品の写真は 3 つのまま');
+});
+function tst(va, count, every) { return { kind: 'sample', theme: 'tool', variant: va, values: { count: count, every: every } }; }
+t('Y-2 結果の 1 行・コード・説明（verbatim）', function () {
+  eq(MD.result(tst('memo', 3, 2), 'js'), '5 分ごとに、話を 3 つの論点カードにまとめる', 'Y-2 memo js');
+  eq(MD.result(tst('memo', 3, 2), 'es'), '5 分ごとに、話を 3 つのカードにまとめる', 'Y-2 memo es');
+  eq(MD.result(tst('nudge', 2, 4), 'js'), '話が終わったら、「いまの話を 2 行で」と手もとに出す', 'Y-2 nudge 話が終わったら');
+  eq(MD.result(tst('nudge', 2, 4), 'es'), '話がおわったら、「いまの話を 2 行で」と手もとに出す', 'Y-2 nudge es');
+  eq(MD.result(tst('oneby', 1, 4), 'js'), '決めることを 1 つずつ出して、話が終わったら次を出す', 'Y-2 oneby 話が終わったら（読点を重ねない）');
+  eq(MD.result(tst('oneby', 2, 3), 'es'), 'きめることを 2 つずつ出して、10 分ごとにつぎを出す', 'Y-2 oneby es');
+  eq(MD.result(tst('board', 4, 0), 'js'), '1 分ごとに、話を 4 本の枝の図に書き足す', 'Y-2 board js');
+  eq(MD.result(tst('board', 4, 0), 'es'), '1 分ごとに、話を 4 本のえだの図に書きたす', 'Y-2 board es');
+  eq(MD.code(tst('memo', 3, 2)), 'メモ → AI → 論点 × 3（5 分ごと）', 'Y-2 code memo');
+  eq(MD.code(tst('nudge', 1, 4)), '時計 → 合図「いまの話を 1 行で」（話の終わり）', 'Y-2 code nudge');
+  eq(MD.code(tst('oneby', 2, 1)), 'リスト → 2 件ずつ表示（3 分ごと）', 'Y-2 code oneby');
+  eq(MD.code(tst('board', 5, 3)), 'メモ → AI → 枝 × 5（10 分ごと）', 'Y-2 code board');
+  eq(MD.desc(tst('memo', 3, 2), 'js'), '論点 3 · 5 分ごと', 'Y-8-2 desc memo');
+  eq(MD.desc(tst('nudge', 1, 4), 'es'), '1 行 · 話の終わり', 'Y-8-2 desc nudge（モード共通）');
+  eq(MD.desc(tst('oneby', 2, 0), 'js'), '2 件ずつ · 1 分ごと', 'Y-8-2 desc oneby');
+  eq(MD.desc(tst('board', 4, 2), 'js'), '枝 4 · 5 分ごと', 'Y-8-2 desc board');
+  eq(MD.valueLabel('tool', 'every', 4, 'es'), '話がおわったら', 'Y-2 間かくの名前 es');
+});
+t('Y-4 tool がどの値でも別の題材の文・NaN に落ちない', function () {
+  var bad = [];
+  MD.theme('tool').variants.forEach(function (va) {
+    for (var c = 1; c <= 5; c++) for (var e = 0; e <= 4; e++) {
+      var st = tst(va, c, e), svg = MD.art(st), txt = [MD.result(st, 'js'), MD.result(st, 'es'), MD.code(st), MD.desc(st, 'js'), MD.desc(st, 'es'), svg.replace(/<[^>]*>/g, ' ')].join(' | ');
+      if (/NaN|undefined|null|\bV\b|Ω|mA|ブロック|星|電|マイクラ|minecraft|speed/.test(txt)) bad.push(va + ' ' + c + ' ' + e + ': ' + txt.slice(0, 80));
+      // SVG の属性（座標・半径など）に NaN / undefined / Infinity が入っていないか（タグを取り除く前の文字列で見る。レビュー MINOR 2）
+      if (/NaN|undefined|Infinity/.test(svg)) bad.push(va + ' ' + c + ' ' + e + ' svg: ' + (svg.match(/[^"]*(NaN|undefined|Infinity)[^"]*/) || [''])[0]);
+    }
+  });
+  eq(bad, [], 'Y-4 別の題材の語が 0 件');
+  // 手順は Y-2 の stepBase（まとめる数 / 間かく / 3 つ目）と各 variant の step3 の verbatim と一致（レビュー MINOR 3）
+  var BASE = [['まとめる数を変える', 'まとめる数をかえる'], ['間かくを決める', 'あいだをきめる']];
+  var STEP3 = { memo: ['サークル対話で使ってみる', 'サークル対話でつかってみる'], nudge: ['合図の言葉を決める', 'あいずのことばをきめる'],
+    oneby: ['次を出す合図を決める', 'つぎを出すあいずをきめる'], board: ['真ん中に書くことを決める', 'まん中に書くことをきめる'] };
+  ['memo', 'nudge', 'oneby', 'board'].forEach(function (va) {
+    eq(MD.stepsFor('tool', va), BASE.concat([STEP3[va]]), 'Y-2 stepsFor tool.' + va + ' は契約の文言');
+    ok(/^<svg/.test(MD.art(tst(va, 3, 2))), 'Y-4 MD.art tool.' + va + ' は線画');
+    ok(MD.art(tst(va, 3, 2)) !== MD.art({ kind: 'sample', theme: 'mc', variant: 'cube', values: { size: 4, block: 0 } }), 'Y-4 tool.' + va + ' はマイクラの図に落ちない');
+  });
+  eq(JSON.parse(MD.artMarks(tst('board', 4, 3))), { items: 4, every: 10 }, 'Y-2 artMarks tool');
+  ok(MD.photoArt({ theme: 'tool', n: 1 }).indexOf('is-photo') >= 0 && MD.photoArt({ theme: 'tool', n: 1 }) !== MD.photoArt({ theme: 'mc', n: 1 }), 'Y-4 photoArt tool はマイクラの写真に落ちない');
+});
+t('Y-2 tool × 2 値: 線画と印が変わる（U11-b と同じ型）', function () {
+  [['memo', { count: 3, every: 2 }, 'count', 4], ['memo', { count: 3, every: 2 }, 'every', 3], ['board', { count: 4, every: 2 }, 'count', 2], ['nudge', { count: 1, every: 1 }, 'every', 4]].forEach(function (c) {
+    var a = tst(c[0], c[1].count, c[1].every), b = JSON.parse(JSON.stringify(a));
+    b.values[c[2]] = c[3];
+    ok(MD.art(a) !== MD.art(b), 'Y-2 tool.' + c[0] + '.' + c[2] + ' で線画が変わる');
+    ok(MD.artMarks(a) !== MD.artMarks(b), 'Y-2 tool.' + c[0] + '.' + c[2] + ' の量が図の印に出る');
+  });
+});
+t('Y-2 試した時の返事（題材の語だけ差し替え）', function () {
+  eq(MD.testReply(tst('memo', 4, 2), 'count', 3, 'js'), '選んだまとめる数に変えて、まとめる数に違いが出たね。狙っていた数に近い？', 'Y-2 count js');
+  eq(MD.testReply(tst('memo', 4, 2), 'count', 3, 'es'), 'まとめる数をかえたら、さっきよりカードがふえたね。変えたところが数に出たね', 'Y-2 count 増えた memo');
+  eq(MD.testReply(tst('board', 2, 2), 'count', 3, 'es'), 'まとめる数をかえたら、さっきより枝がへったね。変えたところが数に出たね', 'Y-2 count 減った board');
+  eq(MD.testReply(tst('nudge', 2, 1), 'count', 1, 'es'), 'まとめる数をかえたら、さっきより行がふえたね。変えたところが数に出たね', 'Y-2 count nudge');
+  eq(MD.testReply(tst('memo', 3, 3), 'every', 2, 'js'), '選んだ間かくに変えて、出る間かくに違いが出たね。狙っていた間かくに近い？', 'Y-2 every js');
+  eq(MD.testReply(tst('memo', 3, 1), 'every', 2, 'es'), 'あいだをかえたら、さっきよりよく出るようになったね。変えたところが間かくに出たね', 'Y-2 every 小さく');
+  eq(MD.testReply(tst('memo', 3, 3), 'every', 2, 'es'), 'あいだをかえたら、さっきより出るのがゆっくりになったね。変えたところが間かくに出たね', 'Y-2 every 大きく');
+  eq(MD.testReply(tst('memo', 3, 4), 'every', 3, 'es'), 'あいだをかえたら、さっきより出るのがゆっくりになったね。変えたところが間かくに出たね', 'Y-2 every 話の終わりは最も長い');
+  eq(MD.testReply(tst('memo', 3, 3), 'every', 4, 'es'), 'あいだをかえたら、さっきよりよく出るようになったね。変えたところが間かくに出たね', 'Y-2 every 話の終わり → 10 分（境界）');
+});
+function fself(o) { return M.fromSelf(Object.assign({ id: 'ys1', linkId: 'k1-tool', text: '自分のメモを入れると、AI が論点ごとに分けて整理してくれる道具を作る', variant: 'memo', src: 'buddy', mode: 'js', now: '10:20' }, o || {})); }
+t('Y-4 fromSelf: tool / 論点メモの作業台', function () {
+  var a = fself();
+  eq([a.theme, a.origin, a.title, a.selfLink], ['tool', 'self', '論点メモ', 'k1-tool'], 'Y-4 題材・出所・題名・紐づけ');
+  eq(a.stage, { kind: 'sample', theme: 'tool', variant: 'memo', values: { count: 3, every: 2 } }, 'Y-4 作業対象は tool.memo（sample）');
+  eq(a.quote, { text: '自分のメモを入れると、AI が論点ごとに分けて整理してくれる道具を作る', removed: false, src: 'buddy' }, 'Y-8-5 引用に工夫の文と出所');
+  eq(a.shelf.map(function (c) { return [c.kind, c.variant, c.state]; }), [['draft', 'nudge', 'new'], ['draft', 'oneby', 'new'], ['draft', 'board', 'new']], 'Y-8-3 仮の案 3 つ');
+  eq(a.shelf.map(function (c) { return MD.pick(M.cardTitle(c), 'js'); }), ['ひとこと合図', 'ひとつずつリスト', '話の地図'], 'Y-8-3 仮の案の名前');
+  eq(a.thread.map(function (m) { return m.r; }), ['open'], 'Y-4 返事は open');
+  eq(a.steps.map(function (x) { return x[0]; }), ['まとめる数を変える', '間かくを決める', 'サークル対話で使ってみる'], 'Y-4 手順は tool の stepBase');
+  eq(M.leaveOptions(a), ['find', 'one'], 'Y-8-3 任せるは見本と同じ操作の組');
+  eq(fself({ mode: 'es' }).title, 'ろんてんメモ', 'Y-4 題名 es');
+  eq(fself({ variant: 'nope' }).stage.variant, 'memo', 'Y-4 知らない variant は memo（境界）');
+  eq(fself({ variant: 'board' }).title, '話の地図', 'Y-4 variant を渡せる');
+  eq(fself({ src: 'own' }).quote.src, 'own', 'Y-8-5 own');
+  eq(fself({ src: 'x' }).quote.src, 'own', 'Y-8-5 知らない src は own（境界）');
+  eq(fself({ linkId: 'bad id"' }), null, 'Y-4 linkId の形が違えば作らない（境界）');
+  eq(fself({ linkId: 'scene:n1-2' }).selfLink, 'scene:n1-2', 'Y-4 場面の紐づけ');
+  var acts = [{ id: 'x1' }, fself(), fself({ id: 'ys2' })];
+  eq(M.findSelfLink(acts, 'k1-tool').id, 'ys1', 'Y-4 同じ紐づけの最初の活動');
+  eq(M.findSelfLink(acts, 'k1-ai'), null, 'Y-4 紐づけが無ければ null');
+});
+t('Y-6 作業台の操作が tool の文で動く（試す / 任せる / これにする / 比べる / 作り直す / 違う / 前に戻す）', function () {
+  var a = fself(), r = M.test(M.setParam(a, 'count', 5));
+  eq(r.change.what, { k: 'changed_one', v: { label: ['まとめる数', 'まとめる数'], value: ['5', '5'] } }, 'Y-6 試すの記録');
+  eq(MD.testReply(r.act.stage, r.key, r.from, 'es'), 'まとめる数をかえたら、さっきよりカードがふえたね。変えたところが数に出たね', 'Y-6 試した返事');
+  var r2 = M.test(M.setParam(r.act, 'every', 4));
+  eq(r2.change.what.v.value, ['話が終わったら', '話がおわったら'], 'Y-6 間かくの名前で記録');
+  var l = settled(r2.act, 'find'), card = l.act.shelf[0];
+  eq([card.kind, card.theme, card.values], ['value', 'tool', { count: 2, every: 1 }], 'Y-6 任せる（find）は tool の値');
+  var one = settled(r2.act, 'one');
+  eq(one.act.shelf[0].values, { count: 1, every: 4 }, 'Y-6 1 か所変えて（count の上限で回る）');
+  var ad = M.adopt(l.act, card.id);
+  eq([ad.act.stage.theme, ad.act.theme, ad.change.who], ['tool', 'tool', 'ai'], 'Y-6 これにする');
+  var rd = settled(M.adopt(a, a.shelf[0].id).act, 'redo');
+  eq(rd.act.shelf[0].variant, 'oneby', 'Y-6 作り直す（次の案）');
+  var tw = settled(M.adopt(a, a.shelf[0].id).act, 'two');
+  eq(tw.act.shelf.slice(0, 2).map(function (c) { return c.variant; }), ['oneby', 'board'], 'Y-6 別の案を 2 つ（今の案以外の仮の案）');
+  var dc = M.decline(a, a.shelf[1].id);
+  eq(dc.act.shelf[1].state, 'passed', 'Y-6 違う');
+  eq(M.undoDecline(dc.act, dc.undo).shelf[1].state, 'new', 'Y-6 違うを戻す');
+  var rv = M.revert(r2.act, null);
+  eq(rv.act.stage.values, { count: 5, every: 2 }, 'Y-6 前に戻す');
+  var names = M.cardNames(l.act.shelf, 'js');
+  eq(Object.keys(names).length, new Set(Object.keys(names).map(function (k) { return names[k]; })).size, 'Y-6 棚の名前は別々');
+});
+t('Y-8-3 extCards.tool は外の記録の場面で使う', function () {
+  var x = fself(); x.stage = null; x.ext = { link: null, photos: [], visible: [] };
+  eq(M.leaveOptions(x), ['calc', 'steps', 'cmd'], 'Y-8-3 外の記録の候補');
+  var c = settled(x, 'calc').act.shelf[0], s2 = settled(x, 'steps').act.shelf[0], cm = settled(x, 'cmd').act.shelf[0];
+  eq([c.kind, MD.pick(c.title, 'js')], ['note', '使う時間'], 'Y-8-3 calc');
+  eq(MD.pick(s2.title, 'js'), '論点メモの使い方', 'Y-8-3 steps');
+  eq([cm.variant, cm.values], ['board', { count: 4, every: 2 }], 'Y-8-3 cmd');
+  var again = M.remake(settled(x, 'calc').act, c.id, 'calc');
+  eq(MD.pick(again.act.shelf[0].title, 'js'), '使う時間（10 分ごと）', 'Y-8-3 calc の作り直しは alt');
+});
+t('Y-8-4 紐づく活動は引用を直しても題材を選び直さない', function () {
+  var a = fself(), e = M.editQuote(a, 'マイクラで家を建てたい', [], 'js');
+  eq([e.changed, e.act.theme, e.act.selfLink], [true, 'tool', 'k1-tool'], 'Y-8-4 題材 tool・紐づけはそのまま');
+  eq(e.act.quote.src === undefined || e.act.quote.src === 'own', true, 'Y-8-5 直した引用は本人の言葉');
+  eq(e.act.shelf.filter(function (c) { return c.state === 'new'; }).map(function (c) { return c.theme; }), ['tool', 'tool', 'tool'], 'Y-8-4 足す案も tool');
+  var c = M.fromText('論点を整理したい', { id: 'yq', now: '10:20' }), e2 = M.editQuote(c, 'マイクラで家', [], 'js');
+  eq(e2.act.theme, 'mc', 'Y-8-4 紐づけの無い活動は今までどおり選び直す');
+});
+t('Y-8-12 移行: selfLink と quote.src の形を検査（版によらず）', function () {
+  var a = fself();
+  eq(M.migrate(a, null) === a, true, 'Y-8-12 正しい形はそのまま（同じもの）');
+  var b = JSON.parse(JSON.stringify(a)); b.selfLink = 'bad link<'; b.quote.src = 'x';
+  var mb = M.migrate(b, null);
+  eq([mb.selfLink === undefined, mb.quote.src === undefined, mb.quote.text], [true, true, a.quote.text], 'Y-8-12 形の違う値は捨てる（v:3 でも）');
+  var c = JSON.parse(JSON.stringify(a)); c.selfLink = 12;
+  eq(M.migrate(c, null).selfLink, undefined, 'Y-8-12 文字列でない selfLink は捨てる');
+  var d = JSON.parse(JSON.stringify(a)); d.v = 1; d.selfLink = 'x'.repeat(65);
+  var md = M.migrate(d, function () { return ''; });
+  eq([md.selfLink, md.v, md.theme], [undefined, 3, 'tool'], 'Y-8-12 古い版でも捨てる（65 字は長すぎ）');
+  var e = JSON.parse(JSON.stringify(a)); e.v = 2;
+  eq(M.migrate(e, function () { return ''; }).selfLink, 'k1-tool', 'Y-8-12 古い版でも正しい紐づけは保つ');
+});
+t('Y-6 作品に残す: tool の絵と題材', function () {
+  var a = M.test(M.setParam(fself(), 'count', 4)).act, sw = M.saveWork([], a, { id: 'wy' });
+  eq([sw.work.theme, sw.work.actId, sw.work.art.stage.theme], ['tool', 'ys1', 'tool'], 'Y-6 作品は tool');
+  ok(/^<svg/.test(MD.art(sw.work.art.stage)), 'Y-6 作品の絵は tool の線画');
+});
+
+t('Y-9 写真の「何を変えた？」: tool は選択肢と同じ語（change_opts_tool）で残す', function () {
+  var x = fself(); x.stage = null;
+  var p = M.addPhoto(x, 'photo'), d = M.describePhoto(p.act, p.change.id, 1, '');
+  eq(d.what, { k: 'changed_aspect', v: { what: { k: 'change_opts_tool', i: 1 } } }, 'Y-9 tool の写真: 間かく（i18n の 1 番目）');
+  eq(M.describePhoto(p.act, p.change.id, 4, '').what, null, 'Y-9 それ以外は候補を残さない（今までどおり）');
+  var e = M.addPhoto(M.fromExt('photo', { id: 'dpm', now: '10:20' }), 'shot');
+  eq(M.describePhoto(e.act, e.change.id, 1, '').what, { k: 'changed_aspect', v: { what: ['大きさ', '大きさ'] } }, 'Y-9 マイクラは今までどおり');
+});
+t('Y-9 tool の「どこが違う？」: 選択肢の key と任せる操作の対応', function () {
+  eq(M.TOOL_ASPECT, ['one', 'fix', 'redo', 'redo', 'redo'], 'Y-9 TOOL_ASPECT');
+  var a = fself();
+  eq(M.changeOptsKey(a), 'change_opts_tool', 'Y-9 tool は change_opts_tool');
+  eq(M.changeOptsKey(sample('mc')), 'change_opts', 'Y-9 マイクラは change_opts のまま');
+  eq(M.changeOptsKey({ theme: 'odai' }), 'change_opts', 'Y-9 odai は change_opts のまま');
+  // 作業対象 = 見本（sample）: one = まとめる数 +1 / fix = 間かく +1 / redo = 次の案
+  var want = [['value', { count: 4, every: 2 }], ['value', { count: 3, every: 3 }], ['draft', 'nudge'], ['draft', 'nudge'], ['draft', 'nudge']];
+  [0, 1, 2, 3, 4].forEach(function (i) {
+    var r = M.leave(a, 'aspect', { aspect: i }), c = r.act.shelf[0];
+    eq([r.opt, c.kind, c.kind === 'value' ? c.values : c.variant], [M.TOOL_ASPECT[i], want[i][0], want[i][1]], 'Y-9 aspect ' + i + ' → ' + M.TOOL_ASPECT[i]);
+  });
+  eq(M.leave(sample('mc'), 'aspect', { aspect: 0 }).opt, 'redo', 'Y-9 マイクラの aspect は ASPECT_OPT のまま（形 → redo）');
+  eq(M.leave(sample('mc'), 'aspect', { aspect: 3 }).opt, 'one', 'Y-9 マイクラの aspect は ASPECT_OPT のまま（動き → one）');
+  eq(M.leave(a, 'aspect', { aspect: 99 }).opt, 'redo', 'Y-9 範囲外は 4（それ以外）に丸める（境界）');
+});
+
 console.log('make-test: ' + pass + ' passed, ' + fail + ' failed');
 console.log('MAKE_TEST=' + (fail === 0 ? 'PASS' : 'FAIL'));
 process.exitCode = fail === 0 ? 0 : 1;

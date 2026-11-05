@@ -69,9 +69,10 @@ const ROUTES: Array<[string, RegExp, Handler]> = [
   ['GET', /^\/api\/meeting\/latest$/, latestMeeting],
 ];
 
-// 管理画面に付ける CSP（同一 origin の /api/* だけを読む。確認用 iframe は sandbox 付きで同一 origin から読む）
+// 管理画面に付ける CSP（同一 origin の /api/* だけを読む。確認用 iframe は sandbox 付きで同一 origin から読む）。
+// §Q-5・§Q-9.8: 確認画面の動画の埋め込みのため frame-src に youtube-nocookie だけを足す（/admin の HTML だけ。生成物の配信の CSP は変えない）
 const ADMIN_CSP =
-  "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+  "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self' https://www.youtube-nocookie.com; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 async function serveAdmin(request: Request, env: Env): Promise<Response> {
   const res = await env.ASSETS.fetch(request);

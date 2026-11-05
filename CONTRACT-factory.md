@@ -1204,6 +1204,10 @@ state は `done` / `active` / `waiting` (人の番) / `failed` / `pending` / `sk
 
 本文（正本）は `docs/plans/verifier-v2/contract-P.md`。検証係（§F-3 / §L-2）に、制作時の web_fetch の取得記録を補助の資料として渡す。同じ URL の開き直しを止める。たとえ・対応づけを「たとえとして成り立つか」で判定し、完全には同じでない点を `analogy_gaps` として result_json に残す（学びマップが後で読む）。
 
+## §Q YouTube 動画（v3.11。2026-11-05 凍結。Astra high GO）
+
+本文（正本）は `docs/plans/video/contract-Q.md`（Q-0〜Q-9、Q-9 が優先）。権利者本人がアップした動画を、youtube-nocookie の埋め込み＋区間指定で素材に入れる。検証係は Gemini が区間を見て書いた記録と照らし、最後は人が本人性と区間の再生・中身を見る。Gemini の呼び出しは版 × 動画で生涯 1 回、記帳は月 VIDEO_MONTHLY_CAP_CENTS まで、probe で確かめてから明示的に有効にする。
+
 ## §R 裁定記録（2026-11-04。Astra medium + 3 視点レビューの指摘への裁定）
 
 1. **`tool_choice: any` は Opus 5.5 で 400** → `auto` + `strict: true` + 再送ループ（§F-3）。採用

@@ -1,5 +1,5 @@
 // 純関数: material.json / claims.json / sources.json の検証と公開 manifest の算出（契約 §E）。I/O を持たない。
-// ここで失敗したものだけが invalid_outputs（必須キー欠落・参照先不在・parts 外参照・JSON 不正・サイズ超過・画像の先頭バイト不一致 §M-2）。
+// ここで失敗したものだけが invalid_outputs（必須キー欠落・参照先不在・parts 外参照・JSON 不正・サイズ超過・画像の先頭バイト不一致 §M-2・動画の形 §Q-1）。
 
 export const REQUIRED_FILES = ['material.json', 'claims.json', 'sources.json', 'adapt-rules.md', 'selfcheck.md'] as const;
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -89,6 +89,29 @@ export function imageRefsOf(materialJsonText: string): { ok: true; refs: ImageRe
   }
   return { ok: true, refs };
 }
+/** §Q-1: parts[].videos[] の 1 本（YouTube の埋め込みで見る区間） */
+export interface Video {
+  id: string;
+  youtube_id: string;
+  title: string;
+  channel: string;
+  start_sec: number;
+  end_sec: number;
+  why: string;
+  rights_note: string;
+  source_id: string;
+}
+
+/** §Q-1 の形 */
+export const VIDEO_ID_RE = /^v[0-9]{1,2}$/;
+export const YOUTUBE_ID_RE = /^[A-Za-z0-9_-]{11}$/;
+/** 1 素材の動画の上限（4 本以上は too_many） */
+export const MAX_VIDEOS = 3;
+/** 区間の長さの上限（秒） */
+export const VIDEO_MAX_RANGE_SEC = 600;
+/** 出典の行の url はこの形と完全一致（クエリは v だけ） */
+export const youtubeWatchUrl = (youtubeId: string): string => `https://www.youtube.com/watch?v=${youtubeId}`;
+
 export interface Part {
   id: string;
   kind: number;
@@ -96,6 +119,8 @@ export interface Part {
   entry_point: { type: (typeof ENTRY_TYPES)[number]; text: string };
   variants: Variant[];
   files: PartFile[];
+  /** §Q-1: 任意。material.json の part に videos がある時だけ付く（無い素材は従来どおり） */
+  videos?: Video[];
   adjustable: string[];
   tech_dependencies: string[];
   runtime_check: unknown;
@@ -180,6 +205,59 @@ function parseJson(text: string): { ok: true; value: unknown } | { ok: false } {
   }
 }
 
+const textLenOk = (v: unknown, max: number): v is string => isStr(v) && [...v].length >= 1 && [...v].length <= max;
+const isNonNegInt = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0;
+
+/**
+ * §Q-1: parts[].videos[] の検査（純関数）。parts は part id と videos の配列（無い part は null）を出現順に渡す。
+ * sourceUrlById は sources.json の id → url。失敗は bad_video:{part_id}:{index}:{理由}（理由は
+ * id / youtube_id / range / text / source / dup / too_many）。素材全体で 4 本以上なら 4 本目で too_many
+ */
+export function checkVideos(
+  parts: Array<{ id: string; videos: unknown[] | null }>,
+  sourceUrlById: ReadonlyMap<string, string>,
+): { ok: true; byPart: Map<string, Video[]> } | { ok: false; detail: string } {
+  const bad = (partId: string, index: number, reason: string) => ({ ok: false as const, detail: `bad_video:${partId}:${index}:${reason}` });
+  const byPart = new Map<string, Video[]>();
+  const seenIds = new Set<string>();
+  const seenRanges = new Set<string>();
+  let total = 0;
+  for (const part of parts) {
+    if (part.videos === null) continue;
+    const out: Video[] = [];
+    for (const [index, raw] of part.videos.entries()) {
+      total++;
+      if (total > MAX_VIDEOS) return bad(part.id, index, 'too_many');
+      if (!isPlainObj(raw)) return bad(part.id, index, 'id');
+      const v = raw;
+      if (!isStr(v.id) || !VIDEO_ID_RE.test(v.id)) return bad(part.id, index, 'id');
+      if (!isStr(v.youtube_id) || !YOUTUBE_ID_RE.test(v.youtube_id)) return bad(part.id, index, 'youtube_id');
+      if (!textLenOk(v.title, 200) || !textLenOk(v.channel, 200) || !textLenOk(v.why, 300) || !textLenOk(v.rights_note, 300))
+        return bad(part.id, index, 'text');
+      if (!isNonNegInt(v.start_sec) || !isNonNegInt(v.end_sec) || v.start_sec >= v.end_sec || v.end_sec - v.start_sec > VIDEO_MAX_RANGE_SEC)
+        return bad(part.id, index, 'range');
+      const rangeKey = JSON.stringify([v.youtube_id, v.start_sec, v.end_sec]);
+      if (seenIds.has(v.id) || seenRanges.has(rangeKey)) return bad(part.id, index, 'dup');
+      seenIds.add(v.id);
+      seenRanges.add(rangeKey);
+      if (!isStr(v.source_id) || sourceUrlById.get(v.source_id) !== youtubeWatchUrl(v.youtube_id)) return bad(part.id, index, 'source');
+      out.push({
+        id: v.id,
+        youtube_id: v.youtube_id,
+        title: v.title,
+        channel: v.channel,
+        start_sec: v.start_sec,
+        end_sec: v.end_sec,
+        why: v.why,
+        rights_note: v.rights_note,
+        source_id: v.source_id,
+      });
+    }
+    byPart.set(part.id, out);
+  }
+  return { ok: true, byPart };
+}
+
 /** パーツ配下の参照パスか（parts/<part_id>/ 配下で .md/.svg/.html）。variants はこれだけ（§M-1） */
 export function isPartPath(p: string, partId: string): boolean {
   if (!isSafeRelativePath(p)) return false;
@@ -237,6 +315,8 @@ export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
   const parts: Part[] = [];
   const seenPartIds = new Set<string>();
   const techDeps = new Set<string>();
+  /** §Q-1: videos は sources.json を読んだ後に検査する（出典の行との一致を見るため） */
+  const rawVideos: Array<{ id: string; videos: unknown[] | null }> = [];
   for (const [i, raw] of (m.parts as unknown[]).entries()) {
     const p = raw as Record<string, unknown>;
     if (!p || typeof p !== 'object') return fail(`bad_type:parts[${i}]`);
@@ -293,6 +373,8 @@ export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
         });
       }
     }
+    if (p.videos !== undefined && !Array.isArray(p.videos)) return fail(`bad_type:parts[${i}].videos`);
+    rawVideos.push({ id: p.id, videos: Array.isArray(p.videos) ? (p.videos as unknown[]) : null });
     const td = isStrArr(p.tech_dependencies) ? p.tech_dependencies : [];
     td.forEach((t) => techDeps.add(t));
     parts.push({
@@ -361,6 +443,14 @@ export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
       license: isStr(s.license) && s.license.length > 0 ? s.license : 'unknown',
       is_primary: s.is_primary === true,
     });
+  }
+
+  // §Q-1: parts[].videos[]（出典の行の url と照らす）。videos のある part にだけ付ける
+  const vc = checkVideos(rawVideos, new Map(sources.map((s) => [s.id, s.url])));
+  if (!vc.ok) return fail(vc.detail);
+  for (const part of parts) {
+    const vs = vc.byPart.get(part.id);
+    if (vs) part.videos = vs;
   }
 
   const material: Material = {
