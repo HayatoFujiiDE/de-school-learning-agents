@@ -65,7 +65,7 @@ html[data-mode="es"] .mp-views .segmented button{min-height:48px}
 
 /* 島（分野で見る）: 教科 × 領域の囲み + 名前 */
 .mp-isl{position:absolute;left:var(--x);top:var(--y);width:var(--w);height:var(--h);border-radius:22px;background:var(--sand)}
-.mp-isl-name{position:absolute;left:18px;top:13px;font-size:15px;font-weight:700;line-height:1.4;color:var(--sand-ink);white-space:nowrap}
+.mp-isl-name{position:absolute;left:calc(var(--x) + 14px);top:calc(var(--y) + 13px);padding:0 4px;border-radius:5px;background:var(--sand);font-size:15px;font-weight:700;line-height:1.4;color:var(--sand-ink);white-space:nowrap;pointer-events:none}
 
 /* ノード（本物の button。位置と大きさは map-layout.js の箱） */
 .mp-n{position:absolute;left:var(--x);top:var(--y);width:var(--w);height:var(--h);box-sizing:border-box;display:flex;flex-direction:column;align-items:stretch;justify-content:center;gap:4px;
@@ -116,7 +116,7 @@ html[data-mode="es"] .mp-views .segmented button{min-height:48px}
 .mp-frame[data-lod="far"] .mp-n.is-made[aria-pressed="true"]{box-shadow:none}
 .mp-frame[data-lod="far"] .mp-n.is-made .mp-label{position:absolute;left:50%;top:110px;transform:translateX(-50%);width:max-content;max-width:calc(150px * var(--inv));margin:0;
   font-size:calc(12.5px * var(--inv));line-height:1.3;text-align:center;padding:calc(1px * var(--inv)) calc(4px * var(--inv));border-radius:calc(6px * var(--inv));background:#ffffffe0}
-.mp-frame[data-lod="far"] .mp-isl-name{font-size:calc(13px * var(--inv));top:10px}
+.mp-frame[data-lod="far"] .mp-isl-name{font-size:calc(13px * var(--inv));top:calc(var(--y) + 10px);padding:0 calc(3px * var(--inv));border-radius:calc(4px * var(--inv))}
 
 /* 枠の右下の操作（＋ − 全体を見る）。詳細パネルを開いている時は、パネルにかからない所へ */
 .mp-ctrl{position:absolute;z-index:2;right:12px;bottom:12px;display:flex;gap:6px;cursor:auto}

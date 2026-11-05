@@ -608,13 +608,13 @@
     var d = 'M2 6H30', body = k === 'cross' ? '<path class="o" d="' + d + '"/><path class="i" d="' + d + '"/>' : '<path d="' + d + '"/>';
     return DES.raw('<svg class="mp-sw k-' + k + '" viewBox="0 0 32 12" aria-hidden="true" focusable="false">' + body + '</svg>');
   }
-  function chipsBar() {
+  function chipsBar(view) {
     var u = mapUi();
     return H('div', { class: 'mp-chipbar' }, [
       H('div', { class: 'opt-chips mp-chips', role: 'group', 'aria-label': T('mp_chips_label') }, CHIPS.map(function (k) {
         return H('button', { type: 'button', class: 'opt-chip mp-chip', 'data-action': 'mp-chip', 'data-arg': k, 'aria-pressed': u.chips[k] ? 'true' : 'false' }, [swatch(k), H('span', null, T('mp_k_' + k))]);
       })),
-      H('p', { class: 'mp-legend-base' }, [swatch('base'), H('span', null, T('mp_k_base'))])
+      H('p', { class: 'mp-legend-base' }, [swatch('base'), H('span', null, T(view === 'fields' ? 'mp_k_base_fields' : 'mp_k_base'))])
     ]);
   }
 
@@ -700,15 +700,18 @@
   }
   function buildMapPage(view, g, L) {
     var kids = head('links', view);
-    kids.push(chipsBar());
-    var vp = H('div', { class: 'mp-vp', style: 'width:' + L.bounds.w + 'px;height:' + L.bounds.h + 'px' });
-    vp.appendChild(edgesSvg(g, L, view));
+    kids.push(chipsBar(view));
+    // 重なりの順: 島の囲み（いちばん下）→ 線 → 島の名前 → ノード（線は島の中の単元まで見え、島の名前は線に隠れない）
+    var vp = H('div', { class: 'mp-vp', style: 'width:' + L.bounds.w + 'px;height:' + L.bounds.h + 'px' }), names = [];
     if (view === 'fields') L.islands.forEach(function (s) {
       var gi = find(g.islands, s.id);
       if (!gi) return;
-      vp.appendChild(H('div', { class: 'mp-isl', 'aria-hidden': 'true', 'data-isl': s.id, style: '--x:' + s.x + 'px;--y:' + s.y + 'px;--w:' + s.w + 'px;--h:' + s.h + 'px' },
-        [H('span', { class: 'mp-isl-name' }, T('mp_island', { subject: pick(gi.subject), area: pick(gi.name) }))]));
+      var st = '--x:' + s.x + 'px;--y:' + s.y + 'px;--w:' + s.w + 'px;--h:' + s.h + 'px';
+      vp.appendChild(H('div', { class: 'mp-isl', 'aria-hidden': 'true', 'data-isl': s.id, style: st }));
+      names.push(H('span', { class: 'mp-isl-name', 'aria-hidden': 'true', 'data-isl': s.id, style: st }, T('mp_island', { subject: pick(gi.subject), area: pick(gi.name) })));
     });
+    vp.appendChild(edgesSvg(g, L, view));
+    names.forEach(function (x) { vp.appendChild(x); });
     nodeOrder(g, view).forEach(function (n) { var b = L.nodes[n.id]; if (b) vp.appendChild(mapNode(g, n, b, view)); });
     var frame = H('div', { class: 'mp-frame', tabindex: '0', role: 'region', 'aria-label': T('mp_frame_label'), 'aria-describedby': 'mp-frame-hint', 'data-lod': 'mid', 'data-view': view, 'data-fk': 'mp-frame' }, [
       vp,
