@@ -329,6 +329,8 @@
       btn(T('from_here'), 'wd-from-here', { id: w.id, disabled: !a, title: lost }),
       btn(T('share'), 'wd-share', { id: w.id, attrs: { 'aria-haspopup': 'dialog' } }),
       btn(T(w.status === 'trial' ? 'to_done' : 'to_trial'), 'wd-status', { id: w.id }),
+      // 学びマップで見る（§Y-8）: その作品の活動のノード（活動が無ければ作品のノード）を選んだ状態で #map へ
+      H('a', { class: 'btn small', href: '#map', 'data-action': 'wd-map', 'data-id': w.id }, [H('span', null, T('mp_in_map'))]),
       btn(T('remove_work'), 'wd-remove', { id: w.id, kls: 'ghost' })
     ]);
     return H('div', { class: 'wd-head' }, [H('div', { class: 'wd-title' }, kids), acts]);
@@ -767,6 +769,7 @@
   A['wd-continue'] = function (el) { var w = cur(el); if (w && act(w.actId)) M.openAct(w.actId); };
   A['wd-from-here'] = function (el) { var w = cur(el); if (w && act(w.actId)) M.openWork(w.id); };
   A['wd-share'] = function (el) { openShare(el.getAttribute('data-id'), el); };
+  A['wd-map'] = function (el) { var w = cur(el); if (w) DES.map.show(act(w.actId) ? 'act:' + w.actId : 'work:' + w.id); };
   A['wd-unshare'] = function (el) {
     var w = cur(el), sid = el.getAttribute('data-arg');
     if (!w) return;
