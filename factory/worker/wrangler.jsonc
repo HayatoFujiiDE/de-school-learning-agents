@@ -65,6 +65,15 @@
     "VIDEO_U_CENTS": "10",
     "VIDEO_MONTHLY_CAP_CENTS": "1000",
     // 予備のモデル（契約 §Q-10 10）。settings video_fallback_enabled が '1' の時だけ、2 回目以降の呼び出しに使う
-    "GEMINI_VIDEO_FALLBACK_MODEL": "gemini-3.8-flash"
+    "GEMINI_VIDEO_FALLBACK_MODEL": "gemini-3.8-flash",
+    // お題のストック（contract-T T-6）。入・切は settings.topics_enabled（既定は切）。お題の記帳の月・日の上限と 1 回の取り置き額（セント）
+    "TOPIC_MONTHLY_CAP_CENTS": "2000",
+    "TOPIC_DAILY_CAP_CENTS": "200",
+    "TOPIC_GEN_RESERVE_CENTS": "60",
+    "TOPIC_CHECK_RESERVE_CENTS": "15",
+    "TOPIC_CHECK_MAX_ATTEMPTS": "2",
+    // 0=日〜6=土（Asia/Tokyo）。talk・philo・make の週 1 回の生成の日
+    "TOPIC_WEEKLY_DAY": "0",
+    "TOPIC_DERIVE_PER_WEEK": "3"
   }
 }
