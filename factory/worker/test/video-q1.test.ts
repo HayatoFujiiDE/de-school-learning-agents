@@ -322,9 +322,9 @@ describe('§Q-5・§Q-9.8 CSP: frame-src の youtube-nocookie は /admin だけ'
 });
 
 describe('§Q-2 allowlist と rubric（生成ファイルに反映済み）', () => {
-  it('domains に youtube.com、hosts に youtube.com と *.youtube.com。youtu.be は入れない', () => {
+  it('domains に youtube.com。hosts（作業場）には YouTube を入れない（Q-9.10）。youtu.be は入れない', () => {
     expect(ALLOWLIST.domains).toContain('youtube.com');
-    expect(ALLOWLIST.hosts).toEqual(expect.arrayContaining(['youtube.com', '*.youtube.com']));
+    expect(ALLOWLIST.hosts.some((h) => h.includes('youtube'))).toBe(false);
     expect([...ALLOWLIST.domains, ...ALLOWLIST.hosts].some((h) => h.includes('youtu.be'))).toBe(false);
     const src = JSON.parse(readFileSync(new URL('../../claude/allowlist.json', import.meta.url), 'utf8')) as { domains: string[]; hosts: string[] };
     expect(ALLOWLIST).toEqual({ domains: src.domains, hosts: src.hosts });

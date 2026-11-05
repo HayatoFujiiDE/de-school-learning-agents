@@ -188,5 +188,6 @@
    - plan.json の `videos.shown` と `videos.not_seen` は、それぞれの中で重複を許さず、互いに交わらない。受け入れテストに入れる。
    - SQL は `day = tokyoDay(now)`、`month = day.slice(0,7)`、`dailyReservedSql(day, …)` を同じ日付で組み立て、既存の位置パラメータで bind する。
    - 日次の保証は「取り置きを入れる時点の条件」である（全台帳の hard cap ではない。既存の記帳方式と同じ）。
+10. **watch ページの扱い（自動のセキュリティ確認の指摘）**: allowlist の hosts（作業場の通信）には YouTube を入れない。domains（web_fetch / web_search）だけに入れる。watch ページの題名・概要欄は投稿者が自由に書ける文なので、検証係は watch ページの本文だけを根拠に claim を confirmed にしない。動画を出典にした claim を confirmed にできるのは「動画の記録で確認:」の時だけとする（PR-Q2 の system 段落と検査に入れる）。
 
 凍結: 2026-11-05（Astra high R2 GO）。
