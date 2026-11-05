@@ -1250,6 +1250,88 @@ t('AD-3 i18n: only_samples は消して参照も残さない / §AD の文言は
   ok(/pj_safety: \['サポーターと確認'/.test(i18n) && /pj_placed: \['作業台に置いたよ'/.test(i18n) && /samples_swapped: \['見本を入れ替えたよ'/.test(i18n), 'AD-3 / AD-4 文言 verbatim');
 });
 
+// ---------- レビューへの裁定（contract-app 末尾「直す（実装）」）----------
+// 偽物の保存: failKey のキーだけ偽を返す。log に呼ばれた順、disk に保存できた値（JSON）を残す
+function fakeStore(st, failKey) {
+  var s = { log: [], disk: {} };
+  s.save = function (k) { s.log.push(k); if (k === failKey || failKey === '*') return false; s.disk[k] = JSON.stringify(st[k]); return true; };
+  return s;
+}
+function freeze(v) { return JSON.stringify(v); }
+var MKSRC = fs.readFileSync(path.join(__dirname, '../app-v3/js/make.js'), 'utf8');
+function handlerSrc(src, name) { var i = src.indexOf("A['" + name + "'] = function"); if (i < 0) return ''; var j = src.indexOf("\n  A['", i + 10); return src.slice(i, j < 0 ? i + 3000 : j); }
+t('裁定 1 共通 M.trySave: 1 つでも保存できなければ全部のキーを前に戻し、保存できたキーは前の値で保存し直す', function () {
+  var st = { activities: [{ id: 'x' }], works: [{ id: 'w' }], saveFailed: false }, fs1 = fakeStore(st, 'works');
+  var r = M.trySave(st, ['activities', 'works'], function (s) { s.activities = [{ id: 'y' }].concat(s.activities); s.works = []; }, fs1.save);
+  eq([r, st.activities.map(function (a) { return a.id; }), st.works.length, st.saveFailed], [false, ['x'], 1, true], '裁定 1 失敗したら前の状態・saveFailed');
+  eq([fs1.log, JSON.parse(fs1.disk.activities).map(function (a) { return a.id; })], [['activities', 'works', 'activities'], ['x']], '裁定 1 先に保存できたキーは前の値で保存し直す');
+  var st2 = { makeSide: { samplePage: 0 }, saveFailed: true }, fs2 = fakeStore(st2, null);
+  eq([M.trySave(st2, ['makeSide'], function (s) { s.makeSide.samplePage = 1; }, fs2.save), st2.makeSide.samplePage, st2.saveFailed], [true, 1, true], '裁定 1 全部保存できたら書き換えたまま（saveFailed は呼ぶ側が決める）');
+});
+t('裁定 1 提案の「これで始める」: 保存できなければ活動を足さず、移動・トーストより前に止まる', function () {
+  var p = MD.project('pj-marble'), st = { activities: MD.seedActivities(), saveFailed: false }, before = freeze(st.activities);
+  var r = M.fromProject(p, { id: 'a-pj1', mode: 'js', now: '10:20', acts: st.activities });
+  eq([M.addAct(st, r.act, fakeStore(st, 'activities').save), freeze(st.activities) === before, st.saveFailed], [false, true, true], '裁定 1 保存の失敗 → 活動は足さない');
+  ok(M.addAct(st, r.act, fakeStore(st, null).save) && st.activities[0].id === 'a-pj1', '裁定 1 保存できたら先頭に足す');
+  var h = handlerSrc(MKSRC, 'mk-project'), ia = h.indexOf('if (!addAct('), ig = h.indexOf("go('#make/"), it = h.indexOf("T('pj_placed')"), ifl = h.indexOf('saveFailUi(');
+  ok(ia > 0 && ia < ifl && ifl < ig && ifl < it && h.indexOf('S().activities = [r.act]') < 0, '裁定 1 mk-project は保存の結果を見てから移動・トースト');
+});
+t('裁定 1 見本・提案の入れ替え: 保存できなければ組の位置を変えない（入れ替えない）', function () {
+  var st = { makeSide: { samplePage: 1, projectPage: 2 }, saveFailed: false };
+  eq([M.swapPage(st, 'samples', 1, fakeStore(st, 'makeSide').save), st.makeSide.samplePage, st.saveFailed], [false, 1, true], '裁定 1 見本: 失敗 → 前の組');
+  eq([M.swapPage(st, 'projects', 2, fakeStore(st, 'makeSide').save), st.makeSide.projectPage], [false, 2], '裁定 1 提案: 失敗 → 前の組');
+  eq([M.swapPage(st, 'samples', 1, fakeStore(st, null).save), st.makeSide.samplePage], [true, 0], '裁定 1 見本: 最後の組の次は最初');
+  eq([M.swapPage(st, 'projects', 2, fakeStore(st, null).save), st.makeSide.projectPage], [true, 0], '裁定 1 提案: 12 件 = 3 組の次は最初');
+  var src = MKSRC.slice(MKSRC.indexOf('function swapGroup'), MKSRC.indexOf("A['mk-more-samples']"));
+  ok(src.indexOf('swapPage(') > 0 && src.indexOf('swapPage(') < src.indexOf("classList.add('is-fading')") && src.indexOf("DES.store.save('makeSide')") < 0, '裁定 1 swapGroup は先に保存し、失敗なら消える前に止まる');
+});
+t('裁定 2 見本の作品の追加（AD-6）: 活動・作品・番号の保存が全部できた時だけ番号を進める', function () {
+  function old() { var acts = MD.seedActivities(); return { activities: acts, works: MD.seedWorks(acts), makeSide: { seedV: 0 }, saveFailed: false }; }
+  var s1 = old(), f1 = fakeStore(s1, 'works');
+  eq([M.applySeeds(s1, f1.save), s1.makeSide.seedV, s1.works.length, s1.activities.length, s1.saveFailed], [false, 0, 4, 3, true], '裁定 2 作品の保存の失敗 → 番号は 0 のまま・足した見本も戻す');
+  ok(f1.log.indexOf('makeSide') < 0 && JSON.parse(f1.disk.activities).length === 3, '裁定 2 番号は保存しない・先に保存した活動は前の値で保存し直す');
+  var s2 = old(), f2 = fakeStore(s2, 'makeSide');
+  eq([M.applySeeds(s2, f2.save), s2.makeSide.seedV, s2.works.length, JSON.parse(f2.disk.works).length], [false, 0, 4, 4], '裁定 2 番号の保存の失敗 → 活動・作品も前の値に');
+  var s3 = old(), f3 = fakeStore(s3, null);
+  eq([M.applySeeds(s3, f3.save), s3.makeSide.seedV, s3.works.length, f3.log], [true, MD.SEED_V, 7, ['activities', 'works', 'makeSide']], '裁定 2 全部できたら番号を進める（番号は最後に保存）');
+  var s4 = { activities: s3.activities, works: s3.works, makeSide: { seedV: 1 }, saveFailed: false }, f4 = fakeStore(s4, null);
+  eq([M.applySeeds(s4, f4.save), s4.makeSide.seedV, f4.log], [true, MD.SEED_V, ['makeSide']], '裁定 2 足す物が無い時は番号だけ');
+  ok(/applySeeds\(s,/.test(MKSRC) && !/s\.makeSide\.seedV = MD\.SEED_V;\s*\n\s*\(add\.changed/.test(MKSRC), '裁定 2 読み込みは applySeeds を使う');
+});
+t('裁定 3 あしあとの「もう一度試す」: 提案から作った活動の projectId と写真のカテゴリを引き継ぐ', function () {
+  var p = MD.project('pj-marble'), a = M.fromProject(p, { id: 'a-pjt', mode: 'js', now: '10:20', acts: [] }).act;
+  a = M.addPhoto(a, 'photo').act;
+  var n = M.fromTrail(a, { id: 'a-pjt2', now: '10:40', mode: 'js', works: [] });
+  eq([n.projectId, n.theme, n.origin, n.fromActId], ['pj-marble', 'project', 'trail', 'a-pjt'], '裁定 3 projectId・題材を引き継ぐ（新しい活動）');
+  eq(M.addPhoto(n, 'photo').photo.cat, 'craft', '裁定 3 やり直した活動の写真は提案のカテゴリ');
+  var lv = M.leave(n, 'oneed');
+  eq(lv.ids.length, 1, '裁定 3 やり直した活動でも「必要な物をまとめて」が 1 枚作る');
+});
+t('裁定 10 3 題材の計算: 値が欠けている・範囲の外の時は題材の既定値（NaN・undefined・{F} を出さない）', function () {
+  var bad = [{}, { frames: 99, fps: -1, gap: 0, count: 99, scenes: 1, voice: 9 }, { frames: 'x', fps: null, gap: 2.5, count: NaN, scenes: '4', voice: {} }];
+  ['stop', 'ath', 'story'].forEach(function (th) {
+    MD.theme(th).variants.forEach(function (vk) {
+      var def = {}; MD.theme(th).params.forEach(function (p) { def[p.key] = p.def; });
+      var good = { kind: 'sample', theme: th, variant: vk, values: def };
+      bad.forEach(function (b, bi) {
+        var st = { kind: 'sample', theme: th, variant: vk, values: b };
+        var out = [MD.result(st, 'js'), MD.result(st, 'es'), MD.code(st), MD.desc(st, 'js'), MD.desc(st, 'es'), MD.art(st), MD.artMarks(st)];
+        ok(!out.some(function (s) { return /NaN|undefined|\{[A-Za-z]+\}|Infinity/.test(String(s)); }), '裁定 10 ' + th + '.' + vk + ' 壊れた値 ' + bi + ' で NaN・undefined・{…} が出ない');
+        eq([MD.result(st, 'js'), MD.code(st), MD.desc(st, 'js'), MD.artMarks(st)], [MD.result(good, 'js'), MD.code(good), MD.desc(good, 'js'), MD.artMarks(good)], '裁定 10 ' + th + '.' + vk + ' 壊れた値 ' + bi + ' は既定値で計算');
+      });
+    });
+  });
+});
+t('裁定 11 gen-thumbs.mjs: エラーの時に出すのは決まった分類の文だけ', function () {
+  var g = fs.readFileSync(path.join(__dirname, 'gen-thumbs.mjs'), 'utf8');
+  var whys = g.match(/why:\s*[^,}]+/g) || [];
+  ok(whys.length >= 3 && whys.every(function (w) { return /^why:\s*(WHY\.[a-z_]+|whyOf\(res\.status|timedOut \? WHY\.[a-z_]+ : WHY\.[a-z_]+)\s*$/.test(w); }), '裁定 11 why は決まった分類だけ（' + whys.join(' / ') + '）');
+  var code = g.replace(/\/\/.*$/gm, '');
+  ok(!/\+\s*\(?\s*e\s*&&\s*e\.name|\+\s*e\.name|\.message/.test(code) && /\(\) => \{ console\.error\('止まった: ' \+ WHY\.crashed\)/.test(code), '裁定 11 例外の名前・本文を出さない');
+  ok(/const WHY = \{[^}]*\}/.test(code) && !/WHY = \{[^}]*\+/.test(code), '裁定 11 分類の文は定数だけ');
+  ok(!/'status ' \+ res\.status \+ \(code/.test(g) && !/\+ code\b/.test(g), '裁定 11 API が返した code の文字列をそのまま出さない');
+});
+
 console.log('make-test: ' + pass + ' passed, ' + fail + ' failed');
 console.log('MAKE_TEST=' + (fail === 0 ? 'PASS' : 'FAIL'));
 process.exitCode = fail === 0 ? 0 : 1;
