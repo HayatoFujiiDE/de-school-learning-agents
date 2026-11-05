@@ -892,9 +892,15 @@ export async function loadVideoMeta(
       log(vid.id, { result: 'exhausted' });
       return unknown;
     }
+    // 数を取る 1 文に時間がかかって試行の締め切りを過ぎた → 呼ばない。数は取った後なので 1 回分を使ったことになる（生涯の回数が 1 減るだけで、呼ばないので安全側）
+    if (o.deadline - Date.now() <= 0) {
+      log(vid.id, { result: 'no_time_after_claim' });
+      return unknown;
+    }
     let r: OEmbedResult;
     try {
-      r = await oembed.lookup(vid.youtube_id);
+      // 要求の締め切りは port が fetch の直前に min(OEMBED_TIMEOUT_MS, 試行の締め切り - now) で決める（この時点の後に数の 1 文はもう無い）
+      r = await oembed.lookup(vid.youtube_id, { deadline: o.deadline });
     } catch {
       r = { outcome: 'unavailable' };
     }

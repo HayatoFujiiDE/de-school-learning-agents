@@ -31,8 +31,11 @@ export type OEmbedResult = ({ outcome: 'ok' } & OEmbedFields) | { outcome: 'not_
 
 export interface OEmbedPort {
   readonly isFake: boolean;
-  /** 1 回だけ呼ぶ（再試行しない）。例外は投げない（失敗はすべて unavailable） */
-  lookup(youtubeId: string): Promise<OEmbedResult>;
+  /**
+   * 1 回だけ呼ぶ（再試行しない）。例外は投げない（失敗はすべて unavailable）。
+   * o.deadline（試行の締め切り。絶対時刻）があれば、要求の締め切りは fetch の直前に測った min(OEMBED_TIMEOUT_MS, deadline - now)。残りが 0 以下なら fetch しない
+   */
+  lookup(youtubeId: string, o?: { deadline?: number }): Promise<OEmbedResult>;
 }
 
 /** 呼ぶ URL（§Q-11 2）。youtube_id は schema で検査済みの 11 文字だけを使う */
@@ -56,6 +59,8 @@ export const OEMBED_AUTHOR_PATH_RE = /^\/(@[^/]{1,300}|channel\/[A-Za-z0-9_-]{1,
  * - `?`・`#` を含む文字列は拒む（空の query・fragment は解析の後に search・hash が空になるため、ここで拒む）
  * - new URL() で読めて、protocol https:、hostname www.youtube.com、username・password・port・search・hash が空
  * - pathname（percent-encode された後。日本語のハンドルは 1 文字が 9 文字）が OEMBED_AUTHOR_PATH_RE に合う
+ * - `@`・`c/`・`user/` の後のハンドル・名前を decodeURIComponent して、読めない（例外）・制御文字（\p{Cc}）・空白・`/`・`\`・`?`・`#`・`%` を含む → 拒む
+ *   （`@%00`・`@a%ZZ`・`c/%2Fwatch` のように、percent-encode で区切りや制御文字を持ち込む形。Astra のレビューの指摘）
  */
 export function safeAuthorUrl(raw: unknown): string {
   if (typeof raw !== 'string') return '';
@@ -70,7 +75,25 @@ export function safeAuthorUrl(raw: unknown): string {
   if (u.protocol !== 'https:' || u.hostname !== 'www.youtube.com') return '';
   if (u.username || u.password || u.port || u.search || u.hash) return '';
   if (!OEMBED_AUTHOR_PATH_RE.test(u.pathname)) return '';
+  if (!authorSegmentOk(u.pathname)) return '';
   return u.href;
+}
+
+/** 復号した後のハンドル・名前に入ってはいけない文字 */
+const AUTHOR_SEGMENT_BAD_RE = /[\p{Cc}\s/\\?#%]/u;
+
+/** pathname の `@`・`c/`・`user/` の後の部分を復号して確かめる（channel/ は [A-Za-z0-9_-] だけなので復号しない） */
+function authorSegmentOk(pathname: string): boolean {
+  const m = /^\/(?:@(.+)|c\/(.+)|user\/(.+))$/.exec(pathname);
+  if (!m) return true;
+  const seg = m[1] ?? m[2] ?? m[3] ?? '';
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(seg);
+  } catch {
+    return false;
+  }
+  return !AUTHOR_SEGMENT_BAD_RE.test(decoded);
 }
 
 /** 保存する 3 つの値に整える（§Q-11 2）。文字列でない値は空。何度当てても同じ結果になる */
@@ -115,10 +138,12 @@ export function youtubeOEmbedPort(opts: { fetchImpl?: typeof fetch; timeoutMs?: 
   const timeoutMs = opts.timeoutMs ?? OEMBED_TIMEOUT_MS;
   return {
     isFake: false,
-    async lookup(youtubeId) {
+    async lookup(youtubeId, call) {
       if (typeof youtubeId !== 'string' || !YOUTUBE_ID_RE.test(youtubeId)) return { outcome: 'unavailable' };
-      // 締め切り: fetch と本文の受信の両方に効かせる
-      const signal = AbortSignal.timeout(timeoutMs);
+      // 締め切り: fetch と本文の受信の両方に効かせる。試行の締め切りがあれば fetch の直前に測った残りと比べて短い方（§Q-11 2・Astra の指摘）
+      const ms = call?.deadline === undefined ? timeoutMs : Math.min(timeoutMs, call.deadline - Date.now());
+      if (!(ms > 0)) return { outcome: 'unavailable' };
+      const signal = AbortSignal.timeout(ms);
       const f = opts.fetchImpl ?? fetch;
       let res: Response;
       try {
