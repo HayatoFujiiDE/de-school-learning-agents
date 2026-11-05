@@ -1,4 +1,4 @@
-/* 作る（#make / #make/<id>）と作品（#works）。CONTRACT-v3 §U、design-v3 §5 / §6。
+/* 作る（#make / #make/<id>）と作品（#works）の共通部品。CONTRACT-v3 §U、design-v3 §5 / §6。作品の一覧・詳細・見せる（§W）は works.css。
    前半は codex-mock/style.css の .page-head / .project-row / .idea-options / .studio-* / .stage-* / .range-row / .step-line / .work-card / .field / .new-dot を移植
    （値は変えない。例外: .range-row input の accent は橙をやめてオリーブ — 橙の用途の制限 §I）。後半の「v3 追加」は新規。 */
 
@@ -317,23 +317,6 @@ html[data-mode="es"] .make-dialog .dialog-footer .btn,html[data-mode="es"] .stud
 .ai-read-box .actions{gap:2px}
 .face-note{font-size:11px;color:var(--muted);line-height:1.7}
 
-/* ---------- 作品（#works） ---------- */
-.works-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px}
-.work-card:focus{outline:none}
-.work-card:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
-.work-info{display:grid;gap:6px}
-.work-info h3{margin:0;line-height:1.6;overflow-wrap:anywhere}
-.work-read,.work-like{display:grid;gap:3px;justify-items:start}
-.work-read p,.work-like p{font-size:12px;line-height:1.7;overflow-wrap:anywhere}
-.work-roles{font-size:11px;line-height:1.8;color:var(--muted);display:flex;flex-wrap:wrap;align-items:center;gap:4px}
-.work-info .actions{margin-top:4px}
-.work-note{aspect-ratio:auto;min-height:150px;padding:14px 16px;display:grid;align-content:start;gap:6px;background:#f6f3ea}
-.work-note .wn-title{font-size:13px;font-weight:600;line-height:1.6}
-.work-note ul{margin:0;padding-left:18px;font-size:12px;line-height:1.8}
-.work-add{border:1px dashed #cfcabd;border-radius:14px;background:transparent;min-height:180px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;font-size:13px;font-weight:600;color:var(--ink)}
-.work-add .ico{width:24px;height:24px}
-.work-add:hover{background:#fbfaf6;filter:none}
-
 /* ---------- #paused（作る から） ---------- */
 .make-paused .paused-push{display:grid;gap:10px}
 .make-paused .push-line{border:0;padding:0;text-align:left}
@@ -368,7 +351,6 @@ html[data-mode="es"] .make-dialog .dialog-footer .btn,html[data-mode="es"] .stud
 .change-row{grid-template-columns:40px minmax(0,1fr)}
 .cr-ops{grid-column:2;justify-content:flex-start}
 .compare-pair{grid-template-columns:minmax(0,1fr)}
-.works-grid{grid-template-columns:minmax(0,1fr)}
 .cap-thumbs{gap:6px}
 .page-head{flex-wrap:wrap}
 }
