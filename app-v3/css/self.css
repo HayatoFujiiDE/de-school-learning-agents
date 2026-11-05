@@ -1,0 +1,245 @@
+/* 自己理解（#self）— docs/plans/self-page/contract-V.md §V-2 / §V-3 / §V-6。
+   構図は CSS grid + ::before / ::after だけ（JS で位置を測らない）。幅の区切りは 1120 / 950 / 700。 */
+
+.self-page{max-width:1140px;margin:0 auto;font-size:13px;line-height:1.8}
+
+/* ---------- ページ頭 ---------- */
+.self-head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;margin-bottom:34px}
+.self-head h1{font-size:29px;line-height:1.5}
+.self-head .sx-intro{font-size:13px;color:var(--muted);max-width:620px;margin-top:8px;line-height:1.8}
+.self-head-side{display:flex;flex-direction:column;align-items:flex-end;flex-shrink:0;padding-top:6px}
+.sx-legend{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;max-width:380px}
+.self-page .date-stamp{font-size:11px;color:var(--muted);border:1px solid var(--line);padding:8px 12px;border-radius:6px;margin-top:10px;line-height:1.4}
+.chip.src-gap{background:transparent;border:1px dashed #cfcabd;color:var(--gap)}
+.chip.k-trying{background:var(--record-soft);color:var(--record)}
+
+/* ---------- 構図（≥ 1121。V-10）: 3 列の独立した縦積み。左 = 関心 → 体験 / 中央 = 本人 + バディ / 右 = 志向性 → 心理 → 習熟 ---------- */
+.self-orbit{display:grid;grid-template-columns:minmax(0,1fr) 280px minmax(0,1fr);column-gap:32px;grid-template-areas:"l c r";align-items:start;position:relative;isolation:isolate}
+.self-col{display:flex;flex-direction:column;gap:24px;min-width:0}
+.col-l{grid-area:l}
+.col-r{grid-area:r}
+/* 中央列は sticky（下のカードを読む間も本人が見える）。上の余白は円がページ頭にかからないため */
+.col-c{grid-area:c;position:sticky;top:96px;z-index:1;padding-top:40px;align-items:center}
+
+/* 本人。円はアバターを中心に 1 本、カードより下に描く */
+.self-hub{--av:200px;--c1:340px;display:flex;justify-content:center;min-width:0}
+.self-hub-inner{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:8px}
+.self-hub-inner::before{content:'';position:absolute;left:50%;top:calc(var(--av) / 2 + 7.5px);width:var(--c1);height:var(--c1);border-radius:50%;border:1px solid var(--line);transform:translate(-50%,-50%);z-index:-1;pointer-events:none}
+.sx-name{font-size:16px;font-weight:700;line-height:1.5;margin-top:6px}
+
+.sx-av{position:relative;display:grid;place-items:center;border-radius:50%;background:#f3eee5;overflow:hidden;flex-shrink:0}
+.sx-av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.sx-av img[hidden]{display:none}
+.sx-av-letter{font-size:40px;font-weight:700;color:var(--ink);line-height:1}
+.sx-av.main{width:var(--av);height:var(--av);margin:7.5px;box-shadow:0 0 0 6px var(--paper),0 0 0 7.5px #524e4440}
+.sx-av.preview{width:160px;height:160px}
+.sx-av.thumb{width:64px;height:64px}
+.sx-av.thumb .sx-av-letter{font-size:22px}
+
+/* バディの吹き出し（本人の直下・幅 280・尖った角は上辺中央）。DES.buddy(44) は吹き出しの左上に置き、文を回り込ませる */
+.self-bud{position:relative;z-index:1;width:100%;min-width:0;display:flex;justify-content:center}
+.sx-bubble{position:relative;width:100%;max-width:280px;background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px;font-size:13px;line-height:1.9;min-width:0}
+.sx-bubble::before{content:'';position:absolute;left:50%;top:-7px;width:12px;height:12px;background:#fff;border-left:1px solid var(--line);border-top:1px solid var(--line);transform:translateX(-50%) rotate(45deg)}
+.sx-bubble>.des-buddy{float:left;margin:2px 10px 2px 0}
+.sx-bubble .link-btn{display:flex;clear:both;margin-top:4px;min-height:44px;padding:0}
+
+/* ---------- 観点カード ---------- */
+.axis-card{position:relative;z-index:1;background:#fff;border:1px solid var(--line);border-radius:18px;padding:16px 18px 14px;min-width:0;box-shadow:var(--shadow)}
+.axis-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.axis-head h2{font-size:15px;line-height:1.6;font-weight:700;min-width:0}
+.axis-head .btn{flex-shrink:0}
+.sx-list{display:grid;gap:8px;min-width:0}
+.sx-group+.sx-group,.sx-tail{margin-top:14px}
+.sx-group-h{font-size:10px;letter-spacing:.14em;color:var(--muted);font-weight:600;margin:0 0 6px;line-height:1.6}
+
+/* 行（出所の区別: 本人の言葉 = 左 3px 青 / 記録 = 左 3px 緑 / 見立て = 破線 / まだ分からない = 枠なし） */
+.srow{position:relative;background:#fff;border-radius:10px;min-width:0}
+.srow.f-own{border-left:3px solid var(--own);border-radius:0 10px 10px 0}
+.srow.f-record{border-left:3px solid var(--record);border-radius:0 10px 10px 0}
+.srow.f-ai{border:1px dashed var(--ai)}
+.srow.f-gap .srow-text{color:var(--gap)}
+.srow-main{display:grid;gap:3px;width:100%;text-align:left;padding:8px 12px;min-height:44px;border-radius:inherit;min-width:0}
+button.srow-main:hover{background:#fbfaf6;filter:none}
+.srow-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11px;color:var(--muted);line-height:1.4;min-width:0}
+.srow-meta .des-buddy{flex-shrink:0}
+.srow-text{display:block;font-size:13px;line-height:1.8;color:var(--ink)}
+.sx-date{font-size:11px;color:var(--muted);white-space:nowrap}
+.chip.sx-agreed .ico{width:11px;height:11px}
+.sx-sublinks{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:0 12px 4px;font-size:11px;color:var(--muted);line-height:1.4}
+.sx-sublinks .link-btn{font-size:11px;min-height:44px;padding:0}
+
+/* 開いた行 */
+.srow-open{display:grid;gap:10px;padding:2px 12px 12px;min-width:0;animation:sxIn .2s ease-out}
+.sx-sub-h{font-size:10px;letter-spacing:.14em;color:var(--muted);font-weight:600;line-height:1.6}
+.sx-basis{list-style:none;margin:4px 0 0;padding:0;display:grid;gap:4px}
+.sx-basis-i{display:flex;flex-wrap:wrap;align-items:center;column-gap:6px;row-gap:2px;font-size:12px;line-height:1.7;min-width:0}
+.sx-btext{font-size:12px;line-height:1.7;min-width:0}
+.sx-orig{font-size:12px;color:var(--muted);line-height:1.7}
+.sx-see{font-size:11px;min-height:44px;padding:0}
+.sx-react{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.sx-react .link-btn{min-height:44px;padding:0 6px}
+.self-page .btn.small,.self-sheet .btn.small{min-height:44px}
+.self-page .btn .ico{width:15px;height:15px}
+.sx-reply{display:flex;align-items:flex-start;gap:8px;font-size:12px;line-height:1.7;color:var(--ink);padding:4px 12px 8px}
+.sx-reply .des-buddy{flex-shrink:0;margin-top:2px}
+
+/* 編集欄 */
+.sx-edit{display:grid;gap:6px;padding:4px 0;min-width:0}
+.sx-edit label{font-size:11px;color:var(--muted);font-weight:600;line-height:1.6}
+.sx-edit textarea{width:100%;min-height:72px;padding:10px 12px;border:1px solid #d8ddd1;border-radius:9px;background:#fff;line-height:1.8;font-size:13px}
+.sx-edit .sx-same{margin:0}
+.sx-edit-ops{display:flex;gap:8px;flex-wrap:wrap}
+
+/* 履歴 */
+.sx-history{padding:4px 12px 12px;display:grid;gap:6px;animation:sxIn .2s ease-out}
+.sx-hist,.sx-log{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.sx-hist-i{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--line)}
+.sx-hist-i .sx-hist-meta{grid-column:1/-1;display:flex;gap:6px;align-items:center}
+.sx-hist-i.is-cur .sx-btext{font-weight:600}
+.sx-log li{display:flex;gap:8px;font-size:11px;color:var(--muted);line-height:1.6}
+
+/* 折りたたみ（ほか n 件 / 外した見立て） */
+.sx-fold{margin-top:4px}
+.sx-fold .link-btn,.sx-away>.link-btn{min-height:44px;padding:0;font-size:12px}
+.sx-away{margin-top:6px;border-top:1px dashed var(--line);padding-top:2px}
+.sx-away-list{list-style:none;margin:0;padding:0;display:grid;gap:4px}
+.sx-away-row{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--gap)}
+.sx-away-ops{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.sx-away-ops .link-btn{min-height:44px;padding:0 6px;font-size:11px}
+.chip.sx-count{height:18px;padding:0 7px;margin-left:4px;font-size:10px}
+
+/* 体験: 左に日付の列 */
+.exp-line{display:grid;grid-template-columns:48px minmax(0,1fr);column-gap:6px;align-items:start;min-width:0}
+.exp-date{font-size:11px;color:var(--muted);padding-top:10px;line-height:1.6}
+
+/* ---------- 困りやすいことと工夫（全幅の帯） ---------- */
+.kufu-band{position:relative;z-index:1;margin-top:32px;background:#fff;border:1px solid var(--line);border-radius:18px;padding:22px 26px 8px;box-shadow:var(--shadow);min-width:0}
+.kufu-band::before{content:'';position:absolute;left:50%;top:-33px;height:32px;border-left:1px dashed #cfcabd}
+.kufu-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.kufu-head h2{font-size:17px;line-height:1.6}
+.kufu-head .sx-intro{font-size:12px;color:var(--muted);line-height:1.8;margin-top:4px;max-width:620px}
+.kufu-head .btn{flex-shrink:0}
+.kufu-fit{margin:16px 0 4px;padding:12px 16px;border-radius:12px;background:var(--record-soft)}
+.kufu-fit ul{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.kfit-i{display:flex;gap:8px;align-items:flex-start;min-width:0}
+.kfit-i>.ico{width:16px;height:16px;color:var(--record);margin-top:4px}
+.kfit-text{font-size:13px;line-height:1.8}
+.kfit-meta{font-size:11px;color:var(--muted)}
+.kfit-i.f-own .kfit-body{border-left:3px solid var(--own);padding:6px 10px;background:#fff;border-radius:0 10px 10px 0}
+.kfit-body{min-width:0;flex:1}
+.kfit-note{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:11px;color:var(--muted);line-height:1.6}
+.kufu-new{padding:12px 0 4px}
+.kufu-scene{display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,1.4fr);gap:28px;padding:18px 0;border-top:1px solid var(--line);margin-top:14px}
+.kufu-fit+.kufu-scene,.kufu-new+.kufu-scene{margin-top:12px}
+.ks-left,.ks-right{display:grid;gap:10px;align-content:start;min-width:0}
+.srow-main.is-static{cursor:default}
+.ks-ops{padding:0 8px 6px}
+.ks-buddy{display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.8}
+.ks-buddy .des-buddy{flex-shrink:0;margin-top:3px}
+.kidea-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.kidea{display:grid;gap:4px;padding:10px 12px 6px;border:1px solid var(--line);border-radius:10px;background:#fff;min-width:0}
+.kidea.f-own{border:0;border-left:3px solid var(--own);border-radius:0 10px 10px 0;background:#fff}
+.kidea-head{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.kidea-text{font-size:13px;line-height:1.8}
+.kidea-res{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.kidea-ops{display:flex;align-items:center;gap:4px}
+.kidea-ops .sx-more{width:44px;height:44px;color:var(--muted)}
+.kidea-how{display:grid;gap:6px;padding:2px 0 6px}
+.sx-rnote{width:100%;min-height:44px;padding:0 12px;border:1px solid #d8ddd1;border-radius:9px;background:#fff;font-size:13px}
+.kmenu{display:grid;gap:2px;padding:4px 0 6px;border-top:1px solid var(--line)}
+.kmenu .btn.small{justify-content:flex-start;width:100%}
+.ks-kinds .btn .ico{width:14px;height:14px}
+.ks-add .btn{padding-left:4px}
+
+/* ページ末尾 */
+.self-page .privacy-line{margin:22px 0 0;text-align:center}
+.self-page .privacy-note{font-size:10px;color:var(--muted);display:inline-flex;align-items:center;gap:5px;line-height:1.7}
+.self-page .privacy-note .ico{width:12px;height:12px}
+
+/* ---------- アバターを変える（dialog） ---------- */
+dialog.self-sheet{width:min(560px,calc(100% - 32px))}
+.sx-av-preview{display:flex;justify-content:center}
+.sx-fieldset{border:0;padding:0;margin:0;min-width:0}
+.sx-fieldset legend{font-size:12px;font-weight:600;padding:0;margin-bottom:8px}
+.sx-hairs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.sx-hairs .radio-card{flex-direction:column;align-items:center;gap:6px;cursor:pointer;min-height:48px;padding:10px 6px;text-align:center}
+.sx-hairs .radio-card input{margin-top:0}
+.sx-colors{display:flex;gap:4px;flex-wrap:wrap}
+.sx-color{position:relative;width:44px;height:44px;display:grid;place-items:center;cursor:pointer}
+.sx-color input{position:absolute;inset:0;margin:0;opacity:0;cursor:pointer}
+.sx-swatch{width:26px;height:26px;border-radius:50%;border:2px solid transparent;box-shadow:inset 0 0 0 3px #fff;background:var(--sw)}
+.sx-color input:checked+.sx-swatch{border-color:#45483e}
+.sx-color input:focus-visible+.sx-swatch{outline:3px solid #a9590b;outline-offset:4px}
+.sx-color input:disabled{cursor:not-allowed}
+.sx-color input:disabled+.sx-swatch{opacity:.5}
+
+/* 動き（差し替え 200ms 以内）。reduced-motion は shell.css の全体指定で 0 になる */
+@keyframes sxIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+.sx-enter{animation:sxIn .18s ease-out}
+@media(prefers-reduced-motion:reduce){.sx-enter,.srow-open,.sx-history{animation:none}}
+
+/* 各カードから本人の方へ: 点 + 線（≥ 1121。左列は右辺、右列は左辺の top:34px） */
+@media(min-width:1121px){
+.self-col>.axis-card::before{content:'';position:absolute;top:34px;width:7px;height:7px;border-radius:50%;background:#a3ab96}
+.self-col>.axis-card::after{content:'';position:absolute;top:37px;width:32px;height:1px;background:#c9ccbf}
+.col-l>.axis-card::before{right:-4px}
+.col-l>.axis-card::after{left:100%}
+.col-r>.axis-card::before{left:-4px}
+.col-r>.axis-card::after{right:100%}
+}
+
+/* ---------- 951〜1120 / 701〜950: 上に本人の段（本人 | 吹き出し）、その下に 2 列の縦積み。同心円なし ---------- */
+@media(max-width:1120px){
+.self-orbit{grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:20px;row-gap:20px;grid-template-areas:"c c" "l r"}
+.self-col{gap:20px}
+.col-c{position:relative;top:auto;padding-top:0;flex-direction:row;flex-wrap:wrap;justify-content:center;align-items:center;column-gap:28px;row-gap:16px}
+.self-hub{--av:150px}
+.self-hub-inner::before{display:none}
+.self-bud{width:auto;flex:0 1 420px}
+.sx-bubble{max-width:420px}
+.sx-bubble::before{left:-7px;top:50%;transform:translateY(-50%) rotate(-45deg)}
+}
+@media(max-width:950px){
+.self-hub{--av:140px}
+.kufu-scene{grid-template-columns:minmax(0,1fr);gap:14px}
+}
+
+/* ---------- ≤ 700（390）: 1 列。hub → 吹き出し → 関心 → 志向性 → 体験 → 心理 → 習熟 → 工夫 ---------- */
+@media(max-width:700px){
+.self-page{padding-bottom:80px}
+.self-head{flex-direction:column;gap:12px;margin-bottom:24px}
+.self-head h1{font-size:25px}
+.self-head-side{align-items:flex-start;padding-top:0}
+.sx-legend{justify-content:flex-start;max-width:none}
+.self-orbit{display:flex;flex-direction:column;align-items:stretch;gap:20px}
+.self-col,.col-c{display:contents}
+.self-hub{order:1;--av:132px;padding:36px 0 8px}
+.self-bud{order:2;width:100%;flex:none}
+.ax-int{order:3}
+.ax-ori{order:4}
+.ax-exp{order:5}
+.ax-psy{order:6}
+.ax-mas{order:7}
+.self-hub-inner::before{display:block;width:220px;height:220px;border:1px dashed #e6e2d8}
+.sx-bubble{max-width:none}
+.sx-bubble::before{left:50%;top:-7px;transform:translateX(-50%) rotate(45deg)}
+/* 左の背骨線（x = 8）と、各カードの見出しの高さの点。カードは左へ 20px 下げる */
+.axis-card{margin-left:20px;padding:14px 14px 12px}
+.axis-card::before{content:'';position:absolute;left:-17px;top:24px;width:9px;height:9px;border-radius:50%;background:#a3ab96}
+.axis-card::after{content:'';position:absolute;left:-13px;top:0;bottom:-21px;width:1px;background:var(--line);z-index:-1}
+.ax-int::after{top:28px}
+.ax-mas::after{bottom:auto;height:28px}
+.kufu-band{padding:18px 16px 6px}
+.kufu-head{flex-direction:column;gap:10px}
+.sx-hairs{grid-template-columns:repeat(2,minmax(0,1fr))}
+dialog.self-sheet{margin:auto auto 0;width:100%;max-width:100%;border-radius:18px 18px 0 0;padding:18px 16px 24px}
+}
+
+/* ---------- 小学生向け（es）: 本文 14 / メタ 12 / 見出し 11、操作 48px ---------- */
+html[data-mode="es"] .self-page{font-size:14px}
+html[data-mode="es"] .srow-text,html[data-mode="es"] .sx-bubble,html[data-mode="es"] .kidea-text,html[data-mode="es"] .ks-buddy,html[data-mode="es"] .kfit-text,html[data-mode="es"] .self-head .sx-intro,html[data-mode="es"] .sx-edit textarea,html[data-mode="es"] .sx-rnote{font-size:14px}
+html[data-mode="es"] .srow-meta,html[data-mode="es"] .sx-date,html[data-mode="es"] .sx-btext,html[data-mode="es"] .sx-basis-i,html[data-mode="es"] .sx-reply,html[data-mode="es"] .exp-date,html[data-mode="es"] .kfit-meta,html[data-mode="es"] .kfit-note,html[data-mode="es"] .sx-sublinks,html[data-mode="es"] .sx-edit label,html[data-mode="es"] .kufu-head .sx-intro,html[data-mode="es"] .self-page .date-stamp,html[data-mode="es"] .sx-orig{font-size:12px}
+html[data-mode="es"] .sx-group-h,html[data-mode="es"] .sx-sub-h{font-size:11px}
+html[data-mode="es"] .sx-sublinks .link-btn,html[data-mode="es"] .sx-away-ops .link-btn,html[data-mode="es"] .sx-see,html[data-mode="es"] .sx-log li,html[data-mode="es"] .sx-fold .link-btn,html[data-mode="es"] .sx-away>.link-btn{font-size:12px}
+html[data-mode="es"] .self-page .btn.small,html[data-mode="es"] .self-sheet .btn.small,html[data-mode="es"] .self-page .link-btn,html[data-mode="es"] .srow-main,html[data-mode="es"] .sx-rnote{min-height:48px}
+html[data-mode="es"] .kidea-ops .sx-more,html[data-mode="es"] .sx-color{width:48px;height:48px}
