@@ -30,15 +30,15 @@ html[data-mode="es"] .mp-views .segmented button{min-height:48px}
 .mp-chip{display:inline-flex;align-items:center;gap:8px}
 .mp-chip[aria-pressed="false"] .mp-sw{opacity:.45}
 /* 凡例（基本の線 + ノードのしるし）。1 行に収まらない幅では「しるしの見方」の開閉（既定は閉。map.js の fitLegend） */
-.mp-legend{min-width:0;max-width:100%;font-size:12px;color:var(--muted);line-height:1.6}
-.mp-legend:not(.is-folded)>.mp-legend-sum{display:none}
-.mp-legend-sum{display:inline-flex;align-items:center;gap:8px;min-height:44px;cursor:pointer;font-weight:600;color:var(--ink);list-style:none}
-.mp-legend-sum::-webkit-details-marker{display:none}
-.mp-legend-sum::before{content:'';width:0;height:0;border-left:6px solid currentColor;border-top:4.5px solid transparent;border-bottom:4.5px solid transparent;transition:transform .15s ease-out}
-.mp-legend[open]>.mp-legend-sum::before{transform:rotate(90deg)}
-html[data-mode="es"] .mp-legend-sum{min-height:48px}
-.mp-legend-items{display:flex;flex-wrap:nowrap;align-items:center;gap:6px 16px;white-space:nowrap}
-.mp-legend.is-folded .mp-legend-items{flex-wrap:wrap;white-space:normal;padding:2px 0 6px}
+.mp-key{min-width:0;max-width:100%;font-size:12px;color:var(--muted);line-height:1.6}
+.mp-key:not(.is-folded)>.mp-key-sum{display:none}
+.mp-key-sum{display:inline-flex;align-items:center;gap:8px;min-height:44px;cursor:pointer;font-weight:600;color:var(--ink);list-style:none}
+.mp-key-sum::-webkit-details-marker{display:none}
+.mp-key-sum::before{content:'';width:0;height:0;border-left:6px solid currentColor;border-top:4.5px solid transparent;border-bottom:4.5px solid transparent;transition:transform .15s ease-out}
+.mp-key[open]>.mp-key-sum::before{transform:rotate(90deg)}
+html[data-mode="es"] .mp-key-sum{min-height:48px}
+.mp-key-items{display:flex;flex-wrap:nowrap;align-items:center;gap:6px 16px;white-space:nowrap}
+.mp-key.is-folded .mp-key-items{flex-wrap:wrap;white-space:normal;padding:2px 0 6px}
 .mp-lg{display:inline-flex;align-items:center;gap:8px}
 .mp-mk{display:inline-block;flex-shrink:0;width:12px;height:12px;border-radius:50%;box-sizing:border-box}
 .mp-mk.k-learned{background:var(--olive);border:1.5px solid var(--olive)}
@@ -272,7 +272,7 @@ html[data-mode="es"] .mp-rel{min-height:48px}
 html[data-mode="es"] .mp-title,html[data-mode="es"] .mp-uname,html[data-mode="es"] .mp-iname{font-size:14px}
 html[data-mode="es"] .mp-sub,html[data-mode="es"] .mp-scene,html[data-mode="es"] .mp-rel,html[data-mode="es"] .mp-linked,
 html[data-mode="es"] .mp-legend,html[data-mode="es"] .mp-pct,html[data-mode="es"] .mp-overall,html[data-mode="es"] .mp-scope,
-html[data-mode="es"] .mp-legend,html[data-mode="es"] .mp-same,html[data-mode="es"] .mp-rel-h{font-size:12px}
+html[data-mode="es"] .mp-key,html[data-mode="es"] .mp-same,html[data-mode="es"] .mp-rel-h{font-size:12px}
 html[data-mode="es"] .mp-scene-line,html[data-mode="es"] .mp-none,html[data-mode="es"] .mp-nline{font-size:13px}
 /* 地図の中の字（map-layout.js の SZ は es の値で箱を見積もる） */
 html[data-mode="es"] .mp-n .mp-label,html[data-mode="es"] .mp-n .mp-t{font-size:14px}
