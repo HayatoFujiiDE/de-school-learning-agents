@@ -202,3 +202,33 @@
 12. **probe の診断（本番で 503 が 2 回続いた後の追加）**: probe の応答に `clip`（区間を付けたか）と `api_error`（Google の error の status と message の先頭 200 字。鍵らしい文字列は伏せる）を足す。入力 `clip:false` で区間を付けない診断の呼び出しを 1 回だけできる（取り置きの ref は `…:noclip`）。通常の経路は常に区間を付ける。
 
 凍結: 2026-11-05（Astra high R2 GO）。
+
+## Q-10 混雑時のやり直しと予備のモデル（2026-11-05。本節は Q-9.1 の「生涯 1 回」に優先する）
+
+起点: probe 4 回がすべて 503 `UNAVAILABLE`（Google の message「gemini-3.6-flash is currently experiencing high demand…」）。区間あり・区間なしの両方で同じだった。Google の開発者フォーラムには、同じ 503 の報告がモデルを問わず数か月分ある。Q-9.1 のままでは、混雑した日に検証した版の動画は二度と確認されない。ふじさん: 「頻繁にあるんだったら、代替手段を持っておかないといけないんじゃないの？」
+
+1. **保証（有界）**: 版 × 動画ごとの Gemini の呼び出しは、生涯 `VIDEO_MAX_CALLS = 3` 回まで。1 回の検証の試行の中では 2 回まで。記帳は呼び出し 1 回ごとに U_video で、精算しない（行は消さない）。最悪の記帳は 1 動画あたり 3U（30¢）。月と日の上限は Q-9.1 の 1 文のまま、呼び出しごとに当てる。
+2. **呼び出しの権利の行**: n 回目の呼び出しの ref は、n = 1 なら `vv:{version_id}:{video_id}`（Q-9.1 と同じ。既存の行と互換）、n ≥ 2 なら `vv:{version_id}:{video_id}:r{n}`。n は D1 にある行（この 3 つの ref）の最大 + 1 で決める。取り置きは Q-9.1 の 1 文（`NOT EXISTS ref`）をそのまま使う。同時に 2 つの試行が同じ n を取ろうとしても、入れられるのは 1 つだけで、負けた側はその動画を呼ばない（この試行では not_seen）。
+3. **やり直す失敗**: `GeminiErrorKind` の `server`（5xx）・`rate_limited`（429）・`timeout`・`connection` だけ。それ以外（`auth`・`not_found`・`bad_request`・`bad_response`・`not_completed`・`no_text`・`no_key`・`bad_input`）は最終とし、以後は呼ばない。
+4. **1 回の試行の中**: 1 回目は主のモデルで呼ぶ。やり直す失敗で、`deadline - now ≥ VIDEO_RETRY_WAIT_MS(20,000) + VIDEO_CALL_MIN_MS` の時だけ、20 秒待って次の呼び出しをする。次の呼び出しは、予備のモデルが有効なら予備のモデル、無効なら主のモデル。SDK・fetch の自動 retry は引き続き使わない。
+5. **試行をまたぐやり直し**: 呼び出しが 3 回に満たず、最後の失敗がやり直す失敗の動画は、後の試行（再検証の操作、または mismatch による作り直し）で呼んでよい。Batch の回収（collect）では呼ばない（Q-9.4 のまま）。自動の定期実行は足さない。
+6. **video-notes.json v2**: `{"v":2,"notes":[…],"missing":[…],"retry":[{"video_id","calls","last_error"}]}`。retry は missing のうち、やり直してよい動画（呼び出し < 3 で、最後の失敗がやり直す失敗）。
+   - v1 のファイルと、retry が空の v2 のファイルは書き直さない（Q-9.1 のまま）。
+   - retry がある時は、その動画だけを呼ぶ。結果は既存の notes に足す（同じ video_id の note は 1 つだけ。既にあれば足さない）。
+   - 書き込みは R2 の条件つき put（読んだ時の etag が一致する時だけ）。一致しなかった時は 1 回だけ読み直し、自分の成功を足して条件つきで put し直す。それも失敗したら、読み直したファイルを使う（自分の結果はこの試行に出さない。呼び出しは記帳済み）。
+   - ファイルが無い時の最初の書き込みは、従来どおり（条件なし）。
+7. **予備のモデル**: env `GEMINI_VIDEO_FALLBACK_MODEL`（wrangler の値は `gemini-3.8-flash`。公式の pricing で、入力の単価は 3.6 Flash と同じ「$0.75 / 1M tokens、2026-12-31 まで」）。settings `video_fallback_enabled` が `'1'` の時だけ使う。既定は無し。区間の指定（`start_offset` / `end_offset`）が 3.8 Flash で効くかは公式の docs で確かめられていない。このため有効にする手順は Q-9.5 と同じとする。probe（入力 `model: "fallback"`。取り置きの ref に `:fb` を足す）の text_head を司令塔が見て、区間の中身に効いていると確かめてから、`POST /api/videos/enable` に `{"fallback": true}` を送って立てる。予備のモデルが未設定なら 409。
+8. **記録**: note の `model` は、実際に答えたモデル。ログ `video_notes` に `call`（n）と `model_role`（primary / fallback）を足す（数とラベルだけ）。
+9. **変えないもの**: plan.json と回収、Q-9.11 の検査、確認画面、review API の形（verify_cost_cents の `vv:{version_id}:*` は r2・r3 の行も含む）。probe は Q-9.12 に `model` の入力を足すだけ。
+10. **受け入れ（vitest。fake の GeminiPort）**:
+    - 503 → 20 秒待ち（fake の時計）→ 2 回目で成功: notes に入り、行が 2 つ（`vv:…` と `…:r2`）。
+    - 503 が 2 回: retry に入る。次の試行で 3 回目を呼ぶ。3 回目も 503 なら retry は空になり、4 回目は呼ばない。
+    - `auth` や `no_text` は 1 回で最終になり、retry に入らない。
+    - 締め切りが足りない時は待たずに 1 回で終わり、retry に入る。
+    - 同じ n を 2 つの試行が同時に取りに行くと、片方だけが呼ぶ。
+    - 予備のモデル: 無効なら 2 回目も主のモデル。有効なら予備のモデルの名前で呼び、note の model もそれになる。
+    - etag の不一致: 読み直して足す。2 回目も不一致なら、読み直したファイルを使う。
+    - v1 のファイルは書き直さず、呼ばない。
+    - 月の上限ちょうどで 2 回目の取り置きが入らない時は、呼ばずに retry に残す（上限で止まったことを `last_error: "cap"` で残す。これはやり直してよい失敗として扱う）。
+    - 既存のテストが green。新しいテストが変更前のコードで落ちる（mutation）。
+11. **範囲**: 触るのは `src/verify.ts`・`src/videos.ts`・`src/routes/videos.ts`・`src/env.ts`・`src/fake/gemini.ts`・`wrangler.jsonc`（var 1 つ）・test/。migration は無し。職人の定義・admin.js は変えない。
