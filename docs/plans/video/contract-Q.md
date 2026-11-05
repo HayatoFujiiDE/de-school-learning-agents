@@ -213,14 +213,13 @@
 4. **動画の状態は記録から組み立てる**（毎試行・回収では行わない）: その動画の D1 の行（n = 1..3）と、R2 の呼び出しの記録を読み、次で決める。
    - ok の記録が 1 つでもある → note にする（n がいちばん小さい ok を採る）。以後は呼ばない。
    - final の記録がある → 呼ばない（not_seen）。
-   - 行があるのに記録が無い n がある → その行の created_at から `VIDEO_INFLIGHT_STALE_MS = 600,000` 未満なら「呼び出し中」とみなし、この試行では呼ばない（not_seen）。それ以上なら retryable とみなす。
-   - それ以外で、最後の記録が retryable かつ n < 3 → 呼んでよい。
+   - 次の n を呼んでよいのは、**いちばん大きい n の行に記録があり、その outcome が retryable で、n < 3 の時だけ**。行があるのに記録が無い（呼び出し中・結果不明・put 失敗）時は、時間がたっても呼ばない（not_seen）。後から retryable の記録が届けば、その後の試行で呼べる。final の記録が届けば、以後は呼ばない。時間で retryable に格上げする規則は置かない（結果が retryable だった証拠にならないため）。
    - 試行の締め切りまでの残りが `VIDEO_CALL_MIN_MS` 未満なら呼ばない（従来どおり）。
 5. **やり直す失敗（retryable）**: `GeminiErrorKind` の `server`（5xx）・`rate_limited`（429）・`timeout`・`connection`、および外側の締め切り（`beforeDeadline`）で待ちきれなかったもの。それ以外（`auth`・`not_found`・`bad_request`・`bad_response`・`not_completed`・`no_text`・`no_key`・`bad_input`）は final。
 6. **1 回の試行の中**: 呼べる動画について 1 回呼ぶ。retryable で、`deadline - now ≥ VIDEO_RETRY_WAIT_MS(20,000) + VIDEO_CALL_MIN_MS` の時だけ、20 秒待って次の n を取り置いてもう 1 回呼ぶ（試行内で 2 回まで）。SDK・fetch の自動 retry は引き続き使わない。
 7. **予備のモデルの使いどころ**: n ≥ 2 の呼び出しは、予備のモデルが有効なら予備のモデルで呼ぶ（試行の中でも、後の試行でも同じ）。無効なら主のモデル。これで、主のモデルが混んでいる間に予備が一度も使われない形を避ける。
 8. **試行をまたぐやり直し**: 後の試行（再検証の操作、または mismatch による作り直し）で、4 の規則で呼んでよい動画を呼ぶ。Batch の回収（collect）では呼ばない・組み立てない（Q-9.4 のまま。plan.json の videos を使う）。自動の定期実行は足さない。
-9. **video-notes.json の扱い**: 新しい版では書かない。既に v1 のファイルがある版はそのファイルを使い、呼ばない（Q-9.1 のまま。既存の missing は救わない）。
+9. **video-notes.json の扱い**: 新しい版では書かない。既に v1 のファイルがある版はそのファイルを使い、呼ばない（Q-9.1 のまま。既存の missing は救わない）。読む側は 1 つの関数（`src/videos.ts` の `readVersionVideoNotes`）にまとめる。v1 のファイルがあればそれを、無ければ呼び出しの記録から 4 の規則で組み立てた `{notes, missing}` を返す。検証係の入力と review API（`src/routes/review.ts` の video_notes）は、どちらもこの関数を使う。review API の応答の形は変えない。
 10. **予備のモデル**: env `GEMINI_VIDEO_FALLBACK_MODEL`（wrangler の値は `gemini-3.8-flash`。公式の pricing で、入力の単価は 3.6 Flash と同じ「$0.75 / 1M tokens、2026-12-31 まで」）。settings `video_fallback_enabled` が `'1'` の時だけ使う。既定は無し。区間の指定が 3.8 Flash で効くかは公式の docs で確かめられていないので、有効にする手順は Q-9.5 と同じとする。probe（入力 `model: "fallback"`。取り置きの ref に `:fb` を足す）の text_head を司令塔が見て、区間の中身に効いていると確かめてから、`POST /api/videos/enable` に `{"fallback": true}` を送って立てる。予備のモデルが未設定なら 409。
 11. **記録とログ**: note の `model` は、実際に答えたモデル。ログ `video_notes` に `call`（n）と `model_role` を足す（数とラベルだけ）。
 12. **変えないもの**: plan.json と回収、Q-9.11 の検査、確認画面、review API の形（verify_cost_cents の `vv:{version_id}:*` は r2・r3 の行も含む）。probe は Q-9.12 に `model` の入力を足すだけ（ref は primary/fallback × clip/noclip で別）。
@@ -230,7 +229,10 @@
     - `auth` や `no_text` は 1 回で final。外側の締め切りは retryable。
     - 締め切りが足りない時は待たずに 1 回で終わり、後の試行で呼べる。
     - 同じ n を 2 つの試行が同時に取りに行くと、片方だけが呼ぶ。負けた側は記録を書かず、勝った側の ok が残る。
-    - 記録が無い行: 10 分未満は呼ばない、10 分以上は呼べる。
+    - 記録が無い行: 時間がたっても呼ばない。n=1 が auth で put に失敗 → 何分たっても n=2 を取り置かない。欠損を読んだ後に retryable の記録が届く → 次の試行で呼べる。final が届く → 呼ばない。
+    - 複数の ok（n=1 と n=2）がある時は n=1 だけを note にし、入力にも 1 回だけ出す。
+    - 呼び出しの記録だけがある版で、review API の video_notes が note を返し、確認画面に出る（v1 の版も従来どおり）。
+    - 予備のモデルが有効な時、n ≥ 2 の送信 body の model が予備のモデルである。probe の ref は primary/fallback × clip/noclip の 4 組で別になる。
     - 予備のモデル: 無効なら n ≥ 2 も主のモデル。有効なら n ≥ 2 は予備の名前で呼び、note の model もそれになる。
     - 条件つき put が null を返す時と例外の時は、その試行では not_seen。
     - 月・日の上限で n = 1 / n = 2 の取り置きが入らない時は呼ばず、上限が空いた後の試行で呼べる（行が増えていないこと）。
@@ -238,4 +240,4 @@
     - 回収（collect）は Gemini を呼ばず、R2 の記録も読まない。提出後に記録が増えても、回収は plan.json のまま。
     - 動画の確認が無効の時は呼び出しゼロ。予備のモデルが未設定の時の enable は 409。
     - 既存のテストが green。新しいテストが変更前のコードで落ちる（mutation）。
-14. **範囲**: 触るのは `src/verify.ts`・`src/videos.ts`・`src/routes/videos.ts`・`src/env.ts`・`src/fake/gemini.ts`・fake の R2（条件つき put が無ければ足す）・`wrangler.jsonc`（var 1 つ）・test/。migration は無し。職人の定義・admin.js は変えない。
+14. **範囲**: 触るのは `src/verify.ts`・`src/videos.ts`・`src/routes/review.ts`（video_notes の読み方だけ）・`src/routes/videos.ts`・`src/env.ts`・`src/fake/gemini.ts`・fake の R2（条件つき put が無ければ足す）・`wrangler.jsonc`（var 1 つ）・test/。migration は無し。職人の定義・admin.js は変えない。
