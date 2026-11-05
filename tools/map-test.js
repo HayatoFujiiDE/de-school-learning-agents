@@ -277,17 +277,24 @@ ok(MPL.size({ kind: 'learned', text: ['あ', 'あ'], scene: { text: 'い' } }, '
 eq(MPL.lineCount('', 13, 100), 0, 'lineCount 空は 0 行');
 
 // ---------- MPC（§AB-2 / AB-3-1）: 倍率・基点不動・全体・LOD ----------
-eq([MPC.clampZoom(0.1), MPC.clampZoom(5), MPC.clampZoom(1.3), MPC.clampZoom(NaN), MPC.clampZoom('x')], [0.3, 2, 1.3, 1, 1], 'clampZoom 0.3〜2.0（壊れた値は 1）');
+eq([MPC.clampZoom(0.1), MPC.clampZoom(5), MPC.clampZoom(1.3), MPC.clampZoom(NaN), MPC.clampZoom('x')], [0.3, 2, 1.3, 1, 1], 'clampZoom ふだんは 0.3〜2.0（壊れた値は 1）');
+eq([MPC.clampZoom(0.05, 0.12), MPC.clampZoom(0.2, 0.12), MPC.clampZoom(0.01, 0.01), MPC.clampZoom(0.2, 0.9)], [0.12, 0.2, 0.1, 0.3], 'clampZoom 枠ごとの下限（床 0.1・0.3 より上にはしない）');
+// 倍率の下限 = min(0.3, 全体が入る倍率)（床 0.1）
+eq([MPC.minZoom({ x: 0, y: 0, w: 1000, h: 500 }, 1040, 540, 20), MPC.minZoom({ x: 0, y: 0, w: 3000, h: 1500 }, 640, 340, 20), MPC.minZoom({ x: 0, y: 0, w: 30000, h: 100 }, 340, 340, 20)], [0.3, 0.2, 0.1], 'minZoom = min(0.3, 全体が入る倍率)・床 0.1');
 function worldAt(v, px, py) { return { x: (px - v.x) / v.z, y: (py - v.y) / v.z }; }
 [[{ x: 10, y: -20, z: 0.5 }, 1.6, 300, 200], [{ x: -400, y: 30, z: 1.2 }, 0.7, 50, 420], [{ x: 0, y: 0, z: 1 }, 100, 640, 360], [{ x: 5, y: 5, z: 0.4 }, 0.01, 10, 10]].forEach(function (c, i) {
   var v = c[0], nv = MPC.zoomAt(v, c[1], c[2], c[3]), a = worldAt(v, c[2], c[3]), b = worldAt(nv, c[2], c[3]);
   ok(near(a.x, b.x, 1e-9) && near(a.y, b.y, 1e-9) && nv.z >= 0.3 && nv.z <= 2, 'zoomAt 基点が動かない（' + i + ': z ' + v.z + ' → ' + nv.z + '）');
 });
 eq(MPC.zoomAt({ x: 0, y: 0, z: 2 }, 1.5, 100, 100), { x: 0, y: 0, z: 2 }, 'zoomAt 上限では動かない');
+var zl = MPC.zoomAt({ x: 10, y: 20, z: 0.3 }, 0.5, 200, 100, 0.18), zw0 = worldAt({ x: 10, y: 20, z: 0.3 }, 200, 100), zw1 = worldAt(zl, 200, 100);
+ok(zl.z === 0.18 && near(zw0.x, zw1.x, 1e-9) && near(zw0.y, zw1.y, 1e-9), 'zoomAt 枠の下限まで（0.3 より下も基点不動）');
 var bd = { x: 0, y: 0, w: 2000, h: 1000 }, fv = MPC.fit(bd, 1000, 600, 20);
 ok(near(fv.z, 0.48) && near(fv.x, 20) && near(fv.y, 60), 'fit 全体が入る倍率で真ん中（' + JSON.stringify(fv) + '）');
-var fs1 = MPC.fit({ x: 0, y: 0, w: 4000, h: 3000 }, 400, 400, 20);
-ok(fs1.z === 0.3 && near(fs1.x + 4000 * 0.3 / 2, 200) && near(fs1.y + 3000 * 0.3 / 2, 200), 'fit 入りきらない時は 0.3 で真ん中');
+var fs1 = MPC.fit({ x: 0, y: 0, w: 3600, h: 3000 }, 400, 400, 20);
+ok(near(fs1.z, 0.1) && fs1.x >= 20 - 1e-9 && fs1.y >= 20 - 1e-9 && near(fs1.x + 3600 * fs1.z / 2, 200) && near(fs1.y + 3000 * fs1.z / 2, 200), 'fit 狭い枠でも全体が入る（0.3 より下げる）・真ん中（' + JSON.stringify(fs1) + '）');
+var fs2 = MPC.fit({ x: 0, y: 0, w: 40000, h: 3000 }, 400, 400, 20);
+ok(fs2.z === 0.1 && near(fs2.x + 40000 * 0.1 / 2, 200), 'fit 床 0.1 でも入らない時だけ はみ出して真ん中');
 eq(MPC.fit({ x: 0, y: 0, w: 100, h: 50 }, 1000, 600, 20).z, 2, 'fit 小さい地図は 2.0 まで');
 eq([MPC.lod(0.3), MPC.lod(0.5999), MPC.lod(0.6), MPC.lod(1.0999), MPC.lod(1.1), MPC.lod(2)], ['far', 'far', 'mid', 'mid', 'near', 'near'], 'lod の境界（far < 0.6 ≦ mid < 1.1 ≦ near）');
 var cv = MPC.clampView({ x: 5000, y: -9000, z: 1 }, bd, 800, 600, 80);
@@ -295,6 +302,18 @@ ok(cv.x === 800 - 80 && cv.y === 80 - 1000, 'clampView 地図を枠から全部�
 var rv = MPC.reveal({ x: 0, y: 0, z: 1 }, { x: 900, y: 100, w: 100, h: 50 }, 800, 600, { l: 16, t: 16, r: 16, b: 16 });
 ok(rv.x === 800 - 16 - 1000 && rv.y === 0, 'reveal はみ出したノードを枠の中へ（少しだけ動かす）');
 eq(MPC.reveal({ x: 0, y: 0, z: 1 }, { x: 100, y: 100, w: 50, h: 50 }, 800, 600), { x: 0, y: 0, z: 1 }, 'reveal 見えていれば動かさない');
+var cn = MPC.center({ x: 0, y: 0, z: 0.5 }, { x: 1000, y: 400, w: 200, h: 100 }, 1100, 500, { r: 360 });
+ok(near((1100 + 200 * 0.5) * 0, 0) && near(cn.x + 1100 * 0.5, (1100 - 360) / 2) && near(cn.y + 450 * 0.5, 250) && cn.z === 0.5, 'center パネルを除いた見える範囲の真ん中へ（倍率は変えない）（' + JSON.stringify(cn) + '）');
+// 逆に拡大した題の間引き（決定論・先に並べたもの = 新しいものを残す）
+var TH = [{ id: 'a', ax: 100, ay: 100, w: 120, h: 20, align: 'center' }, { id: 'b', ax: 300, ay: 100, w: 120, h: 20, align: 'center' }, { id: 'c', ax: 1000, ay: 100, w: 120, h: 20, align: 'center' }, { id: 'isl', ax: 0, ay: 400, w: 100, h: 18, align: 'left' }];
+eq(MPC.thin(TH, 1), [], 'thin 重ならなければ間引かない');
+eq(MPC.thin(TH, 0.7), [], 'thin 倍率 0.7 でも離れていれば残す');
+eq(MPC.thin(TH, 0.25), ['b'], 'thin 重なったら後ろ（古い方）を間引く');
+eq(JSON.stringify(MPC.thin(TH, 0.12)) === JSON.stringify(MPC.thin(TH, 0.12)), true, 'thin 決定論');
+eq(MPC.thin(TH, 0.12).indexOf('a'), -1, 'thin いちばん先（新しいもの）は必ず残る');
+var LT = MPL.layout(g, 'made'), titles = g.nodes.made.map(function (m) { var b = LT.nodes[m.id]; return { id: m.id, ax: b.x + b.w / 2, ay: b.y + 110, w: 150, h: 2 * 13 * 1.3 + 2, align: 'center' }; });
+eq(MPC.thin(titles, 0.3), [], 'thin 見本の作ったものから: 倍率 0.3 では題を間引かない（並びの間合い）');
+ok(MPC.thin(titles, 0.1).length > 0 && MPC.thin(titles, 0.1).indexOf(g.nodes.made[0].id) < 0, 'thin 見本: 倍率 0.1 では古い題を間引き、いちばん新しい題は残す');
 
 // ---------- MP.normalizeUi（§AB-13）/ select / decline ----------
 var D = MP.defaultUi();
@@ -310,8 +329,12 @@ eq(MP.normalizeUi({ sel: 'act:act-py' }, g).sel, { made: 'act:act-py', fields: n
 eq(MP.normalizeUi({ chips: { peer: 'yes', order: true, zzz: true } }, g).chips, { peer: true, order: true, cross: false, next: false }, 'normalizeUi チップは真偽値だけ（その欄だけ初期値）');
 eq(MP.normalizeUi({ declined: ['ln-area', 'zz', 'ln-area', 3, 'ln-stars', 'ln-maze-wall'] }, null).declined, ['ln-area', 'ln-maze-wall'], 'normalizeUi declined はバディの見立てだけ・重なりなし');
 eq(MP.normalizeUi({ declinedNext: ['nx-lamp', 'nx-zz', 'nx-lamp'] }, null).declinedNext, ['nx-lamp'], 'normalizeUi declinedNext は見本にあるものだけ');
-eq(MP.normalizeUi({ pos: { made: { x: 1, y: 2, z: 9 }, fields: { x: 'a', y: 0, z: 1 } } }, null).pos, { made: null, fields: null }, 'normalizeUi 表示位置は 倍率 0.3〜2.0・数だけ');
+eq(MP.normalizeUi({ pos: { made: { x: 1, y: 2, z: 9 }, fields: { x: 'a', y: 0, z: 1 } } }, null).pos, { made: null, fields: null }, 'normalizeUi 表示位置は 倍率 0.1〜2.0・数だけ');
+eq(MP.normalizeUi({ pos: { made: { x: 1, y: 2, z: 0.15 }, fields: { x: 0, y: 0, z: 0.05 } } }, null).pos, { made: { x: 1, y: 2, z: 0.15 }, fields: null }, 'normalizeUi 狭い枠で保存した 0.3 未満の倍率も保つ（床 0.1）');
 eq(MP.normalizeUi({ declined: ['p1'] }, null, { learned: [{ id: 'p1', src: 'person' }] }).declined, [], 'normalizeUi 人の言葉も外さない');
+// いま効いている選択: グラフに無い id（保存値が古い）は選択なし（全部を薄くしない）
+eq([MP.selIn({ sel: { made: 'act:missing' } }, g, 'made'), MP.selIn({ sel: { made: 'act:act-py' } }, g, 'made'), MP.selIn({ sel: { fields: 'ln:ln-area' } }, g, 'fields'), MP.selIn(null, g, 'made')],
+  [null, 'act:act-py', null, null], 'selIn グラフに無い・その見方に無い選択は「選択なし」');
 var s1 = MP.select(D, g, 'made', 'act:act-py');
 eq(s1.sel.made, 'act:act-py', 'select 選ぶ');
 eq(MP.select(s1, g, 'made', 'act:act-py').sel.made, null, 'select 同じノードをもう一度 = 外す');

@@ -1,6 +1,7 @@
 /* 学びマップの並び（CONTRACT-v3 §AB-4 / AB-5 / AB-12）。純関数・DOM 非依存・決定論（乱数と時刻を使わない）。
    MPL.layout(graph, mode) → { nodes: { id: {x,y,w,h} }, islands: [{ id, x, y, w, h, ... }], bounds: {x,y,w,h} }（mode = 'made' | 'fields'）。
-   箱の大きさは文字数から見積もる（js / es の長い方を es の字の大きさで）。どの倍率でも箱の中に収まるよう、いちばん多く出す near の中身で取る。
+   箱の大きさは文字数から見積もる（js / es の長い方を es の字の大きさで）。どの倍率でも箱の中に収まるよう、
+   near の中身（場面・出所・1 行）と、mid の下限 0.6 で画面 12px にした字（世界で 20px・3 行まで）の大きい方で取る。
    置き方は「目標の位置にいちばん近い空き」を横に長いらせんで探して 1 つずつ置く。置いた箱すべてとすき間を空けて
    重ならないことを確かめてから置くので、重なりは起こらない（MPL.overlaps で確かめられる）。
    - 作ったものから: 作ったもの（中心）を、同じ単元につながるものどうしが近くなる順に置く → そのまわりに学んだこと →
@@ -21,12 +22,15 @@
     made: { w: 172, pad: 6, thumb: 100, title: 14, lh: 1.45, sub: 18 },
     learned: { w: 212, px: 11, py: 9, text: 13.5, lh: 1.5, scene: 12, slh: 1.55, chip: 22 },
     unit: { w: 180, px: 10, py: 8, eb: 19, name: 14, lh: 1.45, band: 13, basic: 12, blh: 1.5, gap: 3 },
-    next: { w: 196, px: 11, py: 9, title: 14, lh: 1.45, chip: 22 },
+    next: { w: 196, px: 11, py: 9, title: 14, lh: 1.45, line: 12, llh: 1.55, chip: 22 },
     island: { px: 18, top: 50, bottom: 18, gap: 14, gutter: 250, vgap: 70 }
   };
+  // mid（0.6〜1.1）の字は画面で 12px 以上 = 倍率 0.6 で世界の 20px（map.css の max(…, 12px × 1/倍率)）。mid では 3 行まで（それより長い言葉は短く切る）
+  var MID = { px: 12 / 0.6, lines: 3, eblh: 1.6 };
   MPL.SZ = SZ;
+  MPL.MID = MID;
   MPL.GAP = GAP;
-  var TUNE = { kb: 0.03, kn: 0.008, iters: 320, step: 36, gx: 0.006, gy: 0.018, m: 10, sx: 1.3, sy: 0.5, hx: 2.2 };
+  var TUNE = { kb: 0.03, kn: 0.008, iters: 320, step: 36, gx: 0.006, gy: 0.018, m: 10, sx: 1.3, sy: 0.5, hx: 1.2 };
 
   // ---------- 文字の行数の見積もり（全角 = 1 字、半角 = 0.62 字。1 字ぶん余らせる = 行頭の禁則で次の行へ送られる分） ----------
   function charW(c, px) {
@@ -60,30 +64,37 @@
     return [sc.date, sc.time].filter(Boolean).join(' ') + ' ' + sc.text + (sc.with ? '（' + sc.with + 'と）' : '');
   }
   // 箱の大きさ（mode で単元の中身が違う: 作ったものから = 教科と学年の小見出し / 分野で見る = 算数の帯）
+  function midLines(v, width) { return Math.min(MID.lines, maxLines(v, MID.px, width)); }
   MPL.size = function (n, mode) {
-    var s, iw, h;
+    var s, iw, h, hm;
     if (n.kind === 'learned') {
       s = SZ.learned; iw = s.w - 2 * s.px - 2;
-      // 場面の行の頭に出所チップ（幅は 6 字ぶん・高さは 1 行目だけ少し高い）
+      // near: 言葉 + 場面（行の頭に出所チップ。幅は 6 字ぶん・高さは 1 行目だけ少し高い）/ mid: 言葉だけ（20px・3 行まで）
       h = 2 * s.py + 2 + maxLines(n.text, s.text, iw) * s.text * s.lh + 5 + maxLines('あああああ\u3000' + sceneStr(n.scene), s.scene, iw) * s.scene * s.slh + (s.chip - s.scene * s.slh);
-      return { w: s.w, h: Math.ceil(h) };
+      hm = 2 * s.py + 2 + midLines(n.text, iw) * MID.px * s.lh;
+      return { w: s.w, h: Math.ceil(Math.max(h, hm)) };
     }
     if (n.kind === 'unit') {
       s = SZ.unit; iw = s.w - 2 * s.px - 2;
       // 中身: 作ったものから = 教科と学年 / 名前 / 基礎学習の 1 行（2 行まで）。分野で見る = 名前 /（算数は）帯 / 基礎学習の 1 行
-      var kids = mode === 'fields' ? (n.material ? 3 : 2) : 3;
+      var kids = mode === 'fields' ? (n.material ? 3 : 2) : 3, kidsMid = mode === 'fields' ? (n.material ? 2 : 1) : 2;
       h = 2 * s.py + 2 + maxLines(n.name, s.name, iw) * s.name * s.lh + 2 * s.basic * s.blh + (kids - 1) * s.gap;
-      if (mode === 'fields') { if (n.material) h += s.band; } else h += s.eb;
-      return { w: s.w, h: Math.ceil(h) };
+      hm = 2 * s.py + 2 + midLines(n.name, iw) * MID.px * s.lh + (kidsMid - 1) * s.gap;
+      if (mode === 'fields') { if (n.material) { h += s.band; hm += s.band; } } else { h += s.eb; hm += MID.px * MID.eblh; }
+      return { w: s.w, h: Math.ceil(Math.max(h, hm)) };
     }
     if (n.kind === 'next') {
       s = SZ.next; iw = s.w - 2 * s.px - 2;
-      h = 2 * s.py + 2 + maxLines(n.title, s.title, iw) * s.title * s.lh + 6 + s.chip;
-      return { w: s.w, h: Math.ceil(h) };
+      // near: 題 + バディの 1 行（行の頭に出所チップ）/ mid: 題だけ
+      h = 2 * s.py + 2 + maxLines(n.title, s.title, iw) * s.title * s.lh + 5 + maxLines(['あああああ\u3000'].concat(Array.isArray(n.line) ? n.line.map(function (t) { return 'あああああ\u3000' + t; }) : []), s.line, iw) * s.line * s.llh + (s.chip - s.line * s.llh);
+      hm = 2 * s.py + 2 + midLines(n.title, iw) * MID.px * s.lh;
+      return { w: s.w, h: Math.ceil(Math.max(h, hm)) };
     }
     s = SZ.made; iw = s.w - 2 * s.pad - 2;
-    h = 2 * s.pad + 2 + s.thumb + 6 + Math.min(2, maxLines(n.title, s.title, iw)) * s.title * s.lh + 2 + s.sub;
-    return { w: s.w, h: Math.ceil(h) };
+    // near: 絵 + 題（3 行まで）+ 日付・作品 / mid: 絵 + 題（20px・3 行まで）
+    h = 2 * s.pad + 2 + s.thumb + 6 + Math.min(3, maxLines(n.title, s.title, iw)) * s.title * s.lh + 2 + s.sub;
+    hm = 2 * s.pad + 2 + s.thumb + 6 + midLines(n.title, iw) * MID.px * s.lh;
+    return { w: s.w, h: Math.ceil(Math.max(h, hm)) };
   };
 
   // ---------- 置く（らせんで空きを探す） ----------
@@ -201,6 +212,7 @@
   var LABEL = { top: 110, w: 150 / FAR_Z, h: (2 * 12.5 * 1.3 + 4) / FAR_Z };
   function textW(t, px) { var w = 0, str = String(t || ''); for (var i = 0; i < str.length; i++) w += charW(str[i], px); return w; }
   function pickN(v, k) { return Array.isArray(v) ? (v[k] || v[0]) : String(v == null ? '' : v); }
+  MPL.textW = textW;
 
   // ---------- 作ったものから（§AB-4） ----------
   function layoutMade(g) {
