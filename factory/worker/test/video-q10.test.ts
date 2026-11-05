@@ -58,6 +58,9 @@ let nullPut: Set<string>;
 /** §Q-9.1 の 1 文（取り置き）を試みた回数と、入った回数 */
 let reserveTries: number;
 let reserveWins: number;
+/** 取り置きの 1 文を流す直前・R2 の put の直前に呼ぶ（時計を進めて「時間がかかった」を作る） */
+let onReserve: (() => void) | null;
+let onPut: ((k: string) => void) | null;
 
 const callKey = (vid: string, n: number) => `${PREFIX}video-calls/${vid}/${n}.json`;
 const callKeys = () => [...r2.keys()].filter((k) => k.includes('/video-calls/')).sort();
@@ -74,6 +77,7 @@ function makeEnv(vars: Record<string, string> = {}): Env {
           bind: (...p: unknown[]) => wrap(s.bind(...p)),
           run: async () => {
             reserveTries++;
+            onReserve?.();
             const r = await s.run();
             if (Number(r.meta?.changes ?? 0) > 0) reserveWins++;
             return r;
@@ -88,6 +92,7 @@ function makeEnv(vars: Record<string, string> = {}): Env {
     R2: {
       // Cloudflare の R2 の put: onlyIf の条件が成り立たなければ保存せず null を返す
       async put(k: string, v: string, o?: { onlyIf?: { etagDoesNotMatch?: string } }) {
+        onPut?.(k);
         if (failPut.has(k)) throw new Error('r2_down');
         if (nullPut.has(k)) return null;
         if (o?.onlyIf?.etagDoesNotMatch === '*' && r2.has(k)) return null;
@@ -180,8 +185,12 @@ let sleeps: number[];
 const fakeSleep = async (ms: number) => {
   sleeps.push(ms);
 };
-/** 1 回の試行の動画の記録（verify.ts の loadVideoNotes を直接） */
-const attempt = (env: Env, g: GeminiPort | undefined, ms = 60_000) => loadVideoNotes(env, g, V, vids(), { deadline: Date.now() + ms, sleep: fakeSleep });
+/**
+ * 1 回の試行の動画の記録（verify.ts の loadVideoNotes を直接）。id を渡さなければ呼ぶたびに新しい試行（verification_token）。
+ * 同じ id を渡すと「同じ試行の再開」（Batch の no_time → to_submit）
+ */
+const attempt = (env: Env, g: GeminiPort | undefined, ms = 60_000, id: string = crypto.randomUUID(), sleep = fakeSleep) =>
+  loadVideoNotes(env, g, V, vids(), { deadline: Date.now() + ms, sleep, attempt: id });
 
 // 検証係（同期・Batch）の stub
 type Block = { type: string; text?: string };
@@ -268,6 +277,8 @@ beforeEach(() => {
   nullPut = new Set();
   reserveTries = 0;
   reserveWins = 0;
+  onReserve = null;
+  onPut = null;
   sleeps = [];
 });
 afterEach(() => {
@@ -393,6 +404,107 @@ describe('§Q-10 13 やり直し（試行の中・試行をまたぐ）', () => 
     expect(g.calls).toHaveLength(2);
     expect(vvRows()).toEqual(['vv:v1:v1', 'vv:v1:v1:r2']);
     expect(f.notes.map((n) => n.text)).toEqual([`- 1:20 ${YT1} 呼び出し 2`]);
+  });
+
+  it('同じ試行の再開（同じ verification_token）では、前の再開の分を含めて試行の中で 2 回まで。別の試行なら 3 回目を呼べる', async () => {
+    seed([video()]);
+    enable();
+    const env = makeEnv();
+    const g = scripted(['server']);
+    await attempt(env, g.port, 60_000, 'tok-A');
+    expect(g.calls).toHaveLength(2);
+    expect(callRecord('v1', 1)).toMatchObject({ attempt: 'tok-A' });
+    expect(callRecord('v1', 2)).toMatchObject({ attempt: 'tok-A' });
+    reserveTries = 0;
+    await attempt(env, g.port, 60_000, 'tok-A');
+    expect(g.calls).toHaveLength(2);
+    expect(reserveTries).toBe(0);
+    expect(vvRows()).toEqual(['vv:v1:v1', 'vv:v1:v1:r2']);
+    await attempt(env, g.port, 60_000, 'tok-B');
+    expect(g.calls).toHaveLength(3);
+    expect(callRecord('v1', 3)).toMatchObject({ attempt: 'tok-B', outcome: 'retryable' });
+  });
+
+  it('Batch: 503 が 2 回 → 計画の保存が遅れて submit=no_time（同じ試行が to_submit のまま）→ 次の cron の再開でも 3 回目を呼ばない', async () => {
+    seed([video()]);
+    enable();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-05T03:00:00.000Z'));
+    const env = makeEnv();
+    const g = scripted(['server']);
+    const { port, created } = batchPort(reportMsg([]));
+    // 計画（plan.json）の保存に 2 分かかる → 提出の前の残り時間の確かめ直しで no_time
+    onPut = (k) => {
+      if (k.endsWith('/plan.json')) vi.setSystemTime(Date.now() + 120_000);
+    };
+    expect(await runVerificationStep(env, port, { deadline: Date.now() + 120_000, gemini: g.port, videoSleep: fakeSleep })).toContain('submit=no_time');
+    const row = () => one(db, "SELECT verification_status, verify_phase, verification_token, verification_attempts FROM material_versions WHERE id = 'v1'");
+    const first = row();
+    expect(first).toMatchObject({ verification_status: 'running', verify_phase: 'to_submit', verification_attempts: 1 });
+    expect(g.calls).toHaveLength(2);
+    expect(callRecord('v1', 2)).toMatchObject({ outcome: 'retryable', attempt: first.verification_token });
+    onPut = null;
+    // 次の cron: 同じ試行（同じ token）を再開する
+    expect(await runVerificationStep(env, port, { deadline: Date.now() + 120_000, gemini: g.port, videoSleep: fakeSleep })).toContain('submit=submitted');
+    expect(row()).toMatchObject({ verification_token: first.verification_token, verification_attempts: 1 });
+    expect(g.calls).toHaveLength(2);
+    expect(vvRows()).toEqual(['vv:v1:v1', 'vv:v1:v1:r2']);
+    expect(created).toHaveLength(1);
+    // 別の試行なら 3 回目を呼べる（生涯 3 回まで）
+    await attempt(env, g.port);
+    expect(g.calls).toHaveLength(3);
+  });
+
+  it('20 秒の待ちが終わるまで次の呼び出しをしない（待ちは制御できる promise）', async () => {
+    seed([video()]);
+    enable();
+    const g = scripted(['server', 'ok']);
+    let release: (() => void) | null = null;
+    const waited: number[] = [];
+    const heldSleep = (ms: number) =>
+      new Promise<void>((r) => {
+        waited.push(ms);
+        release = r;
+      });
+    const p = attempt(makeEnv(), g.port, 60_000, undefined, heldSleep);
+    await vi.waitFor(() => expect(release).not.toBeNull());
+    // 待ちの間: 1 回目だけ・2 回目の取り置きもまだ
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(waited).toEqual([VIDEO_RETRY_WAIT_MS]);
+    expect(g.calls).toHaveLength(1);
+    expect(vvRows()).toEqual(['vv:v1:v1']);
+    release!();
+    const f = await p;
+    expect(g.calls).toHaveLength(2);
+    expect(vvRows()).toEqual(['vv:v1:v1', 'vv:v1:v1:r2']);
+    expect(f.notes).toHaveLength(1);
+  });
+
+  it('取り置いた後に締め切りまで VIDEO_CALL_MIN_MS 未満 → Gemini を呼ばず、その n の記録を retryable・deadline_before_call で書く。次の試行は n+1 を呼ぶ', async () => {
+    seed([video()]);
+    enable();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-05T03:00:00.000Z'));
+    const env = makeEnv();
+    const g = scripted(['ok']);
+    const logs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((x: unknown) => void logs.push(String(x)));
+    // 取り置きの 1 文に 15 秒かかる（呼ぶ前の残り 40 秒 → 取り置きの後は 25 秒 < 30 秒）
+    onReserve = () => vi.setSystemTime(Date.now() + 15_000);
+    const f = await attempt(env, g.port, 40_000);
+    expect(f.missing).toEqual(['v1']);
+    expect(g.calls).toHaveLength(0);
+    expect(vvRows()).toEqual(['vv:v1:v1']);
+    expect(callRecord('v1', 1)).toMatchObject({ n: 1, outcome: 'retryable', error: 'deadline_before_call' });
+    expect(callRecord('v1', 1)).not.toHaveProperty('text');
+    expect(logs.map((l) => JSON.parse(l) as Obj).filter((l) => l.at === 'video_notes')).toEqual([
+      { at: 'video_notes', version_id: 'v1', video_id: 'v1', call: 1, model_role: 'primary', result: 'deadline_before_call' },
+    ]);
+    onReserve = null;
+    const next = await attempt(env, g.port);
+    expect(g.calls).toHaveLength(1);
+    expect(vvRows()).toEqual(['vv:v1:v1', 'vv:v1:v1:r2']);
+    expect(next.notes).toHaveLength(1);
   });
 
   it('同じ n を 2 つの試行が同時に取りに行くと、片方だけが呼ぶ。負けた側は記録を書かず、勝った側の ok が残る', async () => {
@@ -652,6 +764,20 @@ describe('§Q-10 13 上限・無効・回収', () => {
     expect(vvRows()).toEqual(['vv:other:v1', 'vv:v1:v1']);
     db.prepare("DELETE FROM cost_ledger WHERE id = 'cap'").run();
     expect((await attempt(env, g.port)).notes).toHaveLength(1);
+    expect(g.calls).toHaveLength(2);
+    expect(vvRows()).toEqual(['vv:v1:v1', 'vv:v1:v1:r2']);
+  });
+
+  it('日の上限で n = 2 の取り置きが入らない時は呼ばず（行は増えない）、上限が空いた後の試行で n = 2 を呼べる', async () => {
+    seed([video()]);
+    enable();
+    // 日次 15¢: n=1 の 10¢ は入る、n=2 は 20¢ > 15¢
+    const g = scripted(['server', 'ok']);
+    await attempt(makeEnv({ DAILY_CAP_CENTS: '15' }), g.port);
+    expect(g.calls).toHaveLength(1);
+    expect(vvRows()).toEqual(['vv:v1:v1']);
+    expect(callRecord('v1', 1).outcome).toBe('retryable');
+    expect((await attempt(makeEnv(), g.port)).notes).toHaveLength(1);
     expect(g.calls).toHaveLength(2);
     expect(vvRows()).toEqual(['vv:v1:v1', 'vv:v1:v1:r2']);
   });
