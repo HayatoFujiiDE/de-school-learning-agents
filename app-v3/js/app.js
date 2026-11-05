@@ -72,8 +72,8 @@ window.DES = window.DES || {};
   var ROUTES = ['talk', 'plan', 'make', 'works', 'today', 'self', 'map', 'trail', 'paused'];
   var NAV = ['talk', 'make', 'works', 'today', 'self', 'map', 'trail'];
 
-  // #make/<id>（作業台）と #works/capture は前方一致（CONTRACT-v3 §U-3）。他は完全一致
-  var PREFIX = ['make', 'works'];
+  // #make/<id>（作業台）・#works/<id>・#today/<id> は前方一致（CONTRACT-v3 §U-3 / §W / §X）。他は完全一致
+  var PREFIX = ['make', 'works', 'today'];
   function route() {
     var h = window.location.hash.replace(/^#/, ''), base = h.split('/')[0];
     if (PREFIX.indexOf(base) >= 0) return base;
@@ -158,7 +158,7 @@ window.DES = window.DES || {};
   var toastTimer = null, toastFn = null, toastGone = null;
   function placeToast() {
     var el = $('#toast'), host = document.body;
-    ['#plan-dialog', '#make-dialog', '#works-dialog'].forEach(function (s) { var d = $(s); if (d && d.open) host = d; });
+    ['#plan-dialog', '#make-dialog', '#works-dialog', '#today-dialog'].forEach(function (s) { var d = $(s); if (d && d.open) host = d; });
     if (el.parentNode !== host) host.appendChild(el);
   }
   APP.toast = function (text, action) {
@@ -364,6 +364,7 @@ window.DES = window.DES || {};
     else if (r === 'plan') DES.plan.renderPage(main);
     else if (r === 'make') DES.make.render(main, APP.routeArg());
     else if (r === 'works') DES.works.render(main, APP.routeArg());
+    else if (r === 'today') DES.today.render(main, APP.routeArg());
     else if (r === 'self') DES.self.render(main);
     else if (rebuild) {
       if (r === 'paused') { if (DES.make.pausedAct()) DES.make.renderPaused(main); else DES.talk.renderPaused(main); }
@@ -420,10 +421,11 @@ window.DES = window.DES || {};
 
   function closeTransient() {
     var u = DES.ui;
-    ['#plan-dialog', '#nav-drawer', '#row-sheet', '#pick-sheet', '#mode-dialog', '#make-dialog', '#works-dialog'].forEach(function (s) { APP.closeDialog($(s), true); });
+    ['#plan-dialog', '#nav-drawer', '#row-sheet', '#pick-sheet', '#mode-dialog', '#make-dialog', '#works-dialog', '#today-dialog'].forEach(function (s) { APP.closeDialog($(s), true); });
     u.menu = null; u.edit = null; u.goalEdit = null; u.noSlot = {};
     DES.make.resetUi();
     DES.works.resetUi();
+    DES.today.resetUi();
   }
   function onHash() {
     var u = DES.ui, st = DES.state, r = route();
@@ -521,6 +523,7 @@ window.DES = window.DES || {};
     DES.talk.bind();
     DES.make.bind();
     DES.works.bind();
+    DES.today.bind();
     APP.render();
   }
   init();
