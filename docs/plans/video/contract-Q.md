@@ -285,3 +285,4 @@
     - 動画の確認が無効（video_gen_enabled 無し）でも oEmbed は呼ばれる。
     - 既存のテストが green。新しいテストが変更前のコードで落ちる（mutation）。
 11. **範囲**: 触るのは `src/youtube-oembed.ts`（新規）・`src/fake/`（fake の port）・`src/anthropic.ts`（port の取得。既存の getGeminiPort と同じ形）・`src/verify.ts`・`src/videos.ts`・`src/routes/review.ts`・`src/checks/citations.ts`・`src/checks/triage.ts`・`public/admin/admin.js`（と必要なら admin.css）・test/。migration・wrangler.jsonc・職人の定義は触らない（定義は司令塔）。
+12. **確認済みと未確認**: 手元の curl で、oEmbed は実在の id に 200、存在しない 11 文字の id に 404 を返し、応答の key は `author_name`・`author_url`・`html`・`title` などだった（2026-11-05）。Cloudflare Workers からの到達（YouTube が Workers の IP を断らないか）と、埋め込み不可の動画の status は未確認。届かない時は `unavailable` として従来どおり進む（fail-soft）ので、deploy 後に実注文で確かめる。
