@@ -586,7 +586,80 @@
     return out;
   }
 
+  // ---------- 全体の帯（§AE-1 / AE-5）: 学ぶ内容の全部（小 4 の算数・理科・国語・社会の全単元 = 分野で見ると同じ集合）を 1 マスずつ ----------
+  // 帯の並び = 分野で見るの島の順（教科 → 領域 → 単元。算数は学習指導要領の順）
+  function bandUnits() {
+    var out = [];
+    MPD.islands().forEach(function (s) { s.units.forEach(function (code) { var u = MPD.anyUnit(code); if (u) out.push(u); }); });
+    return out;
+  }
+  // 単元ごとの状態。「作ったものでふれた」と「基礎学習で終えた」は別の印（混ぜない）:
+  //   touched = 外していない学んだことを通って作ったものにつながる（g は外したものを落としたグラフ = 「違う」で外したものは数えない）/ madeIds = その作ったもの
+  //   done / total = 両方そろった項目 / 項目数（教材の無い単元は 0 / 0）
+  //   state = 基礎学習の印があればそちら（全部終えた = done / 1 つでも問題・説明の印 = doing）、無ければ touched / none。both = ふれた + 基礎学習の印
+  // counts = 印ごとの単元の数（touched は ふれた単元すべて = both を含む。none / doing / done は state の数）/ byState = state ごとの数（合計 = 単元の数）
+  function coverage(g, units, prog) {
+    prog = prog || MPD.progress;
+    units = Array.isArray(units) ? units : bandUnits();
+    var made = {}, out = { units: [], counts: { none: 0, touched: 0, doing: 0, done: 0, both: 0 }, byState: { none: 0, touched: 0, doing: 0, done: 0 } }, seen = {};
+    if (g && g.nodes) g.nodes.units.forEach(function (n) { if (n && n.made && n.made.length) made[n.code] = n.made.slice(); });
+    units.forEach(function (u) {
+      if (!u || typeof u.code !== 'string' || seen[u.code]) return;
+      seen[u.code] = true;
+      var pr = u.material !== false && Array.isArray(u.items) ? progress(u, prog) : { done: 0, total: 0, practiceOnly: 0, explainOnly: 0 };
+      var basic = pr.total && pr.done === pr.total ? 'done' : (pr.done + pr.practiceOnly + pr.explainOnly > 0 ? 'doing' : null);
+      var ids = made[u.code] || [], touched = ids.length > 0, state = basic || (touched ? 'touched' : 'none');
+      out.units.push({ id: u.code, subject: u.sub || null, touched: touched, madeIds: ids, done: pr.done, total: pr.total, state: state, both: touched && !!basic });
+      out.byState[state] += 1;
+      if (touched) out.counts.touched += 1;
+      if (touched && basic) out.counts.both += 1;
+      if (state !== 'touched') out.counts[state] += 1;
+    });
+    return out;
+  }
+  // 札が飛ぶ計画（§AE-3 / AE-4）。fromRects / toRects = { id: { x, y, w, h } }（画面の px）。決定論（同じ入力で同じ出力）。
+  // opts: order（飛ぶ順 = 帯の並び）/ bounds（出発点の範囲 = 地図の枠。中心がこの外のノードは、枠の端のいちばん近い所から出る = offscreen）/
+  //   toBounds（行き先の範囲。外なら端の いちばん近い所へ = landOff）/ start・stagger（1 つずつずらす）・spread（ずらしの合計の上限。多い時は詰める）・dur
+  function isRect(r) { return isObj(r) && fin(r.x) && fin(r.y) && fin(r.w) && fin(r.h) && r.w >= 0 && r.h >= 0; }
+  function clampRect(r, b) {
+    var c = { x: r.x + r.w / 2, y: r.y + r.h / 2 }, o = { x: r.x, y: r.y, w: r.w, h: r.h };
+    if (!isRect(b) || (c.x >= b.x && c.x <= b.x + b.w && c.y >= b.y && c.y <= b.y + b.h)) return { r: o, out: false };
+    var cx = Math.min(Math.max(c.x, b.x), b.x + b.w), cy = Math.min(Math.max(c.y, b.y), b.y + b.h);
+    return { r: { x: cx - r.w / 2, y: cy - r.h / 2, w: r.w, h: r.h }, out: true };
+  }
+  function flightPlan(fromRects, toRects, opts) {
+    opts = opts || {};
+    fromRects = isObj(fromRects) ? fromRects : {};
+    toRects = isObj(toRects) ? toRects : {};
+    var order = Array.isArray(opts.order) ? opts.order : Object.keys(toRects), ids = [], seen = {};
+    order.forEach(function (id) { if (typeof id === 'string' && !seen[id] && isRect(fromRects[id]) && isRect(toRects[id])) { seen[id] = true; ids.push(id); } });
+    var n = ids.length, start = fin(opts.start) ? opts.start : 80, stagger = fin(opts.stagger) ? opts.stagger : 25, spread = fin(opts.spread) ? opts.spread : 580;
+    var dur = fin(opts.dur) ? opts.dur : 640, s = n > 1 ? Math.min(stagger, spread / (n - 1)) : 0;
+    return ids.map(function (id, i) {
+      var f = clampRect(fromRects[id], opts.bounds), t = clampRect(toRects[id], opts.toBounds);
+      return { id: id, from: f.r, to: t.r, delay: Math.round((start + i * s) * 10) / 10, dur: dur, offscreen: f.out, landOff: t.out };
+    });
+  }
+  // 1 つの札の道すじ（ゆるい弧）: 箱の真ん中が 2 次ベジェ（制御点は弦の真ん中から上側へ bend × 弦の長さ）を通り、大きさは比で（掛け算で）変わる。
+  // 速さは ゆっくり → 速く → ゆっくり（3 次）。返すのは steps + 1 こまの箱 { offset, x, y, w, h }（画面の px）
+  function flightKeys(from, to, steps, bend) {
+    steps = Math.max(2, Math.round(steps || 16));
+    bend = fin(bend) ? bend : 0.16;
+    var c0 = { x: from.x + from.w / 2, y: from.y + from.h / 2 }, c1 = { x: to.x + to.w / 2, y: to.y + to.h / 2 }, dx = c1.x - c0.x, dy = c1.y - c0.y;
+    var nx = -dy, ny = dx;
+    if (ny > 0) { nx = -nx; ny = -ny; }
+    var cp = { x: (c0.x + c1.x) / 2 + nx * bend, y: (c0.y + c1.y) / 2 + ny * bend }, out = [];
+    function sz(a, b, e) { return a > 0 && b > 0 ? a * Math.pow(b / a, e) : a + (b - a) * e; }
+    for (var k = 0; k <= steps; k++) {
+      var t = k / steps, e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2, q = 1 - e;
+      var x = q * q * c0.x + 2 * q * e * cp.x + e * e * c1.x, y = q * q * c0.y + 2 * q * e * cp.y + e * e * c1.y, w = sz(from.w, to.w, e), h = sz(from.h, to.h, e);
+      out.push({ offset: t, x: x - w / 2, y: y - h / 2, w: w, h: h });
+    }
+    return out;
+  }
+
   var pure = {
+    bandUnits: bandUnits, coverage: coverage, flightPlan: flightPlan, flightKeys: flightKeys,
     flowCols: flowCols, flowRel: flowRel, flowOrder: flowOrder, visible: visible,
     conceptView: conceptView, conceptNodes: conceptNodes, conceptLines: conceptLines, moveTargets: moveTargets, applyMoved: applyMoved, normalizeMoved: normalizeMoved, pruneMoved: pruneMoved,
     progress: progress, overall: overall, isBlank: isBlank, lastDate: lastDate, dayNum: dayNum, graph: graph, related: related, peers: peers,
@@ -594,6 +667,8 @@
     decline: decline, undecline: undecline, declineNext: declineNext, undeclineNext: undeclineNext, unitLinks: unitLinks, nodeById: nodeById, hasNode: hasNode, posSettle: posSettle
   };
   pure.MOVE_MAX = MOVE_MAX;
+  // 遷移の時間（§AE-3 / AE-4。ms）: 地図と全体の出入り / 札（作ったものから・分野で見る → 全体）/ 1 つだけ / 逆向き / 印 / 下の札の帯
+  pure.XT = { fade: 350, start: 80, stagger: 25, spread: 580, dur: 640, single: 200, singleDur: 700, rStart: 120, rSpread: 560, rDur: 700, mark: 250, sweep: 300, steps: 16, bend: 0.16 };
   Object.keys(pure).forEach(function (k) { MP[k] = pure[k]; });
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
   if (typeof document === 'undefined') return;
@@ -821,7 +896,8 @@
   // 幅が足りない時（< 1024）は見出しの下に折り返す。基礎学習・単元詳細ではタブだけ ----------
   function viewHash(v) { return v === 'flow' || v === 'fields' || v === 'concepts' || v === 'list' ? '#map/' + v : '#map'; }
   function isMapView(v) { return v === 'made' || v === 'fields'; }
-  function switches(tab, view) {
+  // 全体の画面（基礎学習）では、タブの左に「つながりで見る」（§AE-4。最後に使った地図系の見方へ逆向きに飛ぶ）
+  function switches(tab, view, toLinks) {
     var tabs = H('div', { class: 'studio-tabs mp-tabs' }, [H('div', { class: 'segmented', role: 'group', 'aria-label': T('mp_tabs_label') }, ['links', 'basics'].map(function (k) {
       var on = k === tab;
       return H('button', { type: 'button', class: on ? 'active' : null, 'data-action': 'mp-tab', 'data-arg': k, 'aria-current': on ? 'page' : null }, T(k === 'links' ? 'mp_tab_links' : 'mp_tab_basics'));
@@ -830,14 +906,15 @@
       var on = v === view;
       return H('button', { type: 'button', class: on ? 'active' : null, 'data-action': 'mp-view', 'data-arg': v, 'aria-current': on ? 'page' : null }, T('mp_view_' + v));
     }))]);
-    return H('div', { class: 'mp-switch' }, [tabs, views]);
+    var back = toLinks ? H('button', { type: 'button', class: 'btn small mpo-linksbtn', 'data-action': 'mpo-links' }, [icon('map'), H('span', null, T('mp_to_links'))]) : null;
+    return H('div', { class: 'mp-switch' }, [back, tabs, views]);
   }
   function head(tab, view) {
     return [H('div', { class: 'mp-headrow' }, [
       // 概念で見るは参考の見方（§AD-2）: 説明の位置に小さく印
       H('div', { class: 'page-head mp-head' }, [H('div', null, [H('h1', { tabindex: '-1', 'data-fk': 'mp-h' }, T('map')),
         H('p', null, view === 'concepts' && tab === 'links' ? [H('span', { class: 'mp-ref' }, T('mp_ref_view')), H('span', null, T('mp_head_sub'))] : T('mp_head_sub'))])]),
-      switches(tab, view)
+      switches(tab, view, tab === 'basics')
     ])];
   }
 
@@ -860,7 +937,11 @@
   function bigKids(on) { return [icon(on ? 'shrink' : 'expand'), H('span', null, T(on ? 'mp_big_off' : 'mp_big'))]; }
   function bigBtn() {
     var on = !!mapUi().big;
-    return H('button', { type: 'button', class: 'btn mp-bigbtn mp-ovl-top', 'data-action': 'mp-big', 'aria-pressed': on ? 'true' : 'false' }, bigKids(on));
+    return H('button', { type: 'button', class: 'btn mp-bigbtn', 'data-action': 'mp-big', 'aria-pressed': on ? 'true' : 'false' }, bigKids(on));
+  }
+  // 枠の右上: 「全体で見る」（格子 + 文字。§AE-2）→ 大きく見る の左
+  function topRight() {
+    return H('div', { class: 'mp-tr mp-ovl-top' }, [H('button', { type: 'button', class: 'btn mp-allbtn', 'data-action': 'mp-overview' }, [icon('grid'), H('span', null, T('mp_overview'))]), bigBtn()]);
   }
   // 枠の左下: 「しるしの見方」→ 小さな面（線の見本 + ノードの見本）。Esc と外側クリックで閉じ、ボタンにフォーカスが戻る（§AC-4）
   function legend(view) {
@@ -927,7 +1008,8 @@
     } else if (n.kind === 'unit') {
       if (view !== 'fields') kids.push(H('span', { class: 'mp-eb' }, unitHead(n)));
       kids.push(H('span', { class: 'mp-t' }, pick(n.name)));
-      if (view === 'fields' && n.material) { var u = MPD.unit(n.code); kids.push(H('span', { class: 'mp-bandrow' }, [band(u, true), H('span', { class: 'mp-pct' }, progress(u, MPD.progress).pct + '%')])); }
+      // 算数の単元は小さな帯（分野で見る = いつも / 作ったものから = near の時だけ。§AE-2。出し分けは map.css）
+      if (n.material) { var u = MPD.unit(n.code); kids.push(H('span', { class: 'mp-bandrow' }, [band(u, true), H('span', { class: 'mp-pct' }, progress(u, MPD.progress).pct + '%')])); }
       kids.push(H('span', { class: 'mp-sub' }, basicLine(n)));
     } else {
       // near: 題 + バディの 1 行（なぜ作れそうか。行の頭に出所チップ）
@@ -988,7 +1070,7 @@
     ]);
     // 枠の上に重ねる部品（チップ・大きく見る・しるしの見方）は枠の外の兄弟に置く（地図の動かし方の受け口に入らない。§AC-4 / AC-6）
     // ≤ 700 はチップだけ枠の上の 1 行（mp-stage-in が枠の位置の基準）
-    kids.push(H('div', { class: 'mp-stage', 'data-view': view }, [chipPanel(), H('div', { class: 'mp-stage-in' }, [bigBtn(), frame, legend(view)])]), H('p', { id: 'mp-frame-hint', class: 'sr-only' }, T('mp_frame_hint')));
+    kids.push(H('div', { class: 'mp-stage', 'data-view': view }, [chipPanel(), H('div', { class: 'mp-stage-in' }, [topRight(), frame, legend(view)])]), H('p', { id: 'mp-frame-hint', class: 'sr-only' }, T('mp_frame_hint')));
     var page = H('div', { class: 'map-page is-map', 'data-view': view }, kids);
     page._labels = labelItems(g, L, view, vp);
     // 線の引き直し（動かした時）用
@@ -1392,6 +1474,8 @@
       }
       // 算数は「基礎学習で見る」、他教科は教材がこれからの 1 文（リンクなし）
       if (n.material) ops.push(H('a', { class: 'btn small orange', href: '#map/u/' + n.code, 'data-action': 'mp-unit', 'data-id': n.code }, [H('span', null, T('mp_see_basic'))]));
+      // 全体の中で見る（§AE-2）: その単元だけを目立たせて全体の画面へ（札が 1 つだけ飛ぶ）
+      ops.push(btn(T('mp_inall'), 'mp-inall', { id: n.code, icon: 'grid' }));
       ops.push(btn(T('mp_talk'), 'mp-talk', { id: n.id, icon: 'chat' }));
     } else if (n.kind === 'next') {
       kids.push(H('p', { class: 'mp-scene-line' }, [srcChip('buddy'), H('span', null, nextFrom(g, n))]));
@@ -1742,37 +1826,108 @@
     if (u.reveal && isMapView(view)) { var id = u.reveal; u.reveal = null; centerNode(page, id, false); }
   }
 
-  // ---------- 基礎学習（§Y-3）: 4 領域を段に・学習指導要領の順で固定。マス = 左 問題 / 右 説明 ----------
-  function unitRow(u, linked) {
+  // ---------- 全体の画面 `#map/basics`（§AE-1。§Y-3 の画面を置き換え。項目の印・帯・% の決まりは §Y-3 のまま）----------
+  // 上 = 全体の帯（全単元を 1 マスずつ。教科ごとに少し間を空けて教科名を下に）+ 凡例 1 行（4 つの見本 + 単元の数）/
+  // 下 = 教科ごとの段（算数 = 領域ごとの段・名前 + 項目の帯 + %。理科・国語・社会 = 単元の札）。作ったものでふれた単元には印（橙の丸 + 作ったものの絵 最大 3）
+  function stName(state) { return T({ none: 'mp_st_none', touched: 'mp_st_touched', doing: 'mp_st_doing', done: 'mp_st_done' }[state]); }
+  // マスの塗りの高さ = 終えた項目 / 項目数。進めている（どれかの項目に問題・説明の印）けれど終えた項目が 0 の時も、細い塗りで見えるように
+  function cellFill(c) { return c.state === 'done' ? 1 : (c.state === 'doing' ? Math.max(0.12, c.total ? c.done / c.total : 0) : 0); }
+  function cellBox(c, extra) {
+    var f = cellFill(c), kids = [];
+    if (f) kids.push(H('span', { class: 'mpo-fill', style: '--f:' + Math.round(f * 1000) / 1000 }));
+    if (c.touched) kids.push(H('span', { class: 'mpo-dot' }));
+    return H('span', { class: 'mpo-box' + (extra ? ' ' + extra : ''), 'aria-hidden': 'true' }, kids);
+  }
+  function cellLabel(c, u) {
+    var st = [];
+    if (c.touched) st.push(T('mp_st_touched'));
+    if (c.state === 'doing' || c.state === 'done') st.push(stName(c.state));
+    return T('mp_cell_label', { subject: pick(u.subject), name: pick(u.name), state: st.length ? st.join('・') : T('mp_st_none') });
+  }
+  function overviewBand(cov) {
+    var by = {};
+    cov.units.forEach(function (c) { by[c.id] = c; });
+    return H('div', { class: 'mpo-band', role: 'group', 'aria-label': T('mp_all_band') }, MPD.subjects.map(function (sj) {
+      var cells = bandUnits().filter(function (u) { return u.sub === sj.id; }).map(function (u) {
+        var c = by[u.code];
+        return H('button', { type: 'button', class: 'mpo-cell', 'data-action': 'mpo-cell', 'data-id': u.code, 'data-state': c.state, 'data-touched': c.touched ? 'true' : 'false', 'aria-label': cellLabel(c, u) }, [cellBox(c)]);
+      });
+      return H('div', { class: 'mpo-grp', 'data-sub': sj.id }, [H('div', { class: 'mpo-cells' }, cells), H('span', { class: 'mpo-sj', 'aria-hidden': 'true' }, pick(sj.name))]);
+    }));
+  }
+  function overviewLegend(cov) {
+    var sample = { none: { state: 'none', touched: false }, touched: { state: 'touched', touched: true }, doing: { state: 'doing', touched: false, done: 1, total: 2 }, done: { state: 'done', touched: false } };
+    var n = { none: cov.counts.none, touched: cov.counts.touched, doing: cov.counts.doing, done: cov.counts.done };
+    return H('p', { class: 'mpo-legend' }, ['none', 'touched', 'doing', 'done'].map(function (k) {
+      return H('span', { class: 'mpo-lg' }, [cellBox(sample[k], 'is-sample'), H('span', null, T('mp_lg_count', { label: stName(k), n: n[k] }))]);
+    }));
+  }
+  // 作ったものでふれた印（ボタン。押すと逆向きに飛んで、つながりでその単元を選んだ状態へ §AE-4）
+  function touchMark(g, c, u) {
+    if (!c || !c.touched) return null;
+    var arts = c.madeIds.slice(0, 3).map(function (id) { var a = nodeArt(nodeById(g, id)); return a ? H('span', { class: 'mpo-thumb' }, [DES.raw(a)]) : null; }).filter(Boolean);
+    return H('button', { type: 'button', class: 'mpo-touch', 'data-action': 'mpo-touch', 'data-id': u.code, 'aria-label': T('mp_st_touched') + ': ' + pick(u.name) + '（' + T('mp_to_links') + '）' },
+      [H('span', { class: 'mpo-tpill' }, [H('span', { class: 'mpo-tdot', 'aria-hidden': 'true' }), H('span', null, T('mp_st_touched')), arts.length ? H('span', { class: 'mpo-thumbs', 'aria-hidden': 'true' }, arts) : null])]);
+  }
+  function unitRow(g, u, c) {
     var pr = progress(u, MPD.progress);
-    return H('li', { class: 'mp-urow' }, [
+    return H('li', { class: 'mp-urow', 'data-unit': u.code }, [
       H('a', { class: 'mp-uname', href: '#map/u/' + u.code, 'data-fk': 'mp-u:' + u.code }, pick(u.name)),
       H('span', { class: 'mp-ubar' }, [band(u), H('span', { class: 'mp-pct' }, pr.pct + '%')]),
-      linked ? H('button', { type: 'button', class: 'mp-linked', 'data-action': 'mp-linked', 'data-id': u.code, 'aria-label': T('mp_linked_mark') + ': ' + pick(u.name) },
-        [H('span', { class: 'mp-pill' }, [icon('map'), H('span', null, T('mp_linked_mark'))])]) : null
+      touchMark(g, c, u)
     ]);
   }
+  // 理科・国語・社会の単元の札（点線の枠・「基礎学習の教材はこれから」）。マスから来た時のフォーカス先（tabindex=-1）
+  function extCard(g, u, c) {
+    return H('li', { class: 'mpo-xcard', 'data-unit': u.code }, [H('div', { class: 'mpo-xin', tabindex: '-1', 'data-fk': 'mpo-x:' + u.code, role: 'group', 'aria-label': pick(u.name) }, [
+      H('span', { class: 'mpo-xname' }, pick(u.name)), H('span', { class: 'mpo-xline' }, T('mp_no_material')), touchMark(g, c, u)
+    ])]);
+  }
+  function basicsKey(cov, ov) { return [DES.mode(), ov.pct, cov.units.map(function (c) { return c.id + ':' + c.state + ':' + c.madeIds.join(','); }).join('|')].join('#'); }
   function renderBasics(main) {
-    var g = graphNow(), linked = {}, ov = overall(MPD.units, MPD.progress);
-    g.nodes.units.forEach(function (n) { if (n.made.length) linked[n.code] = true; });
+    var g = graphNow(), cov = coverage(g, bandUnits(), MPD.progress), ov = overall(MPD.units, MPD.progress), by = {}, key = basicsKey(cov, ov);
+    // 同じ中身の描き直し（遷移の後に来る hashchange の描画など）では作り直さない（動いている印・フォーカス・読み上げの 1 文を保つ）
+    var cur = main.querySelector('.map-page[data-view="basics"]');
+    if (cur && cur._key === key) return;
+    cov.units.forEach(function (c) { by[c.id] = c; });
     var kids = head('basics');
-    var sec0 = [
-      H('div', { class: 'mp-prog-head' }, [H('h2', { id: 'mp-prog-h' }, T('mp_progress_h')), H('span', { class: 'mp-overall' }, T('mp_overall', { pct: ov.pct }))]),
+    kids.push(H('section', { class: 'mpo-all', 'aria-labelledby': 'mpo-h' }, [H('h2', { id: 'mpo-h' }, T('mp_all_h')), overviewBand(cov), overviewLegend(cov)]));
+    // 算数（§Y-3 の作り）: 全体 % は見出し横に「算数 4 年の基礎学習」と対象を明記
+    var math = [
+      H('div', { class: 'mp-prog-head' }, [H('h2', { id: 'mp-prog-h' }, pick(MPD.SUBJECT)), H('span', { class: 'mp-overall' }, T('mp_overall', { pct: ov.pct }))]),
       H('p', { class: 'mp-legend' }, [H('span', { class: 'mp-sq p', 'aria-hidden': 'true' }), H('span', { class: 'mp-sq e', 'aria-hidden': 'true' }), H('span', null, T('mp_legend'))])
     ];
-    if (isBlank(MPD.units, MPD.progress)) sec0.push(H('p', { class: 'mp-zero' }, T('mp_zero')));
+    if (isBlank(MPD.units, MPD.progress)) math.push(H('p', { class: 'mp-zero' }, T('mp_zero')));
     MPD.areas.forEach(function (area) {
-      sec0.push(H('section', { class: 'mp-area', 'aria-labelledby': 'mp-area-' + area.id }, [
+      math.push(H('section', { class: 'mp-area', 'aria-labelledby': 'mp-area-' + area.id }, [
         H('h3', { id: 'mp-area-' + area.id }, pick(area.name)),
-        H('ul', { class: 'mp-urows' }, MPD.units.filter(function (u) { return u.area === area.id; }).map(function (u) { return unitRow(u, linked[u.code]); }))
+        H('ul', { class: 'mp-urows' }, MPD.units.filter(function (u) { return u.area === area.id; }).map(function (u) { return unitRow(g, u, by[u.code]); }))
       ]));
     });
-    sec0.push(H('p', { class: 'mp-scope' }, T('mp_scope_note')));
-    kids.push(H('section', { class: 'mp-basics', 'aria-labelledby': 'mp-prog-h' }, sec0));
+    kids.push(H('section', { class: 'mp-basics', 'data-sub': 'math', 'aria-labelledby': 'mp-prog-h' }, math));
+    // 理科・国語・社会: 領域ごとに単元の札
+    MPD.subjects.forEach(function (sj) {
+      if (sj.id === 'math') return;
+      var sec = [H('h2', { id: 'mpo-sj-' + sj.id }, pick(sj.name))];
+      MPD.otherAreas.forEach(function (area) {
+        if (area.sub !== sj.id) return;
+        var us = MPD.extUnits.filter(function (u) { return u.sub === sj.id && u.area === area.id; });
+        if (!us.length) return;
+        sec.push(H('section', { class: 'mpo-area', 'aria-labelledby': 'mpo-area-' + area.id }, [H('h3', { id: 'mpo-area-' + area.id }, pick(area.name)),
+          H('ul', { class: 'mpo-xcards' }, us.map(function (u) { return extCard(g, u, by[u.code]); }))]));
+      });
+      kids.push(H('section', { class: 'mpo-subj', 'data-sub': sj.id, 'aria-labelledby': 'mpo-sj-' + sj.id }, sec));
+    });
+    kids.push(H('p', { class: 'mp-scope' }, T('mp_scope_note')));
+    // 遷移の終わりに読み上げる 1 文の置き場（§AE-3-5。先に置いておく = 文を入れた時に読まれる）
+    kids.push(H('p', { class: 'sr-only', id: 'mpx-live', 'aria-live': 'polite' }));
+    var page = H('div', { class: 'map-page is-all', 'data-view': 'basics' }, kids);
+    page._key = key;
+    page._cov = cov;
     unwatch();
     detachMap(main);
     main.textContent = '';
-    main.appendChild(H('div', { class: 'map-page', 'data-view': 'basics' }, kids));
+    main.appendChild(page);
   }
 
   // ---------- 単元（§Y-4）。地図の詳細から開いた時は、戻るリンクがその見方へ（§AB-15） ----------
@@ -1803,6 +1958,418 @@
       H('section', { class: 'mp-sec', 'aria-labelledby': 'mp-ulinks-h' }, [H('h2', { id: 'mp-ulinks-h' }, T('mp_links_h'))].concat(linkKids)),
       H('div', { class: 'mp-ops' }, [btn(T('mp_start_basic'), 'mp-start', { kls: 'orange', id: 'unit:' + u.code }), btn(T('mp_talk'), 'mp-talk', { id: 'unit:' + u.code, icon: 'chat' })])
     ]));
+  }
+
+  // ======================================================================
+  // §AE-3 / AE-4 遷移: つながり ⇄ 全体（基礎学習）をひと続きに。
+  // 重ね面は 1 枚（.mpx-ovl: position:fixed・pointer-events:none・aria-hidden・inert）。中身 = 古い画面（そのままの位置で薄くなる）+ 単元の札。
+  // 動かすのは transform と opacity だけ（Web Animations API）。タイマーは使わない: 時間はすべてアニメーションの delay で決め、
+  // 終わりは「時間を数えるだけのアニメーション」の finished で受ける（途中のこまは document.getAnimations() で止めて・進めて確かめられる）。
+  // 順: 押した時に 読む（古い画面の札の位置・大きさ）→ 書く（重ね面へ古い画面を移す）→ 行き先を描く（同じ処理の中で。白い瞬間を作らない）→
+  //     読む（行き先のマス / ノード）→ 書く（アニメーションを全部まとめて始める）。
+  // 飛ばせる: 途中のクリック・キー・Esc・ホイール・リサイズ → すぐ最後の状態。別のページ・別の見方へ移ったら片付けて終わり（残らない・二重に走らない）。
+  // prefers-reduced-motion（と表示設定の動きを減らす）では動かさず、最後の状態をすぐ出す（読み上げの 1 文は出す）
+  // ======================================================================
+  var X = null;
+  function xRect(r) { return { x: r.left, y: r.top, w: r.width, h: r.height }; }
+  function r2(n) { return Math.round(n * 100) / 100; }
+  function xKey(arg) { return (arg || '') + '|' + DES.mode() + '|' + DES.app.bp(); }
+  function xAnim(x, el, kf, o) {
+    if (!el || typeof el.animate !== 'function') return null;
+    var a = el.animate(kf, o);
+    x.anims.push(a);
+    return a;
+  }
+  var PSEUDO = typeof KeyframeEffect !== 'undefined' && 'pseudoElement' in KeyframeEffect.prototype;
+  // 札の中の箱（vb = 札の中の見えている箱。札の座標）を、画面の箱 r に重ねる transform
+  function xTf(r, vb) {
+    var sx = r.w / Math.max(0.01, vb.w), sy = r.h / Math.max(0.01, vb.h);
+    return 'translate(' + r2(r.x - vb.x * sx) + 'px,' + r2(r.y - vb.y * sy) + 'px) scale(' + r4(sx) + ',' + r4(sy) + ')';
+  }
+  // 古い画面を測る（読むだけ）。重ね面の中で同じ所に出すため、ページの文書上の位置・幅・スクロール量・大きく見るかどうか
+  function xMeasure(page) {
+    var r = page.getBoundingClientRect(), sy = window.scrollY || window.pageYOffset || 0, sx = window.scrollX || window.pageXOffset || 0;
+    return { left: r.left + sx, top: r.top + sy, width: r.width, scrollY: sy, docH: Math.max(document.documentElement.scrollHeight, r.bottom + sy), big: document.documentElement.classList.contains('mp-big'),
+      vw: window.innerWidth, vh: window.innerHeight };
+  }
+  // 重ね面 + 古い画面（ページ要素そのものを移す。スクロールしていた分は重ね面の中のスクロールで保つ = 貼り付く見出しもそのまま）
+  function xOverlay(page, m) {
+    var ovl = H('div', { class: 'mpx-ovl', 'aria-hidden': 'true' }), ghost = H('div', { class: 'mpx-ghost' + (m.big ? ' mpx-big' : '') });
+    var sp = H('div', { class: 'mpx-gsp', style: 'height:' + Math.ceil(m.docH) + 'px' }), w = H('div', { class: 'mpx-gpage', style: 'left:' + r2(m.left) + 'px;top:' + r2(m.top) + 'px;width:' + r2(m.width) + 'px' });
+    ovl.inert = true;
+    ovl.setAttribute('inert', '');
+    w.appendChild(page);
+    sp.appendChild(w);
+    ghost.appendChild(sp);
+    ovl.appendChild(ghost);
+    return { ovl: ovl, ghost: ghost };
+  }
+  // 札（重ね面の中で動く 1 つの箱）: 地図のノードの写しは、地図の枠と同じ倍率の出し方（data-lod・--inv・--dot）の中に置く = ノードと同じ見た目
+  function xCard(ctx) {
+    var at = { class: 'mpx-card' + (ctx ? ' mp-frame' : '') };
+    if (ctx) { at['data-lod'] = ctx.lod; at['data-view'] = ctx.view; at.style = '--inv:' + ctx.inv + ';--dot:' + ctx.dot + 'px'; }
+    return H('div', at);
+  }
+  function xFace(src, list, w, h) {
+    var c = src.cloneNode(true);
+    ['data-action', 'data-id', 'data-arg', 'aria-label', 'tabindex', 'id', 'href'].forEach(function (a) { c.removeAttribute(a); });
+    Array.prototype.forEach.call(c.querySelectorAll('[id]'), function (n) { n.removeAttribute('id'); });
+    c.classList.remove('mpx-gone');
+    c.classList.add('mpx-face');
+    if (list) { c.style.width = r2(w) + 'px'; c.style.height = r2(h) + 'px'; }
+    else { c.style.setProperty('--x', '0px'); c.style.setProperty('--y', '0px'); }
+    return c;
+  }
+  // マスの形の枠（札の座標で vb の大きさ）。枠線・角・丸は、マスの大きさになった時（sx, sy）に画面で 1px・4px・8px になるよう割り戻す
+  function xSquare(vb, sx, sy, c) {
+    var st = 'left:' + r2(vb.x) + 'px;top:' + r2(vb.y) + 'px;width:' + r2(vb.w) + 'px;height:' + r2(vb.h) + 'px;border-width:' + r4(1 / sy) + 'px ' + r4(1 / sx) + 'px;border-radius:' + r4(4 / sx) + 'px/' + r4(4 / sy) + 'px';
+    var kids = [];
+    if (c) {
+      var f = cellFill(c);
+      if (f) kids.push(H('span', { class: 'mpx-sqfill', style: 'height:' + r2(f * 100) + '%' }));
+      if (c.touched) kids.push(H('span', { class: 'mpx-sqdot', style: 'width:' + r4(8 / sx) + 'px;height:' + r4(8 / sy) + 'px;top:' + r4(5 / sy) + 'px;margin-left:' + r4(-4 / sx) + 'px' }));
+    }
+    return H('span', { class: 'mpx-sq', style: st }, kids);
+  }
+  // 地図のノード → 札の材料（読むだけ）。far で点になっている時は点の箱から（飛びながらマスの形になる）
+  function xNodeSrc(page, el) {
+    var id = el.getAttribute('data-id'), R = xRect(el.getBoundingClientRect()), frame = page.querySelector('.mp-frame');
+    if (!R.w && !R.h) return null;
+    var op = parseFloat(window.getComputedStyle(el).opacity);
+    if (!isFinite(op)) op = 1;
+    if (frame && el.classList.contains('mp-n')) {
+      var b = page._L && page._L.nodes[id], v = page._v;
+      if (!b || !v) return null;
+      var lod = frame.getAttribute('data-lod') || 'mid', inv = parseFloat(frame.style.getPropertyValue('--inv')) || 1 / v.z, dot = parseFloat(frame.style.getPropertyValue('--dot')) || 14;
+      var d = dot * inv, vb = lod === 'far' ? { x: b.w / 2 - d / 2, y: b.h / 2 - d / 2, w: d, h: d } : { x: 0, y: 0, w: b.w, h: b.h };
+      return { id: id, el: el, R: R, vb: vb, op: op, ctx: { lod: lod, inv: r4(inv), dot: r2(dot), view: frame.getAttribute('data-view') || '' }, list: false };
+    }
+    return { id: id, el: el, R: R, vb: { x: 0, y: 0, w: R.w, h: R.h }, op: op, ctx: null, list: true };
+  }
+  function xVisible(r, vw, vh) { var cx = r.x + r.w / 2, cy = r.y + r.h / 2; return cx >= 0 && cx <= vw && cy >= 0 && cy <= vh; }
+  // 飛ばすために押した 1 回は「飛ばす」だけ: 続いて来るそのクリックは、下に出てきた画面の部品に届けない（2 度押しで別の操作にならない）。
+  // その押し下げでフォーカスが外れる（何も無い所を押すと body へ移る）のも止める = 着いた所のフォーカスを保つ
+  function eatClick() {
+    var t = null, down = function (e) { document.removeEventListener('mousedown', down, true); e.preventDefault(); };
+    var eat = function (e) { off(); e.preventDefault(); e.stopPropagation(); };
+    var off = function () { document.removeEventListener('click', eat, true); document.removeEventListener('mousedown', down, true); clearTimeout(t); };
+    document.addEventListener('mousedown', down, true);
+    document.addEventListener('click', eat, true);
+    t = setTimeout(off, 700);
+  }
+  function xListen(x, on) {
+    var f = on ? 'addEventListener' : 'removeEventListener';
+    if (on) {
+      // Esc は「最後の状態にする」だけ（詳細を閉じる・大きく見るを戻す などの他の Esc には渡さない）。他のキーは最後の状態にしてから、そのまま届ける
+      x.onKey = function (e) { if (X !== x) return; if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); } xEnd(x, 'skip'); };
+      x.onPtr = function () { if (X !== x) return; xEnd(x, 'skip'); eatClick(); };
+      x.onAny = function () { if (X === x) xEnd(x, 'skip'); };
+    }
+    document[f]('keydown', x.onKey, true);
+    document[f]('pointerdown', x.onPtr, { capture: true, passive: true });
+    ['click', 'wheel', 'touchstart'].forEach(function (t) { document[f](t, x.onAny, { capture: true, passive: true }); });
+    window[f]('resize', x.onAny);
+  }
+  function xStartRun(x) {
+    X = x;
+    xListen(x, true);
+    document.documentElement.setAttribute('data-mpx', x.kind);
+  }
+  // 終わり（how = 'end' 最後まで / 'skip' 飛ばした / 'abort' 別の所へ移った）。何度呼んでもよい
+  function xEnd(x, how) {
+    if (!x || X !== x) return;
+    X = null;
+    xListen(x, false);
+    x.anims.forEach(function (a) { try { a.cancel(); } catch (e) { /* もう終わっている */ } });
+    x.anims = [];
+    if (x.ovl && x.ovl.parentNode) x.ovl.parentNode.removeChild(x.ovl);
+    document.documentElement.removeAttribute('data-mpx');
+    if (how === 'abort') return;
+    if (x.kind === 'all') xAfterAll(x, how === 'end');
+    else xAfterLinks(x);
+  }
+  // 全体の画面に着いた後: 読み上げの 1 文 + h1 へフォーカス。「全体の中で見る」はその単元の札へスクロールして枠を 2 回光らせる
+  function unitTarget(page, code) {
+    return page.querySelector('[data-fk="mp-u:' + esc(code) + '"]') || page.querySelector('[data-fk="mpo-x:' + esc(code) + '"]');
+  }
+  function unitBlock(page, code) { return page.querySelector('.mp-urow[data-unit="' + esc(code) + '"], .mpo-xcard[data-unit="' + esc(code) + '"] .mpo-xin'); }
+  function scrollToUnit(page, code, smooth) {
+    var blk = unitBlock(page, code), t = unitTarget(page, code);
+    if (!blk) return null;
+    var r = blk.getBoundingClientRect(), y = (window.scrollY || window.pageYOffset || 0) + r.top - Math.max(80, (window.innerHeight - r.height) / 2);
+    window.scrollTo({ top: Math.max(0, Math.round(y)), behavior: smooth ? 'smooth' : 'auto' });
+    if (t) t.focus({ preventScroll: true });
+    return blk;
+  }
+  function flash(blk) {
+    if (!blk || !motionOK()) return;
+    var f = H('span', { class: 'mpo-flash', 'aria-hidden': 'true' });
+    blk.appendChild(f);
+    var a = f.animate([{ opacity: 0 }, { opacity: 1, offset: 0.2 }, { opacity: 0, offset: 0.45 }, { opacity: 1, offset: 0.7 }, { opacity: 0 }], { duration: 1000, delay: 260, easing: 'ease-in-out', fill: 'both' });
+    var gone = function () { if (f.parentNode) f.parentNode.removeChild(f); };
+    a.finished.then(gone, gone);
+  }
+  function xAfterAll(x, natural) {
+    var page = document.querySelector('.map-page[data-view="basics"]');
+    if (!page) return;
+    var live = page.querySelector('#mpx-live'), cov = page._cov;
+    if (live && cov) live.textContent = T('mp_live', { n: cov.counts.touched });
+    if (x.single) {
+      // 最後まで見た時だけスクロールを滑らかにして 2 回光らせる。飛ばした時はすぐその札へ
+      var blk = scrollToUnit(page, x.single, natural && motionOK());
+      if (natural) flash(blk);
+      return;
+    }
+    var h1 = page.querySelector('h1');
+    if (h1 && document.activeElement !== h1 && (!document.activeElement || document.activeElement === document.body || !page.contains(document.activeElement))) h1.focus({ preventScroll: true });
+  }
+  function xAfterLinks(x) {
+    var main = document.getElementById('main'), n = x.sel ? firstShown(main, selOf(x.sel)) : null, h1 = main && main.querySelector('h1');
+    var ae = document.activeElement, free = !ae || ae === document.body || (h1 && ae === h1);
+    if (free && (n || h1)) (n || h1).focus({ preventScroll: true });
+  }
+
+  // ---------- つながり → 全体（§AE-3）。o.single = 「全体の中で見る」の単元 code（その 1 つの札だけが飛ぶ）----------
+  function goAll(o) {
+    o = o || {};
+    if (X) xEnd(X, 'skip');
+    var main = document.getElementById('main'), page = main && main.querySelector('.map-page'), h = '#map/basics', u = ui();
+    if (!page || !motionOK()) {
+      // 動かさず最後の状態をすぐ出す（読み上げの 1 文は出す。「全体の中で見る」はその単元の札へ）
+      u.ownHash = h;
+      window.location.hash = h;
+      window.scrollTo(0, 0);
+      DES.app.render();
+      var p0 = main.querySelector('.map-page[data-view="basics"]');
+      if (p0) {
+        if (o.single) scrollToUnit(p0, o.single, false);
+        var lv = p0.querySelector('#mpx-live');
+        if (lv && p0._cov) { var cnt = p0._cov.counts.touched; setTimeout(function () { if (lv.isConnected) lv.textContent = T('mp_live', { n: cnt }); }, 80); }
+      }
+      return;
+    }
+    // 読む: 古い画面と、地図に出ている単元ノード（「全体の中で見る」はその 1 つ。リスト系の見方はその単元の札）
+    var m = xMeasure(page), frame = page.querySelector('.mp-frame'), src = [], seen = {};
+    var sel = '.mp-vp .mp-n.is-unit:not(.is-hid)' + (o.single ? '[data-id="unit:' + esc(o.single) + '"]' : '');
+    // リストでは同じ単元が何枚ものカードに出るので、詳細パネルが開いているカードの中のものを先に
+    var dc = !frame && o.single ? page.querySelector('.mp-detail:not([hidden])') : null, home = dc && dc.closest ? dc.closest('.mp-card-li') : null, lsel = '.mp-node.is-unit[data-id="unit:' + esc(o.single || '') + '"]';
+    var els = frame ? page.querySelectorAll(sel) : (o.single ? Array.prototype.slice.call(home ? home.querySelectorAll(lsel) : []).concat(Array.prototype.slice.call(page.querySelectorAll(lsel))) : []);
+    Array.prototype.forEach.call(els, function (el) {
+      var s = xNodeSrc(page, el);
+      if (!s || seen[s.id]) return;
+      if (!frame && !xVisible(s.R, m.vw, m.vh)) return;
+      seen[s.id] = true;
+      src.push(s);
+    });
+    var fr = frame ? frame.getBoundingClientRect() : null, bounds = fr ? { x: fr.left + frame.clientLeft, y: fr.top + frame.clientTop, w: frame.clientWidth, h: frame.clientHeight } : { x: 0, y: 0, w: m.vw, h: m.vh };
+    // 書く: 古い画面を重ね面へ（地図の受け口は先に外す）→ 行き先を描く
+    unwatch();
+    if (page._detach) { page._detach(); page._detach = null; }
+    var o2 = xOverlay(page, m);
+    src.forEach(function (s) { s.el.classList.add('mpx-gone'); });
+    document.body.appendChild(o2.ovl);
+    var x = { kind: 'all', single: o.single || null, ovl: o2.ovl, ghost: o2.ghost, m: m, anims: [], src: src, bounds: bounds };
+    xStartRun(x);
+    u.ownHash = h;
+    window.location.hash = h;
+    window.scrollTo(0, 0);
+    DES.app.render();
+    x.rk = xKey('basics');
+    var np = main.querySelector('.map-page[data-view="basics"]');
+    if (X !== x || !np) { xEnd(x, 'skip'); return; }
+    x.page = np;
+    xBeginAll(x, np);
+  }
+  function xBeginAll(x, page) {
+    var T0 = MP.XT, single = !!x.single, cov = page._cov, by = {}, order = bandUnits().map(function (u) { return u.code; });
+    cov.units.forEach(function (c) { by[c.id] = c; });
+    // 重ね面の中のスクロールを古い画面のスクロール量に（ここで 1 回だけ並びを計算させ、そのまま読む）
+    x.ghost.scrollTop = x.m.scrollY;
+    // 読む: 行き先のマス（見えている箱）・下の札の帯と印
+    var cells = {}, to = {};
+    Array.prototype.forEach.call(page.querySelectorAll('.mpo-cell'), function (b) {
+      var id = b.getAttribute('data-id'), box = b.querySelector('.mpo-box');
+      cells[id] = b;
+      to[id] = xRect(box.getBoundingClientRect());
+    });
+    var from = {};
+    x.src.forEach(function (s) { from[s.id.slice(5)] = s.R; });
+    var plan = flightPlan(from, to, single ? { order: order, bounds: x.bounds, start: T0.single, dur: T0.singleDur }
+      : { order: order, bounds: x.bounds, start: T0.start, stagger: T0.stagger, spread: T0.spread, dur: T0.dur });
+    var srcOf = {};
+    x.src.forEach(function (s) { srcOf[s.id.slice(5)] = s; });
+    // 書く: アニメーションを全部ここで始める（同じ時刻から数える）
+    var ease = 'cubic-bezier(.2,.7,.3,1)', end = T0.fade, land = {}, lands = [];
+    // 古い画面は 350ms で薄くなって消える。少しだけ縮むのは地図（枠・チップ）だけ（見出しは行き先と同じ所にあるので動かさない = 二重に見えない）
+    xAnim(x, x.ghost, [{ opacity: 1 }, { opacity: 0 }], { duration: T0.fade, easing: 'cubic-bezier(.4,0,1,1)', fill: 'both' });
+    xAnim(x, x.ghost.querySelector('.mp-stage'), [{ transform: 'scale(1)' }, { transform: 'scale(.97)' }], { duration: T0.fade, easing: 'cubic-bezier(.4,0,1,1)', fill: 'both' });
+    xAnim(x, page, [{ opacity: 0 }, { opacity: 1 }], { duration: T0.fade, easing: 'ease-out', fill: 'backwards' });
+    // 大きく見るから来た時は、左メニューと上の帯も一緒に出す（大きく見るを解くのは重ね面の上で: 古い画面は大きく見るの形のまま薄くなる）
+    if (x.m.big) ['#sidebar', '.topbar'].forEach(function (s) { var el = document.querySelector(s); if (el) xAnim(x, el, [{ opacity: 0 }, { opacity: 1 }], { duration: T0.fade, easing: 'ease-out', fill: 'backwards' }); });
+    plan.forEach(function (p) {
+      var s = srcOf[p.id], card = xCard(s.ctx), face = xFace(s.el, s.list, s.R.w, s.R.h), sxC = p.to.w / s.vb.w, syC = p.to.h / s.vb.h, sq = xSquare(s.vb, sxC, syC, null);
+      card.appendChild(face);
+      card.appendChild(sq);
+      x.ovl.appendChild(card);
+      var ks = flightKeys(p.from, p.to, T0.steps, T0.bend).map(function (k) {
+        var op = p.offscreen ? Math.min(1, k.offset / 0.15) : 1;
+        if (k.offset > 0.86) op = Math.min(op, Math.max(0, (1 - k.offset) / 0.14));
+        return { offset: k.offset, transform: xTf(k, s.vb), opacity: r4(op) };
+      });
+      var o = { duration: p.dur, delay: p.delay, fill: 'both' };
+      xAnim(x, card, ks, o);
+      xAnim(x, face, [{ opacity: s.op }, { opacity: s.op, offset: 0.32 }, { opacity: 0, offset: 0.72 }, { opacity: 0 }], o);
+      xAnim(x, sq, [{ opacity: 0 }, { opacity: 0, offset: 0.32 }, { opacity: 1, offset: 0.72 }, { opacity: 1 }], o);
+      land[p.id] = p.delay + p.dur;
+      lands.push(p.delay + p.dur);
+    });
+    // 着いたマスから順に印（丸がぽんと出る・塗りが下から上がる 250ms）。札の来ないマスは、着く時間の幅の中で左から順に
+    var lo = lands.length ? Math.min.apply(null, lands) : T0.start + T0.dur, hi = lands.length ? Math.max.apply(null, lands) : lo, n = order.length;
+    order.forEach(function (code, k) {
+      var c = by[code], b = cells[code];
+      if (!c || !b || (single && code !== x.single)) return;
+      var t = land[code] != null ? land[code] - 40 : (single ? T0.single + T0.singleDur - 40 : lo - 40 + (n > 1 ? k / (n - 1) : 0) * (hi - lo));
+      var fill = b.querySelector('.mpo-fill'), dot = b.querySelector('.mpo-dot');
+      if (fill) xAnim(x, fill, [{ transform: 'scaleY(0)' }, { transform: 'scaleY(' + cellFill(c) + ')' }], { duration: T0.mark, delay: t, easing: ease, fill: 'backwards' });
+      if (dot) xAnim(x, dot, [{ transform: 'scale(0)', opacity: 0 }, { transform: 'scale(1.35)', opacity: 1, offset: 0.55 }, { transform: 'scale(1)', opacity: 1 }], { duration: T0.mark, delay: t + (fill ? 60 : 0), easing: 'ease-out', fill: 'backwards' });
+      end = Math.max(end, t + T0.mark + (fill && dot ? 60 : 0));
+    });
+    // 続けて下の札の帯が左から塗られ（300ms）、作ったものでふれた印が出る（「全体の中で見る」では他と同じく最初から出す）
+    if (!single) {
+      var L0 = Math.max(hi - 100, 1000);
+      if (PSEUDO) Array.prototype.forEach.call(page.querySelectorAll('.mp-urow .mp-band'), function (bd) {
+        var sqs = bd.querySelectorAll('.mp-sq'), tot = sqs.length;
+        Array.prototype.forEach.call(sqs, function (q, j) {
+          var d = L0 + (tot ? j / tot : 0) * (T0.sweep - 90);
+          if (q.classList.contains('p')) xAnim(x, q, [{ opacity: 0 }, { opacity: 1 }], { duration: 90, delay: d, fill: 'backwards', pseudoElement: '::before' });
+          if (q.classList.contains('e')) xAnim(x, q, [{ opacity: 0 }, { opacity: 1 }], { duration: 90, delay: d + 30, fill: 'backwards', pseudoElement: '::after' });
+        });
+      });
+      var marks = page.querySelectorAll('.mpo-touch'), K = marks.length;
+      Array.prototype.forEach.call(marks, function (mk, k) {
+        var d = L0 + 120 + (K > 1 ? k / (K - 1) : 0) * 130;
+        xAnim(x, mk, [{ opacity: 0, transform: 'scale(.85)' }, { opacity: 1, transform: 'scale(1)' }], { duration: 180, delay: d, easing: 'ease-out', fill: 'backwards' });
+        end = Math.max(end, d + 180);
+      });
+      end = Math.max(end, L0 + T0.sweep);
+    }
+    plan.forEach(function (p) { end = Math.max(end, p.delay + p.dur); });
+    xPace(x, end + 20);
+  }
+  // 時間を数えるだけのアニメーション（重ね面の opacity 1 → 1）。止めれば止まり、進めれば進む。終わったら片付け
+  function xPace(x, total) {
+    x.total = total;
+    var a = xAnim(x, x.ovl, [{ opacity: 1 }, { opacity: 1 }], { duration: total, fill: 'both' });
+    if (!a) { xEnd(x, 'end'); return; }
+    a.finished.then(function () { xEnd(x, 'end'); }, function () { /* 取り消された（飛ばした・片付けた）*/ });
+  }
+
+  // ---------- 全体 → つながり（§AE-4）。o.sel = 作ったものでふれた印の単元 code（その単元を選んだ状態で着く）----------
+  function goLinks(o) {
+    o = o || {};
+    if (X) xEnd(X, 'skip');
+    var v = isMapView(mapUi().view) ? mapUi().view : 'made', h = viewHash(v), main = document.getElementById('main'), page = main && main.querySelector('.map-page[data-view="basics"]'), u = ui();
+    var selId = o.sel ? 'unit:' + o.sel : null;
+    if (selId) {
+      var next = normalizeUi(mapUi(), null);
+      next.sel[v] = selId;
+      next.view = v;
+      if (!saveUi(next)) return;
+      u.selCard = null;
+      u.reveal = selId;
+    }
+    if (!page || !motionOK()) {
+      u.ownHash = h;
+      window.location.hash = h;
+      window.scrollTo(0, 0);
+      DES.app.render();
+      xAfterLinks({ sel: selId });
+      return;
+    }
+    // 読む: 行き先の地図に出る単元のマス（帯が画面の外なら、その単元の下の札の印・帯から。それも外なら画面の端から）
+    var m = xMeasure(page), g = graphNow(), vn = viewNodes(g, v), src = [], cov = page._cov, by = {};
+    if (cov) cov.units.forEach(function (c) { by[c.id] = c; });
+    Array.prototype.forEach.call(page.querySelectorAll('.mpo-cell'), function (b) {
+      var code = b.getAttribute('data-id');
+      if (!vn['unit:' + code] || !by[code]) return;
+      var box = b.querySelector('.mpo-box'), R = xRect(box.getBoundingClientRect()), onCell = xVisible(R, m.vw, m.vh), from = R;
+      if (!onCell) {
+        var alt = page.querySelector('.mpo-touch[data-id="' + esc(code) + '"]') || page.querySelector('.mp-urow[data-unit="' + esc(code) + '"] .mp-band, .mpo-xcard[data-unit="' + esc(code) + '"] .mpo-xname');
+        var ar = alt ? xRect(alt.getBoundingClientRect()) : null;
+        if (ar && xVisible(ar, m.vw, m.vh)) from = { x: ar.x + Math.min(ar.w, 40) / 2 - R.w / 2, y: ar.y + ar.h / 2 - R.h / 2, w: R.w, h: R.h };
+      }
+      src.push({ id: code, box: box, from: from, onCell: onCell && from === R, c: by[code] });
+    });
+    // 大きく見るで着く時は、左メニューと上の帯の写しも重ね面に置いて一緒に薄くする（行き先では隠れるため）
+    var chrome = [];
+    if (mapUi().big) ['#sidebar', '.topbar'].forEach(function (s) {
+      var el = document.querySelector(s), r = el && el.getClientRects().length ? el.getBoundingClientRect() : null;
+      if (r && r.width && r.height) chrome.push({ el: el, r: xRect(r) });
+    });
+    // 書く: 古い画面を重ね面へ → 行き先を描く
+    var o2 = xOverlay(page, m);
+    chrome.forEach(function (c) {
+      var cl = c.el.cloneNode(true);
+      cl.removeAttribute('id');
+      Array.prototype.forEach.call(cl.querySelectorAll('[id]'), function (n) { n.removeAttribute('id'); });
+      cl.classList.add('mpx-chrome');
+      cl.style.cssText = 'position:absolute;margin:0;left:' + r2(c.r.x) + 'px;top:' + r2(c.r.y) + 'px;width:' + r2(c.r.w) + 'px;height:' + r2(c.r.h) + 'px';
+      o2.ghost.parentNode.insertBefore(cl, o2.ghost);
+      c.clone = cl;
+    });
+    document.body.appendChild(o2.ovl);
+    var x = { kind: 'links', sel: selId, view: v, ovl: o2.ovl, ghost: o2.ghost, m: m, anims: [], src: src, chrome: chrome };
+    xStartRun(x);
+    u.ownHash = h;
+    window.location.hash = h;
+    window.scrollTo(0, 0);
+    DES.app.render();
+    x.rk = xKey(v === 'made' ? '' : v);
+    var np = main.querySelector('.map-page.is-map[data-view="' + v + '"]');
+    if (X !== x || !np) { xEnd(x, 'skip'); return; }
+    x.page = np;
+    xBeginLinks(x, np);
+  }
+  function xBeginLinks(x, page) {
+    var T0 = MP.XT, frame = page.querySelector('.mp-frame'), order = bandUnits().map(function (u) { return u.code; });
+    x.ghost.scrollTop = x.m.scrollY;
+    // 読む: 地図のその単元ノード（隠れている = 作ったものだけ の時などは飛ばずにその場で消える）
+    var to = {}, tgt = {}, from = {};
+    x.src.forEach(function (s) {
+      var el = frame.querySelector('.mp-vp .mp-n[data-id="unit:' + esc(s.id) + '"]'), t = el ? xNodeSrc(page, el) : null;
+      if (!t) return;
+      tgt[s.id] = t;
+      to[s.id] = t.R;
+      from[s.id] = s.from;
+    });
+    var fr = frame.getBoundingClientRect(), fb = { x: fr.left + frame.clientLeft, y: fr.top + frame.clientTop, w: frame.clientWidth, h: frame.clientHeight };
+    var plan = flightPlan(from, to, { order: order, bounds: { x: 0, y: 0, w: x.m.vw, h: x.m.vh }, toBounds: fb, start: T0.rStart, stagger: T0.stagger, spread: T0.rSpread, dur: T0.rDur });
+    var srcOf = {}, end = T0.fade;
+    x.src.forEach(function (s) { srcOf[s.id] = s; });
+    // 書く
+    xAnim(x, x.ghost, [{ opacity: 1 }, { opacity: 0 }], { duration: T0.fade, easing: 'cubic-bezier(.4,0,1,1)', fill: 'both' });
+    x.chrome.forEach(function (c) { xAnim(x, c.clone, [{ opacity: 1 }, { opacity: 0 }], { duration: T0.fade, easing: 'cubic-bezier(.4,0,1,1)', fill: 'both' }); });
+    xAnim(x, page, [{ opacity: 0 }, { opacity: 1 }], { duration: T0.fade, easing: 'ease-out', fill: 'backwards' });
+    plan.forEach(function (p) {
+      var s = srcOf[p.id], t = tgt[p.id], card = xCard(t.ctx), face = xFace(t.el, t.list, t.R.w, t.R.h), sxC = p.from.w / t.vb.w, syC = p.from.h / t.vb.h, sq = xSquare(t.vb, sxC, syC, s.c);
+      card.appendChild(face);
+      card.appendChild(sq);
+      x.ovl.appendChild(card);
+      if (s.onCell) s.box.classList.add('mpx-gone');
+      var ks = flightKeys(p.from, p.to, T0.steps, T0.bend).map(function (k) {
+        var op = s.onCell ? 1 : Math.min(1, k.offset / 0.15);
+        if (k.offset > 0.88) op = Math.min(op, Math.max(0, (1 - k.offset) / 0.12));
+        return { offset: k.offset, transform: xTf(k, t.vb), opacity: r4(op) };
+      });
+      var o = { duration: p.dur, delay: p.delay, fill: 'both' };
+      xAnim(x, card, ks, o);
+      xAnim(x, sq, [{ opacity: 1 }, { opacity: 1, offset: 0.22 }, { opacity: 0, offset: 0.6 }, { opacity: 0 }], o);
+      xAnim(x, face, [{ opacity: 0 }, { opacity: 0, offset: 0.22 }, { opacity: t.op, offset: 0.6 }, { opacity: t.op }], o);
+      // 地図のノードは札が着くまで隠しておき、着いたら出す
+      if (!p.landOff) xAnim(x, t.el, [{ opacity: 0 }, { opacity: t.op }], { duration: 140, delay: p.delay + p.dur - 120, easing: 'ease-out', fill: 'backwards' });
+      end = Math.max(end, p.delay + p.dur);
+    });
+    xPace(x, end + 40);
   }
 
   // ---------- 描画の入口（app.js から）。引数は '' / 'fields' / 'list' / 'basics' / 'u/<code>'。それ以外は見つからなかった ----------
@@ -1839,6 +2406,8 @@
     document.documentElement.classList.toggle('mp-big', isMapView(v) && !!mapUi().big);
   }
   MP.render = function (main, arg) {
+    // 遷移の途中に、行き先と違う描き直し（es / js・幅の切替など）が来たら、先に最後の状態にする（同じ描き直しは作り直さないので、そのまま）
+    if (X && X.rk && X.rk !== xKey(arg)) xEnd(X, 'skip');
     var fk = focusKeyOf(main);
     applyBig();
     renderView(main, arg);
@@ -1885,6 +2454,11 @@
   // ルートが変わったら一時的な UI を閉じる（app.js の closeTransient から）
   MP.resetUi = function () {
     var u = ui();
+    // 遷移が自分で移った先（もう描いてある）の hashchange は、何も閉じない（遷移はそのまま続ける）
+    if (u.ownHash && window.location.hash === u.ownHash) { u.ownHash = null; return; }
+    u.ownHash = null;
+    // 途中で別のページ・別の見方へ移った: 重ね面とアニメーションを片付ける
+    if (X) xEnd(X, 'abort');
     u.shown = null; u.missing = null; u.selCard = null; u.legendOpen = false;
     if (DES.app.route() !== 'map') { u.lastUnit = null; u.unitFrom = null; detachMap(document.getElementById('main')); document.documentElement.classList.remove('mp-big'); }
     unwatch();
@@ -1930,9 +2504,25 @@
 
   // ---------- 操作 ----------
   var A = DES.actions = DES.actions || {};
+  // 上のタブ。地図系の見方（作ったものから・分野で見る）から「基礎学習」= 札が飛ぶ遷移（§AE-2）。流れで見る・概念で見る・リストからは動きなしで全体の画面へ。
+  // 全体の画面から「つながり」= 最後の見方が地図系なら逆向きの遷移（§AE-4）、それ以外の見方なら今までどおりその見方へ（動きなし）
   A['mp-tab'] = function (el) {
-    var h = el.getAttribute('data-arg') === 'basics' ? '#map/basics' : viewHash(mapUi().view);
+    var k = el.getAttribute('data-arg'), view = curView(), arg = DES.app.routeArg();
+    if (k === 'basics' && isMapView(view)) { goAll({}); return; }
+    if (k !== 'basics' && arg === 'basics' && isMapView(mapUi().view)) { goLinks({}); return; }
+    var h = k === 'basics' ? '#map/basics' : viewHash(mapUi().view);
     if (window.location.hash !== h) window.location.hash = h;
+  };
+  // 全体で見る（枠の右上）/ 全体の中で見る（単元の詳細。その単元だけが飛ぶ）/ つながりで見る（全体の画面の見出しの行）
+  A['mp-overview'] = function () { if (isMapView(curView())) goAll({}); };
+  A['mp-inall'] = function (el) { var code = el.getAttribute('data-id'); if (curView() && MPD.anyUnit(code)) goAll({ single: code }); };
+  A['mpo-links'] = function () { goLinks({}); };
+  // 作ったものでふれた印: 逆向きに飛んで、つながりでその単元を選んだ状態（詳細パネル）で着く
+  A['mpo-touch'] = function (el) { var code = el.getAttribute('data-id'); if (MPD.anyUnit(code)) goLinks({ sel: code }); };
+  // 全体の帯のマス: 下のその単元の札へスクロールしてフォーカス
+  A['mpo-cell'] = function (el) {
+    var page = document.querySelector('.map-page[data-view="basics"]');
+    if (page) scrollToUnit(page, el.getAttribute('data-id'), motionOK());
   };
   A['mp-view'] = function (el) {
     var v = viewOk(el.getAttribute('data-arg')), h = viewHash(v);
@@ -2058,7 +2648,6 @@
     var h = '#map/u/' + el.getAttribute('data-id');
     if (window.location.hash !== h) window.location.hash = h;
   };
-  A['mp-linked'] = function (el) { MP.show('unit:' + el.getAttribute('data-id')); };
   A['mp-show'] = function (el) { MP.show(el.getAttribute('data-id')); };
   A['mp-start'] = function () { DES.app.toast(T('mp_start_toast')); };
 
