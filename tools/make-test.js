@@ -521,7 +521,7 @@ t('U12-6 前の版の活動を読み込むと不足欄を補う', function () {
   };
   function res(m) { return m.r ? MD.pick(MD.replies[m.r], 'js') : (m.k ? '[' + m.k + (m.i != null ? ':' + m.i : '') + ']' : ''); }
   var m1 = M.migrate(old, res), m2 = M.migrate(oldExt, res);
-  eq(m1.v, 2, 'U12-6 版 v:2');
+  eq(m1.v, 3, 'U12-6 版 v:3');
   eq(m1.stepsKind, 'theme', 'U12-6 stepsKind を補う');
   eq(m1.candidate, true, 'U12-6 候補状態の印を補う');
   ok(JSON.stringify(m1.steps).indexOf('ブロック') < 0 && JSON.stringify(m1.steps).indexOf('速さ') >= 0, 'U12-6 手順を今の題材（Python）に', m1.steps);
@@ -532,9 +532,16 @@ t('U12-6 前の版の活動を読み込むと不足欄を補う', function () {
   eq(m2.baseVis, [], 'U12-6 始めの写真を補う');
   eq(m2.changes.map(function (c) { return c.vis; }), [['old2-ph1'], ['old2-ph1', 'old2-ph2']], 'U12-6 変化ごとの写真を補う');
   eq(M.canRevert(m2), true, 'U12-6 移行後は前に戻せる');
-  eq(M.migrate(m2, res), m2, 'U12-6 v:2 はそのまま');
-  eq(M.fromSample('mc', { id: 'n6', now: '10:20' }).v, 2, 'U12-6 新しい活動は v:2');
-  eq(MD.seedActivities()[0].v, 2, 'U12-6 最初からある活動も v:2');
+  eq(M.migrate(m2, res), m2, 'U12-6 v:3 はそのまま');
+  eq(M.fromSample('mc', { id: 'n6', now: '10:20' }).v, 3, 'U12-6 新しい活動は v:3');
+  eq(MD.seedActivities()[0].v, 3, 'U12-6 最初からある活動も v:3');
+  (function () {
+    var old = M.fromSample('py', { id: 'n7', now: '10:20' });
+    old.v = 2; old.stepsKind = 'ext'; old.ext = { photos: [], visible: [] };
+    var mm = M.migrate(old, res);
+    eq(mm.stepsKind, 'theme', 'U12-6b 98f0a71 で v:2・ext に移行済みの見本活動も theme に直る');
+    eq(mm.v, 3, 'U12-6b 版 v:3');
+  })();
 });
 t('U12-e 次は今と違う一歩か、無ければ空', function () {
   var full = M.test(M.setParam(M.test(M.setParam(sample('mc'), 'size', 6)).act, 'block', 1)).act;
