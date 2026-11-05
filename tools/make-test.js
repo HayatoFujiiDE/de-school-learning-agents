@@ -628,6 +628,178 @@ t('U12x-4 「作品に残す」の「今」は見えている値（未試行の�
   eq(M.saveWork([], clean, { id: 'x4b' }).act.changes.length, clean.changes.length, 'U12x-4 変更が無ければ積まない');
 });
 
+// ======================================================================
+// §W 作品（一覧・詳細・見せる）の純関数
+// ======================================================================
+var W = require(path.join(__dirname, '../app-v3/js/works.js'));
+function cl(v) { return JSON.parse(JSON.stringify(v)); }
+t('W-1 完成 / 試作の既定と 2 択', function () {
+  var fresh = sample('mc');
+  var full = M.test(M.setParam(M.test(M.setParam(sample('mc'), 'size', 6)).act, 'block', 1)).act;
+  eq(M.defaultStatus(fresh), 'trial', 'W-1 手順が途中なら試作');
+  eq(M.defaultStatus(full), 'done', 'W-1 手順が最後まで進んでいれば完成');
+  eq(M.defaultStatus({ steps: [], stepIdx: 0 }), 'trial', 'W-1 手順が無ければ試作（境界）');
+  eq(M.saveWork([], fresh, { id: 'ws1' }).work.status, 'trial', 'W-1 saveWork の既定（途中）');
+  eq(M.saveWork([], full, { id: 'ws2' }).work.status, 'done', 'W-1 saveWork の既定（最後まで）');
+  eq(M.saveWork([], fresh, { id: 'ws3', status: 'done' }).work.status, 'done', 'W-1 saveWork 選んだ方');
+  eq(M.saveWork([], full, { id: 'ws4', status: 'nope' }).work.status, 'done', 'W-1 saveWork 知らない値は既定へ');
+  var sw = M.saveWork([], fresh, { id: 'ws5' }).work;
+  eq([sw.craft, sw.shares], [null, []], 'W-1 saveWork は工夫 null・見せた記録 [] で始まる（残しただけでは誰にも見せない）');
+  var cap = { workId: 'wc1', actId: 'ac1', images: ['cap-mc'], title: '', made: 0, madeLine: '', read: { text: 'x', edited: false, declined: false }, now: '10:20', mode: 'js' };
+  eq(M.addCapture([], [], cap).work.status, 'done', 'W-1 写真から入れる作品の既定は完成');
+  eq(M.addCapture([], [], Object.assign({}, cap, { status: 'trial' })).work.status, 'trial', 'W-1 写真から入れる作品も試作を選べる');
+  eq(M.addCapture([], [], cap).work.shares, [], 'W-1 addCapture も見せた記録 []');
+});
+t('W-5 読み込み時に欄を補う（消さない）', function () {
+  var old = [{ id: 'o1', title: 'a' }, { id: 'o2', title: 'b', status: 'trial', craft: '工夫', shares: [{ id: 's', to: ['family'], scope: 'work', time: 'x' }] },
+    { id: 'o3', title: 'c', status: 'weird', craft: 5, shares: 'x' }];
+  var n = W.normalize(old);
+  eq(n.length, 3, 'W-5 件数はそのまま');
+  eq([n[0].status, n[0].craft, n[0].shares], ['done', null, []], 'W-5 status 無し → done / craft 無し → null / shares 無し → []');
+  eq(n[1], old[1], 'W-5 そろっている作品はそのまま');
+  ok(n[1] === old[1], 'W-5 そろっている作品は同じものを返す');
+  eq([n[2].status, n[2].craft, n[2].shares], ['done', '5', []], 'W-5 おかしな値も補う（境界）');
+  eq(old[0].status, undefined, 'W-5 元の配列は変えない');
+  eq(W.normalize(n), n, 'W-5 2 回目は何も変えない');
+  eq(W.normalize(null), [], 'W-5 null は空');
+  ok(W.normalize === M.normalizeWorks, 'W-5 W.normalize は make.js の移行と同じ関数');
+});
+t('W-2 一覧の 2 段（新しい順 = 保存の並び）', function () {
+  var ws = [{ id: 'a', status: 'trial' }, { id: 'b', status: 'done' }, { id: 'c' }, { id: 'd', status: 'trial' }, { id: 'e', status: 'done' }];
+  var g = W.group(ws);
+  eq(g.done.map(function (w) { return w.id; }), ['b', 'c', 'e'], 'W-2 完成（status 無しも完成）');
+  eq(g.trial.map(function (w) { return w.id; }), ['a', 'd'], 'W-2 試作');
+  eq(W.group([]), { done: [], trial: [] }, 'W-2 空');
+  var s1 = M.saveWork([], sample('mc'), { id: 'old' }), s2 = M.saveWork(s1.works, sample('py'), { id: 'new' });
+  eq(W.group(s2.works).trial.map(function (w) { return w.id; }), ['new', 'old'], 'W-2 後から残したものが先');
+  eq(W.isShown({ shares: [] }), false, 'W-2 見せていなければ印なし');
+  eq(W.isShown({ shares: [{ id: 's' }] }), true, 'W-2 見せていれば「見せている」');
+});
+t('W-3 変わってきたところ（はじめ + 残した時点まで）', function () {
+  var x = M.test(M.setParam(sample('mc'), 'size', 6)).act;
+  var y = M.test(M.setParam(x, 'size', 8)).act;
+  var w = M.saveWork([], y, { id: 'wf', at: y.changes[0].id }).work;
+  var z = M.test(M.setParam(y, 'size', 3)).act;
+  var fr = W.storyFrames(z, w);
+  eq(fr.map(function (f) { return f.id; }), ['@base', y.changes[0].id], 'W-3 残した時点より後の変化は入らない');
+  eq([fr[0].kind, fr[0].time], ['base', z.baseTime], 'W-3 先頭は「はじめ」');
+  eq(fr.map(function (f) { return f.last; }), [false, true], 'W-3 最後のコマ = この作品');
+  eq(fr[1].art.stage.values.size, 6, 'W-3 コマの絵はその時点の状態');
+  eq([fr[1].who, fr[1].what.k], ['own', 'changed_one'], 'W-3 誰が・何を変えた');
+  var all = W.storyFrames(z, M.saveWork([], z, { id: 'wf2' }).work);
+  eq(all.length, 4, 'W-3 今で残せば全部の変化');
+  var none = W.storyFrames(sample('mc'), M.saveWork([], sample('mc'), { id: 'wf3' }).work);
+  eq([none.length, none[0].last], [1, true], 'W-3 変化 0 個 = はじめだけ（境界）');
+  eq(W.storyFrames(null, w), [], 'W-3 活動が無ければコマ無し');
+  // 絵の無いコマ（写真を全部隠した時点）は前の絵を薄く
+  var e = M.addPhoto(M.fromExt('photo', { id: 'wf4', now: '10:20' }), 'shot').act;
+  var rb = M.revert(e, '@base').act;
+  var fw = W.storyFrames(rb, M.saveWork([], rb, { id: 'wf5' }).work);
+  eq(fw[0].art, null, 'W-3 はじめに絵が無ければ空（前の絵も無い）');
+  var lastF = fw[fw.length - 1];
+  eq([lastF.inherited, lastF.art && lastF.art.photo && lastF.art.photo.id], [true, e.ext.photos[1].id], 'W-3 絵の無いコマは前の絵（inherited）');
+  // 残した時点の変化が活動に無い時は、作品の状態を最後のコマに
+  var lost = cl(w); lost.at = 'gone';
+  var fl = W.storyFrames(z, lost);
+  eq([fl.length, fl[1].id, fl[1].last, fl[1].art.stage.values.size], [2, '@work', true, 6], 'W-3 時点が見つからなければ作品の状態（境界）');
+});
+t('W-3 直す・状態・外す（純関数は元を変えない）', function () {
+  var ws = [{ id: 'a', title: '塔', like: null, craft: null, status: 'trial', from: 'make' }, { id: 'b', title: '回路', status: 'done', from: 'capture', read: { text: 'x', edited: false, declined: false } }];
+  var snap = cl(ws);
+  var st = W.setStatus(ws, 'a', 'done');
+  eq(st[0].status, 'done', 'W-3 試作 → 完成');
+  eq(W.setStatus(st, 'a', 'trial')[0].status, 'trial', 'W-3 完成 → 試作');
+  ok(W.setStatus(ws, 'a', 'trial') === ws, 'W-3 同じ状態なら同じ配列');
+  ok(W.setStatus(ws, 'a', 'x') === ws, 'W-3 知らない状態は無視');
+  ok(W.setStatus(ws, 'nope', 'done') === ws, 'W-3 無い id は無視');
+  eq(W.edit(ws, 'a', 'title', '  石の塔 ')[0].title, '石の塔', 'W-3 タイトルを直す（前後の空白は取る）');
+  ok(W.edit(ws, 'a', 'title', '   ') === ws, 'W-3 空のタイトルは元のまま');
+  ok(W.edit(ws, 'a', 'title', '塔') === ws, 'W-3 同じタイトルは変化なし');
+  var lk = W.edit(ws, 'a', 'like', '形');
+  eq(lk[0].like, '形', 'W-3 気に入っているところ');
+  eq(W.edit(lk, 'a', 'like', ' ')[0].like, null, 'W-3 気に入っているところは空にできる');
+  eq(W.edit(ws, 'a', 'craft', '先に高さを決めた')[0].craft, '先に高さを決めた', 'W-3 工夫したところ');
+  ok(W.edit(ws, 'a', 'status', 'done') === ws, 'W-3 直せる欄は title / like / craft だけ');
+  eq(W.setRead(ws, 'b', { text: 'y', edited: true, declined: false })[1].read.text, 'y', 'W-3 見立てを直す');
+  eq(W.setRead(ws, 'b', { text: 'x', edited: true, declined: true })[1].read.declined, true, 'W-3 見立ての「違う」');
+  ok(W.setRead(ws, 'a', { text: 'y' }) === ws, 'W-3 見立ては写真から作った作品だけ');
+  var rm = W.remove(ws, 'a');
+  eq([rm.works.length, rm.works[0].id, rm.undo.index], [1, 'b', 0], 'W-3 作品から外す');
+  eq(W.restore(rm.works, rm.undo).map(function (w) { return w.id; }), ['a', 'b'], 'W-3 元に戻す = 元の位置');
+  eq(W.restore([], { work: { id: 'z' }, index: 9 }).map(function (w) { return w.id; }), ['z'], 'W-3 戻す位置は範囲に収める（境界）');
+  ok(W.restore(ws, rm.undo) === ws, 'W-3 もうある作品は戻さない');
+  eq(W.remove(ws, 'nope'), null, 'W-3 無い作品は外せない');
+  eq(ws, snap, 'W-3 どの操作も元の配列を変えない');
+  var sb = W.siblings([{ id: 'a', actId: 'x' }, { id: 'b', actId: 'x' }, { id: 'c', actId: 'y' }], { id: 'a', actId: 'x' });
+  eq(sb.map(function (w) { return w.id; }), ['b'], 'W-3 同じ活動から残したほかの作品');
+});
+t('W-4 見せる・見せるのをやめる', function () {
+  var ws = [{ id: 'a', title: '塔', shares: [] }, { id: 'b', title: '回路' }];
+  var r = W.share(ws, 'a', { to: ['friends', 'nope', 'family', 'family'], scope: 'story', time: '11/2 10:20' });
+  eq(r.share.to, ['family', 'friends'], 'W-4 相手は決まった 3 つから・並びはそろえる・重ならない');
+  eq([r.share.scope, r.share.time, r.works[0].shares.length], ['story', '11/2 10:20', 1], 'W-4 1 件足す');
+  eq(W.share(ws, 'a', { to: [], scope: 'work' }), null, 'W-4 相手 0 人は見せられない');
+  eq(W.share(ws, 'a', { to: ['nope'] }), null, 'W-4 知らない相手だけも 0 人');
+  eq(W.share(ws, 'b', { to: ['supporter'], scope: '??' }).share.scope, 'work', 'W-4 範囲の既定は作品だけ（shares 無しの作品にも足せる）');
+  eq(W.share(ws, 'zz', { to: ['family'] }), null, 'W-4 無い作品');
+  var r2 = W.share(r.works, 'a', { to: ['supporter'], scope: 'work', time: 't' });
+  var un = W.unshare(r2.works, 'a', r.share.id);
+  eq(un.works[0].shares.map(function (s) { return s.id; }), [r2.share.id], 'W-4 1 件ずつやめる');
+  var r3 = W.share(un.works, 'a', { to: ['family'], time: 't' });
+  ok(r3.share.id !== r2.share.id, 'W-4 やめた後に見せても id は重ならない');
+  eq(W.undoUnshare(un.works, un.undo)[0].shares.map(function (s) { return s.id; }), [r.share.id, r2.share.id], 'W-4 元に戻す = 元の位置');
+  ok(W.undoUnshare(r2.works, un.undo) === r2.works, 'W-4 もう戻っていれば何もしない');
+  eq(W.unshare(r2.works, 'a', 'nope'), null, 'W-4 無い記録');
+  eq(ws[0].shares, [], 'W-4 元の配列は変えない');
+});
+t('W-4 相手に見える内容（作品だけ / 流れも）', function () {
+  var acts = MD.seedActivities(), sw = MD.seedWorks(acts);
+  function byId(id) { return sw.filter(function (w) { return w.id === id; })[0]; }
+  function actOf(w) { return acts.filter(function (a) { return a.id === w.actId; })[0]; }
+  var cap = byId('w-seed-circuit');
+  var only = W.shareItems(cap, actOf(cap), 'work');
+  eq(only.map(function (i) { return i.k; }), ['pv_title', 'pv_like', 'pv_craft_none'], 'W-4 作品だけ = 絵とタイトル・本人の言葉');
+  ok(JSON.stringify(only).indexOf(cap.read.text) < 0, 'W-4 作品だけにはバディの見立てを入れない');
+  var story = W.shareItems(cap, actOf(cap), 'story');
+  eq(story.length, 5, 'W-4 流れも = 5 行');
+  eq([story[3].k, story[3].v.n], ['pv_story', 2], 'W-4 変わってきたところのコマ数');
+  eq([story[4].k, story[4].read], ['pv_roles', cap.read.text], 'W-4 見立ては関わりの行に出所つきで');
+  var dec = cl(cap); dec.read.declined = true;
+  eq(W.shareItems(dec, actOf(cap), 'story')[4].read, null, 'W-4 違うと言った見立ては見せない');
+  eq(W.shareItems(cap, null, 'story')[3].k, 'pv_story_lost', 'W-4 活動が無ければ記録は無いと書く');
+  eq(only.filter(function (i) { return i.src === 'own'; }).length, 1, 'W-4 本人の言葉は本人の出所');
+});
+t('W-6 見本の作品', function () {
+  var acts = MD.seedActivities(), sw = MD.seedWorks(acts), g = W.group(sw);
+  eq([g.done.length, g.trial.length], [2, 2], 'W-6 完成 2 + 試作 2');
+  var big = g.done.filter(function (w) { return w.from === 'make'; })[0], cap = g.done.filter(function (w) { return w.from === 'capture'; })[0];
+  function actOf(w) { return acts.filter(function (a) { return a.id === w.actId; })[0]; }
+  ok(big && W.storyFrames(actOf(big), big).length - 1 >= 4, 'W-6 完成の 1 つは変化 4 つ以上');
+  ok(cap && cap.read && cap.read.text && !cap.read.declined, 'W-6 完成の 1 つは写真から・バディの見立てあり');
+  eq(cap.shares.length === 1 && cap.shares[0].to, ['family'], 'W-6 その作品はおうちの人に見せている 1 件');
+  eq(g.trial.concat(big).every(function (w) { return !W.isShown(w); }), true, 'W-6 ほかは誰にも見せていない');
+  var themes = {};
+  sw.forEach(function (w) { themes[w.theme] = true; });
+  eq(Object.keys(themes).sort(), ['circuit', 'mc', 'py'], 'W-6 題材は §U-1 の 3 つだけ');
+  sw.forEach(function (w) {
+    var a = actOf(w), ch = a.changes.filter(function (c) { return c.id === w.at; })[0];
+    eq(w.roles, M.roles(a, w.at), 'W-6 ' + w.id + ' の関わりは make.js の roles と同じ');
+    eq(w.snap, M.chState(a, ch), 'W-6 ' + w.id + ' の残した時点の状態は chState と同じ');
+    if (w.from === 'make') eq(w.art, M.saveWork([], a, { id: 'x', at: w.at }).work.art, 'W-6 ' + w.id + ' の絵は saveWork と同じ');
+    eq(M.migrateWork(w, acts), w, 'W-6 ' + w.id + ' は移行で変わらない');
+  });
+  eq(W.normalize(sw), sw, 'W-6 見本は補う欄が無い');
+  var people = {};
+  acts.forEach(function (a) { a.changes.forEach(function (c) { if (c.with) people[c.with] = true; }); });
+  eq(Object.keys(people), ['田中さん'], 'W-6 人の名前は既存の田中さんだけ');
+  eq(acts.filter(function (a) { return a.state === 'working' || a.state === 'paused'; }).map(function (a) { return a.id; }), ['act-build'], 'W-6 作るの制作中は今までどおり 1 件');
+  eq(acts.map(function (a) { return M.migrate(a, function () { return ''; }) === a; }), [true, true, true], 'W-6 見本の活動は v:3 のまま');
+  eq(MD.seedWorks([acts[0]]).map(function (w) { return w.id; }), ['w-seed-build'], 'W-6 結び付く活動が無い作品は作らない（境界）');
+  eq(MD.seedWorks([]), [], 'W-6 活動 0 件なら作品 0 件');
+  var text = JSON.stringify(sw) + JSON.stringify(acts);
+  ok(!/版|点数|ランキング|順位|評価|成績|レベル|集中力|得意|苦手|上手|成長|頑張|すごい/.test(text), 'W-7 見本に「版」と評価の語が無い');
+});
+
 console.log('make-test: ' + pass + ' passed, ' + fail + ' failed');
 console.log('MAKE_TEST=' + (fail === 0 ? 'PASS' : 'FAIL'));
 process.exitCode = fail === 0 ? 0 : 1;
