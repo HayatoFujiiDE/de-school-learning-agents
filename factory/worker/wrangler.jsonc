@@ -63,6 +63,8 @@
     // 動画の確認（契約 §Q-4）。GEMINI_API_KEY は secret（ふじさんがセッションの外で wrangler secret put。ここには書かない）
     "GEMINI_VIDEO_MODEL": "gemini-3.6-flash",
     "VIDEO_U_CENTS": "10",
-    "VIDEO_MONTHLY_CAP_CENTS": "1000"
+    "VIDEO_MONTHLY_CAP_CENTS": "1000",
+    // 予備のモデル（契約 §Q-10 10）。settings video_fallback_enabled が '1' の時だけ、2 回目以降の呼び出しに使う
+    "GEMINI_VIDEO_FALLBACK_MODEL": "gemini-3.8-flash"
   }
 }

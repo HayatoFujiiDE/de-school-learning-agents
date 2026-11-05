@@ -7,7 +7,8 @@ import { getSetting, setSetting } from '../db';
 import { cfg, type Env } from '../env';
 import { GeminiError, type GeminiPort } from '../gemini';
 
-export const FAKE_GEMINI_SCENARIOS = ['ok', 'no_usage', 'server', 'bad_request', 'timeout', 'no_text'] as const;
+// server_once: 最初の 1 回だけ 503（§Q-10 のやり直しの smoke。fake_gemini_calls が 0 の時）
+export const FAKE_GEMINI_SCENARIOS = ['ok', 'no_usage', 'server', 'server_once', 'bad_request', 'timeout', 'no_text'] as const;
 export type FakeGeminiScenario = (typeof FAKE_GEMINI_SCENARIOS)[number];
 
 export function createFakeGeminiPort(env: Env): GeminiPort {
@@ -21,9 +22,11 @@ export function createFakeGeminiPort(env: Env): GeminiPort {
       const n = Number.parseInt((await getSetting(env.DB, 'fake_gemini_calls')) ?? '0', 10);
       await setSetting(env.DB, 'fake_gemini_calls', String((Number.isFinite(n) ? n : 0) + 1));
       if (scenario === 'server') throw new GeminiError(true, 500, 'server', false);
+      if (scenario === 'server_once' && (Number.isFinite(n) ? n : 0) === 0) throw new GeminiError(true, 503, 'server', false);
       if (scenario === 'bad_request') throw new GeminiError(true, 400, 'bad_request', false);
       if (scenario === 'timeout') throw new GeminiError(false, undefined, 'timeout', false);
       if (scenario === 'no_text') throw new GeminiError(true, 200, 'no_text', true);
+      // req.model（予備のモデル §Q-10 7）は本文に入れない（記録の model は呼ぶ側が決める）
       const text = `- ${req.startSec} 秒〜${req.endSec} 秒: （fake）画面に説明の図が映り、話し手が仕組みを説明している\n- 手がかり: チャンネル名と動画の説明が一致（fake）\n- 不適切な表現: 無し（fake）`;
       return scenario === 'no_usage'
         ? { text, httpStatus: 200 }
