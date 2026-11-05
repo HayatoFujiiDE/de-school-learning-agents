@@ -494,7 +494,8 @@ eq(MP.select(MP.normalizeUi({ concept: 'c-change' }, g), g, 'concepts', 'unit:S4
 
 // ---------- 作ったものを自分で並べる（§AD-5）: MP.normalizeMoved / moveTargets / applyMoved ----------
 eq(MP.normalizeMoved({ 'act:act-py': { dx: 10.04, dy: -5 }, 'ln:ln-area': { dx: 1, dy: 1 }, 'past:past-box': { dx: 'a', dy: 1 }, 'past:past-maze': { dx: 9999, dy: -9999 }, 'past:past-moon': { dx: 0, dy: 0 }, 'act:zz': { dx: 1, dy: 2 } }, null),
-  { 'act:act-py': { dx: 10, dy: -5 }, 'past:past-maze': { dx: 4000, dy: -4000 }, 'act:zz': { dx: 1, dy: 2 } }, 'AD-5 normalizeMoved 作ったものの id・数だけ・±4000・動いていないものは捨てる');
+  { 'act:act-py': { dx: 10, dy: -5 }, 'past:past-maze': { dx: 1500, dy: -1500 }, 'act:zz': { dx: 1, dy: 2 } }, 'AD-5 normalizeMoved 作ったものの id・数だけ・±1500（差し戻し 3）・動いていないものは捨てる');
+eq(MP.MOVE_MAX, 1500, '差し戻し 3 動かせる範囲は ±1500（定数 1 つ）');
 eq(Object.keys(MP.normalizeMoved({ 'act:act-py': { dx: 1, dy: 2 }, 'act:zz': { dx: 1, dy: 2 } }, g)), ['act:act-py'], 'AD-5 normalizeMoved グラフに無い id は捨てる');
 eq(MP.normalizeUi({ moved: { made: { 'past:past-box': { dx: 5, dy: 6 } }, fields: 3, list: { 'act:act-py': { dx: 1, dy: 1 } } } }, g).moved, { made: { 'past:past-box': { dx: 5, dy: 6 } }, fields: {} }, 'AD-5 normalizeUi moved は 作ったものから / 分野で見る だけ（壊れた見方は空）');
 var LM = MPL.layout(g, 'made'), LF = MPL.layout(g, 'fields');
@@ -505,7 +506,9 @@ var LMm = MP.applyMoved(LM, { 'past:past-box': { dx: 100, dy: -40 } }, g), moved
 eq(movedIds.sort(), ['ln:ln-box-coins', 'ln:ln-box-net', 'ln:ln-box-right', 'past:past-box'], 'AD-5 applyMoved 作ったものと その学んだことだけが動く（単元・橋・これからは動かない）');
 ok(movedIds.every(function (id) { return LMm.nodes[id].x === LM.nodes[id].x + 100 && LMm.nodes[id].y === LM.nodes[id].y - 40; }), 'AD-5 applyMoved 同じ分だけ動く');
 eq(JSON.stringify(MPL.layout(g, 'made')), JSON.stringify(LM), 'AD-5 applyMoved は並びの計算（MPL.layout）を変えない');
-var far1 = MP.applyMoved(LM, { 'past:past-box': { dx: -4000, dy: 4000 } }, g), fb = far1.bounds, bx = far1.nodes['past:past-box'];
+var far1 = MP.applyMoved(LM, { 'past:past-box': { dx: -1500, dy: 1500 } }, g), fb = far1.bounds, bx = far1.nodes['past:past-box'];
+var farX = MP.applyMoved(LM, { 'past:past-box': { dx: -9000, dy: 9000 } }, g);
+ok(farX.nodes['past:past-box'].x === LM.nodes['past:past-box'].x - 1500 && farX.nodes['past:past-box'].y === LM.nodes['past:past-box'].y + 1500, '差し戻し 3 applyMoved も ±1500 で止まる');
 ok(fb.x <= bx.x - 60 && fb.y + fb.h >= bx.y + bx.h + 60 && fb.x + fb.w >= LM.bounds.w && Object.keys(far1.nodes).every(function (id) { return MPL.inside(far1.nodes[id], fb); }), 'AD-5 applyMoved 全体の範囲は動かした後のノードまで広がる（全体を見る用）');
 eq(MP.applyMoved(LM, {}, g).bounds, LM.bounds, 'AD-5 applyMoved 動かしていなければ範囲は同じ');
 eq(MP.applyMoved(LM, { 'unit:M4-B-03': { dx: 5, dy: 5 }, 'act:zz': { dx: 5, dy: 5 } }, g).nodes, LM.nodes, 'AD-5 applyMoved 作ったもの以外・無い id は動かさない');
@@ -513,6 +516,23 @@ var FFm = MP.applyMoved(LF, { 'act:act-py': { dx: -24, dy: 48 } }, g);
 ok(FFm.nodes['act:act-py'].x === LF.nodes['act:act-py'].x - 24 && FFm.nodes['unit:M4-C-01'].x === LF.nodes['unit:M4-C-01'].x && JSON.stringify(FFm.islands) === JSON.stringify(LF.islands), 'AD-5 applyMoved 分野で見る = 作ったものだけ（島・単元は動かない）');
 eq(JSON.stringify(MP.applyMoved(LM, { 'past:past-box': { dx: 100, dy: -40 } }, g)), JSON.stringify(LMm), 'AD-5 applyMoved 決定論');
 eq(MPC.MOVE_STEP, 24, 'AD-5 Shift + 矢印は地図の座標で 24px');
+// 差し戻し 4: 保存値にグラフに無い id だけがある → 描く前の照合で捨てる（動いたノードが無いので「ならびを元に戻す」は出ない）
+var uz = MP.normalizeUi({ moved: { made: { 'act:zz': { dx: 30, dy: 0 } }, fields: { 'past:gone': { dx: 1, dy: 1 } } } }, null);
+eq(uz.moved.made, { 'act:zz': { dx: 30, dy: 0 } }, '差し戻し 4 前提: 読み込み時（グラフなし）は形だけ見るので不明 id が残る');
+var pz = MP.pruneMoved(uz, g);
+eq([pz.moved, pz !== uz, uz.moved.made['act:zz'].dx], [{ made: {}, fields: {} }, true, 30], '差し戻し 4 pruneMoved グラフに無い id を捨てる（元の ui は書き換えない）');
+var keepU = MP.normalizeUi({ moved: { made: { 'past:past-box': { dx: 5, dy: 0 } } } }, null);
+ok(MP.pruneMoved(keepU, g) === keepU && MP.pruneMoved(keepU, null) === keepU, '差し戻し 4 pruneMoved 変わらなければ同じものを返す（グラフ無しは何もしない）');
+var mixU = MP.pruneMoved(MP.normalizeUi({ moved: { made: { 'past:past-box': { dx: 5, dy: 0 }, 'act:zz': { dx: 1, dy: 1 } } } }, null), g);
+eq(mixU.moved.made, { 'past:past-box': { dx: 5, dy: 0 } }, '差し戻し 4 pruneMoved 実際にあるものは残す');
+// 差し戻し 5: 概念で見るで 学んだことの「違う」→ 作ったものが帯から消える時は選択なし（戻し先が無い）
+var dc = MP.decline({ concept: 'c-change', sel: { concepts: 'ln:ln-moon-frames' } }, g, 'concepts', 'ln:ln-moon-frames');
+eq([dc.declined, dc.sel.concepts], [['ln-moon-frames'], null], '差し戻し 5 decline 概念で見る: その作ったもの（お月見）が帯から消える → 選択なし');
+var gm = MP.graph(MPD.learned, acts, works, ['ln-moon-frames'], OPT);
+ok(!MP.conceptNodes(gm, CC, 'c-change')['past:past-moon'], '差し戻し 5 前提: 外した後、お月見は ともなって変わる の帯に無い');
+var dc2 = MP.decline({ concept: 'c-shape', sel: { concepts: 'ln:ln-box-right' } }, g, 'concepts', 'ln:ln-box-right');
+eq(dc2.sel.concepts, 'past:past-box', '差し戻し 5 decline 同じ作ったものの別の学んだことが帯に残る時は、その作ったものへ');
+eq(MP.decline({ sel: { made: 'ln:ln-moon-frames' } }, g, 'made', 'ln:ln-moon-frames').sel.made, 'past:past-moon', '差し戻し 5 作ったものから は今までどおり その作ったものへ');
 
 // ---------- MP.unitLinks（単元の詳細） ----------
 eq(MP.unitLinks(g, 'M4-C-01').map(function (x) { return [x.learned.id, x.made.id]; }), [['ln:ln-stars', 'act:act-py'], ['ln:ln-speed', 'act:act-py'], ['ln:ln-bead-repeat', 'past:past-beads'], ['ln:ln-moon-frames', 'past:past-moon']], 'unitLinks 変わり方 ← 学んだこと ← 作ったもの');

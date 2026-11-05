@@ -23,9 +23,9 @@
   var VIEWS = ['made', 'flow', 'fields', 'concepts', 'list'];
   // つながりのチップは 1 つ（§AC-13 / AD-1 / AD-9: 作ったものどうし・教科をまたぐ・学ぶ順はやめた。保存済みの chips.peer / cross / order は読み捨てる）
   var CHIPS = ['next'];
-  // 本人が動かせる見方（§AD-5）と、動かした分の上限（地図の座標で ±4000）
+  // 本人が動かせる見方（§AD-5）と、動かした分の上限（地図の座標で ±1500。normalize・ドラッグ中・Shift + 矢印で同じ値）
   var MOVE_VIEWS = ['made', 'fields'];
-  var MOVE_MAX = 4000;
+  var MOVE_MAX = 1500;
   var PAD = 60;
   var MADE = { act: 1, work: 1, past: 1 };
 
@@ -302,7 +302,7 @@
     return { view: 'made', sel: { made: null, flow: null, fields: null, concepts: null, list: null }, chips: { next: false }, declined: [], declinedNext: [], pos: { made: null, fields: null },
       big: false, only: false, concept: null, moved: { made: {}, fields: {} } };
   }
-  // 動かした分を整える: 作ったものの id（グラフがあればグラフにあるものだけ）・数だけ・±4000 に収めて 0.1 にまるめる・動いていないものは捨てる
+  // 動かした分を整える: 作ったものの id（グラフがあればグラフにあるものだけ）・数だけ・±MOVE_MAX に収めて 0.1 にまるめる・動いていないものは捨てる
   function normalizeMoved(raw, g) {
     var out = {};
     if (!isObj(raw)) return out;
@@ -369,6 +369,11 @@
     if (!n || n.kind !== 'learned' || n.src !== 'buddy') return null;
     cur.declined.push(n.learnedId);
     VIEWS.forEach(function (v) { if (cur.sel[v] === id) cur.sel[v] = n.madeId; });
+    // 概念で見る: その作ったものが帯に残るのは、同じ考え方の やったこと に同じ作ったものの別の学んだことがある時だけ。残らなければ選択なし
+    if (cur.sel.concepts === n.madeId) {
+      var stay = conceptView(g, MPD.concepts, cur.concept).did.some(function (lid) { return lid !== id && nodeById(g, lid).madeId === n.madeId; });
+      if (!stay) cur.sel.concepts = null;
+    }
     return cur;
   }
   // 元に戻す: 外した学んだことを戻し、選択は外す前（無ければその学んだこと）に
@@ -455,6 +460,20 @@
   }
 
   // ---------- 作ったものを自分で並べる（§AD-5）----------
+  // 描く前の照合: 保存値の moved からグラフに無い id（消えた活動・古い値）を捨てる。変わった時だけ新しい ui を返す（変わらなければ同じもの）
+  function pruneMoved(ui, g) {
+    if (!isObj(ui) || !isObj(ui.moved) || !g) return ui;
+    var changed = false, moved = {};
+    MOVE_VIEWS.forEach(function (v) {
+      var raw = isObj(ui.moved[v]) ? ui.moved[v] : {}, m = normalizeMoved(raw, g);
+      if (JSON.stringify(m) !== JSON.stringify(raw)) changed = true;
+      moved[v] = m;
+    });
+    if (!changed) return ui;
+    var out = clone(ui);
+    out.moved = moved;
+    return out;
+  }
   // 一緒に動くもの: その作ったもの + その作ったものだけにつながる学んだこと（並びにあるものだけ。分野で見るでは学んだことが無いので作ったものだけ）。
   // 単元・これから作れそう（2 つ以上の作ったものにつながりうる）は動かさない
   function moveTargets(g, id, L) {
@@ -569,11 +588,12 @@
 
   var pure = {
     flowCols: flowCols, flowRel: flowRel, flowOrder: flowOrder, visible: visible,
-    conceptView: conceptView, conceptNodes: conceptNodes, conceptLines: conceptLines, moveTargets: moveTargets, applyMoved: applyMoved, normalizeMoved: normalizeMoved,
+    conceptView: conceptView, conceptNodes: conceptNodes, conceptLines: conceptLines, moveTargets: moveTargets, applyMoved: applyMoved, normalizeMoved: normalizeMoved, pruneMoved: pruneMoved,
     progress: progress, overall: overall, isBlank: isBlank, lastDate: lastDate, dayNum: dayNum, graph: graph, related: related, peers: peers,
     viewNodes: viewNodes, edgesIn: edgesIn, defaultUi: defaultUi, normalizeUi: normalizeUi, selIn: selIn, select: select, deselect: deselect,
     decline: decline, undecline: undecline, declineNext: declineNext, undeclineNext: undeclineNext, unitLinks: unitLinks, nodeById: nodeById, hasNode: hasNode, posSettle: posSettle
   };
+  pure.MOVE_MAX = MOVE_MAX;
   Object.keys(pure).forEach(function (k) { MP[k] = pure[k]; });
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
   if (typeof document === 'undefined') return;
@@ -1174,10 +1194,12 @@
     ui().animMove = false;
     if (page._mvRaf) { cancelAnimationFrame(page._mvRaf); page._mvRaf = null; }
     clearTimeout(page._mvT);
+    page._mvStop = null;
     page._L = to;
     if (!anim) { placeAll(page, view); return; }
     var t0 = null, D = 220, done = false;
-    function finish() { if (done) return; done = true; if (page._mvRaf) cancelAnimationFrame(page._mvRaf); page._mvRaf = null; if (page.isConnected && page._L === to) placeAll(page, view); }
+    function finish() { if (done) return; done = true; page._mvStop = null; clearTimeout(page._mvT); if (page._mvRaf) cancelAnimationFrame(page._mvRaf); page._mvRaf = null; if (page.isConnected && page._L === to) placeAll(page, view); }
+    page._mvStop = finish;
     function step(ts) {
       if (done || !page.isConnected || page._L !== to) return;
       if (t0 == null) t0 = ts;
@@ -1206,13 +1228,17 @@
     if (page) page._mk = null;
     return setUi(next, o || {});
   }
+  // 元に戻すの動きが走っていたら、止めて最後の状態（保存値どおりの位置）にしてから動かし始める
+  function stopMoveAnim(page) { if (page && page._mvStop) page._mvStop(); }
   function addMoved(view, id, dx, dy) {
+    stopMoveAnim(document.querySelector('.map-page.is-map'));
     var cur = clone(movedOf(view)), p = cur[id] || { dx: 0, dy: 0 };
     cur[id] = { dx: p.dx + dx, dy: p.dy + dy };
     return saveMoved(view, cur);
   }
   // つかんだ: 一緒に動くもの（作ったもの + その学んだこと）の元の位置を覚えて、浮いた見た目に
   function startNodeDrag(page, id) {
+    stopMoveAnim(page);
     var targets = moveTargets(graphFull(), id, page._L);
     if (!targets.length) return false;
     page._drag = { id: id, base: targets.map(function (t) { return clone(page._L.nodes[t]); }), ids: targets, dx: 0, dy: 0 };
@@ -1223,6 +1249,10 @@
   function moveNodeDrag(page, dx, dy) {
     var d = page._drag, only = {};
     if (!d) return;
+    // 保存済みの分と足して ±MOVE_MAX を超えない（保存の時の丸めと同じ範囲。離した時に跳ばない）
+    var p = movedOf(page.getAttribute('data-view'))[d.id] || { dx: 0, dy: 0 };
+    dx = Math.max(-MOVE_MAX - p.dx, Math.min(MOVE_MAX - p.dx, dx));
+    dy = Math.max(-MOVE_MAX - p.dy, Math.min(MOVE_MAX - p.dy, dy));
     d.dx = dx; d.dy = dy;
     d.ids.forEach(function (t, k) { var b = d.base[k]; page._L.nodes[t] = { x: b.x + dx, y: b.y + dy, w: b.w, h: b.h }; only[t] = true; setNodePos(page, t); });
     redrawEdges(page, only);
@@ -1836,6 +1866,9 @@
   function viewOfArg(arg) { return !arg ? 'made' : (arg === 'flow' || arg === 'fields' || arg === 'concepts' || arg === 'list' ? arg : null); }
   function renderView(main, arg) {
     var u = ui(), m = /^u\/(.+)$/.exec(arg || ''), view = viewOfArg(arg);
+    // 描く前の照合（§AD-5）: 動かした分のうちグラフに無い id は捨てる（「ならびを元に戻す」は実際に動いているノードがある時だけ出る）
+    var pm = pruneMoved(mapUi(), graphFull());
+    if (pm !== S().mapUi) S().mapUi = pm;
     if (m) {
       var un = MPD.unit(m[1]);
       // 教材の無い単元（理科など）・無い code は基礎学習の一覧へ
@@ -1991,7 +2024,10 @@
   // 違う（バディの見立てだけ）: ノードと線が消える → トースト「外したよ」+「元に戻す」5 秒
   A['mp-decline'] = function (el) {
     var view = curView() || 'made', id = el.getAttribute('data-id'), g = graphNow(), before = mapUi().sel[view], next = decline(mapUi(), g, view, id), n = nodeById(g, id);
-    if (!next || !setUi(next, { sel: selOf(next.sel[view] || n.madeId) })) return;
+    if (!next) return;
+    // 戻し先（その作ったもの）が無い時（概念で見るで帯から消えた）は、選んでいる考え方のカード → h1 へ
+    var to = next.sel[view] ? selOf(next.sel[view]) : (view !== 'concepts' ? selOf(n.madeId) : (next.concept ? '[data-action="mp-concept"][data-id="' + esc(next.concept) + '"]' : '[data-fk="mp-h"]'));
+    if (!setUi(next, { sel: to, focus: 'mp-h' })) return;
     DES.app.toast(T('removed_toast'), { label: T('undo_restore'), fn: function () { setUi(undecline(mapUi(), view, n.learnedId, before), { sel: selOf(before || id) }); } });
   };
   // これから作れそうなものの「違う」: 地図から外す → トースト + 元に戻す
