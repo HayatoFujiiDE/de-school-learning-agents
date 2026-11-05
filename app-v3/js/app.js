@@ -72,8 +72,8 @@ window.DES = window.DES || {};
   var ROUTES = ['talk', 'plan', 'make', 'works', 'today', 'self', 'map', 'trail', 'paused'];
   var NAV = ['talk', 'make', 'works', 'today', 'self', 'map', 'trail'];
 
-  // #make/<id>（作業台）・#works/<id>・#today/<id> は前方一致（CONTRACT-v3 §U-3 / §W / §X）。他は完全一致
-  var PREFIX = ['make', 'works', 'today'];
+  // #make/<id>（作業台）・#works/<id>・#today/<id>・#map/<arg> は前方一致（CONTRACT-v3 §U-3 / §W / §X / §Y）。他は完全一致
+  var PREFIX = ['make', 'works', 'today', 'map'];
   function route() {
     var h = window.location.hash.replace(/^#/, ''), base = h.split('/')[0];
     if (PREFIX.indexOf(base) >= 0) return base;
@@ -365,6 +365,7 @@ window.DES = window.DES || {};
     else if (r === 'make') DES.make.render(main, APP.routeArg());
     else if (r === 'works') DES.works.render(main, APP.routeArg());
     else if (r === 'today') DES.today.render(main, APP.routeArg());
+    else if (r === 'map') DES.map.render(main, APP.routeArg());
     else if (r === 'self') DES.self.render(main);
     else if (rebuild) {
       if (r === 'paused') { if (DES.make.pausedAct()) DES.make.renderPaused(main); else DES.talk.renderPaused(main); }
@@ -426,6 +427,7 @@ window.DES = window.DES || {};
     DES.make.resetUi();
     DES.works.resetUi();
     DES.today.resetUi();
+    DES.map.resetUi();
   }
   function onHash() {
     var u = DES.ui, st = DES.state, r = route();
@@ -524,6 +526,7 @@ window.DES = window.DES || {};
     DES.make.bind();
     DES.works.bind();
     DES.today.bind();
+    DES.map.bind();
     APP.render();
   }
   init();
