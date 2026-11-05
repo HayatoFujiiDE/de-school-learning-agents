@@ -1045,6 +1045,12 @@
     for (var i = msgs.length - 1; i >= 0; i--) if (msgs[i].who === 'child') { said = msgs[i].text; break; }
     createAndOpen(fromText(said, { id: newId('a'), origin: 'talk', now: DES.data.now, mode: mode(), works: S().works }));
   };
+  // 学びマップの「これで作る」（CONTRACT-v3 §AB-6）: 入口の「思いつきから」（mk-start）と同じ経路で、言葉から作業台へ
+  M.fromIdea = function (text) {
+    var t = String(text == null ? '' : text).replace(/^\s+|\s+$/g, '');
+    if (!t) return;
+    createAndOpen(fromText(t, { id: newId('a'), origin: 'make', now: DES.data.now, mode: mode(), works: S().works }));
+  };
   // 予定表 mine 行の「作るで開く」: その取り組みの制作中があれば作業台、無ければ入口（同じカテゴリの見本を先頭に）
   var CAT_THEME = { minecraft: 'mc', programming: 'py', digital: 'circuit' };
   M.openFromPlan = function (row) {
