@@ -26,6 +26,8 @@
   // ---------- 題材の決め方（U-2）: 直近の本人発言から決定論で ----------
   function pickTheme(text) {
     var t = String(text || ''), low = t.toLowerCase();
+    // 自分を助ける道具（contract-Y §Y-3 / Y-8 の 9）: 既存の判定より前。「マイクラの道具」も tool（意図した仕様）
+    if (/論点|道具|整理|合図/.test(t)) return 'tool';
     if (/マイクラ|建築|コマンド/.test(t)) return 'mc';
     if (low.indexOf('python') >= 0 || /ゲーム|プログラム/.test(t)) return 'py';
     if (low.indexOf('led') >= 0 || /回路|電気|電池/.test(t)) return 'circuit';
@@ -116,6 +118,29 @@
       ext: { link: kind === 'link' ? 'Minecraft（リンクの体験例）' : null, photos: [], visible: [] }, steps: th.extSteps, stepsKind: 'ext', now: o.now });
     if (kind !== 'link') a = addPhoto(a, 'photo').act;
     return a;
+  }
+  // 自己理解の工夫・本人の場面から（contract-Y §Y-4 / Y-8）: 題材 tool の作業台。selfLink = 工夫の id か 'scene:' + 場面 id。
+  // o: { id, linkId, text, variant（既定 memo）, src: 'buddy'|'own', mode, now, works }。linkId の形が違えば null
+  var SELF_LINK = /^[A-Za-z0-9:_-]{1,64}$/;
+  function isSelfLink(v) { return typeof v === 'string' && SELF_LINK.test(v); }
+  function fromSelf(o) {
+    o = o || {};
+    if (!isSelfLink(o.linkId)) return null;
+    var th = MD.theme('tool'), variant = th.variants.indexOf(o.variant) >= 0 ? o.variant : th.sample, text = String(o.text == null ? '' : o.text);
+    var quote = text ? { text: text, removed: false, src: o.src === 'buddy' ? 'buddy' : 'own' } : null;
+    var a = newAct({ id: o.id, title: MD.pick(MD.variant('tool', variant).title, o.mode), origin: 'self', theme: 'tool',
+      stage: stageOf('tool', variant, 'sample'), quote: quote, now: o.now });
+    a.selfLink = o.linkId;
+    // 任せる・仮の案（Y-8 の 3）: ひとこと合図 / ひとつずつリスト / 話の地図 を棚に置く
+    addIdeas(a, 'tool', o.works);
+    say(a, 'open', o.mode);
+    return a;
+  }
+  // 同じ紐づけ（selfLink）の活動（あれば最初の 1 件）
+  function findSelfLink(acts, linkId) {
+    var hit = null;
+    (acts || []).forEach(function (x) { if (!hit && x && x.selfLink === linkId) hit = x; });
+    return hit;
   }
 
   // 今日のお題から（§X-2 / X-8）: お題の問い・最初の一歩・必要な物を引き継いだ活動（origin 'today'、odaiId 付き）。
@@ -542,7 +567,8 @@
     if (A.quote.text === t) return { act: a, changed: false };
     A.quote = { text: t, removed: false };
     A.shelf.forEach(function (c) { if (c.state === 'new') c.state = 'passed'; });
-    var theme = pickTheme(t);
+    // 自己理解と紐づく活動は題材を選び直さない（Y-8 の 4）。紐づけも外さない
+    var theme = A.selfLink ? A.theme : pickTheme(t);
     A.theme = theme;
     tick(A, 1);
     addIdeas(A, theme, works);
@@ -751,8 +777,19 @@
     if (A.ext && A.ext.photos) A.ext.photos.forEach(function (p) { p.theme = ODAI_THEME; });
     return A;
   }
+  // 自己理解との紐づけ（selfLink）と引用の出所（quote.src）: 形の違う値は捨てる（Y-4 / Y-8 の 12。版によらず全活動に通す）
+  function fixSelfLink(a) {
+    if (!a || typeof a !== 'object') return a;
+    var badLink = a.selfLink !== undefined && !isSelfLink(a.selfLink);
+    var badSrc = !!(a.quote && typeof a.quote === 'object' && a.quote.src !== undefined && a.quote.src !== 'buddy' && a.quote.src !== 'own');
+    if (!badLink && !badSrc) return a;
+    var A = clone(a);
+    if (badLink) delete A.selfLink;
+    if (badSrc) delete A.quote.src;
+    return A;
+  }
   function migrate(a, resolve) {
-    a = fixOdaiTheme(a);
+    a = fixSelfLink(fixOdaiTheme(a));
     if (a && a.v >= SCHEMA) return a;
     var A = clone(a);
     // 作業対象の主の種類で決める（§U-12 補足 3）: 見本・バディの試作なら theme（写真があっても）、外の記録だけなら ext / build
@@ -824,6 +861,7 @@
     finishMaking: finishMaking, cardNames: cardNames, visiblePhotos: visiblePhotos, cardTitle: cardTitle,
     canRevertTo: canRevertTo, restoreState: restoreState, findMsg: findMsg, declineReply: declineReply, undoDeclineReply: undoDeclineReply, migrate: migrate,
     migrateWork: migrateWork, withPending: withPending, fromOdai: fromOdai, isOdaiExt: isOdaiExt, remakeOptions: remakeOptions, ODAI_THEME: ODAI_THEME,
+    fromSelf: fromSelf, findSelfLink: findSelfLink, isSelfLink: isSelfLink,
     // §W（作品の一覧・詳細）が使う
     defaultStatus: defaultStatus, normalizeWorks: normalizeWorks, chState: chState, baseState: baseState, curState: curState
   };
@@ -988,6 +1026,19 @@
     go('#make/' + id);
   }
   M.openAct = openAct;
+  // 自己理解の工夫・本人の場面から（contract-Y §Y-4 / Y-8 の 1）: 同じ紐づけの活動があればそれを開く（止めていれば再開）。
+  // 無ければ tool の作業台を作って先頭に足し、#make/<id> へ。戻り値は活動 id
+  M.openFromSelf = function (o) {
+    o = o || {};
+    if (!isSelfLink(o.linkId)) return null;
+    var hit = findSelfLink(S().activities, o.linkId);
+    if (hit) { openAct(hit.id); return hit.id; }
+    var a = fromSelf({ id: newId('a'), linkId: o.linkId, text: o.text, variant: o.variant || 'memo', src: o.src, mode: mode(), now: DES.data.now, works: S().works });
+    if (!a) return null;
+    DES.app.change(function () { if (freshCards(a)) S().makeSide.shelfFolded = false; S().activities = [a].concat(S().activities); });
+    go('#make/' + a.id);
+    return a.id;
+  };
   // 今日のお題の「作ってみる」/「自分の案にする」（§X-2）: 同じお題の活動があればそれを開く（問いを書き換えていれば反映して開く）
   M.openOdai = function (odai, question) {
     if (!odai) return null;
@@ -1244,8 +1295,10 @@
     if (u.edit && u.edit.type === 'quote' && u.edit.act === a.id) {
       return H('div', { class: 'quote-frame editing' }, [chip('own', T('own_label')), inlineEdit('quote', a.id, T('own_label'), u.edit.value, true)]);
     }
-    return H('div', { class: 'quote-frame', 'data-fk': 'quote:' + a.id, tabindex: '-1' }, [
-      H('div', { class: 'qf-head' }, [chip('own', T('own_label'))]),
+    // 出所（Y-8 の 5）: 'buddy' = バディの提案（琥珀）。'own' か無い時は本人の言葉
+    var src = q.src === 'buddy' ? chip('ai', T('ai_proposal')) : chip('own', T('own_label'));
+    return H('div', { class: 'quote-frame' + (q.src === 'buddy' ? ' is-ai' : ''), 'data-fk': 'quote:' + a.id, tabindex: '-1' }, [
+      H('div', { class: 'qf-head' }, [src]),
       H('p', { class: 'qf-text' }, q.text),
       H('div', { class: 'actions' }, [btn(T('quote_edit'), 'mk-quote-edit', { id: a.id, kls: 'ghost' }), btn(T('quote_remove'), 'mk-quote-remove', { id: a.id, kls: 'ghost' })])
     ]);
