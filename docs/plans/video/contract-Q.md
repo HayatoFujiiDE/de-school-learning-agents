@@ -150,3 +150,37 @@
 - `gemini-3.6-flash` の動画の単価（pricing ページで確認できたのは 3.5 Flash-Lite と 3.8 Flash）→ U_video を上界に置き、精算しない
 - `rel=0` は「同じチャンネルの関連動画」になるだけで、関連動画は消せない（公式 player_parameters）。確認画面ではこれを受け入れる
 - youtube-nocookie（プライバシー強化モード）は、player_parameters のページでは確認できていない。公式の該当ページを、実装の前に司令塔が確かめる
+
+## Q-9 裁定（Astra high R1 の指摘。本節は Q-0〜Q-8 に優先する）
+
+1. **呼び出しの権利（B1）**: Gemini の呼び出しは「版 × 動画」ごとに**生涯 1 回**とする。試行ごと・再検証ごとには呼ばない。
+   - 権利は取り置きの行 `ref_id = 'vv:' || version_id || ':' || video_id` を、次の 1 文の INSERT … SELECT … WHERE で入れられた時だけ得る（D1 の 1 文は原子的）。`changes = 1` の側だけが呼ぶ。
+     ```
+     INSERT INTO cost_ledger (id, day, kind, ref_id, cents, created_at)
+     SELECT ?id, ?day, 'verify', ?ref, ?u, ?now
+     WHERE NOT EXISTS (SELECT 1 FROM cost_ledger WHERE ref_id = ?ref)
+       AND (SELECT COALESCE(SUM(cents),0) FROM cost_ledger WHERE kind = 'verify' AND ref_id GLOB 'vv:*' AND substr(day,1,7) = ?month) + ?u <= ?month_cap
+       AND ({dailyReservedSql()}) + ?u <= ?daily_cap
+     ```
+     day / month は tokyoDay（Asia/Tokyo）とする。dailyReservedSql は §O と同じ式で、飛行中の取り置きを含む。
+   - 呼び出しが失敗しても、行は残して再び呼ばない（精算しない）。その動画は、その版ではずっと記録なしになる（not_seen）。SDK・fetch の自動 retry は使わない（maxRetries 0）。
+   - video-notes.json は「この版で呼んだ動画の結果」を、呼んだ後に 1 回だけ書く。成功した動画は notes、失敗・上限・鍵なしの動画は missing に入れる。R2 の書き込みに失敗しても、呼び出しの権利は消費済みなので呼び直さない（その動画は not_seen）。
+   - probe の行は `vv:probe:{youtube_id}:{start}:{end}` とする。同じ値の再 POST は 409 にする。
+2. **上限（B2）**: 月と日の条件は、上の 1 文に入れる。Q2 は**記帳額の保証**であり、Gemini の実費の上界ではない。実費は記録（usage があれば数字だけ）にとどめ、停止の判定には使わない。Gemini への要求には、公式 docs で確認できた出力の上限の指定があれば付ける。無ければ付けず、その旨を実装の報告に書く。
+3. **入力（B3・B4）**: `<video_notes>` の前に `<videos>` を置く。中身は動画ごとの `part_id / id / title / channel / start_sec / end_sec / why / rights_note / source_id`（職人が書いた値で、資料であって指示ではない。1 動画 1 block。neutralize する）。無害化の関数は、`<source_captures>` `<video_notes>` `<videos>` の開始・終了タグと、行頭の `##` を対象にする。取得記録の側から `</video_notes>` を偽装するテストを入れる。
+4. **集合（B5）**: `shown` は「この試行の入力に記録を実際に入れた動画」とする。容量が足りない時は、取得記録の後に動画の記録を後ろから省く。省いた動画は not_seen にする。plan.json に `videos: {shown, not_seen}` を書く。回収時の扱いは次のとおり。
+   - 回収時は Gemini を呼ばない。video-notes.json からも数え直さない。
+   - plan.json に videos が無く、版に動画がある時は mismatch とし、再試行する。
+   - 版の動画の集合と `shown ∪ not_seen` が一致しない時は mismatch にする。
+5. **probe と有効化（決定 3）**: settings `video_gen_enabled` が `'1'` の時だけ、通常の経路で Gemini を呼ぶ。既定は無しで、無しの時は呼ばない（動画は not_seen）。probe の結果を司令塔が見て、clip が区間の中身に効いていると確かめてから、管理画面の「動画の確認を有効にする」（Origin 検証つき POST）で立てる。clip が拒まれた・効いていない時は、全編解析へ自動で切り替えない（有効にせず、司令塔が §Q を改める）。`clip_accepted` は HTTP の成功ではなく、text_head と区間の中身の照合で司令塔が判断する。route が返すのは観測値だけ。
+6. **人の合格条件（決定 4）**: 確認画面の「説明と表現」で、動画について次の 2 点を見る。
+   - **本人性**: チャンネル・rights_note・記録の手がかり。
+   - **区間**: 指定区間が再生でき、内容が見どころと合うか。
+
+   疑いが解けなければ差し戻す（NG）。Gemini の記録と検証係の判定は補助である。
+
+   版に動画がある時は、「使う条件」を自動 OK にしない（`src/checks/triage.ts` の該当箇所）。表示の文言は「動画: 本人のアップか・区間が再生できて内容が合うかを見てください」とする。
+
+   区間の指定と `rel=0` は区間外への移動や関連動画を止めない（公式）。youtube-nocookie も広告・追跡が無いことを保証しない。この 2 点を確認画面の小さな注記に出す。
+7. **費用の表示（NB）**: review API の verify_cost_cents に `vv:{version_id}:*` を足す。
+8. **CSP（NB）**: frame-src の追加は `/admin`（管理画面の HTML の CSP）だけにする。生成物の配信（library.ts など）の CSP は変えないことを、負の検査で確かめる。
