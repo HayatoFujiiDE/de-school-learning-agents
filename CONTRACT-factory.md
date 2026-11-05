@@ -1200,6 +1200,10 @@ state は `done` / `active` / `waiting` (人の番) / `failed` / `pending` / `sk
 - 一時 route `/api/probe/image-tool` と `src/routes/probe.ts` は §O の実装で削除する
 - §O-12（v3.9.1、2026-11-05）: 検証係が図・画像を見る。本文は `docs/plans/image-generation/contract-O12-verifier-figures.md`。§O-0 範囲外の「検証係が画像を見ること」と §L-6 4 の「検証係は図を見ない」を置き換える
 
+## §P 検証係の改善（取得記録・開き直しの節約・たとえ）（v3.10。2026-11-05 凍結）
+
+本文（正本）は `docs/plans/verifier-v2/contract-P.md`。検証係（§F-3 / §L-2）に、制作時の web_fetch の取得記録を補助の資料として渡す。同じ URL の開き直しを止める。たとえ・対応づけを「たとえとして成り立つか」で判定し、完全には同じでない点を `analogy_gaps` として result_json に残す（学びマップが後で読む）。
+
 ## §R 裁定記録（2026-11-04。Astra medium + 3 視点レビューの指摘への裁定）
 
 1. **`tool_choice: any` は Opus 5.5 で 400** → `auto` + `strict: true` + 再送ループ（§F-3）。採用
