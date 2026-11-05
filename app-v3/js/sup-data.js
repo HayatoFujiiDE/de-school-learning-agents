@@ -194,7 +194,7 @@
       rp_extra: '補足', rp_extra_ph: 'おうちの人に伝えたいことがあれば書く',
       rp_preview: 'おうちの人に届く形を見る', rp_preview_h: '{child}の 1 週間（{from}〜{to}）', rp_from: '{sup}より',
       rp_check: '確かめた', rp_send: '送る', rp_send_note: 'このモックでは送られない', rp_sent_toast: '送ったことにした（体験例）',
-      rp_sent_line: '{at} に送った（体験例）', rp_to_draft: '下書きに戻す', rp_locked: '送ったあとは、下書きに戻してから直す', rp_need_one: '載せる項目を 1 つ以上選ぶ',
+      rp_sent_line: '{at} に送った（体験例）', rp_to_draft: '下書きに戻す', rp_locked: '送ったあとは、下書きに戻してから直す', rp_stale: '確かめたあとに、元の記録が変わっている。下書きに戻すと今の中身になる', rp_need_one: '載せる項目を 1 つ以上選ぶ',
       rp_next_proposed: '{start}〜 {title}（提案中）',
       rp_own_up: '{label}では、自分で進める割合が上がってきました（{w0}: {n0} 回のうち {o0} 回 → 今週: {n1} 回のうち {o1} 回）',
       rp_own_flat: '{label}は、{sup}と一緒に進めています（今週: {n1} 回のうち自分で {o1} 回）',
