@@ -83,7 +83,7 @@ html[data-mode="es"] .mp-linked,html[data-mode="es"] .mp-uname,html[data-mode="e
 .mp-zero{font-size:13px;line-height:1.8}
 .mp-area{min-width:0}
 .mp-area h3{font-size:13px;line-height:1.6;padding-bottom:6px;margin-bottom:4px;border-bottom:1px solid var(--line)}
-.mp-urows{list-style:none;margin:0;padding:0;display:grid;gap:4px}
+.mp-urows{list-style:none;margin:0;padding:0;display:grid;gap:6px}
 .mp-urow{display:grid;grid-template-columns:minmax(0,220px) auto minmax(0,1fr);align-items:center;gap:4px 16px;min-width:0;padding:2px 0}
 .mp-uname{display:inline-flex;align-items:center;justify-self:start;font-size:13px;font-weight:600;line-height:1.5;color:var(--ink);text-underline-offset:4px;overflow-wrap:anywhere}
 .mp-ubar{display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap}
@@ -95,7 +95,11 @@ html[data-mode="es"] .mp-linked,html[data-mode="es"] .mp-uname,html[data-mode="e
 .mp-sq::after{right:0}
 .mp-sq.p::before,.mp-sq.e::after{background:var(--olive)}
 .mp-pct{font-size:11px;color:var(--muted);font-weight:600;font-variant-numeric:tabular-nums;min-width:34px}
-.mp-linked{justify-self:start;display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border:1px solid var(--line);border-radius:999px;background:#fff;font-size:11px;font-weight:600;line-height:1.5;color:var(--ink);text-align:left}
+/* 印「作ったものとつながっている」: 押せる範囲は 44px（es 48px）のまま、見た目は小さな丸い札（隣の行の札とくっつかない） */
+.mp-linked{justify-self:start;display:inline-flex;align-items:center;padding:0;border:0;background:none;font-size:11px;font-weight:600;line-height:1.5;color:var(--ink);text-align:left}
+.mp-linked:hover{filter:none}
+.mp-pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border:1px solid var(--line);border-radius:999px;background:#fff}
+.mp-linked:hover .mp-pill{border-color:#cfcabd}
 .mp-linked .ico{width:14px;height:14px;flex-shrink:0}
 .mp-scope{font-size:12px;color:var(--muted);line-height:1.8}
 

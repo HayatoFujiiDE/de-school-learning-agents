@@ -5,6 +5,7 @@ var fs = require('fs');
 var MD = require(path.join(__dirname, '../app-v3/js/make-data.js'));
 var MPD = require(path.join(__dirname, '../app-v3/js/map-data.js'));
 var MP = require(path.join(__dirname, '../app-v3/js/map.js'));
+var W = require(path.join(__dirname, '../app-v3/js/works.js'));
 
 var pass = 0, fail = 0;
 function ok(cond, name) {
@@ -24,12 +25,14 @@ ok(codes.every(function (c) { return /^M4-[A-D]-\d\d$/.test(c); }), 'Y-5 code �
 eq(MPD.areas.map(function (a) { return a.name[0]; }), ['数と計算', '図形', '変化と関係', 'データの活用'], 'Y-3 4 領域（段の順）');
 var byArea = {};
 MPD.units.forEach(function (u) { (byArea[u.area] = byArea[u.area] || []).push(u.name[0]); });
-eq(byArea.A, ['大きな数', 'わり算の筆算', '小数', 'がい数', '計算のきまり', '分数'], 'Y-5 数と計算の単元と順');
-eq(byArea.B, ['角の大きさ', '垂直・平行と四角形', '面積', '直方体と立方体'], 'Y-5 図形の単元と順');
-eq(byArea.C, ['変わり方', '簡単な割合'], 'Y-5 変化と関係の単元と順');
-eq(byArea.D, ['折れ線グラフ', '整理のしかた'], 'Y-5 データの活用の単元と順');
-ok(U('M4-A-05').items.some(function (it) { return /□/.test(it.name[0]); }), 'Y-5 計算のきまりは □を使った式を含む');
-ok(U('M4-B-04').items.some(function (it) { return /位置/.test(it.name[0]); }), 'Y-5 直方体と立方体は ものの位置を含む');
+// 学習指導要領（第 4 学年の内容）の項目の順で固定（司令塔裁定 2026-11-05）
+eq(byArea.A, ['大きな数', 'がい数', 'わり算の筆算', '小数', '分数', '計算のきまり'], 'Y-3 数と計算は学習指導要領の順');
+eq(byArea.B, ['垂直・平行と四角形', '直方体と立方体', '面積', '角の大きさ'], 'Y-3 図形は学習指導要領の順');
+eq(byArea.C, ['変わり方', '簡単な割合'], 'Y-3 変化と関係は学習指導要領の順');
+eq(byArea.D, ['整理のしかた', '折れ線グラフ'], 'Y-3 データの活用は学習指導要領の順');
+eq(codes, codes.slice().sort(), 'Y-5 仮の code の番号も表示の順');
+ok(U('M4-A-06').items.some(function (it) { return /□/.test(it.name[0]); }), 'Y-5 計算のきまりは □を使った式を含む');
+ok(U('M4-B-02').items.some(function (it) { return /位置/.test(it.name[0]); }), 'Y-5 直方体と立方体は ものの位置を含む');
 MPD.units.forEach(function (u) {
   ok(pair(u.name), 'Y-5 ' + u.code + ' の名前は [中, 小]');
   ok(u.items.length >= 3 && u.items.length <= 6, 'Y-5 ' + u.code + ' は 3〜6 項目（' + u.items.length + '）');
@@ -46,18 +49,18 @@ Object.keys(P).forEach(function (k) {
   ok(codes.indexOf(k.replace(/-\d+$/, '')) >= 0, 'Y-5 進み具合の項目 ' + k + ' は単元にある');
   [v.practice, v.explain].forEach(function (d) { ok(d === null || (dayNum(d) > 0 && dayNum(d) <= 1102), 'Y-5 ' + k + ' の日付は M/D で 11/2 まで'); });
 });
-['M4-A-01', 'M4-D-01', 'M4-A-02', 'M4-B-01', 'M4-B-02'].forEach(function (c) {
+['M4-A-01', 'M4-D-02', 'M4-A-03', 'M4-B-04', 'M4-B-01'].forEach(function (c) {
   var r = MP.progress(U(c), P);
   ok(r.done / r.total >= 0.6, 'Y-5 前半の ' + U(c).name[0] + ' はおおむね両方済み（' + r.done + '/' + r.total + '）');
 });
-['M4-A-03', 'M4-A-04'].forEach(function (c) {
+['M4-A-04', 'M4-A-02'].forEach(function (c) {
   var r = MP.progress(U(c), P);
   ok(r.done < r.total && r.done + r.practiceOnly + r.explainOnly > 0, 'Y-5 ' + U(c).name[0] + ' は途中');
 });
 var area = U('M4-B-03'), ap = area.items.filter(function (it) { return MPD.itemProgress(P, it.id).practice; }).length, ae = area.items.filter(function (it) { return MPD.itemProgress(P, it.id).explain; }).length;
 eq([ap, ae], [2, 1], 'Y-5 面積は 問題 2 項目・説明 1 項目');
 ok(MP.progress(area, P).practiceOnly >= 1, 'Y-5 面積は片方だけのマスが見える');
-['M4-A-05', 'M4-A-06', 'M4-B-04', 'M4-C-01', 'M4-C-02', 'M4-D-02'].forEach(function (c) {
+['M4-A-06', 'M4-A-05', 'M4-B-02', 'M4-C-01', 'M4-C-02', 'M4-D-01'].forEach(function (c) {
   var r = MP.progress(U(c), P);
   eq([r.done, r.practiceOnly, r.explainOnly], [0, 0, 0], 'Y-5 ' + U(c).name[0] + ' は空');
 });
@@ -66,7 +69,7 @@ ok(ov.pct >= 30 && ov.pct <= 40, 'Y-5 全体でおよそ 3〜4 割（' + ov.pct 
 
 // ---------- MP.progress / overall / isBlank / lastDate（§Y-3 / §Y-9） ----------
 eq(MP.progress(area, P), { done: 1, practiceOnly: 1, explainOnly: 0, total: 5, pct: 20 }, 'progress 面積');
-eq(MP.progress(U('M4-A-04'), P), { done: 0, practiceOnly: 1, explainOnly: 1, total: 3, pct: 0 }, 'progress がい数（問題だけ 1・説明だけ 1）');
+eq(MP.progress(U('M4-A-02'), P), { done: 0, practiceOnly: 1, explainOnly: 1, total: 3, pct: 0 }, 'progress がい数（問題だけ 1・説明だけ 1）');
 eq(MP.progress(U('M4-C-01'), {}), { done: 0, practiceOnly: 0, explainOnly: 0, total: 3, pct: 0 }, 'progress 記録なし = 0%');
 eq(MP.progress(null, P), { done: 0, practiceOnly: 0, explainOnly: 0, total: 0, pct: 0 }, 'progress 単元なし');
 var eight = { items: [1, 2, 3, 4, 5, 6, 7, 8].map(function (i) { return { id: 'x-' + i }; }) };
@@ -80,8 +83,8 @@ ok(ov.pct !== avg, 'overall は単元 % の平均ではない（' + ov.pct + ' v
 eq(MP.overall([], P), { done: 0, total: 0, pct: 0 }, 'overall 単元なし');
 ok(MP.isBlank(MPD.units, {}) === true && MP.isBlank(MPD.units, P) === false, 'isBlank 記録が 1 つも無い時だけ');
 eq(MP.lastDate(area, P), '11/1', 'lastDate 面積 = 11/1');
-eq(MP.lastDate(U('M4-A-02'), P), '10/7', 'lastDate 月をまたいでも新しい日（9/29 < 10/7）');
-eq(MP.lastDate(U('M4-A-05'), P), null, 'lastDate 記録なし = null');
+eq(MP.lastDate(U('M4-A-03'), P), '10/7', 'lastDate 月をまたいでも新しい日（9/29 < 10/7）');
+eq(MP.lastDate(U('M4-A-06'), P), null, 'lastDate 記録なし = null');
 
 // ---------- 対応表（§Y-5）: 場面は既存の見本記録の原文だけ ----------
 var acts = MD.seedActivities(), works = MD.seedWorks(acts);
@@ -105,11 +108,16 @@ eq(work('w-seed-py').craft, '速さを 4 にしたら追いつけなかったの
 eq(work('w-seed-circuit').like, '電池を 2 個にしたら、電球がはっきりついたところ', 'Y-5 w-seed-circuit の like の原文');
 var L = {};
 MPD.learned.forEach(function (l) { L[l.id] = l; });
-eq([L['ln-area'].src, L['ln-area'].units, L['ln-area'].evidence], ['buddy', ['M4-B-03'], { changeId: 'act-build-c2', field: 'what' }], 'Y-5 2 倍 → 面積（バディ）');
-eq([L['ln-cuboid'].src, L['ln-cuboid'].units, L['ln-cuboid'].evidence], ['buddy', ['M4-B-04'], { changeId: 'act-build-c1', field: 'what' }], 'Y-5 塔 → 直方体と立方体（バディ）');
-eq([L['ln-stars'].src, L['ln-stars'].units, L['ln-stars'].evidence], ['own', ['M4-C-01'], { workId: 'w-seed-py', field: 'like' }], 'Y-5 星 → 変わり方（本人）');
-eq([L['ln-speed'].src, L['ln-speed'].units, L['ln-speed'].evidence], ['own', ['M4-C-01'], { workId: 'w-seed-py', field: 'craft' }], 'Y-5 速さ → 変わり方（本人。速さの単元に結ばない）');
-eq([L['ln-battery'].src, L['ln-battery'].units, L['ln-battery'].evidence], ['own', ['S4-A-01'], { workId: 'w-seed-circuit', field: 'like' }], 'Y-5 電池 → 理科 電流の働き（本人）');
+eq([L['ln-area'].src, L['ln-area'].units, L['ln-area'].evidence], ['buddy', ['M4-B-03'], { changeId: 'act-build-c2', field: 'what', quote: '塔を 2 倍にした' }], 'Y-5 2 倍 → 面積（バディ）');
+eq([L['ln-cuboid'].src, L['ln-cuboid'].units, L['ln-cuboid'].evidence], ['buddy', ['M4-B-02'], { changeId: 'act-build-c1', field: 'what', quote: '石で塔を建てた' }], 'Y-5 塔 → 直方体と立方体（バディ）');
+eq([L['ln-stars'].src, L['ln-stars'].units, L['ln-stars'].evidence], ['own', ['M4-C-01'], { workId: 'w-seed-py', field: 'like', quote: work('w-seed-py').like }], 'Y-5 星 → 変わり方（本人）');
+eq([L['ln-speed'].src, L['ln-speed'].units, L['ln-speed'].evidence], ['own', ['M4-C-01'], { workId: 'w-seed-py', field: 'craft', quote: work('w-seed-py').craft }], 'Y-5 速さ → 変わり方（本人。速さの単元に結ばない）');
+eq([L['ln-battery'].src, L['ln-battery'].units, L['ln-battery'].evidence], ['own', ['S4-A-01'], { workId: 'w-seed-circuit', field: 'like', quote: work('w-seed-circuit').like }], 'Y-5 電池 → 理科 電流の働き（本人）');
+// 引き出した時の原文（quote）は、見本の記録の今の文と同じ
+MPD.learned.forEach(function (l) {
+  var e = l.evidence, cur = e.changeId ? ((act(l.actId).changes.filter(function (c) { return c.id === e.changeId; })[0] || {}).what || {}).text : (work(e.workId) || {})[e.field];
+  eq(e.quote, cur, 'Y-5 ' + l.id + ' の quote = 見本の記録の原文');
+});
 
 // ---------- MP.graph（§Y-9）: 活動 1 つ = ノード 1 つ・記録が消えたら辺ごと落とす ----------
 var OPT = { today: '11/2' };
@@ -117,7 +125,7 @@ var g = MP.graph(MPD.learned, acts, works, [], OPT);
 eq(g.nodes.acts.map(function (n) { return n.id; }), ['act:act-build', 'act:act-py', 'act:act-cap'], 'graph 作ってきたもの = 活動の並び（活動 1 つ = 1 ノード）');
 eq(g.nodes.acts.map(function (n) { return n.works.map(function (w) { return w.title; }); }), [['石の塔（2 倍）'], ['星がたくさん落ちるゲーム', '星 5 つのゲーム'], ['電球がつく回路']], 'graph 作ったものに残した作品のタイトル');
 eq(g.nodes.learned.map(function (n) { return n.id; }), ['ln:ln-area', 'ln:ln-cuboid', 'ln:ln-stars', 'ln:ln-speed', 'ln:ln-battery'], 'graph 学んだこと 5');
-eq(g.nodes.units.map(function (n) { return [n.id, n.material]; }), [['unit:M4-B-03', true], ['unit:M4-B-04', true], ['unit:M4-C-01', true], ['unit:S4-A-01', false]], 'graph つながる単元（重なりなし・理科は material:false）');
+eq(g.nodes.units.map(function (n) { return [n.id, n.material]; }), [['unit:M4-B-03', true], ['unit:M4-B-02', true], ['unit:M4-C-01', true], ['unit:S4-A-01', false]], 'graph つながる単元（重なりなし・理科は material:false）');
 eq(g.edges.length, 10, 'graph 辺 10（作ったもの→学んだこと 5 + 学んだこと→単元 5）');
 var all = g.nodes.acts.concat(g.nodes.learned, g.nodes.units).map(function (n) { return n.id; });
 eq(all.filter(function (id, i) { return all.indexOf(id) !== i; }), [], 'graph ノード id が重ならない');
@@ -136,6 +144,23 @@ var w4 = cp(works);
 w4.forEach(function (w) { if (w.id === 'w-seed-py') w.like = null; });
 var g4 = MP.graph(MPD.learned, acts, w4, [], OPT);
 ok(!MP.hasNode(g4, 'ln:ln-stars') && MP.hasNode(g4, 'ln:ln-speed'), 'graph 記録の欄が空になったら、その学んだことだけ落とす');
+// 記録を本人が直したら（作品の詳細の W.edit）、その記録から引き出した学んだことは出さない。元の文に戻せばまた出る（裁定 1）
+var we = W.edit(works, 'w-seed-py', 'like', '色の組み合わせを工夫したところ');
+eq(we.filter(function (w) { return w.id === 'w-seed-py'; })[0].like, '色の組み合わせを工夫したところ', 'quote 前提: W.edit で気に入っているところが変わる');
+var ge = MP.graph(MPD.learned, acts, we, [], OPT);
+ok(!MP.hasNode(ge, 'ln:ln-stars') && !MP.hasNode(ge, 'act:act-py>ln:ln-stars') && ge.edges.every(function (e) { return e.from !== 'ln:ln-stars' && e.to !== 'ln:ln-stars'; }), 'quote 直した記録の学んだことは辺ごと出さない（本人由来で残さない）');
+ok(MP.hasNode(ge, 'ln:ln-speed') && MP.hasNode(ge, 'unit:M4-C-01'), 'quote 直していない記録（工夫したところ）の学んだことは残る');
+var wb = W.edit(we, 'w-seed-py', 'like', work('w-seed-py').like);
+ok(MP.hasNode(MP.graph(MPD.learned, acts, wb, [], OPT), 'ln:ln-stars'), 'quote 元の文に戻すと また出る');
+var ws = cp(works);
+ws.forEach(function (w) { if (w.id === 'w-seed-py') w.like = '  ' + w.like + ' '; });
+ok(MP.hasNode(MP.graph(MPD.learned, acts, ws, [], OPT), 'ln:ln-stars'), 'quote 前後の空白だけの違いは同じ文');
+var ac = cp(acts);
+ac[0].changes.forEach(function (c) { if (c.id === 'act-build-c2') c.what = { text: '塔を 3 倍にした' }; });
+ok(!MP.hasNode(MP.graph(MPD.learned, ac, works, [], OPT), 'ln:ln-area') && MP.hasNode(MP.graph(MPD.learned, ac, works, [], OPT), 'ln:ln-cuboid'), 'quote 変化の文が変わったら、その学んだことだけ出さない');
+var noQ = cp(MPD.learned);
+delete noQ[2].evidence.quote;
+ok(!MP.hasNode(MP.graph(noQ, acts, works, [], OPT), 'ln:ln-stars'), 'quote 原文を持たない対応は出さない');
 var a5 = cp(acts);
 a5[0].changes = a5[0].changes.filter(function (c) { return c.id !== 'act-build-c2'; });
 ok(!MP.hasNode(MP.graph(MPD.learned, a5, works, [], OPT), 'ln:ln-area'), 'graph 変化が無くなったら（戻した）その学んだことを落とす');
@@ -149,8 +174,8 @@ eq(MP.graph(MPD.learned, null, undefined, null).nodes.acts.length, 0, 'graph 壊
 
 // ---------- MP.related（2 ホップ）/ defaultSel ----------
 eq(MP.defaultSel(g), 'act:act-build', 'defaultSel 見本 = 建築（大きく）');
-eq(MP.related(g, 'act:act-build'), { nodes: ['ln:ln-area', 'ln:ln-cuboid', 'unit:M4-B-03', 'unit:M4-B-04'],
-  edges: ['act:act-build>ln:ln-area', 'ln:ln-area>unit:M4-B-03', 'act:act-build>ln:ln-cuboid', 'ln:ln-cuboid>unit:M4-B-04'] }, 'related 作ったもの → 学んだこと → 単元');
+eq(MP.related(g, 'act:act-build'), { nodes: ['ln:ln-area', 'ln:ln-cuboid', 'unit:M4-B-03', 'unit:M4-B-02'],
+  edges: ['act:act-build>ln:ln-area', 'ln:ln-area>unit:M4-B-03', 'act:act-build>ln:ln-cuboid', 'ln:ln-cuboid>unit:M4-B-02'] }, 'related 作ったもの → 学んだこと → 単元');
 eq(MP.related(g, 'ln:ln-stars').nodes, ['act:act-py', 'unit:M4-C-01'], 'related 学んだこと → 作ったもの と 単元（となりの学んだことは含めない）');
 eq(MP.related(g, 'unit:M4-C-01'), { nodes: ['act:act-py', 'ln:ln-stars', 'ln:ln-speed'],
   edges: ['ln:ln-stars>unit:M4-C-01', 'act:act-py>ln:ln-stars', 'ln:ln-speed>unit:M4-C-01', 'act:act-py>ln:ln-speed'] }, 'related 単元 ← 学んだこと ← 作ったもの');
@@ -168,6 +193,11 @@ eq(MP.normalizeUi({ sel: 5, declined: ['ln-area'] }, null), { declined: [] }, 'n
 eq(MP.normalizeUi({ sel: 'x', declined: 'ln-area' }, null), { declined: [] }, 'normalizeUi 形が違えば初期値（declined が配列でない）');
 eq(MP.normalizeUi([1, 2], null), { declined: [] }, 'normalizeUi 配列は初期値');
 eq(MP.normalizeUi({ declined: ['ln-area', 'zz', 'ln-area', 3, 'ln-cuboid'] }, null).declined, ['ln-area', 'ln-cuboid'], 'normalizeUi declined は対応表にあるものだけ・重なりなし');
+eq(MP.normalizeUi({ sel: null, declined: ['ln-stars', 'ln-speed', 'ln-battery'] }, null).declined, [], 'normalizeUi 保存値に本人の言葉の id があっても落とす（裁定 2）');
+eq(MP.normalizeUi({ declined: ['ln-stars', 'ln-cuboid', 'ln-battery'] }, null).declined, ['ln-cuboid'], 'normalizeUi declined はバディの見立てだけ残す');
+var gp = MP.graph(MPD.learned, acts, works, MP.normalizeUi({ declined: ['ln-stars', 'ln-speed', 'ln-battery'] }, null).declined, OPT);
+eq(gp.nodes.learned.filter(function (n) { return n.src === 'own'; }).length, 3, 'normalizeUi → graph 本人由来の学んだこと 3 件は保存値で消えない');
+eq(MP.normalizeUi({ declined: ['p1'] }, null, [{ id: 'p1', src: 'person' }, { id: 'b1', src: 'buddy' }]).declined, [], 'normalizeUi 人の言葉も外さない');
 eq(MP.normalizeUi({ sel: 'ln:ln-area', declined: ['ln-area'] }, g1).sel, 'act:act-build', 'normalizeUi 外した学んだことの選択は既定へ');
 eq(MP.select({}, g, 'act:act-build'), { sel: null, declined: [] }, 'select 既定で選ばれているノードをもう一度 = 外す');
 eq(MP.select({}, g, 'ln:ln-stars'), { sel: 'ln:ln-stars', declined: [] }, 'select 別のノード');

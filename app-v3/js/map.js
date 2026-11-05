@@ -56,19 +56,21 @@
   }
 
   // ---------- つながり（§Y-2 / §Y-9） ----------
-  // 場面 = 記録 1 つ（活動の変化の文 / 作品の本人の言葉）。記録が無い・空なら null（その学んだことは出さない）
+  // 場面 = 記録 1 つ（活動の変化の文 / 作品の本人の言葉）。記録が無い・空・引き出した時の原文（evidence.quote）と違う
+  // （本人が直した）なら null = その学んだことは出さない（古い手がかりを本人の記録に裏付けられたものとして残さない）
   function scene(ev, a, works, opts) {
-    if (!isObj(ev) || !a) return null;
+    if (!isObj(ev) || !a || typeof ev.quote !== 'string' || !trim(ev.quote)) return null;
+    var quote = trim(ev.quote);
     if (typeof ev.changeId === 'string') {
       var c = find(a.changes, ev.changeId), t = c && c.what && typeof c.what.text === 'string' ? trim(c.what.text) : '';
-      if (!t) return null;
+      if (!t || t !== quote) return null;
       return { kind: 'change', ref: c.id, field: 'what', date: opts.today || null, time: c.time || null, text: t, with: c.with || null };
     }
     if (typeof ev.workId === 'string') {
       var w = find(works, ev.workId), f = ev.field === 'craft' || ev.field === 'like' ? ev.field : null;
       if (!w || !f || w.actId !== a.id) return null;
       var v = typeof w[f] === 'string' ? trim(w[f]) : '';
-      if (!v) return null;
+      if (!v || v !== quote) return null;
       return { kind: 'work', ref: w.id, field: f, date: w.date || null, time: w.atTime || null, text: v, with: null };
     }
     return null;
@@ -143,9 +145,10 @@
   // 既定の選択 = いちばん新しい作ったもの（左の列の先頭）
   function defaultSel(g) { return g && g.nodes.acts.length ? g.nodes.acts[0].id : null; }
   // des3.mapUi を整える。形が違えば初期値（{ declined: [] }・選択は既定）。
-  // declined は対応表にある学んだことだけ（重なりなし）。sel: null = 本人が外した（保つ）/ 無い・無効な id = 既定（graph がある時）
+  // declined は対応表にあるバディの見立てだけ（本人・人の言葉と知らない id は落とす。重なりなし）。
+  // sel: null = 本人が外した（保つ）/ 無い・無効な id = 既定（graph がある時）
   function normalizeUi(raw, g, table) {
-    var known = (table || MPD.learned).map(function (l) { return l.id; }), out = { sel: undefined, declined: [] };
+    var known = (table || MPD.learned).filter(function (l) { return l && l.src === 'buddy'; }).map(function (l) { return l.id; }), out = { sel: undefined, declined: [] };
     var ok = isObj(raw) && (raw.sel == null || typeof raw.sel === 'string') && (raw.declined == null || Array.isArray(raw.declined));
     if (ok) {
       (raw.declined || []).forEach(function (id) { if (typeof id === 'string' && known.indexOf(id) >= 0 && out.declined.indexOf(id) < 0) out.declined.push(id); });
@@ -226,7 +229,7 @@
   function narrow() { return DES.app.bp() === 's'; }
   function ui() {
     var u = DES.ui;
-    if (!u.mp) u.mp = { shown: null, missing: null, selCard: null, ro: null };
+    if (!u.mp) u.mp = { shown: null, missing: null, selCard: null, ro: null, roCols: null, redirect: false };
     return u.mp;
   }
   function todayMD() { var p = DES.data.today.split('-'); return (+p[1]) + '/' + (+p[2]); }
@@ -451,13 +454,19 @@
       path.setAttribute('d', 'M' + r1(x1) + ' ' + r1(y1) + 'C' + r1(x1 + dx) + ' ' + r1(y1) + ' ' + r1(x2 - dx) + ' ' + r1(y2) + ' ' + r1(x2) + ' ' + r1(y2));
     });
   }
-  function unwatch() { var u = ui(); if (u.ro) { u.ro.disconnect(); u.ro = null; } }
+  // 監視は いま見えている つながり の列の入れ物（.mp-cols）1 つに結ぶ。見えている間は描くたびに必ず登録を確かめ（同じ DOM を使い回す時も）、
+  // 離れる時（別のタブ・ルート・作り直し）は外す
+  function unwatch() { var u = ui(); if (u.ro) { u.ro.disconnect(); u.ro = null; } u.roCols = null; }
   function watch(page, g) {
-    var cols = page.querySelector('.mp-cols');
-    if (!cols) return;
-    drawLines(page, g);
-    if (window.ResizeObserver) { var ro = new ResizeObserver(function () { drawLines(page, g); }); ro.observe(cols); ui().ro = ro; }
-    if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { drawLines(page, g); });
+    var cols = page.querySelector('.mp-cols'), u = ui();
+    page._g = g;
+    if (!cols) { unwatch(); return; }
+    if (u.roCols === cols && u.ro) return;
+    unwatch();
+    u.roCols = cols;
+    drawLines(page, page._g);
+    if (window.ResizeObserver) { u.ro = new ResizeObserver(function () { drawLines(page, page._g); }); u.ro.observe(cols); }
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { if (u.roCols === cols) drawLines(page, page._g); });
   }
 
   function renderLinks(main) {
@@ -469,8 +478,8 @@
       page = buildLinks(g);
       page._key = key;
       main.appendChild(page);
-      watch(page, g);
     }
+    watch(page, g);
     applySel(page, g, effSel(g));
   }
 
@@ -487,7 +496,8 @@
     return H('li', { class: 'mp-urow' }, [
       H('a', { class: 'mp-uname', href: '#map/u/' + u.code, 'data-fk': 'mp-u:' + u.code }, pick(u.name)),
       H('span', { class: 'mp-ubar' }, [band(u), H('span', { class: 'mp-pct' }, pr.pct + '%')]),
-      linked ? H('button', { type: 'button', class: 'mp-linked', 'data-action': 'mp-linked', 'data-id': u.code, 'aria-label': T('mp_linked_mark') + ': ' + pick(u.name) }, [icon('map'), H('span', null, T('mp_linked_mark'))]) : null
+      linked ? H('button', { type: 'button', class: 'mp-linked', 'data-action': 'mp-linked', 'data-id': u.code, 'aria-label': T('mp_linked_mark') + ': ' + pick(u.name) },
+        [H('span', { class: 'mp-pill' }, [icon('map'), H('span', null, T('mp_linked_mark'))])]) : null
     ]);
   }
   function renderBasics(main) {
@@ -546,21 +556,50 @@
     if (u.missing !== arg) { u.missing = arg; DES.app.toast(T('mp_not_found')); }
     window.location.replace(to);
   }
+  // 描き直しでフォーカスしていた要素が消えたら、同じもの（data-fk → 操作 + id + arg → 操作 + id → href）へ戻す。
+  // 幅の切替で app.js が DES.app.render を直接呼ぶ時（APP.commit を通らない）もフォーカスを失わない
+  function focusKeyOf(main) {
+    var ae = document.activeElement;
+    if (!ae || ae === document.body || !main.contains(ae)) return null;
+    return { el: ae, fk: ae.getAttribute('data-fk'), action: ae.getAttribute('data-action'), id: ae.getAttribute('data-id'), arg: ae.getAttribute('data-arg'), href: ae.getAttribute('href') };
+  }
+  function firstShown(main, sel) {
+    var list = main.querySelectorAll(sel);
+    for (var i = 0; i < list.length; i++) if (!list[i].disabled && list[i].getClientRects().length) return list[i];
+    return null;
+  }
+  function restoreFocus(main, k) {
+    if (!k || (k.el.isConnected && document.activeElement === k.el)) return;
+    var a = k.action ? '[data-action="' + esc(k.action) + '"]' : null, id = k.id != null ? '[data-id="' + esc(k.id) + '"]' : '', cands = [];
+    if (k.fk) cands.push('[data-fk="' + esc(k.fk) + '"]');
+    if (a && k.arg != null) cands.push(a + id + '[data-arg="' + esc(k.arg) + '"]');
+    // 狭い幅 ↔ 広い幅でノードの置き場所（data-arg）が変わる時は、同じノード
+    if (a && k.id != null) cands.push(a + id);
+    if (k.href) cands.push('a[href="' + esc(k.href) + '"]');
+    for (var i = 0; i < cands.length; i++) { var n = firstShown(main, cands[i]); if (n) { n.focus(); return; } }
+  }
   MP.render = function (main, arg) {
+    var fk = focusKeyOf(main);
+    renderView(main, arg);
+    restoreFocus(main, fk);
+    var u = ui();
+    // 開いたら見出しへ（タブ・単元を開いた時も）。同じ画面の描き直しでは動かさない。見つからなかった引数は移った先で
+    if (u.redirect) { u.redirect = false; return; }
+    if (u.shown !== (arg || '')) { u.shown = arg || ''; var h = main.querySelector('h1'); if (h) h.focus(); }
+  };
+  function renderView(main, arg) {
     var u = ui(), m = /^u\/(.+)$/.exec(arg || ''), view = !arg ? 'links' : (arg === 'basics' ? 'basics' : (m ? 'unit' : null));
     if (view === 'unit') {
       var un = MPD.unit(m[1]);
       // 教材の無い単元（理科）・無い code は基礎学習の一覧へ
-      if (!un) { renderBasics(main); notFound(arg, '#map/basics'); return; }
+      if (!un) { renderBasics(main); u.redirect = true; notFound(arg, '#map/basics'); return; }
       renderUnit(main, un);
     } else if (view === 'basics') renderBasics(main);
     else {
       renderLinks(main);
-      if (view === null) { notFound(arg, '#map'); return; }
+      if (view === null) { u.redirect = true; notFound(arg, '#map'); }
     }
-    // 開いたら見出しへ（タブ・単元を開いた時も）。同じ画面の描き直しでは動かさない
-    if (u.shown !== (arg || '')) { u.shown = arg || ''; var h = main.querySelector('h1'); if (h) h.focus(); }
-  };
+  }
   // ルートが変わったら一時的な UI を閉じる（app.js の closeTransient から）
   MP.resetUi = function () { var u = ui(); u.shown = null; u.missing = null; u.selCard = null; unwatch(); };
 
