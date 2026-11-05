@@ -472,7 +472,97 @@
       ],
       state: 'working', pauseCount: 0, declined: 0, offered: false, resumeNote: null,
       clock: 614, seq: 10, touched: 1, draft: '', v: 3
-    }];
+    }].concat(seedWorkActs());
+  };
+
+  // ---------- 見本の作品が結び付く活動（§W-6）。どちらも「ここで一区切り」なので作るの制作中には出ない ----------
+  function cp(v) { return JSON.parse(JSON.stringify(v)); }
+  function pyStage(kind, speed, count) { return { kind: kind, theme: 'py', variant: 'catch', values: { speed: speed, count: count } }; }
+  function one(key, v) { var p = param('py', key); return { k: 'changed_one', v: { label: cp(p.label), value: [String(v), String(v)] } }; }
+  function seedWorkActs() {
+    // Python の小さなゲーム（見本から）: 本人の試す 4 回 + バディの値 1 回 + 田中さんと 1 回 → 「変わってきたところ」が見える
+    var s0 = pyStage('sample', 2, 3), s1 = pyStage('sample', 3, 3), s2 = pyStage('sample', 3, 5), s3 = pyStage('sample', 4, 5), s4 = pyStage('sample', 4, 6), s5 = pyStage('sample', 3, 6);
+    var py = {
+      id: 'act-py', title: 'Python の小さなゲーム', origin: 'sample', theme: 'py', catalogId: 'prog-python', sampleId: 'py',
+      quote: null, stage: cp(s5), base: cp(s0), baseTime: '10:20', ext: null, baseVis: null, stepsKind: 'theme', candidate: false,
+      steps: MD.stepsFor('py', 'catch'), stepIdx: 2, next: null,
+      changes: [
+        { id: 'act-py-c1', who: 'own', kind: 'test', time: '10:22', what: one('speed', 3), res: true, snap: cp(s1), vis: null },
+        { id: 'act-py-c2', who: 'own', kind: 'test', time: '10:24', what: one('count', 5), res: true, snap: cp(s2), vis: null },
+        { id: 'act-py-c3', who: 'ai', kind: 'adopt', time: '10:27', what: { k: 'left_rec', v: { what: one('speed', 4) } }, cardId: 'act-py-k1', snap: cp(s3), vis: null },
+        { id: 'act-py-c4', who: 'own', kind: 'test', time: '10:29', what: one('count', 6), res: true, snap: cp(s4), vis: null },
+        { id: 'act-py-c5', who: 'own', with: '田中さん', kind: 'test', time: '10:31', what: one('speed', 3), res: true, snap: cp(s5), vis: null }
+      ],
+      shelf: [{ id: 'act-py-k1', batch: 'act-py-b1', kind: 'value', baseKind: 'sample', theme: 'py', variant: 'catch', values: { speed: 4, count: 5 }, what: one('speed', 4), time: '10:26', state: 'adopted' }],
+      thread: [
+        { id: 'act-py-m1', who: 'buddy', time: '10:20', r: 'open', text: MD.replies.open[0] },
+        { id: 'act-py-m2', who: 'buddy', time: '10:22', r: 'test', text: MD.testReply(s1, 'speed', 2, 'js'), change: 'act-py-c1' },
+        { id: 'act-py-m3', who: 'buddy', time: '10:24', r: 'test', text: MD.testReply(s2, 'count', 3, 'js'), change: 'act-py-c2' },
+        { id: 'act-py-m4', who: 'child', time: '10:25', text: 'もう少し速くしてみて' },
+        { id: 'act-py-m5', who: 'record', time: '10:26', text: '棚に「Python の小さなゲーム」を置いた' },
+        { id: 'act-py-m6', who: 'buddy', time: '10:27', r: 'left', text: '「Python の小さなゲーム」にしたよ。' + MD.replies.left[0], change: 'act-py-c3' },
+        { id: 'act-py-m7', who: 'buddy', time: '10:29', r: 'test', text: MD.testReply(s4, 'count', 5, 'js'), change: 'act-py-c4' },
+        { id: 'act-py-m8', who: 'buddy', time: '10:31', r: 'test', text: MD.testReply(s5, 'speed', 4, 'js'), change: 'act-py-c5' }
+      ],
+      state: 'closed', pauseCount: 1, declined: 0, offered: false, resumeNote: null, lastPause: null,
+      clock: 631, seq: 20, draft: '', v: 3
+    };
+    // 電球がつく回路（作品の「写真・スクショを入れる」から。写真 1 枚 = 変化 1 つ）
+    var cap = MD.capture('cap-circuit');
+    var circuit = {
+      id: 'act-cap', title: pick(cap.title, 'js'), origin: 'works', theme: 'circuit', catalogId: cap.catalogId, sampleId: null,
+      quote: null, stage: null, base: null, baseTime: '10:10',
+      ext: { link: null, photos: [{ id: 'act-cap-ph1', theme: 'circuit', n: cap.n, kind: 'photo', time: '10:12' }], visible: ['act-cap-ph1'] },
+      baseVis: [], stepsKind: 'ext', candidate: false, steps: cp(MD.theme('circuit').extSteps), stepIdx: 1, next: null,
+      changes: [{ id: 'act-cap-c1', who: 'own', kind: 'photo', time: '10:12', what: { k: 'added_photo' }, snap: null, vis: ['act-cap-ph1'], photoId: 'act-cap-ph1' }],
+      shelf: [],
+      thread: [{ id: 'act-cap-m1', who: 'buddy', time: '10:12', text: pick(cap.read, 'js'), src: 'read' }],
+      state: 'closed', pauseCount: 1, declined: 0, offered: false, resumeNote: null, lastPause: null,
+      clock: 612, seq: 10, draft: '', v: 3
+    };
+    return [py, circuit];
+  }
+
+  // ---------- 見本の作品（§W-6）: 完成 2（変化 5 つの Python / 写真から作った回路・バディの見立て・おうちの人に見せている）+ 試作 2 ----------
+  // acts に結び付く活動があるものだけ作る。残した時点の状態・絵・関わりは make.js の saveWork / addCapture と同じ形（make-test で突き合わせる）
+  var SEED_WORKS = [
+    { id: 'w-seed-build', actId: 'act-build', at: 'act-build-c2', title: '石の塔（2 倍）', like: null, craft: null, date: '11/2', status: 'trial' },
+    { id: 'w-seed-circuit', actId: 'act-cap', at: 'act-cap-c1', capture: 'cap-circuit', title: '電球がつく回路', like: '電池を 2 個にしたら、電球がはっきりついたところ', craft: null,
+      date: '11/1', status: 'done', shares: [{ id: 'w-seed-circuit-s1', to: ['family'], scope: 'work', time: '11/1 10:30' }] },
+    { id: 'w-seed-py', actId: 'act-py', at: 'act-py-c5', title: '星がたくさん落ちるゲーム', like: '星が 6 つになると、どれを取りに行くか迷うところ',
+      craft: '速さを 4 にしたら追いつけなかったので、3 に戻した', date: '10/30', status: 'done' },
+    { id: 'w-seed-py-trial', actId: 'act-py', at: 'act-py-c2', title: '星 5 つのゲーム', like: null, craft: null, date: '10/30', status: 'trial' }
+  ];
+  function findIn(list, id) { for (var i = 0; i < (list || []).length; i++) if (list[i].id === id) return list[i]; return null; }
+  function rolesUpTo(a, uptoId) {
+    var out = { own: 0, ai: 0, people: [], lines: [] }, ppl = {};
+    for (var i = 0; i < a.changes.length; i++) {
+      var c = a.changes[i];
+      if (c.who === 'ai') out.ai += 1; else out.own += 1;
+      if (c.with) { if (!ppl[c.with]) { ppl[c.with] = { name: c.with, n: 0 }; out.people.push(ppl[c.with]); } ppl[c.with].n += 1; }
+      out.lines.push({ who: c.who, with: c.with || null, what: cp(c.what) });
+      if (c.id === uptoId) break;
+    }
+    return out;
+  }
+  MD.seedWorks = function (acts) {
+    var out = [];
+    SEED_WORKS.forEach(function (d) {
+      var a = findIn(acts, d.actId), ch = a ? findIn(a.changes, d.at) : null;
+      if (!ch) return;
+      var st = { stage: cp(ch.snap), vis: ch.vis == null ? null : cp(ch.vis) };
+      var ids = st.vis || [], photo = a.ext && ids.length ? findIn(a.ext.photos, ids[ids.length - 1]) : null;
+      var cap = d.capture ? MD.capture(d.capture) : null;
+      var w = { id: d.id, actId: a.id, at: ch.id, atTime: ch.time, title: d.title, like: d.like, from: cap ? 'capture' : 'make', theme: a.theme,
+        art: cap ? { photo: cp(a.ext.photos[0]) } : (st.stage ? { stage: cp(st.stage) } : (photo ? { photo: cp(photo) } : null)),
+        roles: rolesUpTo(a, ch.id), date: d.date, snap: st, snapTime: ch.time, status: d.status, craft: d.craft, shares: cp(d.shares || []) };
+      if (cap) {
+        w.images = [cap.id]; w.read = { text: pick(cap.read, 'js'), edited: false, declined: false };
+        w.made = cap.made; w.madeLine = null; w.catalogId = cap.catalogId;
+      }
+      out.push(w);
+    });
+    return out;
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = MD;

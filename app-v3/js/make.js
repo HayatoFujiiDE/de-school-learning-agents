@@ -538,8 +538,16 @@
     var from = committed(a);
     return commitChange(a, { who: 'own', kind: 'set', what: whatDiff(a.stage.theme, from && from.values, a.stage.values) }).act;
   }
+  // 完成 / 試作（§W-1）。作るの「作品に残す」の既定: 活動の手順が最後まで進んでいれば完成、それ以外は試作
+  var STATUS = ['done', 'trial'];
+  function defaultStatus(a) {
+    var n = a && a.steps ? a.steps.length : 0;
+    return n > 0 && a.stepIdx >= n - 1 ? 'done' : 'trial';
+  }
+  function pickStatus(v, def) { return STATUS.indexOf(v) >= 0 ? v : def; }
   function saveWork(works, a, o) {
     o = o || {};
+    var status = pickStatus(o.status, defaultStatus(a));
     if (!o.at) a = withPending(a);
     var k = o.at ? idx(a.changes, o.at) : a.changes.length - 1;
     var ch = k >= 0 ? a.changes[k] : null, snap = ch ? ch.snap : a.stage, photo = null;
@@ -552,8 +560,22 @@
     var title = String(o.title || '').replace(/^\s+|\s+$/g, '') || a.title;
     var like = String(o.like || '').replace(/^\s+|\s+$/g, '');
     var work = { id: o.id, actId: a.id, at: ch ? ch.id : null, atTime: ch ? ch.time : null, title: title, like: like || null, from: 'make',
-      theme: a.theme, art: art, roles: roles(a, ch ? ch.id : null), date: o.date || null, snap: clone(st), snapTime: ch ? ch.time : nowOf(a) };
+      theme: a.theme, art: art, roles: roles(a, ch ? ch.id : null), date: o.date || null, snap: clone(st), snapTime: ch ? ch.time : nowOf(a),
+      status: status, craft: null, shares: [] };
     return { works: [work].concat(works || []), work: work, act: a };
+  }
+  // 保存済みの作品に §W の欄を補う（§W-5）: status 無し → done、craft 無し → null、shares 無し → []。補うだけで消さない
+  function normalizeWorks(works) {
+    return (works || []).map(function (w) {
+      if (!w || typeof w !== 'object') return w;
+      var okS = STATUS.indexOf(w.status) >= 0, okC = w.craft === null || typeof w.craft === 'string', okSh = Array.isArray(w.shares);
+      if (okS && okC && okSh) return w;
+      var W = clone(w);
+      if (!okS) W.status = 'done';
+      if (!okC) W.craft = w.craft == null ? null : String(w.craft);
+      if (!okSh) W.shares = [];
+      return W;
+    });
   }
   // 前の版の作品（at / snap が無い）の移行（§U-12 補足 2）: 保存時刻以前で最後の変化を at に、その変化の状態を snap に。
   // 保存時刻は 残した時点の時刻、キャプチャーなら活動の最初の変化（入れた時）。該当する変化が無ければ活動の最初の状態
@@ -594,7 +616,9 @@
     var work = { id: o.workId, actId: a.id, from: 'capture', title: title, images: caps.map(function (c) { return c.id; }), read: read,
       made: o.made == null ? null : o.made, madeLine: line || null, catalogId: o.catalogId || null, theme: theme,
       art: { photo: clone(a.ext.photos[0]) }, roles: roles(a), date: o.date || null, like: null,
-      at: a.changes[a.changes.length - 1].id, atTime: a.changes[a.changes.length - 1].time, snap: clone(curState(a)) };
+      at: a.changes[a.changes.length - 1].id, atTime: a.changes[a.changes.length - 1].time, snap: clone(curState(a)),
+      // 写真から入れる作品の既定は完成（外で作ったものを撮る想定。§W-1）
+      status: pickStatus(o.status, 'done'), craft: null, shares: [] };
     return { activities: [a].concat(acts || []), works: [work].concat(works || []), work: work, act: a };
   }
 
@@ -719,7 +743,9 @@
     demo: demo, cardStage: cardStage, pushMsg: pushMsg, lastWhat: lastWhat, reopenAt: reopenAt, replyTarget: replyTarget,
     finishMaking: finishMaking, cardNames: cardNames, visiblePhotos: visiblePhotos, cardTitle: cardTitle,
     canRevertTo: canRevertTo, restoreState: restoreState, findMsg: findMsg, declineReply: declineReply, undoDeclineReply: undoDeclineReply, migrate: migrate,
-    migrateWork: migrateWork, withPending: withPending
+    migrateWork: migrateWork, withPending: withPending,
+    // §W（作品の一覧・詳細）が使う
+    defaultStatus: defaultStatus, normalizeWorks: normalizeWorks, chState: chState, baseState: baseState, curState: curState
   };
   Object.keys(pure).forEach(function (k) { M[k] = pure[k]; });
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
@@ -753,7 +779,7 @@
     DES.store._make = true;
     DES.store.load = function () {
       var s = load0.apply(DES.store, arguments), failed = false;
-      s.activities = MD.seedActivities(); s.works = []; s.makeSide = sideDefaults();
+      s.activities = MD.seedActivities(); s.works = null; s.makeSide = sideDefaults();
       EXTRA.forEach(function (k) {
         try {
           var raw = window.localStorage.getItem('des3.' + k);
@@ -765,8 +791,10 @@
       if (failed) s.saveFailed = true;
       // 前の版の活動は不足欄を補う（§U-12 指摘 6）。返事の文は今の表示で作って固定する
       s.activities = s.activities.map(function (a) { return migrate(a, tx); });
-      // 前の版の作品は 残した時点（at / snap）を補う（§U-12 補足 2）
-      s.works = s.works.map(function (w) { return migrateWork(w, s.activities); });
+      // 作品が保存されていない（初めて・はじめの状態に戻した）時は見本の作品（§W-6）。活動に結び付くものだけ
+      if (!s.works) s.works = MD.seedWorks(s.activities);
+      // 前の版の作品は 残した時点（at / snap）を補い（§U-12 補足 2）、§W の欄（status / craft / shares）を補う（§W-5）
+      s.works = normalizeWorks(s.works.map(function (w) { return migrateWork(w, s.activities); }));
       // 「作っている」の途中で閉じた・読み込んだ活動は、ここで完了させる（§U-11 指摘 11）。新しいカードが入るので棚は開く
       s.activities = s.activities.map(function (a) {
         var ids = a.shelf.filter(function (c) { return c.state === 'making'; }).map(function (c) { return c.id; });
@@ -1831,7 +1859,7 @@
   function openSave(id, opener) {
     var a = act(id), dlg = dlgEl();
     if (!a) return;
-    mk().dlg = { type: 'save', act: id, at: '', title: a.title, like: '', failed: false, saved: null };
+    mk().dlg = { type: 'save', act: id, at: '', title: a.title, like: '', status: defaultStatus(a), failed: false, saved: null };
     renderSave();
     DES.app.openDialog(dlg, opener);
     var t = document.getElementById('mk-save-title');
@@ -1845,6 +1873,17 @@
     return function () { if (t) dlg.appendChild(t); };
   }
   M.clearDialog = clearDialog;
+  // 「完成にする」/「試作として残す」の 2 択（§W-1。作るの「作品に残す」と作品の「写真・スクショを入れる」で同じ部品）
+  function statusField(ui, cur, name) {
+    return H('fieldset', { class: 'status-pick' }, [
+      H('legend', null, T('status_h')),
+      H('div', { class: 'mode-options' }, STATUS.map(function (s) {
+        return H('label', { class: 'radio-card' }, [H('input', { type: 'radio', name: name, value: s, checked: cur === s, 'data-ui': ui, 'data-key': 'status' }),
+          H('span', null, T('status_' + s + '_pick'))]);
+      }))
+    ]);
+  }
+  M.statusField = statusField;
   function renderSave() {
     var d = mk().dlg, a = act(d.act), dlg = dlgEl();
     var putBack = clearDialog(dlg);
@@ -1862,6 +1901,7 @@
       field(T('save_point'), 'mk-save-at', H('select', { id: 'mk-save-at', 'data-ui': 'mk-dlg', 'data-key': 'at' }, opts)),
       field(T('title_label'), 'mk-save-title', H('input', { id: 'mk-save-title', type: 'text', 'data-ui': 'mk-dlg', 'data-key': 'title', value: d.title, autocomplete: 'off' })),
       field(T('like_point'), 'mk-save-like', H('input', { id: 'mk-save-like', type: 'text', 'data-ui': 'mk-dlg', 'data-key': 'like', value: d.like, autocomplete: 'off' })),
+      statusField('mk-dlg', d.status, 'mk-save-status'),
       rolesBox(roles(d.at ? a : withPending(a), d.at || null))
     ]);
     if (d.failed) body.appendChild(H('p', { class: 'dlg-error', role: 'alert' }, T('save_work_fail')));
@@ -1878,7 +1918,7 @@
     if (!a) return;
     // 再試行はフォームの今の値で作り直す（§U-11 指摘 10）。前の試みで足した 1 件は外してから
     if (d.saved) S().works = S().works.filter(function (w) { return w.id !== d.saved; });
-    var r = saveWork(S().works, a, { id: newId('w'), at: d.at || null, title: d.title, like: d.like, date: today() });
+    var r = saveWork(S().works, a, { id: newId('w'), at: d.at || null, title: d.title, like: d.like, status: d.status, date: today() });
     S().works = r.works;
     d.saved = r.work.id;
     // 未試行の値を残した時は、積んだ変化を活動にも反映する（保存に失敗してもメモリには残る）
@@ -1997,6 +2037,7 @@
       } else if (ui === 'mk-dlg' && u.dlg) {
         var k = t.getAttribute('data-key');
         if (k === 'closed') u.dlg.closed = t.value === 'closed';
+        else if (k === 'status') u.dlg.status = t.value === 'trial' ? 'trial' : 'done';
         else if (k !== 'at') u.dlg[k] = t.value;
       }
     });
@@ -2011,6 +2052,7 @@
           if (a && box) box.parentNode.replaceChild(rolesBox(roles(u.dlg.at ? a : withPending(a), u.dlg.at || null)), box);
         }
         if (k === 'closed') u.dlg.closed = t.value === 'closed';
+        if (k === 'status') u.dlg.status = t.value === 'trial' ? 'trial' : 'done';
       }
     });
     document.addEventListener('keydown', function (e) {
