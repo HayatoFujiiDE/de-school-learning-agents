@@ -1,5 +1,5 @@
-/* 作品展示の見本データ（contract-app §AF-6）。他の人の作品 8 件はすべて架空。呼び名だけを持ち、本当の名前・学年・顔は持たない。
-   反応・ひとことの見本、番人（G.guard）の語の一覧、種類ごとの簡単な線画もここに置く（§AD のカテゴリの線画が入るまでの置き場。make-data.js は変えない）。
+/* 作品展示の見本データ（contract-app §AG-6）。他の人の作品 8 件はすべて架空。呼び名だけを持ち、本当の名前・学年・顔は持たない。
+   反応・ひとことの見本、番人（G.guard）の語の一覧、種類ごとの簡単な線画もここに置く（§AE のカテゴリの線画が入るまでの置き場。make-data.js は変えない）。
    ここの文字列は固定の見本。利用者の入力は入らない（線画 SVG は固定の文字列だけで作る）。 */
 (function (root) {
   'use strict';
@@ -12,16 +12,16 @@
   GD.THEME_CAT = { mc: 'minecraft', ath: 'minecraft', py: 'programming', circuit: 'digital', stop: 'media', story: 'writing', tool: 'craft' };
   // 「先に準備する」で作る活動の題材（写真のダミーの絵に使う）。MD.THEMES に無い題材は使わない（gallery.js が確かめる）
   GD.CAT_THEME = { minecraft: 'mc', programming: 'py', digital: 'circuit', media: 'stop', writing: 'story' };
-  // 「先に準備する」の手順（§AF-5 verbatim。[中, 小]）
+  // 「先に準備する」の手順（§AG-5 verbatim。[中, 小]）
   GD.PREP_STEPS = [
     ['何を一緒に作るか話す', 'なにを いっしょに つくるか はなす'],
     ['分けてやる所を決める', 'わけて やる ところを きめる'],
     ['合わせて見る', 'あわせて 見る']
   ];
-  // 初めて展示に出した後に 1 件届く声かけ（§AF-5）
+  // 初めて展示に出した後に 1 件届く声かけ（§AG-5）
   GD.SEED_CALL = { from: 'そらまめ', kind: 'together' };
 
-  // 他の人の作品 8 件（§AF-6 verbatim）。time = 展示に出した時刻（並びは新しい順だけ）
+  // 他の人の作品 8 件（§AG-6 verbatim）。time = 展示に出した時刻（並びは新しい順だけ）
   GD.items = [
     { id: 'g-clay-walk', name: 'そらまめ', cat: 'media', title: '粘土のカエルが歩く動画', like: 'とぶ前に、少ししゃがむところ', answers: 'ok', art: 'photo', time: '11/1 15:20' },
     { id: 'g-ice-course', name: 'ペンギン号', cat: 'minecraft', title: '氷ですべるアスレチック', like: '最後の足場だけ、わざと小さくしたところ', answers: null, art: 'photo', time: '11/1 11:05' },
@@ -49,7 +49,7 @@
     { id: 'gn-4', itemId: 'g-4koma', name: 'もくもく', text: '4 コマ目の顔、ずっと見ていられる', time: '10/30 15:25' }
   ];
 
-  // 番人の語の一覧（§AF-4 (a)。人を傷つける言い方の短い一覧。画面には出さない）
+  // 番人の語の一覧（§AG-4 (a)。人を傷つける言い方の短い一覧。画面には出さない）
   GD.BAD_WORDS = ['ばか', 'バカ', '馬鹿', 'あほ', 'アホ', 'きもい', 'キモい', 'キモイ', 'うざい', 'ウザい', '死ね', 'しね', '消えろ', 'きえろ',
     'へたくそ', '下手くそ', 'ブス', 'ぶす', 'デブ', 'でぶ'];
 

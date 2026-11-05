@@ -4,7 +4,7 @@
    屋外・生き物・刃物を使うお題は safety: true、外に出て探すお題は outdoor: true。人の名前は足さない。
    文言は [中学生向け, 小学生向け] の組。絵は数値だけから組み立てる 2 色の線画 SVG（1 枚ごとに 墨 + 橙 か 墨 + オリーブ。淡い面は同じ色の透明度）。
    play.result(values) と drawArt(kind, values) は決定論。node からも読める（tools/today-test.js）。
-   §AE（contract-app）: 作る・ためすに 3 本（od-ath-winter / od-stop-leaf / od-story-snow。プール 12 本 = fit ごとに 4 本）+ 対話のお題 9 本（TDD.dialogs。
+   §AF（contract-app）: 作る・ためすに 3 本（od-ath-winter / od-stop-leaf / od-story-snow。プール 12 本 = fit ごとに 4 本）+ 対話のお題 9 本（TDD.dialogs。
    news / talk / philo が 3 本ずつ）。対話のお題に限り、実在の人・組織の名前を出典つきで書く。TDD.get は作る・ためすのお題だけ（作るの作業台が読む）。 */
 (function (root) {
   'use strict';
@@ -221,7 +221,7 @@
     out += circle(40, 30, 9, ORANGE, INK, 1.2);
     return wrap(out);
   };
-  // ---------- §AE 作る・ためすに足す 3 本の線画（墨 + 橙）。§AD の題材（ath / stop / story）と同じ値で描く ----------
+  // ---------- §AF 作る・ためすに足す 3 本の線画（墨 + 橙）。§AE の題材（ath / stop / story）と同じ値で描く ----------
   // マイクラのアスレチック（横から見たコース）: 足場の数 = 足場の個数 / 足場のあいだ = 間隔。2 個目・4 個目…はすべる足場（橙 + 斜めの線）
   function flag(x, goal) {
     return line(x, 140, x, 74, INK, 1.4) + poly([[x, 74], [x + 16, 80], [x, 86]], goal ? ORANGE : WHITE, 1.2, goal ? fo(0.5) : '');
@@ -272,7 +272,7 @@
     return wrap(out);
   };
 
-  // ---------- §AE 対話のお題の線画（お題ごとに 1 枚・2 色。値で変わらない） ----------
+  // ---------- §AF 対話のお題の線画（お題ごとに 1 枚・2 色。値で変わらない） ----------
   // 火星の月から砂を持ち帰る（墨 + 橙）: 火星・フォボス・探査機と行き帰りの破線
   ART.d_mmx = function () {
     var out = '';
@@ -384,10 +384,10 @@
   var TEMP = names(['-2 ℃', '-5 ℃', '-10 ℃', '-15 ℃', '-20 ℃']);
   var WET = names([['乾いている', 'かわいている'], ['ふつう', 'ふつう'], ['湿っている', 'しめっている']]);
   var WINDDIR = names([['向かい風', 'むかいかぜ'], ['風なし', 'かぜなし'], ['追い風', 'おいかぜ']]);
-  // §AE の 3 本（§AD の題材の値の名前）
+  // §AF の 3 本（§AE の題材の値の名前）
   var ATH_FEEL = names([['かんたん', 'かんたん'], ['ふつう', 'ふつう'], ['むずかしい', 'むずかしい'], ['とてもむずかしい', 'とてもむずかしい']]);
   var VOICE = names([['「わたし」が語る', '「わたし」がかたる'], ['外から語る', '外からかたる'], ['手紙で語る', '手紙でかたる']]);
-  // 作るに題材がある時は作るの結果 1 行（MD.result）、無い時（§AD の着地前）はお題の中の決定論の 1 行
+  // 作るに題材がある時は作るの結果 1 行（MD.result）、無い時（§AE の着地前）はお題の中の決定論の 1 行
   function hasTheme(theme) { return !!(MD && MD.THEMES && MD.THEMES.indexOf(theme) >= 0); }
   function themeResult(theme, variant, values) {
     var st = { kind: 'sample', theme: theme, variant: variant, values: values };
@@ -603,7 +603,7 @@
         } },
       makeSteps: [['見る鳥を 1 種類決める', '見る鳥を 1 しゅるいきめる'], ['見た日・場所・数をメモする', '見た日・ばしょ・数をメモする'], ['1 週間分を 1 枚の表にまとめる', '1 しゅうかんぶんを 1 まいの表にまとめる']]
     },
-    // ===== §AE 作る・ためすに足す 3 本（題材 ath / stop / story は §AD。作るに題材が無い間は外で作る活動に落ちる = M.fromOdai の既存の分岐）=====
+    // ===== §AF 作る・ためすに足す 3 本（題材 ath / stop / story は §AE。作るに題材が無い間は外で作る活動に落ちる = M.fromOdai の既存の分岐）=====
     {
       id: 'od-ath-winter', fit: 'near', art: 'ath', safety: false, outdoor: false, source: 'buddy', due: null, makeTheme: 'ath', makeVariant: 'ice',
       title: ['冬の遊び場みたいなアスレチック、マイクラで作れる？', 'ふゆのあそび場みたいなアスレチック、マイクラでつくれる？'],
@@ -679,7 +679,7 @@
   TDD.get = function (id) { for (var i = 0; i < TOPICS.length; i++) if (TOPICS[i].id === id) return TOPICS[i]; return null; };
   TDD.pool = function (fit) { return TOPICS.filter(function (t) { return t.fit === fit; }).map(function (t) { return t.id; }); };
 
-  // ---------- §AE 対話のお題 9 本（news / talk / philo が 3 本ずつ）。「中」は contract-app §AE の verbatim ----------
+  // ---------- §AF 対話のお題 9 本（news / talk / philo が 3 本ずつ）。「中」は contract-app §AF の verbatim ----------
   // 事実・数字・名前・URL は 2026-11-06 に確かめたもの（design.md §6）。足さない・言い換えない。
   // src は sources の id（1 つの前提を 2 つの出典が支える時だけ id の配列）。kind の無いお題（TOPICS）は make として扱う
   TDD.KINDS = ['news', 'talk', 'philo'];
@@ -921,7 +921,7 @@
   // 作業台の「写真を足す」のダミー: そのお題の線画（探す写真と同じ 3 枚を順に）。make-data.js の MD.photoArt がここを呼ぶ
   TDD.workPhotoArt = function (photo) {
     var o = TDD.get(photo && photo.odai);
-    // 対話のお題（§AE）から作った活動の写真: お題の絵 + 写真の四隅（探す写真が無いので、どの 1 枚もお題の絵。レビューへの裁定）
+    // 対話のお題（§AF）から作った活動の写真: お題の絵 + 写真の四隅（探す写真が無いので、どの 1 枚もお題の絵。レビューへの裁定）
     var d = o ? null : TDD.getDialog(photo && photo.odai);
     if (d) return TDD.cardArt(d).replace('</svg>', corners() + '</svg>').replace('class="mk-art td-art"', 'class="mk-art td-art is-photo"');
     if (!o) return TDD.frameOnly();
