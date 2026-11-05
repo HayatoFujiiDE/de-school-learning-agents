@@ -1,0 +1,140 @@
+/* 作品展示（#gallery 一覧 / #gallery/<id> 詳細 / 呼び名のダイアログ）。contract-app §AF。
+   部品（.page-head / .section-head / .chip / .btn / .opt-chip / .radio-card / .card / .link-btn / .work-note）は shell.css・make.css・plan.css・works.css のものを使い、ここは追加だけ。
+   橙は主ボタン（届ける・OK する）だけ。反応は数を出さず、押した人の呼び名をチップで並べる。操作領域は 44px（es 48px）。 */
+
+.gallery-page{max-width:var(--page-max);margin:0 auto;min-width:0}
+.gallery-page h1:focus,.gallery-page h2:focus,.gl-held:focus,.gl-block:focus{outline:none}
+.gallery-page .btn,.gallery-page .link-btn,.gallery-page .opt-chip,.gl-react-btn,.gl-auto{min-height:44px}
+html[data-mode="es"] .gallery-page .btn,html[data-mode="es"] .gallery-page .link-btn,html[data-mode="es"] .gl-react-btn,html[data-mode="es"] .gl-auto,html[data-mode="es"] .gl-note-row input{min-height:48px}
+
+/* 作品の一覧の見出し横のリンク（works.js。§AF-1） */
+.wk-title-row{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 16px;min-width:0}
+.wk-gallery-link{font-weight:600;gap:6px;min-height:44px}
+
+/* ---------- 一覧（§AF-3） ---------- */
+.gl-page-head{flex-wrap:wrap}
+.gl-page-head>div:first-child{min-width:0;flex:1 1 320px}
+.gl-page-head p{overflow-wrap:anywhere}
+.gl-page-head .gl-sub2{font-size:11px;margin-top:4px}
+.gl-name{display:flex;align-items:center;gap:6px 10px;flex-wrap:wrap;background:#fff;border:1px solid var(--line);border-radius:12px;padding:6px 6px 6px 14px;min-width:0;max-width:100%}
+.gl-name-k{font-size:11px;color:var(--muted);font-weight:600}
+.gl-name strong{font-size:14px;overflow-wrap:anywhere;min-width:0}
+.gl-auto{display:inline-flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px 14px;font-size:12px;font-weight:600;line-height:1.6;margin:-8px 0 22px;cursor:pointer;max-width:100%}
+.gl-auto input{width:20px;height:20px;flex-shrink:0;accent-color:var(--record);margin:0}
+.gl-auto span{overflow-wrap:anywhere;min-width:0}
+
+.gl-sec{margin-bottom:24px;min-width:0}
+.gl-sec .section-head{margin-bottom:10px}
+.gl-sec h2{font-size:15px;line-height:1.6}
+.gl-rows{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.gl-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px 10px 16px;min-width:0}
+.gl-row p{font-size:13px;line-height:1.8;overflow-wrap:anywhere;min-width:0}
+.gl-row-text{display:grid;gap:2px;min-width:0;flex:1 1 280px}
+.gl-row-state{font-size:12px;color:var(--muted)}
+.gl-row-ops{display:flex;flex-wrap:wrap;gap:6px}
+.gl-inbox .gl-row{border-left:3px solid var(--orange);border-radius:0 12px 12px 0}
+.gl-promises .gl-row{border-left:3px solid var(--record);border-radius:0 12px 12px 0}
+
+.gl-filter{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px}
+.gl-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+a.gl-card{display:flex;flex-direction:column;color:inherit;text-decoration:none;min-width:0;background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden}
+a.gl-card:hover{border-color:#cfcabd}
+a.gl-card:focus{outline:none}
+a.gl-card:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
+.gl-card.is-mine{border-color:#c9dcd2}
+.gl-card-info{display:grid;gap:4px;padding:10px 12px 12px;align-content:start;min-width:0}
+.gl-card-info h3{font-size:13px;line-height:1.6;margin:0;overflow-wrap:anywhere}
+.gl-who{font-size:12px;color:var(--muted);line-height:1.6;overflow-wrap:anywhere}
+.gl-card-foot{display:flex;flex-wrap:wrap;gap:4px 6px;margin-top:2px}
+.chip.k-glcat{background:#f1eee4;color:var(--olive)}
+.chip.k-glmine{background:var(--record-soft);color:var(--record)}
+.gl-empty{border:1px dashed #cfcabd;border-radius:14px;padding:28px 20px;display:grid;justify-items:start;gap:10px;max-width:640px}
+
+/* 絵: 画像（AI の印つき）/ 線画 / 作品の絵 */
+.gl-art{position:relative;background:var(--art-bg);aspect-ratio:1.52;overflow:hidden;display:grid;place-items:center;min-width:0}
+.gl-art svg{width:100%;height:100%}
+.gl-art img{width:100%;height:100%;object-fit:cover;display:block}
+.gl-art .work-note{width:100%;height:100%;min-height:0;aspect-ratio:auto;overflow:hidden}
+.gl-ai-mark{position:absolute;right:6px;bottom:6px;background:#ffffffe6;color:var(--ink);border-radius:999px;padding:1px 8px;font-size:10px;font-weight:600;line-height:1.7;max-width:calc(100% - 12px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---------- 詳細（§AF-4 / AF-5） ---------- */
+.gl-back{margin:0 0 4px}
+.gl-back .link-btn{font-weight:600;gap:6px}
+.gl-dhead{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px 28px;align-items:start;margin-bottom:22px}
+.gl-hero{margin:0;border-radius:16px;overflow:hidden;border:1px solid var(--line);min-width:0}
+.gl-hero .gl-art{background-image:radial-gradient(#d7d5ca .7px,transparent .7px);background-size:16px 16px}
+.gl-info{display:grid;gap:12px;min-width:0;align-content:start}
+.gl-info h1{font-size:23px;line-height:1.45;overflow-wrap:anywhere}
+.gl-meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px}
+.gl-meta .gl-who{font-size:13px;font-weight:600;color:var(--ink)}
+.gl-text{display:grid;gap:2px;min-width:0}
+.gl-text-k{font-size:11px;color:var(--muted);font-weight:600;line-height:1.7}
+.gl-text-v{font-size:13px;line-height:1.9;overflow-wrap:anywhere}
+.gl-own-ops{display:flex;flex-wrap:wrap;gap:8px}
+
+.gl-dcols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+.gl-dcols>.gl-block:nth-child(2){grid-row:span 2}
+.gl-block.card{padding:18px 20px;margin-bottom:0;display:grid;gap:12px;min-width:0}
+.gl-block h2{font-size:15px;line-height:1.6}
+
+.gl-reacts{display:grid;gap:10px}
+.gl-react{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;min-width:0}
+.gl-react-btn{display:inline-flex;align-items:center;gap:6px;padding:0 14px;border:1px solid var(--line);border-radius:999px;background:#fff;font-size:12px;font-weight:600;color:var(--ink)}
+.gl-react-btn .ico{width:14px;height:14px}
+.gl-react-btn.on{background:#e8eef5;border-color:var(--own);color:var(--own)}
+.gl-react-btn:focus-visible{outline:3px solid #a9590b;outline-offset:2px}
+.gl-names{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:4px;min-width:0}
+.chip.k-glname{background:#f6f3ea;color:var(--ink);font-weight:500}
+.chip.k-glname.is-me{background:#e8eef5;color:var(--own)}
+.gl-got{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.gl-got li{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px}
+.gl-got-k{font-size:12px;font-weight:600}
+
+.gl-thread{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.gl-msg{background:#fbfaf6;border:1px solid var(--line);border-radius:10px;padding:8px 12px;display:grid;gap:2px;justify-items:start;min-width:0}
+.gl-msg.is-me{background:#f3f6fa;border-color:#d5dfea}
+.gl-msg-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:12px;line-height:1.7}
+.gl-msg-time{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.gl-msg-text{font-size:13px;line-height:1.8;overflow-wrap:anywhere;white-space:pre-wrap;max-width:100%}
+.gl-held{background:var(--sand);border-radius:10px;padding:10px 12px;display:grid;gap:6px;min-width:0}
+.gl-held-k{font-size:11px;font-weight:600;color:var(--sand-ink)}
+.gl-held ul{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.gl-held li{display:grid;gap:2px;justify-items:start;min-width:0}
+.gl-held-why{font-size:12px;line-height:1.7;color:var(--sand-ink)}
+.gl-note-form{display:grid;gap:6px;min-width:0}
+.gl-note-form label{font-size:12px;font-weight:500}
+.gl-note-row{display:flex;gap:8px;min-width:0}
+.gl-note-row input{flex:1 1 auto;min-width:0;min-height:44px;padding:10px 12px;border:1px solid #d8ddd1;border-radius:9px;background:#fff;font-size:13px}
+.gl-note-row input[readonly]{background:#f6f3ea}
+.gl-note-row .btn{flex-shrink:0}
+.gl-reading{font-size:12px;line-height:1.7;color:var(--ai-ink);min-height:1.7em}
+.gl-reading:empty{min-height:0}
+
+.gl-call-pick{border:0;margin:0;padding:0;min-width:0}
+.gl-call-pick .mode-options{display:grid;gap:6px}
+.gl-call-pick .radio-card{min-height:44px;align-items:center;padding:8px 12px}
+.gl-call-state{font-size:13px;line-height:1.8;overflow-wrap:anywhere}
+
+/* ダイアログ */
+.gl-dlg-work{display:grid;gap:2px;font-size:13px;line-height:1.7;overflow-wrap:anywhere}
+.gl-name-why{font-size:12px;line-height:1.7;color:#8a3b12}
+.gl-face{font-size:12px;line-height:1.8;background:var(--sand);color:var(--ink);border-radius:8px;padding:8px 12px}
+
+@media(max-width:1120px){
+  .gl-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media(max-width:950px){
+  .gl-dhead{grid-template-columns:1fr}
+  .gl-hero{max-width:560px}
+  .gl-dcols{grid-template-columns:1fr}
+  .gl-dcols>.gl-block:nth-child(2){grid-row:auto}
+}
+@media(max-width:700px){
+  .gl-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .gl-card-info{padding:8px 10px 10px}
+  .gl-card-info h3{font-size:12px}
+  .gl-info h1{font-size:20px}
+  .gl-name{padding-left:10px}
+  .gl-block.card{padding:14px 14px}
+  .gl-row{padding-left:12px}
+}
