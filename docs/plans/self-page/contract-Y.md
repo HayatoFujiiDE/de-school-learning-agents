@@ -138,3 +138,28 @@ variant: 'memo'
 ## Y-7 スコープ外
 
 道具の実際の動作（本当にメモを AI が分ける）、サークル対話の場での使用、写真から tool の活動を作る経路、作るの入口に 4 枚目の見本を出すこと。
+
+## Y-8 裁定（2026-11-05 Astra medium 契約レビュー REVISE への回答。Y-1〜Y-7 に優先）
+
+1. **新規活動の id と保存**（BLOCKING）: `openFromSelf` は `id: newId('a')` で作り、既存の入口と同じく `DES.app.change(function () { S().activities = [a].concat(S().activities); })` で追加してから `#make/<id>` へ
+2. **MD.desc**: tool の説明は `{c} · {Es}`。c は memo「論点 {count}」/ nudge「{count} 行」/ oneby「{count} 件ずつ」/ board「枝 {count}」（モード共通）。Es は Y-2 と同じ（「{n} 分ごと」/「話の終わり」）
+3. **任せる・仮の案**: `openFromSelf` は作った活動に既存の `addIdeas(a, 'tool', works)` で仮の案 3 つ（ひとこと合図 / ひとつずつリスト / 話の地図）を棚に置く。stage は 'sample'（見本と同じ操作の組 = find / one）。`extCards.tool` は既存 3 題材で extCards が使われる場面と同じ場面で使う。受け入れの「任せる」は「他の題材の見本と同じ操作が出て、どれも tool の文になる」と読み替える
+4. **題材の固定**: `selfLink` を持つ活動は、引用を直しても題材を選び直さない（`editQuote` で pickTheme を通さない）。紐づけも外さない
+5. **引用の出所**: `openFromSelf(o)` に `o.src = 'buddy' | 'own'` を足し、`quote.src` に入れる。データの工夫を本人が直していない時は 'buddy'、本人が直した工夫・本人が書いた場面は 'own'。作業台の引用枠は 'buddy' の時 `T('ai_proposal')`（バディの提案）+ 琥珀の出所チップ、'own' または無い時は今までどおり本人の言葉。src が無い既存の引用は 'own' 扱い
+6. **本人の場面**: 紐づけの表示（チップ + 作業台を開く）だけにする。「試してみる」と hint は出さない（場面には試す対象の工夫が無いため）
+7. **工夫の状態ごとの表示**（データの kind 'tool' の工夫）:
+
+   | 工夫の状態 | 活動なし | 活動あり | 作品あり |
+   | - | - | - | - |
+   | idle（通常の行） | 「試してみる」+ `make_btn` | 「試してみる」+ チップ + `open_bench` | 「試してみる」+ チップ `saved_work` + `open_bench` + hint `saved_hint` |
+   | trying（通常の行） | 「やってみてどうだった？」+ `make_btn` | 「やってみてどうだった？」+ チップ + `open_bench` | 同左（チップは `saved_work`、hint なし） |
+   | result fit（「自分に合う工夫」の行） | なし | チップ + `open_bench` | チップ `saved_work` + `open_bench` |
+   | result meh / adjust（通常の行） | idle と同じ | idle と同じ | idle と同じ（hint なし） |
+   | away（折りたたみ） | なし | なし | なし |
+
+   紐づけは工夫の状態遷移を変えない（§V-4 の reducer はそのまま）
+8. **チップの文言**: 活動の state が 'working' なら `making`、それ以外（paused / stopped / closed 等）は `made_tool`。作品がある時は state によらず `saved_work`。hint `saved_hint` は「作った道具を、試してみよう」（試作・完成を問わない文に変更済み）
+9. **pickTheme の複合入力**: 「論点 / 道具 / 整理 / 合図」を含めば他の題材語より tool を優先する（意図した仕様）。受け入れに「マイクラの道具」→ tool、「マイクラの家」→ mc を入れる
+10. **受け入れの時点**: 作業台を開いた直後は図とコードが tool のもの（結果の 1 行は「まだ試していない」の既存表示）。試した後に結果の 1 行が Y-2 の文になる
+11. **図の間かくの表記**: `MD.art` はモードを持たないので、時計の横の文字は vals > 0 なら「{n}分」、0 なら「おわり」（モード共通）
+12. **migrate**: `selfLink` と `quote.src` の検査は、現行版の早期 return より前、または全活動に通る正規化で行う
