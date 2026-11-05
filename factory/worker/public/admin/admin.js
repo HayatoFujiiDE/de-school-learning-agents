@@ -1804,6 +1804,15 @@
   var VIDEO_NO_VERDICT = '判定がありません';
   var VIDEO_VERDICT = { ok: ['検証係: 問題なし', 'green'], problem: ['検証係: 指摘あり', 'red'], unclear: ['検証係: 判断できず', 'yellow'], not_seen: ['検証係: 未確認（記録なし）', 'gray'] };
   var vhas = function (o, k) { return !!o && Object.prototype.hasOwnProperty.call(o, k); };
+  /** §Q-11 8: YouTube の公式情報（oEmbed）の印の文（verbatim） */
+  var VIDEO_META_MARK = {
+    partial: 'チャンネル名が一部だけ一致しています。本人のチャンネルか確かめてください',
+    mismatch: '職人が書いたチャンネル名と違います',
+    not_found: '動画が見つかりません',
+    unknown: '公式の情報をまだ取れていません'
+  };
+  /** リンクにしてよい author_url（Worker で確かめた形をもう一度: https://www.youtube.com/ の下だけ） */
+  var YT_AUTHOR_URL_RE = /^https:\/\/www\.youtube\.com\/(@[^\/?#\s]+|channel\/[A-Za-z0-9_-]+|c\/[^\/?#\s]+|user\/[^\/?#\s]+)$/;
   /** 確認画面の動画の欄の材料: notes = video_id → 記録（video_notes が無ければ null）、verdicts = id → 判定（検証が無ければ null、古い検証は 'old'） */
   function videoCtxOf(d) {
     var vn = d && d.video_notes;
@@ -1821,7 +1830,35 @@
         ver.videos.forEach(function (x) { if (x && typeof x.id === 'string' && !vhas(verdicts, x.id)) verdicts[x.id] = x; });
       }
     }
-    return { notes: notes, verdicts: verdicts };
+    // §Q-11 8: video_meta（無い応答 = 古い Worker は null。表示しない）
+    var meta = null;
+    if (d && Array.isArray(d.video_meta)) {
+      meta = Object.create(null);
+      d.video_meta.forEach(function (m) { if (m && typeof m.video_id === 'string' && !vhas(meta, m.video_id)) meta[m.video_id] = m; });
+    }
+    return { notes: notes, verdicts: verdicts, meta: meta };
+  }
+  /** §Q-11 8: 職人が書いたチャンネル名と並べる「YouTube の公式情報」と印（値はすべて escape。リンクは author_url がある時だけ） */
+  function videoMetaHtml(v, vc) {
+    var ms = vc ? vc.meta : null;
+    if (!ms) return '';
+    var m = typeof v.id === 'string' && vhas(ms, v.id) ? ms[v.id] : null;
+    var outcome = m && m.outcome === 'ok' ? 'ok' : m && m.outcome === 'not_found' ? 'not_found' : 'unknown';
+    var line = '';
+    var mark = outcome;
+    if (outcome === 'ok') {
+      var name = typeof m.author_name === 'string' ? m.author_name : '';
+      var url = typeof m.author_url === 'string' ? m.author_url : '';
+      var ch = url && YT_AUTHOR_URL_RE.test(url)
+        ? '<a href="' + esc(url) + '" rel="noopener noreferrer" target="_blank" data-video-meta-link="1">' + esc(name) + '</a>'
+        : esc(name);
+      line = '<p data-video-meta="ok">YouTube の公式情報: ' + esc(typeof m.title === 'string' ? m.title : '') + ' / ' + ch + '</p>';
+      mark = m.channel_match === 'partial' || m.channel_match === 'mismatch' ? m.channel_match : '';
+    }
+    var markHtml = mark && vhas(VIDEO_META_MARK, mark)
+      ? '<p class="' + (mark === 'unknown' ? 'muted' : 'err') + '" data-video-meta-mark="' + esc(mark) + '">' + esc(VIDEO_META_MARK[mark]) + '</p>'
+      : '';
+    return line + markHtml;
   }
   function usageText(u) {
     if (!u || typeof u !== 'object') return '';
@@ -1873,6 +1910,7 @@
       : '<p class="err" data-video-bad="1">動画の id か区間の形が正しくないため、埋め込みません</p>';
     return '<div class="rv-video" data-video="' + esc(v.id) + '"><p><b>動画 ' + esc(v.id) + '</b> ' + esc(v.title) + '</p>' + embed +
       '<p>区間 ' + (okRange ? esc(fmtSec(s)) + '〜' + esc(fmtSec(e)) : '<span class="muted">不明</span>') + ' ・ チャンネル ' + esc(v.channel) + '</p>' +
+      videoMetaHtml(v, vc) +
       '<p>見どころ: ' + esc(v.why) + '</p>' +
       '<p>本人のアップと言える理由: ' + esc(v.rights_note) + '</p>' +
       videoNotesHtml(v, vc) + videoVerdictHtml(v, vc) + '</div>';
