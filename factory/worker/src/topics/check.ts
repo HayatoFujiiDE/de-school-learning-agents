@@ -339,7 +339,8 @@ SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${P.sql}`,
     sql: `INSERT OR IGNORE INTO topic_decisions (id, topic_id, decision, by, read_all, content_sha256, note, created_at)
 SELECT 'td:' || t.id || ':' || ?, t.id, CASE WHEN t.status = 'ready' THEN 'auto_ready' ELSE 'auto_hold' END, 'machine', 0, t.content_sha256, NULL, ?
 FROM topics t WHERE t.id = ? AND t.check_attempts = ? AND t.status IN ('ready','held') AND ${Q.sql}`,
-    params: [A, t, id, A, ...Q.params],
+    // id に連結する attempt は文字列で渡す（数値で bind すると REAL になり 'td:<id>:2.0' になる）
+    params: [String(A), t, id, A, ...Q.params],
   });
   stmts.push(...retireParentOnAutoStmts({ childId: id, attempt: A, now: t, q: Q }));
   const res = await env.DB.batch(stmts.map((s) => prepare(env.DB, s)));
