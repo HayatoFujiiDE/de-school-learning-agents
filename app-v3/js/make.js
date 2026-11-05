@@ -950,6 +950,22 @@
     return n;
   }
   pure.fromTrail = M.fromTrail = fromTrail;
+  // 作品展示の「いっしょに作る約束」→「先に準備する」（contract-app §AF-5）: 外で作って写真で記録する活動（origin 'gallery'・promiseId 付き）。
+  // fromOdai と同じ約束: 同じ約束から作った活動があれば作らずにその id を返す。o: { id, title, steps: [[中,小]…], theme, now, acts }
+  // 戻り値: { id, act, created }。約束の id か題が無ければ null
+  function fromPromise(p, o) {
+    o = o || {};
+    if (!p || typeof p.id !== 'string' || !p.id || !o.title) return null;
+    var hit = null;
+    (o.acts || []).forEach(function (x) { if (!hit && x && x.promiseId === p.id) hit = x; });
+    if (hit) return { id: hit.id, act: hit, created: false };
+    var theme = MD.THEMES.indexOf(o.theme) >= 0 ? o.theme : 'mc';
+    var steps = Array.isArray(o.steps) && o.steps.length ? o.steps : MD.theme(theme).extSteps;
+    var a = newAct({ id: o.id, title: String(o.title), origin: 'gallery', theme: theme, ext: { link: null, photos: [], visible: [] }, steps: steps, stepsKind: 'ext', now: o.now });
+    a.promiseId = p.id;
+    return { id: a.id, act: a, created: true };
+  }
+  pure.fromPromise = M.fromPromise = fromPromise;
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
   if (typeof document === 'undefined') return;
 
