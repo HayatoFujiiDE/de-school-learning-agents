@@ -89,6 +89,10 @@ pre { white-space: pre-wrap; word-break: break-word; background: var(--paper); p
 .rv-ngnote { margin-top: 6px; }
 .rv-figs { margin: 6px 0 0; }
 .thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 0; }
+/* §Q-5 確認画面の動画（YouTube の埋め込み） */
+.rv-videos { margin: 8px 0 0; }
+.rv-video { margin: 8px 0 0; padding: 8px 0 0; border-top: 1px solid var(--line); }
+.rv-video iframe { display: block; width: 100%; max-width: 560px; aspect-ratio: 16 / 9; height: auto; border: 0; border-radius: 8px; }
 .thumb { width: 120px; height: 90px; object-fit: contain; border: 1px solid var(--line); border-radius: 8px; background: var(--white); }
 .thumb-gen { display: flex; flex-direction: column; gap: 4px; width: 160px; }
 .thumb-gen .thumb { width: 160px; }
