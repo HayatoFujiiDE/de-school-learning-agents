@@ -9,8 +9,8 @@
   var DES = root.DES = root.DES || {};
   var M = DES.make && DES.make.stepNext ? DES.make : (typeof require === 'function' ? require('./make.js') : null);
   var TR = DES.trail = DES.trail || {};
-  var FILTERS = ['all', 'make', 'talk', 'found', 'plan'];
-  // 絞り込み → 出す種類（作った = 作った + 作品に残した）
+  var FILTERS = ['all', 'make', 'talk', 'found', 'plan', 'own'];
+  // 絞り込み → 出す種類（作った = 作った + 作品に残した）。own = 手伝いの印が無いもの（contract-AD §18-7）
   var KINDS = { make: ['make', 'work'], talk: ['talk'], found: ['found'], plan: ['plan'] };
 
   // ---------- 小道具 ----------
@@ -70,15 +70,17 @@
     var ms = messages || [], out = [];
     ms.forEach(function (m, i) {
       if (!m || m.who !== 'child') return;
-      var nx = ms[i + 1], reply = nx && nx.who === 'buddy' ? nx : null;
+      // アイデアへのバディの返事（ideaReply）は 本人の発言の返事にしない（contract-AD §18-5）
+      var nx = ms[i + 1], reply = nx && nx.who === 'buddy' && !nx.ideaReply ? nx : null;
       out.push({ id: 'talk:' + m.id, msgId: m.id, time: m.time, text: String(m.text == null ? '' : m.text),
-        reply: reply ? firstLine(reply.text) : null, replyId: reply ? reply.id : null, seq: i });
+        reply: reply ? firstLine(reply.text) : null, replyId: reply ? reply.id : null, seq: i, by: m.by || null });
     });
     return out;
   }
 
   // ---------- 時系列「たどる」（§Z-4）: day 降順 → time 降順（同じ時刻は新しく足されたものが先）。id は重ならない ----------
-  // o: { acts, works, messages, plan, odai, today, finishTpl, hideRec }
+  // o: { acts, works, messages, plan, odai, today, finishTpl, hideRec, helped }
+  //   helped    = { odai: { [odaiId]: true } }（サポーターの手伝いがあったお題。contract-AD §18-13。無ければ空）
   //   finishTpl = 終わった の記録行のテンプレート（DES.text.rec_finish）。終わった行と同じ終わりを書いた記録行は出さず、行の recId にする（1 回だけ出す）
   //   hideRec   = 見送り・外した を書いた記録行のテンプレート（DES.text.rec_decline / rec_remove / rec_skip）。一致する記録行は出さない
   // 出さないもの: 予定の見送り・外した・非表示の行とその記録行 / 入口を開いただけ・とっておいた（odai）/ 背中押し・断った回数 / 変化の無い活動
@@ -102,7 +104,7 @@
     (o.plan || []).forEach(function (r, i) {
       if (!r || r.gone !== 'finished' || r.hidden) return;
       var e = { id: 'plan:' + r.id, kind: 'plan', sub: 'finished', day: today, time: r.start, rowId: r.id, title: r.title, start: r.start, end: r.end,
-        catalogId: r.activity || null, recId: null };
+        catalogId: r.activity || null, recId: null, by: r.by || null };
       if (o.finishTpl) fin[fmt(o.finishTpl, { title: r.title, start: r.start, end: r.end })] = e;
       add(e, i);
     });
@@ -112,19 +114,20 @@
     ms.forEach(function (m, i) {
       if (!m || m.who !== 'record') return;
       var text = String(m.text == null ? '' : m.text), f = fin[text];
-      if (f) { if (!f.recId) f.recId = m.id; return; }
+      // まとめた終わりの記録行に by があれば、終わった行の by にする（行か記録行のどちらか。contract-AD §18-7）
+      if (f) { if (!f.recId) { f.recId = m.id; if (!f.by && m.by) f.by = m.by; } return; }
       if (hide.some(function (re) { return re.test(text); })) return;
-      add({ id: 'rec:' + m.id, kind: 'plan', sub: 'record', day: today, time: m.time, msgId: m.id, text: text }, 1000 + i);
+      add({ id: 'rec:' + m.id, kind: 'plan', sub: 'record', day: today, time: m.time, msgId: m.id, text: text, by: m.by || null }, 1000 + i);
     });
     talkTopics(ms).forEach(function (t) {
-      add({ id: t.id, kind: 'talk', day: today, time: t.time, msgId: t.msgId, text: t.text, reply: t.reply, replyId: t.replyId }, 1000 + t.seq);
+      add({ id: t.id, kind: 'talk', day: today, time: t.time, msgId: t.msgId, text: t.text, reply: t.reply, replyId: t.replyId, by: t.by }, 1000 + t.seq);
     });
     // 作品に残した（作品の並びは新しいものが先）
     var works = o.works || [];
     works.forEach(function (w, i) {
       if (!w || typeof w.id !== 'string') return;
       add({ id: 'work:' + w.id, kind: 'work', day: dayKey(w.date) >= 0 ? w.date : today, time: w.atTime || w.snapTime || '', workId: w.id, title: w.title,
-        status: w.status === 'trial' ? 'trial' : 'done', like: w.like || null, art: clone(w.art || null) }, 2000 + works.length - i);
+        status: w.status === 'trial' ? 'trial' : 'done', like: w.like || null, art: clone(w.art || null), by: w.by || null }, 2000 + works.length - i);
     });
     // 作った: 活動 × 日で 1 件に畳む（変化は日を持たないので、活動の日 = day 欄か今日）
     var acts = o.acts || [];
@@ -137,13 +140,13 @@
       add(e, 3000 + acts.length - i);
     });
     // 見つけた: お題の記録 found[]
-    var tried = o.odai && isObj(o.odai.tried) ? o.odai.tried : {};
+    var tried = o.odai && isObj(o.odai.tried) ? o.odai.tried : {}, helped = o.helped && isObj(o.helped.odai) ? o.helped.odai : {};
     Object.keys(tried).forEach(function (oid) {
       var f = tried[oid] && tried[oid].found;
       (Array.isArray(f) ? f : []).forEach(function (x, j) {
         if (!isObj(x)) return;
         var p = splitStamp(x.time, today);
-        add({ id: 'found:' + oid + ':' + j, kind: 'found', day: p.day, time: p.time, odaiId: oid, photo: x.photo, line: x.line ? String(x.line) : null }, 4000 + j);
+        add({ id: 'found:' + oid + ':' + j, kind: 'found', day: p.day, time: p.time, odaiId: oid, photo: x.photo, line: x.line ? String(x.line) : null, helped: helped[oid] === true }, 4000 + j);
       });
     });
     out.sort(function (x, y) { return (y.dk - x.dk) || (y.tm - x.tm) || (y.ord - x.ord); });
@@ -158,7 +161,14 @@
     });
     return out;
   }
+  // 手伝いの印が無いもの（contract-AD §18-7）: 話した・予定の記録・終わった予定・作品は by 無し / 作った は最後の変化が本人で人名無し / 見つけた は helped 無し
+  function isOwn(e) {
+    if (e.kind === 'make') return e.who === 'own' && !e.with;
+    if (e.kind === 'found') return !e.helped;
+    return !e.by;
+  }
   function filter(list, f) {
+    if (f === 'own') return (list || []).filter(isOwn);
     var k = KINDS[f];
     return k ? (list || []).filter(function (e) { return k.indexOf(e.kind) >= 0; }) : (list || []).slice();
   }
@@ -226,6 +236,8 @@
   function ownChip() { return chip('own', T('who_own'), T('own_label') + ' ' + T('who_own')); }
   function aiChip() { return chip('ai', T('who_ai'), T('ai_proposal') + ' ' + T('who_ai')); }
   function recChip(text) { return chip('record', text || T('record_label'), T('record_label') + (text ? ' ' + text : '')); }
+  // サポーターの印（contract-AD §AD-10）: 緑のチップに人名
+  function byChip(key, by) { return by && DES.sup ? recChip(T(key, { sup: DES.sup.nameOf(by) })) : null; }
   // 誰が（本人 / バディ / いっしょにした人の名前）
   function whoChips(who, withName) {
     var out = [];
@@ -319,7 +331,7 @@
     return H('a', { class: 'tr-body tr-work', href: '#works/' + e.workId, 'data-fk': 'tr-link:' + e.id }, [thumb(e.art), H('span', { class: 'tr-side' }, info)]);
   }
   function talkBody(e) {
-    var kids = [H('p', { class: 'tr-say' }, [kindMark(e), ownChip(), H('span', { class: 'tr-own' }, e.text)])];
+    var kids = [H('p', { class: 'tr-say' }, [kindMark(e), ownChip(), byChip('by_typed', e.by), H('span', { class: 'tr-own' }, e.text)])];
     if (e.reply) kids.push(H('p', { class: 'tr-reply' }, [aiChip(), H('span', null, e.reply)]));
     kids.push(H('div', { class: 'tr-ops' }, [btn(T('tr_see_talk'), 'tr-talk', { arg: e.msgId, icon: 'chat' })]));
     return H('div', { class: 'tr-body' }, kids);
@@ -328,9 +340,9 @@
   function seeTalkBtn(msgId) { return btn(T('tr_see_talk'), 'tr-talk', { arg: msgId, icon: 'chat' }); }
   function planBody(e) {
     if (e.sub === 'record') {
-      return H('div', { class: 'tr-body' }, [H('p', { class: 'tr-text' }, [kindMark(e), recChip(), H('span', null, e.text)]), H('div', { class: 'tr-ops' }, [seeTalkBtn(e.msgId)])]);
+      return H('div', { class: 'tr-body' }, [H('p', { class: 'tr-text' }, [kindMark(e), recChip(), byChip('by_with', e.by), H('span', null, e.text)]), H('div', { class: 'tr-ops' }, [seeTalkBtn(e.msgId)])]);
     }
-    var kids = [H('div', { class: 'tr-line1' }, [kindMark(e), recChip(),
+    var kids = [H('div', { class: 'tr-line1' }, [kindMark(e), recChip(), byChip('by_with', e.by),
       H('strong', { class: 'tr-title' }, e.title + ' ' + DES.plan.range(e.start, e.end)), H('span', { class: 'tr-done' }, T('finished'))])];
     // 終わった行の操作も 1 つ: 予定に入れる（取り組みがある時）→ 無ければ まとめた記録行を話すで見る → それも無ければ 今日の予定
     var op = planBtn(e.catalogId, 'row:' + e.rowId, e.title) || (e.recId ? seeTalkBtn(e.recId) : H('a', { class: 'btn small', href: '#plan' }, [icon('calendar'), H('span', null, T('plan'))]));
@@ -380,7 +392,7 @@
     var st = S(), today = todayStr();
     var cards = resumeCards(st.activities, st.makeSide && st.makeSide.lastStop, today);
     var list = entries({ acts: st.activities, works: st.works, messages: DES.talk.messages(), plan: st.plan, odai: st.odai, today: today,
-      finishTpl: DES.text.rec_finish, hideRec: HIDE_REC.map(function (k) { return DES.text[k]; }) });
+      finishTpl: DES.text.rec_finish, hideRec: HIDE_REC.map(function (k) { return DES.text[k]; }), helped: st.sup ? st.sup.helped : null });
     // お題の定義が無い「見つけた」は出さない（today.js の normalize と同じ扱い）
     list = list.filter(function (e) { if (e.kind !== 'found') return true; var o = TDD && TDD.get(e.odaiId); return !!(o && TDD.photo(o, e.photo)); });
     return { today: today, cards: cards, list: list };

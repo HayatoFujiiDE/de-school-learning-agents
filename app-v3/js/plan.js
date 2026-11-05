@@ -86,6 +86,8 @@
     var len = Math.min(slot.len, 60);
     var r = { id: o.id, start: slot.start, end: toHM(toMin(slot.start) + len), title: item.title, kind: kind, activity: item.id };
     if (o.from) r.from = o.from;
+    // サポーターのアイデアから入れた行（contract-AD §18-4）
+    if (o.idea) r.idea = o.idea;
     return r;
   }
   // 会話からの提案（§G 規則 1）: 最初の空き（15 分以上）に proposed。長さ = min(空き, 60)
@@ -520,12 +522,13 @@
   };
   // 取り組みを予定に入れる（グリッドの「入れる」）。外から呼べる（あしあと §Z-6 は o = { undo: true, after: 戻した後のフォーカス }）。
   // o.undo の時だけトーストに「戻す」（5 秒: 入れた行を外し、記録は消さず「「{title}」を戻した」を足す — R-6 と同じ）。o 無しは従来どおり
+  // o.idea = 行に持たせるアイデアの id / o.onAdded(row) = 行が入った時だけ同じ change の中で呼ぶ（contract-AD §18-4）
   act.addFirst = function (actId, o) {
     o = o || {};
     var item = P.item(actId), newId = P.newId('p');
     if (!item) return;
     DES.app.change(function () {
-      var res = addMine(S().plan, C(), item, { id: newId });
+      var res = addMine(S().plan, C(), item, { id: newId, idea: o.idea });
       if (!res.row) {
         DES.app.toast(T('no_free'), { label: T('keep_tomorrow'), fn: function () { act.keepTomorrow(actId); } });
         return;
@@ -534,6 +537,7 @@
       ui().actor = newId;
       var line = X('rec_add', { start: res.row.start, title: res.row.title });
       rec(line);
+      if (o.onAdded) o.onAdded(res.row);
       DES.app.toast(line, o.undo ? { label: T('undo'), fn: function () { act.unadd(newId, o.after); } } : null);
     });
   };
@@ -649,6 +653,14 @@
     return null;
   }
 
+  // サポーターと入れた行・サポーターのアイデアから入れた行（contract-AD §AD-6）。緑の記録チップに人名
+  function byChip(r) {
+    if (!DES.sup || !DES.sup.nameOf || (!r.by && !r.idea)) return null;
+    var t = r.by ? T('by_row', { sup: DES.sup.nameOf(r.by) }) : T('idea_row', { sup: DES.sup.supName() });
+    return chip(t, 'src-record', { icon: 'record', label: t });
+  }
+  P.byChip = byChip;
+
   // ---------- 表 ----------
   // o: { ctx:'panel'|'dialog'|'page', compact:bool, wide:bool }
   P.renderTable = function (o) {
@@ -736,6 +748,8 @@
     ]);
     kids.push(title);
     var chips = r.kind === 'proposed' ? [srcChip('ai', T('ai_proposal'))] : [kindChip(r)];
+    var bc = byChip(r);
+    if (bc) chips.push(bc);
     if (r.trial && (r.kind === 'proposed' || r.kind === 'mine')) chips.push(chip(T('trial'), 'k-trial'));
     if (cf && r.overlapLater) {
       chips.push(H('button', { class: 'chip-btn', type: 'button', 'data-action': 'ov-reopen', 'data-id': r.id, 'aria-label': T('overlap') + ': ' + T('overlap_with', { title: cf.otherTitle }) }, [chip(T('overlap'), 'k-overlap')]));
