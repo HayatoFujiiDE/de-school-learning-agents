@@ -37,6 +37,13 @@ case " $* " in *" today"*)
   printf '%-40s %s\n' "today-test" "${tv:-TODAY_TEST=MISSING}"
   [ "$tv" = "TODAY_TEST=PASS" ] || fail=1
 ;; esac
+# 作品展示の純関数テスト（contract-app §AF-7）: gallery のルートを検査する時だけ
+case " $* " in *" gallery"*)
+  node "$(dirname "$0")/gallery-test.js" > "$TMP/gallery-test.log" 2>&1
+  gv=$(grep -o 'GALLERY_TEST=[A-Z]*' "$TMP/gallery-test.log")
+  printf '%-40s %s\n' "gallery-test" "${gv:-GALLERY_TEST=MISSING}"
+  [ "$gv" = "GALLERY_TEST=PASS" ] || fail=1
+;; esac
 # 学びマップの純関数テスト（CONTRACT-v3 §Y-8）: map のルートを検査する時だけ
 case " $* " in *" map"*)
   node "$(dirname "$0")/map-test.js" > "$TMP/map-test.log" 2>&1
