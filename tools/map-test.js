@@ -8,6 +8,7 @@ var MPD = require(path.join(__dirname, '../app-v3/js/map-data.js'));
 var MPL = require(path.join(__dirname, '../app-v3/js/map-layout.js'));
 var MPC = require(path.join(__dirname, '../app-v3/js/map-canvas.js'));
 var MP = require(path.join(__dirname, '../app-v3/js/map.js'));
+var ST = require(path.join(__dirname, '../app-v3/js/store.js'));
 var W = require(path.join(__dirname, '../app-v3/js/works.js'));
 
 var pass = 0, fail = 0;
@@ -205,8 +206,15 @@ eq(MP.graph(MPD.learned, null, undefined, null).nodes.made.length, MPD.past.leng
 
 // ---------- MP.related（種類ごと）/ peers ----------
 var rb = MP.related(g, 'act:act-build');
-eq(rb.kinds.base.sort(), ['act:act-build>ln:ln-area', 'act:act-build>ln:ln-cuboid', 'ln:ln-area>unit:M4-B-03', 'ln:ln-cuboid>unit:M4-B-02'].sort(), 'related 作ったもの → 学んだこと → 単元（base）');
-eq(rb.kinds.peer.length, 3, 'related 作ったもの → 作ったものどうし（落ち葉・迷路・貯金箱）');
+ok(['act:act-build>ln:ln-area', 'act:act-build>ln:ln-cuboid', 'ln:ln-area>unit:M4-B-03', 'ln:ln-cuboid>unit:M4-B-02'].every(function (x) { return rb.kinds.base.indexOf(x) >= 0; }), 'related 作ったもの → 学んだこと → 単元（base）');
+// §AC-13: 作ったものどうしの線（peer）は related に入らない。同じ単元を通ってつながる作ったものは 基本の線（作ったもの → 学んだこと → 単元 ← 学んだこと ← 作ったもの）で濃くなる
+ok(!('peer' in rb.kinds) && rb.edges.every(function (id) { return id.indexOf('peer:') !== 0; }), 'AC-13 related に作ったものどうしの線が無い');
+ok(['past:past-leaf', 'past:past-maze', 'past:past-box'].every(function (id) { return rb.nodes.indexOf(id) >= 0; }), 'AC-13 related 同じ単元につながる作ったもの（落ち葉・迷路・貯金箱）も濃く');
+ok(rb.kinds.base.indexOf('past:past-leaf>ln:ln-leaf-area') >= 0 && rb.kinds.base.indexOf('ln:ln-leaf-area>unit:M4-B-03') >= 0 && rb.kinds.base.indexOf('ln:ln-box-net>unit:M4-B-02') >= 0, 'AC-13 related 相手の作ったもの → 学んだこと → 共有する単元 の基本の線');
+ok(rb.kinds.base.every(function (eid) { var e = g.edges.filter(function (x) { return x.id === eid; })[0], l = MP.nodeById(g, e.to.indexOf('ln:') === 0 ? e.to : e.from); return l.madeId === 'act:act-build' || l.units.some(function (c) { return MP.nodeById(g, 'act:act-build').units.indexOf(c) >= 0; }); }), 'AC-13 related 相手の学んだことは共有する単元へ行くものだけ');
+var rbf = MP.related(g, 'act:act-build');
+ok(rbf.kinds.mu.indexOf('past:past-maze>unit:M4-B-03') >= 0 && rbf.kinds.mu.indexOf('act:act-build>unit:M4-B-03') >= 0, 'AC-13 related 分野で見る（作ったもの → 単元 ← 作ったもの）');
+ok(MP.related(g, 'act:act-cap').nodes.every(function (id) { return !/^(act|past|work):/.test(id); }), 'AC-13 related 同じ単元が無ければ 他の作ったものは濃くならない');
 ok(rb.kinds.next.length > 0 && rb.nodes.indexOf('next:nx-tower-box') >= 0, 'related 作ったもの → これから作れそう');
 eq([rb.kinds.order.length, rb.kinds.cross.length], [0, 0], 'related 作ったものには 学ぶ順・教科をまたぐ を含めない');
 ok(rb.nodes.indexOf('act:act-build') < 0, 'related 自分は含めない');
@@ -215,7 +223,7 @@ ok(ru.kinds.order.indexOf('ul:o-graph-change') >= 0 && ru.kinds.order.indexOf('u
 ok(ru.nodes.indexOf('act:act-py') >= 0 && ru.nodes.indexOf('ln:ln-stars') >= 0 && ru.nodes.indexOf('unit:S4-A-01') >= 0, 'related 単元 ← 学んだこと ← 作ったもの + またぐ相手');
 var rn = MP.related(g, 'next:nx-lamp');
 eq(rn.kinds.next.sort(), ['ln:ln-battery>next:nx-lamp', 'ln:ln-stars>next:nx-lamp', 'unit:M4-C-01>next:nx-lamp', 'unit:S4-A-01>next:nx-lamp'].sort(), 'related これから作れそう ← 元（学んだこと・単元）');
-eq(MP.related(g, 'nope'), { nodes: [], edges: [], kinds: { base: [], mu: [], peer: [], order: [], cross: [], next: [] } }, 'related 無い id');
+eq(MP.related(g, 'nope'), { nodes: [], edges: [], kinds: { base: [], mu: [], order: [], cross: [], next: [] } }, 'related 無い id');
 eq(MP.peers(g, 'act:act-build'), [{ id: 'past:past-leaf', units: ['M4-B-03'] }, { id: 'past:past-maze', units: ['M4-B-03'] }, { id: 'past:past-box', units: ['M4-B-02'] }], 'peers 同じ単元につながる作ったもの + 共有単元（新しい順）');
 eq(MP.peers(g, 'past:past-maze'), [{ id: 'act:act-build', units: ['M4-B-03'] }, { id: 'past:past-leaf', units: ['M4-B-03'] }, { id: 'past:past-box', units: ['M4-B-01', 'M4-B-04'] }], 'peers 共有単元が 2 つ');
 eq(MP.peers(g, 'act:act-cap'), [], 'peers 同じ単元が無ければ空');
@@ -225,6 +233,53 @@ ok(vm['ln:ln-area'] && !vm['unit:M4-C-02'] && vm['unit:M4-B-03'], 'viewNodes 作
 ok(!vf['ln:ln-area'] && vf['unit:M4-C-02'] && vf['unit:J4-C-02'], 'viewNodes 分野で見る = 学んだことなし・全単元');
 ok(MP.edgesIn(g, 'fields').every(function (e) { return e.kind !== 'base'; }) && MP.edgesIn(g, 'made').every(function (e) { return e.kind !== 'mu'; }), 'edgesIn 分野で見るは 作ったもの → 単元 にまとめる');
 ok(MP.edgesIn(g, 'made').filter(function (e) { return e.kind === 'order' || e.kind === 'cross'; }).every(function (e) { return vm[e.from] && vm[e.to]; }), 'edgesIn 作ったものからの 学ぶ順・教科をまたぐ は出ている単元どうしだけ');
+ok(peer.length > 0 && ['made', 'flow', 'fields', 'list'].every(function (v) { return MP.edgesIn(g, v).every(function (e) { return e.kind !== 'peer'; }); }), 'AC-13 作ったものどうしの線はどの見方にも描かない（並びと peers のためグラフには残す）');
+eq(MP.viewNodes(g, 'flow'), vm, 'AC-8 流れで見るのノード = 作ったものから と同じ');
+
+// ---------- 流れで見る（§AC-8 / AC-9）: MP.flowCols / flowRel / flowOrder ----------
+var fc = MP.flowCols(g);
+eq(fc.made, ids(g.nodes.made), 'flowCols 左 = 作ったもの（新しい順）');
+eq(fc.next, ids(g.nodes.next), 'flowCols これから作れそうは左の最後');
+var fl = [];
+g.nodes.made.forEach(function (m) { fl = fl.concat(m.learned); });
+eq(fc.learned, fl, 'flowCols 中 = 学んだこと（作ったものの順）');
+eq(fc.units.slice().sort(), Object.keys(vm).filter(function (id) { return id.indexOf('unit:') === 0; }).sort(), 'flowCols 右 = 作ったものとつながる単元すべて');
+eq(fc.units[0], 'unit:' + MP.nodeById(g, fl[0]).units[0], 'flowCols 単元は上から最初に出てくる順');
+eq(MP.flowOrder(g, null), fc, 'flowOrder 選択なし = 元の順');
+eq(MP.flowOrder(g, 'zzz'), fc, 'flowOrder 無い選択 = 元の順');
+var fo = MP.flowOrder(g, 'act:act-py'), fr = MP.flowRel(g, 'act:act-py');
+function headSet(list, on) { var k = 0; while (k < list.length && on(list[k])) k += 1; return list.slice(k).every(function (id) { return !on(id); }); }
+var onPy = function (id) { return id === 'act:act-py' || fr.nodes.indexOf(id) >= 0; };
+ok(['made', 'next', 'learned', 'units'].every(function (k) { return headSet(fo[k], onPy) && fo[k].slice().sort().join() === fc[k].slice().sort().join(); }), 'flowOrder 選択あり = 選んだもの・つながる相手が各列の先頭（並べ替えるだけ）');
+eq(fo.made[0], 'act:act-py', 'flowOrder 選んだ作ったものが左の先頭');
+eq(fo.learned.slice(0, 2), ['ln:ln-stars', 'ln:ln-speed'], 'flowOrder その学んだことが中の先頭（元の順のまま）');
+eq(fo.units[0], 'unit:M4-C-01', 'flowOrder つながる単元が右の先頭');
+eq(fo.learned.filter(function (id) { return !onPy(id); }), fc.learned.filter(function (id) { return !onPy(id); }), 'flowOrder 残りは元の順');
+eq(JSON.stringify(MP.flowOrder(g, 'act:act-py')), JSON.stringify(fo), 'flowOrder 決定論');
+ok(fr.edges.every(function (eid) { return /^(act|past|work|ln):/.test(eid) && eid.indexOf('peer:') < 0 && eid.indexOf('ul:') < 0; }), 'flowRel 線は 作ったもの → 学んだこと → 単元 だけ');
+var fru = MP.flowRel(g, 'unit:M4-C-01');
+ok(fru.nodes.indexOf('unit:S4-A-01') < 0 && fru.nodes.indexOf('act:act-py') >= 0, 'flowRel 単元を選んでも 教科をまたぐ相手は濃くしない（この見方は線を出さない）');
+eq(MP.flowRel(g, 'unit:M4-C-02'), null, 'flowRel 流れで見るに無いノード = null');
+
+// ---------- 作ったものだけ（§AC-14）: MP.visible ----------
+var vAll = MP.visible(g, { only: false, view: 'made' });
+eq([vAll.nodes.slice().sort().join(), vAll.edges.slice().sort().join()], [Object.keys(vm).sort().join(), MP.edgesIn(g, 'made').map(function (e) { return e.id; }).sort().join()], 'visible off = その見方のノードと線すべて');
+var vOn = MP.visible(g, { only: true, view: 'made' });
+eq([vOn.nodes, vOn.edges], [ids(g.nodes.made), []], 'visible on = 作ったものだけ・線なし');
+var vSel = MP.visible(g, { only: true, selId: 'act:act-py', view: 'made' }), rpy = MP.related(g, 'act:act-py');
+ok(ids(g.nodes.made).every(function (id) { return vSel.nodes.indexOf(id) >= 0; }), 'visible on + 選択 = 作ったものは全部出たまま');
+eq(vSel.nodes.filter(function (id) { return !/^(act|past|work):/.test(id); }), ['ln:ln-stars', 'ln:ln-speed', 'unit:M4-C-01', 'next:nx-lamp'], 'visible on + 選択 = その 1 つの 学んだこと → 単元・これから だけ（同じ単元を通る他の作ったものの学んだことは足さない）');
+ok(vSel.edges.every(function (id) { return !/^past:|^ln:ln-bead|^ln:ln-moon/.test(id); }), 'visible on + 選択 = 他の作ったものからの線は出さない');
+ok(vSel.nodes.indexOf('ln:ln-area') < 0 && vSel.nodes.indexOf('unit:M4-B-03') < 0, 'visible on + 選択 = 他の作ったものの学んだこと・単元は出さない');
+ok(vSel.edges.length > 0 && vSel.edges.every(function (id) { return rpy.edges.indexOf(id) >= 0; }) && vSel.edges.indexOf('act:act-py>ln:ln-stars') >= 0, 'visible on + 選択 = その 1 つのつながりの線だけ');
+var vF = MP.visible(g, { only: true, selId: 'act:act-py', view: 'fields' }), vf2 = MP.viewNodes(g, 'fields');
+ok(vF.nodes.every(function (id) { return vf2[id]; }) && vF.edges.every(function (id) { return /^(act|past|work):.*>unit:|^unit:.*>next:/.test(id); }), 'visible 分野で見る（学んだことは出さない・作ったもの → 単元）');
+eq(MP.visible(g, { only: true, selId: 'ln:ln-area', view: 'fields' }).nodes, ids(g.nodes.made), 'visible その見方に無い選択は作ったものだけ');
+eq(MP.visible(null, { only: true }), { nodes: [], edges: [] }, 'visible グラフが無い');
+
+// ---------- 表示設定の nav（§AC-7 / AC-9） ----------
+eq([ST.normalizeUi(null), ST.normalizeUi({ nav: 'rail' }), ST.normalizeUi({ nav: 'open' }), ST.normalizeUi({ nav: 'x' }), ST.normalizeUi('rail'), ST.normalizeUi([1])],
+  [{ nav: 'open' }, { nav: 'rail' }, { nav: 'open' }, { nav: 'open' }, { nav: 'open' }, { nav: 'open' }], 'AC-7 表示設定の nav: rail のときだけ閉じる・形が違えば open');
 
 // ---------- MPL.layout（§AB-12）: 決定論・全ノードに位置・重ならない・fields は島の中 ----------
 function layoutChecks(gg, label) {
@@ -317,16 +372,20 @@ ok(MPC.thin(titles, 0.1).length > 0 && MPC.thin(titles, 0.1).indexOf(g.nodes.mad
 
 // ---------- MP.normalizeUi（§AB-13）/ select / decline ----------
 var D = MP.defaultUi();
-eq(D, { view: 'made', sel: { made: null, fields: null, list: null }, chips: { peer: true, order: false, cross: false, next: false }, declined: [], declinedNext: [], pos: { made: null, fields: null } }, 'normalizeUi 初期値（チップは 作ったものどうし だけ on）');
+eq(D, { view: 'made', sel: { made: null, flow: null, fields: null, list: null }, chips: { order: false, cross: false, next: false }, declined: [], declinedNext: [], pos: { made: null, fields: null }, big: false, only: false }, 'normalizeUi 初期値（AC-13: チップ 3 つはどれも off・大きく見る / 作ったものだけ は off）');
 eq(MP.normalizeUi(null, g), D, 'normalizeUi 無い = 初期値（選択なし = 静かな初期表示）');
-[5, 'x', [1, 2], { view: 3, sel: 'a', chips: [], declined: 'x', declinedNext: {}, pos: 7 }].forEach(function (raw, i) {
+[5, 'x', [1, 2], { view: 3, sel: 'a', chips: [], declined: 'x', declinedNext: {}, pos: 7, big: 'yes', only: 1 }].forEach(function (raw, i) {
   eq(MP.normalizeUi(raw, g), D, 'normalizeUi 壊れた値は初期値（' + i + '）');
 });
-var good = { view: 'fields', sel: { made: 'ln:ln-area', fields: 'unit:J4-C-02', list: 'next:nx-lamp' }, chips: { peer: false, order: true, cross: true, next: true }, declined: ['ln-cuboid'], declinedNext: ['nx-moon-haiku'], pos: { made: { x: 10, y: 20, z: 0.5 }, fields: { x: -5, y: 0, z: 1.25 } } };
+var good = { view: 'fields', sel: { made: 'ln:ln-area', flow: 'unit:M4-C-01', fields: 'unit:J4-C-02', list: 'next:nx-lamp' }, chips: { order: true, cross: true, next: true }, declined: ['ln-cuboid'], declinedNext: ['nx-moon-haiku'], pos: { made: { x: 10, y: 20, z: 0.5 }, fields: { x: -5, y: 0, z: 1.25 } }, big: true, only: true };
 eq(MP.normalizeUi(good, g), good, 'normalizeUi 正しい値は保つ');
-eq(MP.normalizeUi({ sel: { made: 'unit:J4-C-02', fields: 'ln:ln-area', list: 'zzz' } }, g).sel, { made: null, fields: null, list: null }, 'normalizeUi その見方に無いノードの選択は null');
-eq(MP.normalizeUi({ sel: 'act:act-py' }, g).sel, { made: 'act:act-py', fields: null, list: null }, 'normalizeUi §Y の形（文字列）は 作ったものから の選択');
-eq(MP.normalizeUi({ chips: { peer: 'yes', order: true, zzz: true } }, g).chips, { peer: true, order: true, cross: false, next: false }, 'normalizeUi チップは真偽値だけ（その欄だけ初期値）');
+eq(MP.normalizeUi({ sel: { made: 'unit:J4-C-02', flow: 'unit:J4-C-02', fields: 'ln:ln-area', list: 'zzz' } }, g).sel, { made: null, flow: null, fields: null, list: null }, 'normalizeUi その見方に無いノードの選択は null');
+eq(MP.normalizeUi({ sel: 'act:act-py' }, g).sel, { made: 'act:act-py', flow: null, fields: null, list: null }, 'normalizeUi §Y の形（文字列）は 作ったものから の選択');
+eq(MP.normalizeUi({ chips: { peer: 'yes', order: true, zzz: true } }, g).chips, { order: true, cross: false, next: false }, 'normalizeUi チップは真偽値だけ（その欄だけ初期値）');
+eq(MP.normalizeUi({ chips: { peer: true, order: false } }, g).chips, { order: false, cross: false, next: false }, 'AC-13 保存済みの chips.peer は読み捨てる');
+eq([MP.normalizeUi({ view: 'flow', sel: { flow: 'ln:ln-area' } }, g).view, MP.normalizeUi({ view: 'flow', sel: { flow: 'ln:ln-area' } }, g).sel.flow], ['flow', 'ln:ln-area'], 'AC-9 normalizeUi は view:flow・sel.flow を受ける');
+eq([MP.normalizeUi({ big: true, only: true }, g).big, MP.normalizeUi({ big: true, only: true }, g).only, MP.normalizeUi({ big: 'true', only: 'x' }, g).big, MP.normalizeUi({ big: 'true', only: 'x' }, g).only], [true, true, false, false], 'AC-9 / AC-14 normalizeUi big・only は真偽値だけ（形が違えば false）');
+eq(MP.select(D, g, 'flow', 'unit:M4-C-01').sel.flow, 'unit:M4-C-01', 'select 流れで見るの選択は sel.flow');
 eq(MP.normalizeUi({ declined: ['ln-area', 'zz', 'ln-area', 3, 'ln-stars', 'ln-maze-wall'] }, null).declined, ['ln-area', 'ln-maze-wall'], 'normalizeUi declined はバディの見立てだけ・重なりなし');
 eq(MP.normalizeUi({ declinedNext: ['nx-lamp', 'nx-zz', 'nx-lamp'] }, null).declinedNext, ['nx-lamp'], 'normalizeUi declinedNext は見本にあるものだけ');
 eq(MP.normalizeUi({ pos: { made: { x: 1, y: 2, z: 9 }, fields: { x: 'a', y: 0, z: 1 } } }, null).pos, { made: null, fields: null }, 'normalizeUi 表示位置は 倍率 0.1〜2.0・数だけ');
@@ -350,7 +409,7 @@ eq([MP.selIn({ sel: { made: 'act:missing' } }, g, 'made'), MP.selIn({ sel: { mad
 var s1 = MP.select(D, g, 'made', 'act:act-py');
 eq(s1.sel.made, 'act:act-py', 'select 選ぶ');
 eq(MP.select(s1, g, 'made', 'act:act-py').sel.made, null, 'select 同じノードをもう一度 = 外す');
-eq(MP.select(s1, g, 'fields', 'unit:M4-C-02').sel, { made: 'act:act-py', fields: 'unit:M4-C-02', list: null }, 'select 見方ごとの選択');
+eq(MP.select(s1, g, 'fields', 'unit:M4-C-02').sel, { made: 'act:act-py', flow: null, fields: 'unit:M4-C-02', list: null }, 'select 見方ごとの選択');
 eq(MP.select(s1, g, 'fields', 'ln:ln-area').sel.fields, null, 'select その見方に無いノードは選ばない');
 eq(MP.deselect(s1, g, 'made').sel.made, null, 'deselect 外す');
 var d1 = MP.decline({ sel: { made: 'ln:ln-area' } }, g, 'made', 'ln:ln-area');
@@ -377,7 +436,7 @@ var layoutSrc = fs.readFileSync(path.join(__dirname, '../app-v3/js/map-layout.js
 var canvasSrc = fs.readFileSync(path.join(__dirname, '../app-v3/js/map-canvas.js'), 'utf8');
 var cssSrc = fs.readFileSync(path.join(__dirname, '../app-v3/css/map.css'), 'utf8');
 var keys = { mp_in_map: true, mp_kind_act: true, mp_kind_work: true, mp_kind_learned: true, mp_kind_unit: true, mp_kind_next: true, mp_tab_links: true, mp_tab_basics: true,
-  mp_view_made: true, mp_view_fields: true, mp_view_list: true, mp_k_peer: true, mp_k_order: true, mp_k_cross: true, mp_k_next: true };
+  mp_view_made: true, mp_view_flow: true, mp_view_fields: true, mp_view_list: true, mp_k_order: true, mp_k_cross: true, mp_k_next: true, mp_big: true, mp_big_off: true, mp_only: true };
 mapSrc.replace(/\bT\('([a-z_]+)'/g, function (all, k) { if (!/_$/.test(k)) keys[k] = true; return all; });
 var missing = Object.keys(keys).filter(function (k) { return !new RegExp('\\n\\s+' + k + ": \\['[^']+', '[^']+'\\]").test(i18n); });
 eq(missing, [], 'AB-14 使う key が i18n.js に [中, 小] である');
@@ -399,6 +458,10 @@ eq(strings([MPD.units, MPD.extUnits, MPD.areas, MPD.otherAreas, MPD.subjects, MP
 eq([mapSrc, dataSrc, layoutSrc, canvasSrc, cssSrc].filter(function (s) { return /まだ|理解した|身についた/.test(s); }).length, 0, 'Y-11 map*.js / map.css に「まだ」「理解した」「身についた」が無い');
 ok(!/Math\.random|Date\.now|new Date|performance\.now/.test(layoutSrc + canvasSrc + dataSrc), 'AB-12 並び・動かし方・中身に乱数と時刻を使わない');
 ok(/touch-action:none/.test(cssSrc) && /aria-live/.test(mapSrc) && /pointer-events:none/.test(cssSrc), 'AB-2 枠は touch-action:none・詳細の見出しは aria-live・線は pointer-events:none');
+ok(!/k-peer|'peer'/.test(mapSrc.split('ここから下はブラウザ専用')[1] || "'peer'") && !/k-peer/.test(cssSrc), 'AC-13 画面の作り（チップ・凡例・線）に 作ったものどうし が無い');
+var shellI18n = ['nav_rail_close', 'nav_rail_open'].filter(function (k) { return !new RegExp('\\n\\s+' + k + ": \\['[^']+', '[^']+'\\]").test(i18n); });
+eq(shellI18n, [], 'AC-10 メニューを閉じる / 開く の key が [中, 小]');
+ok(/mp_big: \['大きく見る', '大きく 見る'\]/.test(i18n) && /mp_big_off: \['もとの大きさ', 'もとの 大きさ'\]/.test(i18n) && /mp_view_flow: \['流れで見る', 'ながれで 見る'\]/.test(i18n) && /nav_rail_close: \['メニューを閉じる', 'メニューを とじる'\]/.test(i18n) && /nav_rail_open: \['メニューを開く', 'メニューを ひらく'\]/.test(i18n) && /mp_only: \['作ったものだけ', '作ったものだけ'\]/.test(i18n), 'AC-10 / AC-14 文言は契約どおり');
 ok(/stroke-dasharray:0 6/.test(cssSrc) && /stroke-dasharray:7 5/.test(cssSrc) && /k-cross \.i/.test(cssSrc), 'AB-3 線の種類は形で分ける（点線・破線・二重）');
 ok(!/#ed922c|--orange/.test(cssSrc.split('\n').filter(function (l) { return /mp-e\b|mp-e\.|mp-sw|mp-sq/.test(l); }).join('\n')), 'AB-3 / Y-3 線とマスに橙を使わない');
 
