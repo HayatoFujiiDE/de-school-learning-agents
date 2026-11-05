@@ -348,19 +348,41 @@ export function shownImagePathsOf(messages: MessageParam[]): string[] {
 
 /**
  * Batch の回収時の図の集合（§O-12 c 最後）: 図の一覧は版の R2 を同じ手順で列挙し直し（本文・画像は読まない）、
- * 見せた画像は R2 の会話 JSON の画像ブロックから決める。見せた図 = 一覧 − not_seen、not_seen = 一覧の png / webp のうち会話に画像ブロックが無いもの
+ * 見せた画像は R2 の会話 JSON の画像ブロックから決める。見せた図 = 一覧 − not_seen。
+ * not_seen は「容量のため見せなかった」画像だけ = 会話に画像ブロックが無く、会話の図の一覧の行に NOT_SEEN_MARK が付いている png / webp。
+ * どちらでもない png / webp（会話の後に増えた等）と、旧形式の会話（§O-12 の前に出した Batch。最初の user content が文字列）で版に図があるものは
+ * claim_set_mismatch（再試行で新しい形の入力を作り直す。§O-12 c 最後）。図が 0 枚の版は旧形式でも従来どおり
  */
 async function figurePlanAtCollect(env: Env, r: VersionForVerify, prev: MessageParam[] | null): Promise<{ shown: string[]; notSeen: string[] } | { fail: string }> {
   const all = await listPartKeys(env.R2, r.r2_prefix);
   if (all === null) return { fail: 'input_too_large' };
   const figures = all.filter((p) => FIGURE_RE.test(p));
+  if (figures.length === 0) return { shown: [], notSeen: [] };
+  const first = prev?.[0];
+  if (first && typeof first.content === 'string') return { fail: 'claim_set_mismatch' };
   const images = figures.filter((p) => IMAGE_PART_RE.test(p));
   if (images.length === 0) return { shown: figures, notSeen: [] };
   if (!prev) return { fail: 'conversation_missing' };
   const given = new Set(shownImagePathsOf(prev));
-  const notSeen = images.filter((p) => !given.has(p));
+  const markedNotSeen = new Set(notSeenLinesOf(prev, images));
+  const notSeen: string[] = [];
+  for (const p of images) {
+    if (given.has(p)) continue;
+    if (!markedNotSeen.has(p)) return { fail: 'claim_set_mismatch' };
+    notSeen.push(p);
+  }
   const ns = new Set(notSeen);
   return { shown: figures.filter((p) => !ns.has(p)), notSeen };
+}
+
+/** 会話の最初の user message の図の一覧（FIGURES_HEADING の text block）で、行が `- {path}` で始まり NOT_SEEN_MARK で終わる candidates の path */
+function notSeenLinesOf(messages: MessageParam[], candidates: string[]): string[] {
+  const c = messages[0]?.role === 'user' ? messages[0].content : null;
+  if (!Array.isArray(c)) return [];
+  const listing = c.find((b) => (b as { type?: unknown }).type === 'text' && String((b as { text?: unknown }).text ?? '').startsWith(FIGURES_HEADING)) as { text: string } | undefined;
+  if (!listing) return [];
+  const lines = listing.text.split('\n').slice(1);
+  return candidates.filter((p) => lines.some((l) => l.endsWith(NOT_SEEN_MARK) && (l === `- ${p}${NOT_SEEN_MARK}` || l.startsWith(`- ${p}: `))));
 }
 
 const oneLineText = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
