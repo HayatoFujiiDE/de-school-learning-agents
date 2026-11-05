@@ -23,6 +23,8 @@ interface TopicsUi {
   latestCheck(t: Topic, checks: unknown): Topic | null;
   approveState(t: Topic, detail: unknown, readAll: boolean): ApproveState;
   errorText(e: unknown, meta: Meta | null): string;
+  runOutcome(res: unknown, label: string, meta: Meta | null): { ok: boolean; text: string };
+  statusText(code: string, meta: Meta | null): string;
   tokyoDay(now: Date, offset: number): string;
 }
 
@@ -201,6 +203,14 @@ describe('「出せるにする」を押せるか・送る中身（T-3 人が承
     const noSha = held({ content_sha256: '' });
     expect(T.approveState(noSha, detailOf(noSha, [check()]), true).enabled).toBe(false);
   });
+  it('api-notes の TopicRow: approvable = false なら押せない / needs_read_all = true ならチェックが要る', () => {
+    const no = held({ approvable: false });
+    expect(T.approveState(no, detailOf(no, [check()]), true).enabled).toBe(false);
+    const ra = held({ hold_reason: 'heavy', sensitivity: 'normal', needs_read_all: true, approvable: true });
+    const d = detailOf(ra, [check({ approvable: true, sources_ok: true, reasons: [] })]);
+    expect(T.approveState(ra, d, false).enabled).toBe(false);
+    expect(T.approveState(ra, d, true).body).toEqual({ decision: 'approve', content_sha256: SHA, read_all: true });
+  });
   it('詳細の状態が一覧より新しければ詳細に従う（一覧では held でも詳細で ready なら出さない）', () => {
     const listRow = held();
     const now = held({ status: 'ready', hold_reason: null });
@@ -231,6 +241,27 @@ describe('表示名（GET /api/topics/meta。取れなければコードのま�
     expect(T.reasonText('cap', m)).toBe('上限');
     expect(m.enabled).toBe(false);
   });
+  it('api-notes の形: kinds に枠の数・理由は reasons / hold_reasons / flags / heavy_reasons から引く・状態の表示名', () => {
+    const m = T.normalizeMeta({
+      enabled: true, locale: 'ja-JP',
+      kinds: [{ kind: 'news', label: 'ニュースから', slots: 2 }, { kind: 'make', label: '作るの提案', slots: 3 }],
+      statuses: { checking: '確かめ中' },
+      hold_reasons: { schema: '形が合わない', source_lost: '出典が消えた' },
+      reasons: { 'flagged:one_sided': '1 つの立場に寄っている' },
+      flags: { unsourced_claim: '出典のない事実・考え' },
+      heavy_reasons: { war: '戦争・紛争' },
+    })!;
+    expect(m.slots).toEqual({ news: 2, make: 3 });
+    expect(T.kindText('make', m)).toBe('作るの提案');
+    expect(T.reasonText('flagged:one_sided', m)).toBe('1 つの立場に寄っている');
+    expect(T.reasonText('schema:asks_count', m)).toBe('形が合わない（asks_count）');
+    expect(T.reasonText('source_lost', m)).toBe('出典が消えた');
+    expect(T.reasonText('unsourced_claim', m)).toBe('出典のない事実・考え');
+    expect(T.reasonText('war', m)).toBe('戦争・紛争');
+    expect(T.statusText('checking', m)).toBe('確かめ中');
+    expect(T.statusText('held', m)).toBe('要確認');
+    expect(T.statusText('held', null)).toBe('要確認');
+  });
   it('meta が無い時はコードのまま', () => {
     expect(T.normalizeMeta(null)).toBeNull();
     expect(T.kindText('news', null)).toBe('news');
@@ -252,8 +283,37 @@ describe('サーバーの 400 / 409 の理由を文で出す', () => {
     const meta = T.normalizeMeta({ reasons: { 'schema:asks_count': '問いの数' } });
     expect(T.errorText(err(400, { error: 'invalid_body', reasons: ['schema:asks_count'] }), meta)).toContain('問いの数');
   });
+  it('api-notes の失敗コード（bad_request・run_in_progress・parent_not_eligible・cap・disabled）', () => {
+    expect(T.errorText(err(400, { error: 'bad_request' }), null)).toContain('200 字');
+    expect(T.errorText(err(409, { error: 'run_in_progress' }), null)).toContain('もう動いています');
+    expect(T.errorText(err(409, { error: 'parent_not_eligible' }), null)).toContain('今は作れません');
+    expect(T.errorText(err(409, { error: 'cap' }), null)).toContain('上限');
+    expect(T.errorText(err(409, { error: 'disabled' }), null)).toContain('切');
+  });
   it('通信の失敗（status なし）', () => {
     expect(T.errorText(new Error('Failed to fetch'), null)).toContain('通信できませんでした');
+  });
+});
+
+describe('生成・派生の結果（{ run }。failed でも 200）を文にする', () => {
+  const meta = T.normalizeMeta({ reasons: { no_valid_topic: '通るお題が 0 本' } });
+  it('done は成功の文（保存・落とした・額）', () => {
+    const o = T.runOutcome({ run: { id: 'r1', status: 'done', made: 2, dropped: 1, cents: 31 } }, '作るのお題', meta);
+    expect(o.ok).toBe(true);
+    expect(o.text).toContain('保存 2 本');
+    expect(o.text).toContain('落とした 1 本');
+  });
+  it('failed・skipped は失敗の文（理由の表示名）', () => {
+    const f = T.runOutcome({ run: { id: 'r2', status: 'failed', error: 'no_valid_topic' } }, '発展の子', meta);
+    expect(f.ok).toBe(false);
+    expect(f.text).toContain('通るお題が 0 本');
+    const s = T.runOutcome({ run: { id: 'r3', status: 'skipped', error: 'cap' } }, '見直しの子', meta);
+    expect(s.ok).toBe(false);
+    expect(s.text).toContain('cap');
+  });
+  it('calling・run の無い応答は受け付けた文', () => {
+    expect(T.runOutcome({ run: { status: 'calling' } }, 'x', null).ok).toBe(true);
+    expect(T.runOutcome(null, 'x', null).ok).toBe(true);
   });
 });
 

@@ -31,11 +31,13 @@
     sha_mismatch: '画面を開いた後に本文が変わっています。読み込み直して、もう一度全文を確かめてください',
     state_conflict: '状態が変わっています（ほかの操作か定期処理が先に動きました）。読み込み直してください',
     invalid_note: 'メモは 200 字までです',
-    invalid_decision: 'この操作は受け付けられません',
+    bad_request: '送った内容を受け付けませんでした（操作の種類・本文の印が無い、またはメモが 200 字を超えています）',
+    bad_query: '一覧の条件が正しくありません',
+    bad_day: '日付が正しくありません',
     run_in_progress: '同じ種類の作成がもう動いています。終わってから押してください',
     cap: '費用の上限に届いているため始められません',
     parent_not_eligible: 'このお題からは今は作れません（状態・深さ・子の数・週の上限の条件に合いません）',
-    topics_disabled: 'お題は「切」になっています。記録のタブで「入」にしてから押してください',
+    disabled: 'お題が「切」か、工場が一時停止中です（記録のタブで入・切を確かめてください）',
     paused: '工場が一時停止中のため実行できません',
     not_found: '見つかりません（消えたか、id が違います）',
     access_denied: 'ログインが必要です',
@@ -114,19 +116,40 @@
     }
     return out;
   }
-  function slotMap(x) {
-    var out = {};
+  /** 枠の数（{kind: n} でも、kinds の [{kind, slots|count}] でも受ける） */
+  function slotMap(x, out) {
+    out = out || {};
     if (Array.isArray(x)) {
-      x.forEach(function (it) { if (it && typeof it.kind === 'string' && typeof it.count === 'number') out[it.kind] = it.count; });
+      x.forEach(function (it) {
+        if (!it || typeof it.kind !== 'string') return;
+        var n = typeof it.slots === 'number' ? it.slots : it.count;
+        if (typeof n === 'number') out[it.kind] = n;
+      });
     } else if (x && typeof x === 'object') {
       Object.keys(x).forEach(function (k) { if (typeof x[k] === 'number') out[k] = x[k]; });
     }
     return out;
   }
-  /** GET /api/topics/meta の応答 → { enabled, kinds, slots, reasons }。取れなかった時（null）は表示名なし */
+  function mergeLabels(list) {
+    var out = {};
+    list.forEach(function (x) { var m = labelMap(x); Object.keys(m).forEach(function (k) { if (!has(out, k)) out[k] = m[k]; }); });
+    return out;
+  }
+  /**
+   * GET /api/topics/meta の応答（api-notes.md）→ { enabled, kinds, slots, reasons, statuses, fetch, decisions }。
+   * reasons は 検査の理由・held の理由・flags・重い理由 を 1 つの表に（先に書いた方が勝つ）。取れなかった時（null）は表示名なし
+   */
   function normalizeMeta(m) {
     if (!m || typeof m !== 'object') return null;
-    return { enabled: m.enabled === true, kinds: labelMap(m.kinds), slots: slotMap(m.slots), reasons: labelMap(m.reasons) };
+    return {
+      enabled: m.enabled === true,
+      kinds: labelMap(m.kinds),
+      slots: slotMap(m.slots, slotMap(m.kinds)),
+      reasons: mergeLabels([m.reasons, m.hold_reasons, m.flags, m.heavy_reasons]),
+      statuses: labelMap(m.statuses),
+      fetch: labelMap(m.fetch_results),
+      decisions: labelMap(m.decisions)
+    };
   }
   /** 種類の表示名。meta に無ければコードそのまま */
   function kindText(code, meta) {
@@ -187,7 +210,8 @@
     var t = detail && detail.topic ? detail.topic : topic;
     if (!t || t.status !== 'held' || !has(APPROVABLE_HOLD, t.hold_reason)) return { show: false, enabled: false, why: '', body: null };
     if (!detail || !detail.topic) return { show: true, enabled: false, why: '全文を読み込んでいます', body: null };
-    var heavy = t.sensitivity === 'heavy';
+    var heavy = t.sensitivity === 'heavy' || t.needs_read_all === true;
+    if (t.approvable === false || t.approvable === 0) return { show: true, enabled: false, why: '最新の検査が、人が承認してよい結果ではありません', body: null };
     if (typeof t.content_sha256 !== 'string' || !t.content_sha256) return { show: true, enabled: false, why: '本文の印（content_sha256）がありません。読み込み直してください', body: null };
     var c = latestCheck(t, detail.checks);
     if (!c) return { show: true, enabled: false, why: '最新の検査の記録がありません', body: null };
@@ -213,6 +237,27 @@
     if (body && Array.isArray(body.reasons) && body.reasons.length) text += ': ' + body.reasons.map(function (r) { return reasonText(r, meta); }).join('・');
     if (body && typeof body.message === 'string' && body.message) text += '（' + body.message + '）';
     return text;
+  }
+
+  /** 状態・取得の結果・決定の表示名。meta にあればそれ、無ければ画面の既定の文 */
+  function statusText(code, meta) { var c = String(code === null || code === undefined ? '' : code); return meta && has(meta.statuses, c) ? meta.statuses[c] : (STATUS_LABEL[c] ? STATUS_LABEL[c][0] : c); }
+  function fetchText(code, meta) { var c = String(code || ''); return meta && has(meta.fetch, c) ? meta.fetch[c] : (FETCH_LABEL[c] ? FETCH_LABEL[c][0] : c); }
+  function decisionText(code, meta) { var c = String(code || ''); return meta && has(meta.decisions, c) ? meta.decisions[c] : (DECISION_LABEL[c] || c); }
+
+  /**
+   * 生成・派生の応答 { run: RunRow }（呼び出しが終わってから返る。failed でも 200）→ 画面の文。
+   * label = 「作る」「見直しの子」「発展の子」などの主語
+   */
+  function runOutcome(res, label, meta) {
+    var r = res && res.run && typeof res.run === 'object' ? res.run : null;
+    if (!r) return { ok: true, text: label + 'を受け付けました。記録のタブで結果を見られます' };
+    var id = r.id ? '（run ' + r.id + '）' : '';
+    var n = function (x) { return typeof x === 'number' ? x : 0; };
+    if (r.status === 'done') return { ok: true, text: label + 'を作りました' + id + '。保存 ' + n(r.made) + ' 本・形で落とした ' + n(r.dropped) + ' 本・' + n(r.cents) + '¢。できたお題は検査を通ってから出ます' };
+    if (r.status === 'calling') return { ok: true, text: label + 'を作っています' + id + '。記録のタブで結果を見られます' };
+    var why = r.error ? reasonText(r.error, meta) : '理由なし';
+    if (r.status === 'skipped') return { ok: false, text: label + 'は始まりませんでした' + id + '（' + why + '）' };
+    return { ok: false, text: label + 'を作れませんでした' + id + '（' + why + '）' };
   }
 
   /** Asia/Tokyo の日付（YYYY-MM-DD）。offset 日ずらす（Asia/Tokyo は夏時間なし） */
@@ -255,6 +300,8 @@
   function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
   function pill(text, cls) { return h('span', { class: 'pill ' + (cls || ''), text: text }); }
   function labelPill(table, code) { var x = table[code] || [String(code === null || code === undefined ? '—' : code), 'gray']; return pill(x[0], x[1]); }
+  function statusPill(code) { var x = STATUS_LABEL[code] || [null, 'gray']; return pill(statusText(code, S.meta), x[1]); }
+  function fetchPill(code) { var x = FETCH_LABEL[code] || [null, 'gray']; return pill(fetchText(code, S.meta), x[1]); }
   function fmtTime(t) { if (!t) return '—'; try { return new Date(t).toLocaleString('ja-JP'); } catch (e) { return String(t); } }
   function loadingEl() { return h('p', { class: 'loading', 'data-tp-loading': '1', text: '読み込み中…' }); }
 
@@ -362,7 +409,7 @@
           h('div', { class: 'row' }, [
             pill(id, 'gray'), h('b', { text: String(r.name || bs.name || '') }),
             truthyFlag(r.required) ? pill('必須', 'orange') : null,
-            r.fetch_result ? labelPill(FETCH_LABEL, r.fetch_result) : null,
+            r.fetch_result ? fetchPill(r.fetch_result) : null,
             r.evidence ? h('span', { class: 'muted', text: EVIDENCE_LABEL[r.evidence] || String(r.evidence) }) : null
           ]),
           h('p', { class: 'tp-url' }, sourceLink(url)),
@@ -381,7 +428,7 @@
     var c = latestCheck(t, detail.checks);
     if (!c) return h('p', { class: 'muted', text: '検査の記録はまだありません' });
     var d = checkDetail(c);
-    var o = d && d.output && typeof d.output === 'object' ? d.output : null;
+    var o = d && d.model && typeof d.model === 'object' ? d.model : d && d.output && typeof d.output === 'object' ? d.output : null; // api-notes は detail.model
     var reasons = checkReasons(c);
     return h('section', { class: 'tp-sec tp-check', 'data-tp-check': '1' }, [
       h('h4', { text: '最新の検査（' + String(c.attempt) + ' 回目）' }),
@@ -407,7 +454,7 @@
       return h('li', { class: r.id === me ? 'tp-me' : '' }, [
         pill('深さ ' + String(r.depth || 0), 'gray'), ' ',
         r.derive_kind ? pill(DERIVE_LABEL[r.derive_kind] || r.derive_kind, 'gray') : null, ' ',
-        h('span', { text: String(r.title || '') }), ' ', labelPill(STATUS_LABEL, r.status), ' ',
+        h('span', { text: String(r.title || '') }), ' ', statusPill(r.status), ' ',
         h('span', { class: 'muted', text: kindText(r.kind, meta) }), r.id === me ? h('span', { class: 'muted', text: '（このお題）' }) : null
       ]);
     }))]);
@@ -417,7 +464,7 @@
     if (!rows.length) return null;
     return h('section', { class: 'tp-sec' }, [h('h4', { text: '決定の記録' }), h('ul', { class: 'tp-decisions' }, rows.map(function (d) {
       return h('li', null, [
-        h('span', { class: 'muted', text: fmtTime(d.created_at) }), ' ', h('b', { text: DECISION_LABEL[d.decision] || String(d.decision) }), ' ',
+        h('span', { class: 'muted', text: fmtTime(d.created_at) }), ' ', h('b', { text: decisionText(d.decision, S.meta) }), ' ',
         h('span', { class: 'muted', text: String(d.by || '') }), truthyFlag(d.read_all) ? [' ', pill('全文を読んだ', 'green')] : null,
         d.note ? h('span', { class: 'pre', text: ' ' + String(d.note) }) : null
       ]);
@@ -495,13 +542,13 @@
       setResult(result, '');
       var body = { kind: kind };
       if (note && note.trim()) body.note = note.trim().slice(0, NOTE_MAX);
-      return runBusy(buttons, btn, '送信中…', api('POST', '/api/topics/' + encodeURIComponent(st.topic.id) + '/derive', body)).then(function (res) {
-        if (!alive(cfg.g)) return;
-        var rid = res && (res.run_id || (res.run && res.run.id));
-        var text = (kind === 'refresh' ? '見直しの子を作り始めました' : '発展の子を作り始めました') + (rid ? '（run ' + rid + '）' : '') + '。できた子は検査を通ってから出ます。記録のタブで進み具合を見られます';
-        st.extendOpen = false; paint();
-        setResult(result, text, false); result.focus(); toast(kind === 'refresh' ? '見直しを始めました' : '発展を始めました');
-        return true;
+      // 応答は呼び出しが終わってから返る（最大 2〜3 分。api-notes）
+      return runBusy(buttons, btn, '作成中…（2〜3 分かかることがあります）', api('POST', '/api/topics/' + encodeURIComponent(st.topic.id) + '/derive', body)).then(function (res) {
+        if (!alive(cfg.g)) return false;
+        var out = runOutcome(res, kind === 'refresh' ? '見直しの子' : '発展の子', meta);
+        if (out.ok) { st.extendOpen = false; paint(); }
+        setResult(result, out.text, !out.ok); result.focus(); toast(out.text, !out.ok);
+        return out.ok;
       }, function (e) {
         if (!alive(cfg.g)) return false;
         var msg = errorText(e, meta);
@@ -515,7 +562,7 @@
       return h('div', { class: 'tp-card-head' }, [
         h('h3', { class: 'tp-title', text: String(t.title || t.id) }),
         h('div', { class: 'row' }, [
-          pill(kindText(t.kind, meta), 'gray'), labelPill(STATUS_LABEL, t.status),
+          pill(kindText(t.kind, meta), 'gray'), statusPill(t.status),
           t.sensitivity === 'heavy' ? pill('重い話題（サポーターと読む）', 'red') : null,
           t.status === 'held' && t.hold_reason ? h('span', { class: 'tp-reason' }, [h('span', { text: reasonText(t.hold_reason, meta) }), ' ', h('code', { class: 'muted', text: String(t.hold_reason) })]) : null,
           typeof t.depth === 'number' && t.depth > 0 ? pill('深さ ' + t.depth, 'gray') : null,
@@ -548,7 +595,8 @@
         var ap = approveState(t, st.detail, st.readAll);
         var why = h('span', { class: 'tp-why muted', 'aria-live': 'polite', text: ap.why });
         var abtn = h('button', { type: 'button', class: 'btn primary', disabled: !ap.enabled, 'data-tp-approve': '1', text: '出せるにする' });
-        var heavy = (st.detail && st.detail.topic ? st.detail.topic : t).sensitivity === 'heavy';
+        var ht = st.detail && st.detail.topic ? st.detail.topic : t;
+        var heavy = ht.sensitivity === 'heavy' || ht.needs_read_all === true; // approveState と同じ判定
         if (heavy) {
           var cb = h('input', { type: 'checkbox', 'data-tp-readall': '1', checked: st.readAll, disabled: !st.detail });
           cb.addEventListener('change', function () {
@@ -685,7 +733,7 @@
                 labelPill(SLOT_STATE, s.state), ' ',
                 t ? h('span', { text: String(t.title || t.id || '') }) : (s.state === 'empty' ? h('span', { class: 'err', text: '出せるお題がありません' }) : null),
                 t && t.sensitivity === 'heavy' ? [' ', pill('サポーターと読む', 'red')] : null,
-                t && s.state === 'stopped' && t.status ? [' ', h('span', { class: 'muted', text: '今は ' + (STATUS_LABEL[t.status] ? STATUS_LABEL[t.status][0] : t.status) })] : null
+                t && s.state === 'stopped' && t.status ? [' ', h('span', { class: 'muted', text: '今は ' + statusText(t.status, meta) })] : null
               ]);
             })) : h('p', { class: 'muted', text: '枠の情報がありません' })
           ]));
@@ -751,7 +799,7 @@
       rows.forEach(function (t) {
         var card = topicCard(t, { g: g, mode: 'stock', open: false });
         card.classList.add('card');
-        var info = h('p', { class: 'muted tp-stock-info', text: '最後に出した日 ' + String(t.last_scheduled_day || 'まだ出していない') + ' / 系譜の深さ ' + String(typeof t.depth === 'number' ? t.depth : '—') });
+        var info = h('p', { class: 'muted tp-stock-info', text: '最後に出した日 ' + String(t.last_shown_day || 'まだ出していない') + ' / 系譜の深さ ' + String(typeof t.depth === 'number' ? t.depth : '—') });
         card.insertBefore(info, card.children[1] || null);
         list.appendChild(card);
       });
@@ -826,10 +874,10 @@
       confirmFirst({ title: kindText(k, meta) + 'のお題を今すぐ作ります', body: '生成を 1 回呼びます（費用がかかります。上限を超える時は始まりません）。できたお題は検査を通ってから出ます。', okText: '作る' }).then(function (d) {
         if (!d || !d.ok) return;
         setResult(runResult, '');
-        runBusy([go, sel], go, '送信中…', api('POST', '/api/topics/runs', { kind: k })).then(function (res) {
+        runBusy([go, sel], go, '作成中…（2〜3 分かかることがあります）', api('POST', '/api/topics/runs', { kind: k })).then(function (res) {
           if (!alive(g)) return;
-          var rid = res && (res.run_id || (res.run && res.run.id));
-          setResult(runResult, '作り始めました' + (rid ? '（run ' + rid + '）' : '') + '。下の記録に出ます', false); runResult.focus(); toast('作り始めました');
+          var out = runOutcome(res, kindText(k, meta) + 'のお題', meta);
+          setResult(runResult, out.text, !out.ok); runResult.focus(); toast(out.text, !out.ok);
           loadRuns();
         }, function (e) {
           if (!alive(g)) return;
@@ -922,6 +970,8 @@
     latestCheck: latestCheck,
     approveState: approveState,
     errorText: errorText,
+    runOutcome: runOutcome,
+    statusText: statusText,
     tokyoDay: tokyoDay
   };
 })();
