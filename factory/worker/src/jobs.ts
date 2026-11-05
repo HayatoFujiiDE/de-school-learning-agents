@@ -6,6 +6,7 @@ import type { BetaManagedAgentsEventParams } from '@anthropic-ai/sdk/resources/b
 import type { SessionCreateParams } from '@anthropic-ai/sdk/resources/beta/sessions/sessions';
 import { PortError, type CallOpts, type FactoryPort, type FileMeta } from './anthropic';
 import { accumulateCitations, finishCitations, isCitationAcc, newCitationAcc, type CitationAcc } from './checks/citations';
+import { versionVideosOf } from './videos';
 import { checkForbidden } from './checks/forbidden';
 import { basenameOf, duplicateBasename, resolveOutputLayout } from './checks/layout';
 import {
@@ -1651,7 +1652,8 @@ class Reconciler {
       state = { ...state, ev };
       await this.writeState(job, 'ingested', state);
     }
-    const cit = finishCitations(ev.acc, citeSources);
+    // §Q-11 9: 版の動画（versionVideosOf と同じ読み方）を渡す。動画に紐づく行（動画の出典）だけを、開けたか・引用の検査から外す
+    const cit = finishCitations(ev.acc, citeSources, versionVideosOf(dec.decode(files.get('material.json')!)));
     const grader = ev.grader;
 
     const texts = new Map<string, string>();

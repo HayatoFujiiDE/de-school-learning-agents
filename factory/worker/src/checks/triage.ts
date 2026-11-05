@@ -2,6 +2,11 @@
 // 「怪しいところだけ人に出す」ため、claim × 出典の問題を (source_id, cause) ごとの group にまとめ、
 // 6 項目のうち機械で決められる 3 項目（内容と根拠・利用条件・生成物の動作）の自動 OK と、自動の処置（none / auto_return / reverify）を決める。
 // 入力（claims_json / result_json / material_json / 出典 id）は職人・検証係が書いた信頼できない値なので、キー照合は Map / Set で行う（継承プロパティを踏まない）。
+// §Q-11 9: 動画の出典（版の動画の source_id が指す行で、url がその動画の watch URL と一致するもの）は、maker_url_not_fetched・quote_mismatch の原因と
+// quote_mismatch_many の集計（分子・分母）から外す。動画でない出典の検査は変えない。
+
+import { videoSourceIds } from './citations';
+import { versionVideosOfMaterial } from '../videos';
 
 export type Cause =
   | 'contradicted'
@@ -29,9 +34,9 @@ export const CAUSE_TEXT: Record<Cause, string> = {
   license_unknown: '利用条件が分からない',
 };
 
-/** return_note の 2 行目（§L-3 の固定文。verbatim） */
+/** return_note の 2 行目（§L-3 の固定文。verbatim。§Q-11 9 で「開けなかったページは出典に使わない」の後に動画の出典の例外の一言を足した） */
 export const RETURN_FIXED_TEXT =
-  '出典の URL は web_fetch で本文が返った URL を一字も変えずに書く。引用は本文の一続きをそのまま写す。開けなかったページは出典に使わない。主張には必ず出典 id を付け、その id を sources.json に入れる。';
+  '出典の URL は web_fetch で本文が返った URL を一字も変えずに書く。引用は本文の一続きをそのまま写す。開けなかったページは出典に使わない。動画（YouTube）の出典の行は別で、開けなくても書いてよい。主張には必ず出典 id を付け、その id を sources.json に入れる。';
 
 /** report.meta.fetch_errors のうち「検証係の取得上限」とみなすエラーコード */
 const VERIFIER_LIMIT_ERRORS = ['max_uses_exceeded', 'too_many_requests', 'unavailable'];
@@ -180,6 +185,11 @@ export function triageVersion(input: TriageInput): TriageOutput {
   const report = input.report;
   const verdicts = report ? readVerdicts(report.result) : new Map<string, Verdict>();
   const verifierLimit = report ? hasVerifierLimit(report.result) : false;
+  // §Q-11 9: 動画の出典（material が読めなければ無し = 従来どおり全部検査する）
+  const videoIds = videoSourceIds(
+    [...sources.values()].map((s) => ({ id: s.source_id, url: s.url })),
+    versionVideosOfMaterial(input.material),
+  );
 
   const groups: TriageGroup[] = [];
   const byKey = new Map<string, TriageGroup>();
@@ -217,8 +227,8 @@ export function triageVersion(input: TriageInput): TriageOutput {
         let cause: Cause;
         if (verdict === 'contradicted') cause = 'contradicted';
         else if (!s) cause = 'source_not_listed';
-        else if (s.url_was_fetched === 0) cause = 'maker_url_not_fetched';
-        else if (s.quote_found === 0) cause = 'quote_mismatch';
+        else if (s.url_was_fetched === 0 && !videoIds.has(sid)) cause = 'maker_url_not_fetched';
+        else if (s.quote_found === 0 && !videoIds.has(sid)) cause = 'quote_mismatch';
         else if (verifierLimit) cause = 'verifier_limit';
         else cause = 'not_confirmed';
         addClaim(groupFor(sid, cause), c.id);
@@ -227,7 +237,7 @@ export function triageVersion(input: TriageInput): TriageOutput {
   }
   // 出典だけの問題（report の有無に関係なく出す）
   for (const [sid, s] of sources) {
-    if (s.quote_found === 0) groupFor(sid, 'quote_mismatch');
+    if (s.quote_found === 0 && !videoIds.has(sid)) groupFor(sid, 'quote_mismatch');
     if (s.license === 'unknown') groupFor(sid, 'license_unknown');
   }
 
@@ -250,12 +260,14 @@ export function triageVersion(input: TriageInput): TriageOutput {
   // reasons（report あり かつ claims ≥ 5）
   const confirmed = claims.filter((c) => verdicts.get(c.id)?.verdict === 'confirmed').length;
   const contradicted = claims.filter((c) => verdicts.get(c.id)?.verdict === 'contradicted').length;
-  const quoteBad = [...sources.values()].filter((s) => s.quote_found === 0).length;
+  // §Q-11 9: 分子（quoteBad）と分母（出典の数）から動画の出典を外す
+  const quoteSources = [...sources.values()].filter((s) => !videoIds.has(s.source_id));
+  const quoteBad = quoteSources.filter((s) => s.quote_found === 0).length;
   const reasons: Reason[] = [];
   if (report && claims.length >= MIN_CLAIMS_FOR_REASONS) {
     if (contradicted >= 1) reasons.push('contradicted');
     if (confirmed * 2 < claims.length) reasons.push('few_confirmed');
-    if (quoteBad * 2 > sources.size) reasons.push('quote_mismatch_many');
+    if (quoteBad * 2 > quoteSources.length) reasons.push('quote_mismatch_many');
   }
   const bad = reasons.length > 0;
 
@@ -269,7 +281,7 @@ export function triageVersion(input: TriageInput): TriageOutput {
 
   let returnNote: string | null = null;
   if (action === 'auto_return') {
-    const n = { claims: claims.length, confirmed, sources: sources.size, quoteBad };
+    const n = { claims: claims.length, confirmed, sources: quoteSources.length, quoteBad };
     const lines = [
       `自動の差し戻し（検証の結果: ${reasons.map((r) => REASON_TEXT(r, n)).join('。')}）。`,
       RETURN_FIXED_TEXT,

@@ -1,5 +1,8 @@
 // 純関数: 出典 URL と引用の機械照合（契約 §F-1）。I/O を持たない。
 // events は制作 session の events.list の結果を古い順に（§B-4-d）。取得ページ本文は untrusted だが、ここでは部分文字列検査にしか使わない。
+// §Q-11 9: 動画の出典（版の動画の source_id が指す行で、url がその動画の watch URL と一致するもの）は、開けたか・引用が本文にあるかを検査しない。
+
+import { youtubeWatchUrl } from './schema';
 
 export interface CitationSourceInput {
   id: string;
@@ -9,6 +12,28 @@ export interface CitationSourceInput {
 }
 
 export type CheckDetail = 'ok' | 'not_fetched' | 'quote_not_found' | 'no_excerpt' | 'result_unavailable' | 'secondary';
+
+/** 版の動画のうち、動画の出典の判定に要る値（src/videos.ts の VersionVideo と同じ名前） */
+export interface CitationVideo {
+  source_id: string;
+  youtube_id: string;
+}
+
+/**
+ * 動画の出典の id（§Q-11 9）: 版の動画の source_id が指す行で、url がその動画の `https://www.youtube.com/watch?v={youtube_id}` と一字も違わず一致するもの。
+ * youtubeSourceIdsOf（src/videos.ts）より狭い。動画に紐づかない YouTube の URL の行は入らない
+ */
+export function videoSourceIds(sources: ReadonlyArray<{ id: string; url: string }>, videos: readonly CitationVideo[]): Set<string> {
+  const out = new Set<string>();
+  for (const v of videos) {
+    const watch = youtubeWatchUrl(v.youtube_id);
+    if (sources.some((s) => s.id === v.source_id && s.url === watch)) out.add(v.source_id);
+  }
+  return out;
+}
+
+/** 動画の出典の check_detail（§Q-11 9: 既存の値で表す。引用は空にする行なので no_excerpt。url_was_fetched・quote_found は 0） */
+export const VIDEO_SOURCE_CHECK_DETAIL: CheckDetail = 'no_excerpt';
 
 export interface CitationResult {
   sources: Array<{ source_id: string; url_was_fetched: 0 | 1; quote_found: 0 | 1; check_detail: CheckDetail }>;
@@ -145,9 +170,15 @@ export function accumulateCitations(acc: CitationAcc, sources: CitationSourceInp
   return acc;
 }
 
-export function finishCitations(acc: CitationAcc, sources: CitationSourceInput[]): CitationResult {
+export function finishCitations(acc: CitationAcc, sources: CitationSourceInput[], videos: readonly CitationVideo[] = []): CitationResult {
   const out: CitationResult['sources'] = [];
+  const videoIds = videoSourceIds(sources, videos);
   for (const s of sources) {
+    if (videoIds.has(s.id)) {
+      // §Q-11 9: 動画の出典は開けたか・引用を検査しない（events に watch URL の取得の履歴があっても 0 のまま）
+      out.push({ source_id: s.id, url_was_fetched: 0, quote_found: 0, check_detail: s.is_primary ? VIDEO_SOURCE_CHECK_DETAIL : 'secondary' });
+      continue;
+    }
     const target = normalizeUrl(s.url);
     const u = get(acc.urls, target);
     // 開いた = エラーでない結果を見た、または結果がまだ来ていない fetch がある（§F-1 の result_unavailable）。
@@ -182,6 +213,6 @@ export function finishCitations(acc: CitationAcc, sources: CitationSourceInput[]
   };
 }
 
-export function checkCitations(sources: CitationSourceInput[], events: unknown[]): CitationResult {
-  return finishCitations(accumulateCitations(newCitationAcc(), sources, events), sources);
+export function checkCitations(sources: CitationSourceInput[], events: unknown[], videos: readonly CitationVideo[] = []): CitationResult {
+  return finishCitations(accumulateCitations(newCitationAcc(), sources, events), sources, videos);
 }

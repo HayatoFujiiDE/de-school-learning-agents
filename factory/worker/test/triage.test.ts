@@ -2,9 +2,9 @@
 import { describe, expect, it } from 'vitest';
 import { CAUSE_TEXT, triageVersion, type TriageInput, type TriageSource } from '../src/checks/triage';
 
-// 契約から一字ずつ写した文（実装の定数と突き合わせる。§L-3 の固定文・§L-6 の表）
+// 契約から一字ずつ写した文（実装の定数と突き合わせる。§L-3 の固定文・§L-6 の表）。固定文は §Q-11 9 で動画の出典の例外の一言を足した
 const CONTRACT_FIXED_TEXT =
-  '出典の URL は web_fetch で本文が返った URL を一字も変えずに書く。引用は本文の一続きをそのまま写す。開けなかったページは出典に使わない。主張には必ず出典 id を付け、その id を sources.json に入れる。';
+  '出典の URL は web_fetch で本文が返った URL を一字も変えずに書く。引用は本文の一続きをそのまま写す。開けなかったページは出典に使わない。動画（YouTube）の出典の行は別で、開けなくても書いてよい。主張には必ず出典 id を付け、その id を sources.json に入れる。';
 const CONTRACT_CAUSE_TEXT = {
   contradicted: '出典と食い違う',
   maker_url_not_fetched: '職人がこの URL を開けていない',
@@ -221,7 +221,7 @@ describe('triageVersion (§L-7 l1)', () => {
     expect(t.action).toBe('auto_return');
     expect(t.return_note!.split('\n')).toEqual([
       '自動の差し戻し（検証の結果: 確かめられた主張が 5 件中 1 件で、半分に届きませんでした）。',
-      '出典の URL は web_fetch で本文が返った URL を一字も変えずに書く。引用は本文の一続きをそのまま写す。開けなかったページは出典に使わない。主張には必ず出典 id を付け、その id を sources.json に入れる。',
+      '出典の URL は web_fetch で本文が返った URL を一字も変えずに書く。引用は本文の一続きをそのまま写す。開けなかったページは出典に使わない。動画（YouTube）の出典の行は別で、開けなくても書いてよい。主張には必ず出典 id を付け、その id を sources.json に入れる。',
       '- 出典 なし: 出典が付いていない。主張 c2。検証係が開いた URL: なし',
       '- 出典 s2（https://minecraft.wiki/w/s2）: 出典で確かめられなかった。主張 c3、c4、c5。検証係が開いた URL: なし',
       '- 出典 s1（https://minecraft.wiki/w/s1）: 利用条件が分からない。主張 なし。検証係が開いた URL: なし',
