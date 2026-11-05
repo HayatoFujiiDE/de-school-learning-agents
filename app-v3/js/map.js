@@ -668,7 +668,7 @@
   };
   pure.MOVE_MAX = MOVE_MAX;
   // 遷移の時間（§AE-3 / AE-4。ms）: 地図と全体の出入り / 札（作ったものから・分野で見る → 全体）/ 1 つだけ / 逆向き / 印 / 下の札の帯
-  pure.XT = { fade: 350, start: 80, stagger: 25, spread: 580, dur: 640, single: 200, singleDur: 700, rStart: 120, rSpread: 560, rDur: 700, mark: 250, sweep: 300, steps: 16, bend: 0.16 };
+  pure.XT = { fade: 350, inDelay: 200, start: 80, stagger: 25, spread: 580, dur: 640, single: 200, singleDur: 700, rStart: 120, rSpread: 560, rDur: 700, mark: 250, sweep: 300, steps: 16, bend: 0.16 };
   Object.keys(pure).forEach(function (k) { MP[k] = pure[k]; });
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
   if (typeof document === 'undefined') return;
@@ -1974,13 +1974,19 @@
   function xRect(r) { return { x: r.left, y: r.top, w: r.width, h: r.height }; }
   function r2(n) { return Math.round(n * 100) / 100; }
   function xKey(arg) { return (arg || '') + '|' + DES.mode() + '|' + DES.app.bp(); }
+  // 遷移のアニメーションを 1 つ始める。外から取り消された（cancel）ら、遷移ごと最後の状態にする（自分で片付ける時は ended なので何もしない）
   function xAnim(x, el, kf, o) {
     if (!el || typeof el.animate !== 'function') return null;
     var a = el.animate(kf, o);
     x.anims.push(a);
+    a.oncancel = function () { if (!x.ended) xEnd(x, 'skip'); };
     return a;
   }
   var PSEUDO = typeof KeyframeEffect !== 'undefined' && 'pseudoElement' in KeyframeEffect.prototype;
+  // 出ていく画面 / 入ってくる画面の不透明度（どちらも 350ms。入る方は 200ms 遅らせる = 出ていく方が 0.5 を切ってから）。
+  // 交差のあいだ、どちらの文字も「濃いもの + 薄く残るもの」として重ならないよう、出る方は後半で速く、入る方は前半をゆっくり
+  var FADE_OUT = [{ opacity: 1 }, { opacity: 0.5, offset: 0.6 }, { opacity: 0.12, offset: 0.85 }, { opacity: 0 }];
+  var FADE_IN = [{ opacity: 0 }, { opacity: 0.25, offset: 0.3 }, { opacity: 0.75, offset: 0.66 }, { opacity: 1 }];
   // 札の中の箱（vb = 札の中の見えている箱。札の座標）を、画面の箱 r に重ねる transform
   function xTf(r, vb) {
     var sx = r.w / Math.max(0.01, vb.w), sy = r.h / Math.max(0.01, vb.h);
@@ -2047,24 +2053,49 @@
     return { id: id, el: el, R: R, vb: { x: 0, y: 0, w: R.w, h: R.h }, op: op, ctx: null, list: true };
   }
   function xVisible(r, vw, vh) { var cx = r.x + r.w / 2, cy = r.y + r.h / 2; return cx >= 0 && cx <= vw && cy >= 0 && cy <= vh; }
-  // 飛ばすために押した 1 回は「飛ばす」だけ: 続いて来るそのクリックは、下に出てきた画面の部品に届けない（2 度押しで別の操作にならない）。
-  // その押し下げでフォーカスが外れる（何も無い所を押すと body へ移る）のも止める = 着いた所のフォーカスを保つ
-  function eatClick() {
-    var t = null, down = function (e) { document.removeEventListener('mousedown', down, true); e.preventDefault(); };
+  // 飛ばすために押した 1 回（主ボタンの押し下げ）だけは「飛ばす」だけ: その押し下げに対応するクリックを、下に出てきた画面の部品に届けない
+  // （2 度押しで別の操作にならない）。押し下げでフォーカスが外れる（何も無い所を押すと body へ移る）のも止める。
+  // 捕まえておくのは その指・そのボタンが離れるまで（離した直後に来るクリックまで）。右クリック・中ボタンでは捕まえない。
+  // 取り消し（pointercancel）・ドラッグ・キーなど、対応するクリックが来ない時は、捕まえたものをすぐ外す
+  function eatClick(ev) {
+    if (!ev || ev.button !== 0 || ev.isPrimary === false) return;
+    var id = ev.pointerId, sx = ev.clientX, sy = ev.clientY, t = null, gone = false;
+    var down = function (e) { document.removeEventListener('mousedown', down, true); e.preventDefault(); };
     var eat = function (e) { off(); e.preventDefault(); e.stopPropagation(); };
-    var off = function () { document.removeEventListener('click', eat, true); document.removeEventListener('mousedown', down, true); clearTimeout(t); };
+    var up = function (e) {
+      if (e.pointerId !== id) return;
+      document.removeEventListener('pointerup', up, true);
+      document.removeEventListener('pointercancel', cancel, true);
+      // マウスのクリックは離した処理の中で続けて来る（同じ処理の間だけ待つ）。指・ペンはタップの時だけ少し後に来る（動かした = タップでない なら待たない）
+      var moved = Math.abs(e.clientX - sx) > 10 || Math.abs(e.clientY - sy) > 10;
+      if (ev.pointerType === 'mouse') t = setTimeout(off, 0);
+      else if (moved) off();
+      else t = setTimeout(off, 350);
+    };
+    var cancel = function (e) { if (e.pointerId === id) off(); };
+    // 離したのが届かない（窓の外で離した等）時の保険
+    var t0 = setTimeout(function () { off(); }, 1500);
+    var off = function () {
+      if (gone) return;
+      gone = true;
+      clearTimeout(t);
+      clearTimeout(t0);
+      ['click', 'mousedown', 'pointerup', 'pointercancel'].forEach(function (k) { document.removeEventListener(k, { click: eat, mousedown: down, pointerup: up, pointercancel: cancel }[k], true); });
+    };
     document.addEventListener('mousedown', down, true);
     document.addEventListener('click', eat, true);
-    t = setTimeout(off, 700);
+    document.addEventListener('pointerup', up, true);
+    document.addEventListener('pointercancel', cancel, true);
   }
   function xListen(x, on) {
     var f = on ? 'addEventListener' : 'removeEventListener';
     if (on) {
       // Esc は「最後の状態にする」だけ（詳細を閉じる・大きく見るを戻す などの他の Esc には渡さない）。他のキーは最後の状態にしてから、そのまま届ける
       x.onKey = function (e) { if (X !== x) return; if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); } xEnd(x, 'skip'); };
-      x.onPtr = function () { if (X !== x) return; xEnd(x, 'skip'); eatClick(); };
+      x.onPtr = function (e) { if (X !== x) return; xEnd(x, 'skip'); eatClick(e); };
       x.onAny = function () { if (X === x) xEnd(x, 'skip'); };
     }
+    if (!x.onKey) return;
     document[f]('keydown', x.onKey, true);
     document[f]('pointerdown', x.onPtr, { capture: true, passive: true });
     ['click', 'wheel', 'touchstart'].forEach(function (t) { document[f](t, x.onAny, { capture: true, passive: true }); });
@@ -2075,19 +2106,30 @@
     xListen(x, true);
     document.documentElement.setAttribute('data-mpx', x.kind);
   }
-  // 終わり（how = 'end' 最後まで / 'skip' 飛ばした / 'abort' 別の所へ移った）。何度呼んでもよい
+  // 終わり（how = 'end' 最後まで / 'skip' 飛ばした・失敗した / 'abort' 別の所へ移った）。何度呼んでもよい。始める途中（X になる前）で失敗した遷移も片付ける。
+  // 片付け（アニメーション・重ね面・受け口・html[data-mpx]）を先に必ず済ませ、その後の フォーカス・読み上げ で失敗しても残さない
   function xEnd(x, how) {
-    if (!x || X !== x) return;
-    X = null;
+    if (!x || x.ended) return;
+    x.ended = true;
+    if (X === x) X = null;
     xListen(x, false);
-    x.anims.forEach(function (a) { try { a.cancel(); } catch (e) { /* もう終わっている */ } });
+    (x.anims || []).forEach(function (a) { try { a.cancel(); } catch (e) { /* もう終わっている */ } });
     x.anims = [];
     if (x.ovl && x.ovl.parentNode) x.ovl.parentNode.removeChild(x.ovl);
-    document.documentElement.removeAttribute('data-mpx');
+    if (!X) document.documentElement.removeAttribute('data-mpx');
     if (how === 'abort') return;
-    if (x.kind === 'all') xAfterAll(x, how === 'end');
-    else xAfterLinks(x);
+    try { if (x.kind === 'all') xAfterAll(x, how === 'end'); else xAfterLinks(x); } catch (e) { /* 着いた後の飾り（フォーカス・読み上げ）だけの失敗。画面はもう最後の状態 */ }
   }
+  // どこで失敗しても（例外）最後の状態へ: 行き先の画面が描けていなければ描き、重ね面を片付ける
+  function xRescue(x, h) {
+    try {
+      if (window.location.hash !== h) { ui().ownHash = h; window.location.hash = h; }
+      if (!x.page || !x.page.isConnected) { window.scrollTo(0, 0); DES.app.render(); }
+    } catch (e) { /* 描けなくても重ね面は外す */ }
+    xEnd(x, 'skip');
+  }
+  // アニメーションが使えるか（無い環境は reduced-motion と同じ道 = 動かさず最後の状態）
+  function canAnimate() { return typeof Element !== 'undefined' && !!Element.prototype && typeof Element.prototype.animate === 'function'; }
   // 全体の画面に着いた後: 読み上げの 1 文 + h1 へフォーカス。「全体の中で見る」はその単元の札へスクロールして枠を 2 回光らせる
   function unitTarget(page, code) {
     return page.querySelector('[data-fk="mp-u:' + esc(code) + '"]') || page.querySelector('[data-fk="mpo-x:' + esc(code) + '"]');
@@ -2102,7 +2144,7 @@
     return blk;
   }
   function flash(blk) {
-    if (!blk || !motionOK()) return;
+    if (!blk || !motionOK() || !canAnimate()) return;
     var f = H('span', { class: 'mpo-flash', 'aria-hidden': 'true' });
     blk.appendChild(f);
     var a = f.animate([{ opacity: 0 }, { opacity: 1, offset: 0.2 }, { opacity: 0, offset: 0.45 }, { opacity: 1, offset: 0.7 }, { opacity: 0 }], { duration: 1000, delay: 260, easing: 'ease-in-out', fill: 'both' });
@@ -2134,20 +2176,24 @@
     o = o || {};
     if (X) xEnd(X, 'skip');
     var main = document.getElementById('main'), page = main && main.querySelector('.map-page'), h = '#map/basics', u = ui();
-    if (!page || !motionOK()) {
-      // 動かさず最後の状態をすぐ出す（読み上げの 1 文は出す。「全体の中で見る」はその単元の札へ）
-      u.ownHash = h;
-      window.location.hash = h;
-      window.scrollTo(0, 0);
-      DES.app.render();
-      var p0 = main.querySelector('.map-page[data-view="basics"]');
-      if (p0) {
-        if (o.single) scrollToUnit(p0, o.single, false);
-        var lv = p0.querySelector('#mpx-live');
-        if (lv && p0._cov) { var cnt = p0._cov.counts.touched; setTimeout(function () { if (lv.isConnected) lv.textContent = T('mp_live', { n: cnt }); }, 80); }
-      }
-      return;
-    }
+    if (!page || !motionOK() || !canAnimate()) { allStill(o); return; }
+    var x = { kind: 'all', single: o.single || null, anims: [] };
+    try { goAllRun(o, x, main, page, h, u); } catch (err) { xRescue(x, h); }
+  }
+  // 動かさず最後の状態をすぐ出す（reduced-motion・アニメーションが使えない環境。読み上げの 1 文は出す。「全体の中で見る」はその単元の札へ）
+  function allStill(o) {
+    var main = document.getElementById('main'), h = '#map/basics', u = ui();
+    u.ownHash = h;
+    window.location.hash = h;
+    window.scrollTo(0, 0);
+    DES.app.render();
+    var p0 = main.querySelector('.map-page[data-view="basics"]');
+    if (!p0) return;
+    if (o.single) scrollToUnit(p0, o.single, false);
+    var lv = p0.querySelector('#mpx-live');
+    if (lv && p0._cov) { var cnt = p0._cov.counts.touched; setTimeout(function () { if (lv.isConnected) lv.textContent = T('mp_live', { n: cnt }); }, 80); }
+  }
+  function goAllRun(o, x, main, page, h, u) {
     // 読む: 古い画面と、地図に出ている単元ノード（「全体の中で見る」はその 1 つ。リスト系の見方はその単元の札）
     var m = xMeasure(page), frame = page.querySelector('.mp-frame'), src = [], seen = {};
     var sel = '.mp-vp .mp-n.is-unit:not(.is-hid)' + (o.single ? '[data-id="unit:' + esc(o.single) + '"]' : '');
@@ -2166,9 +2212,9 @@
     unwatch();
     if (page._detach) { page._detach(); page._detach = null; }
     var o2 = xOverlay(page, m);
+    x.ovl = o2.ovl; x.ghost = o2.ghost; x.m = m; x.src = src; x.bounds = bounds;
     src.forEach(function (s) { s.el.classList.add('mpx-gone'); });
     document.body.appendChild(o2.ovl);
-    var x = { kind: 'all', single: o.single || null, ovl: o2.ovl, ghost: o2.ghost, m: m, anims: [], src: src, bounds: bounds };
     xStartRun(x);
     u.ownHash = h;
     window.location.hash = h;
@@ -2176,7 +2222,7 @@
     DES.app.render();
     x.rk = xKey('basics');
     var np = main.querySelector('.map-page[data-view="basics"]');
-    if (X !== x || !np) { xEnd(x, 'skip'); return; }
+    if (X !== x || !np) { xRescue(x, h); return; }
     x.page = np;
     xBeginAll(x, np);
   }
@@ -2199,13 +2245,14 @@
     var srcOf = {};
     x.src.forEach(function (s) { srcOf[s.id.slice(5)] = s; });
     // 書く: アニメーションを全部ここで始める（同じ時刻から数える）
-    var ease = 'cubic-bezier(.2,.7,.3,1)', end = T0.fade, land = {}, lands = [];
-    // 古い画面は 350ms で薄くなって消える。少しだけ縮むのは地図（枠・チップ）だけ（見出しは行き先と同じ所にあるので動かさない = 二重に見えない）
-    xAnim(x, x.ghost, [{ opacity: 1 }, { opacity: 0 }], { duration: T0.fade, easing: 'cubic-bezier(.4,0,1,1)', fill: 'both' });
+    var ease = 'cubic-bezier(.2,.7,.3,1)', end = T0.inDelay + T0.fade, land = {}, lands = [];
+    // 古い画面は 350ms で薄くなって消える。少しだけ縮むのは地図（枠・チップ）だけ（見出しは行き先と同じ所にあるので動かさない = 二重に見えない）。
+    // 全体の画面は、地図が 0.5 を切る頃（200ms）から出し始める（薄くなる地図の文字と、もう濃い全体の画面の文字が重ならない）
+    xAnim(x, x.ghost, FADE_OUT, { duration: T0.fade, fill: 'both' });
     xAnim(x, x.ghost.querySelector('.mp-stage'), [{ transform: 'scale(1)' }, { transform: 'scale(.97)' }], { duration: T0.fade, easing: 'cubic-bezier(.4,0,1,1)', fill: 'both' });
-    xAnim(x, page, [{ opacity: 0 }, { opacity: 1 }], { duration: T0.fade, easing: 'ease-out', fill: 'backwards' });
+    xAnim(x, page, FADE_IN, { duration: T0.fade, delay: T0.inDelay, fill: 'backwards' });
     // 大きく見るから来た時は、左メニューと上の帯も一緒に出す（大きく見るを解くのは重ね面の上で: 古い画面は大きく見るの形のまま薄くなる）
-    if (x.m.big) ['#sidebar', '.topbar'].forEach(function (s) { var el = document.querySelector(s); if (el) xAnim(x, el, [{ opacity: 0 }, { opacity: 1 }], { duration: T0.fade, easing: 'ease-out', fill: 'backwards' }); });
+    if (x.m.big) ['#sidebar', '#topbar'].forEach(function (s) { var el = document.querySelector(s); if (el) xAnim(x, el, FADE_IN, { duration: T0.fade, delay: T0.inDelay, fill: 'backwards' }); });
     plan.forEach(function (p) {
       var s = srcOf[p.id], card = xCard(s.ctx), face = xFace(s.el, s.list, s.R.w, s.R.h), sxC = p.to.w / s.vb.w, syC = p.to.h / s.vb.h, sq = xSquare(s.vb, sxC, syC, null);
       card.appendChild(face);
@@ -2261,7 +2308,8 @@
     x.total = total;
     var a = xAnim(x, x.ovl, [{ opacity: 1 }, { opacity: 1 }], { duration: total, fill: 'both' });
     if (!a) { xEnd(x, 'end'); return; }
-    a.finished.then(function () { xEnd(x, 'end'); }, function () { /* 取り消された（飛ばした・片付けた）*/ });
+    // 最後まで = 'end'。取り消された（外から cancel・自分で片付けた）時も必ず片付けへ（片付け済みなら何もしない）
+    a.finished.then(function () { xEnd(x, 'end'); }, function () { xEnd(x, 'skip'); });
   }
 
   // ---------- 全体 → つながり（§AE-4）。o.sel = 作ったものでふれた印の単元 code（その単元を選んだ状態で着く）----------
@@ -2278,7 +2326,8 @@
       u.selCard = null;
       u.reveal = selId;
     }
-    if (!page || !motionOK()) {
+    if (!page || !motionOK() || !canAnimate()) {
+      // 動かさず最後の状態（reduced-motion・アニメーションが使えない環境）
       u.ownHash = h;
       window.location.hash = h;
       window.scrollTo(0, 0);
@@ -2286,6 +2335,10 @@
       xAfterLinks({ sel: selId });
       return;
     }
+    var x = { kind: 'links', sel: selId, view: v, anims: [], chrome: [] };
+    try { goLinksRun(x, main, page, v, h, u); } catch (err) { xRescue(x, h); }
+  }
+  function goLinksRun(x, main, page, v, h, u) {
     // 読む: 行き先の地図に出る単元のマス（帯が画面の外なら、その単元の下の札の印・帯から。それも外なら画面の端から）
     var m = xMeasure(page), g = graphNow(), vn = viewNodes(g, v), src = [], cov = page._cov, by = {};
     if (cov) cov.units.forEach(function (c) { by[c.id] = c; });
@@ -2302,12 +2355,13 @@
     });
     // 大きく見るで着く時は、左メニューと上の帯の写しも重ね面に置いて一緒に薄くする（行き先では隠れるため）
     var chrome = [];
-    if (mapUi().big) ['#sidebar', '.topbar'].forEach(function (s) {
+    if (mapUi().big) ['#sidebar', '#topbar'].forEach(function (s) {
       var el = document.querySelector(s), r = el && el.getClientRects().length ? el.getBoundingClientRect() : null;
       if (r && r.width && r.height) chrome.push({ el: el, r: xRect(r) });
     });
-    // 書く: 古い画面を重ね面へ → 行き先を描く
+    // 書く: 古い画面を重ね面へ → 行き先を描く（大きく見るは行き先を描く時に付く。重ね面の中の古い画面と写しには効かない = 測った位置のまま。map.css）
     var o2 = xOverlay(page, m);
+    x.ovl = o2.ovl; x.ghost = o2.ghost; x.m = m; x.src = src; x.chrome = chrome;
     chrome.forEach(function (c) {
       var cl = c.el.cloneNode(true);
       cl.removeAttribute('id');
@@ -2318,7 +2372,6 @@
       c.clone = cl;
     });
     document.body.appendChild(o2.ovl);
-    var x = { kind: 'links', sel: selId, view: v, ovl: o2.ovl, ghost: o2.ghost, m: m, anims: [], src: src, chrome: chrome };
     xStartRun(x);
     u.ownHash = h;
     window.location.hash = h;
@@ -2326,7 +2379,7 @@
     DES.app.render();
     x.rk = xKey(v === 'made' ? '' : v);
     var np = main.querySelector('.map-page.is-map[data-view="' + v + '"]');
-    if (X !== x || !np) { xEnd(x, 'skip'); return; }
+    if (X !== x || !np) { xRescue(x, h); return; }
     x.page = np;
     xBeginLinks(x, np);
   }
@@ -2344,12 +2397,12 @@
     });
     var fr = frame.getBoundingClientRect(), fb = { x: fr.left + frame.clientLeft, y: fr.top + frame.clientTop, w: frame.clientWidth, h: frame.clientHeight };
     var plan = flightPlan(from, to, { order: order, bounds: { x: 0, y: 0, w: x.m.vw, h: x.m.vh }, toBounds: fb, start: T0.rStart, stagger: T0.stagger, spread: T0.rSpread, dur: T0.rDur });
-    var srcOf = {}, end = T0.fade;
+    var srcOf = {}, end = T0.inDelay + T0.fade;
     x.src.forEach(function (s) { srcOf[s.id] = s; });
-    // 書く
-    xAnim(x, x.ghost, [{ opacity: 1 }, { opacity: 0 }], { duration: T0.fade, easing: 'cubic-bezier(.4,0,1,1)', fill: 'both' });
-    x.chrome.forEach(function (c) { xAnim(x, c.clone, [{ opacity: 1 }, { opacity: 0 }], { duration: T0.fade, easing: 'cubic-bezier(.4,0,1,1)', fill: 'both' }); });
-    xAnim(x, page, [{ opacity: 0 }, { opacity: 1 }], { duration: T0.fade, easing: 'ease-out', fill: 'backwards' });
+    // 書く: 全体の画面（と大きく見るで隠れる左メニュー・上の帯の写し）は 350ms で消え、地図は 全体が 0.5 を切る頃（200ms）から出る
+    xAnim(x, x.ghost, FADE_OUT, { duration: T0.fade, fill: 'both' });
+    x.chrome.forEach(function (c) { xAnim(x, c.clone, FADE_OUT, { duration: T0.fade, fill: 'both' }); });
+    xAnim(x, page, FADE_IN, { duration: T0.fade, delay: T0.inDelay, fill: 'backwards' });
     plan.forEach(function (p) {
       var s = srcOf[p.id], t = tgt[p.id], card = xCard(t.ctx), face = xFace(t.el, t.list, t.R.w, t.R.h), sxC = p.from.w / t.vb.w, syC = p.from.h / t.vb.h, sq = xSquare(t.vb, sxC, syC, s.c);
       card.appendChild(face);
