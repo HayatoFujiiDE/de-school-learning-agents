@@ -659,6 +659,10 @@ function videoErrorKind(e: unknown): string {
  * - 1 回の呼び出し: §Q-9.1 の 1 文で n の行を取り置けた時だけ呼ぶ（負けた・上限 → この試行では not_seen）。呼んだ後に記録を「まだ無い時だけ」の
  *   条件つき put で書く（null・例外 → この試行では not_seen）。retryable で、締め切りまで VIDEO_RETRY_WAIT_MS + VIDEO_CALL_MIN_MS 以上ある時だけ、
  *   待ってから次の n をもう 1 回（試行の中で VIDEO_MAX_CALLS_PER_ATTEMPT 回まで）
+ * - 試行の中の回数は、記録の attempt（o.attempt = material_versions.verification_token。同じ試行の再開＝Batch の no_time → to_submit でも同じ値、
+ *   試行ごとに新しい値）が同じ記録を数えて決める（この関数の中の数だけでは、同じ試行の再開で 3 回目を呼べてしまうため）
+ * - 取り置いた後に締め切りまで VIDEO_CALL_MIN_MS 未満なら呼ばず、その n の記録を retryable・error 'deadline_before_call'（何も送っていない）で書く
+ *   （後の試行が §Q-10 4 で次の n を呼べる）
  * - n ≥ 2 は settings video_fallback_enabled が '1' で予備のモデルが設定されていれば予備のモデル、そうでなければ主のモデル（§Q-10 7）
  * 呼び出しが失敗しても取り置きの行は残す（精算しない）。この関数は throw しない
  */
@@ -667,7 +671,7 @@ export async function loadVideoNotes(
   gemini: GeminiPort | undefined,
   v: VersionForVerify,
   videos: VersionVideo[],
-  o: { deadline: number; sleep?: VideoSleep },
+  o: { deadline: number; sleep?: VideoSleep; attempt: string },
 ): Promise<VideoNotesFile> {
   const none = (): VideoNotesFile => ({ v: 1, notes: [], missing: videos.map((x) => x.id) });
   if (videos.length === 0) return { v: 1, notes: [], missing: [] };
@@ -720,10 +724,25 @@ export async function loadVideoNotes(
       );
     };
 
-    /** 1 動画の呼び出し（試行の中で VIDEO_MAX_CALLS_PER_ATTEMPT 回まで）。ok の記録を書けた時だけ note */
+    /** 呼び出しの記録を書く（1 呼び出し 1 ファイル。key の n は D1 の取り置きで一意なので、書き手は 1 つだけ。条件なしの put §Q-10 3）。null・例外 → false */
+    const writeRecord = async (record: VideoCallRecord): Promise<boolean> => {
+      try {
+        return (await env.R2.put(videoCallKey(v.r2_prefix, record.video_id, record.n), JSON.stringify(record))) !== null;
+      } catch {
+        return false;
+      }
+    };
+
+    /** 1 動画の呼び出し（試行の中で VIDEO_MAX_CALLS_PER_ATTEMPT 回まで。前の再開で使った分を含む）。ok の記録を書けた時だけ note */
     const callVideo = async (vid: VersionVideo, firstN: number): Promise<VideoNote | null> => {
       let n = firstN;
-      for (let made = 0; ; ) {
+      // この試行で既に使った回数（durable: 記録の attempt で数える。取り置いて記録の無い行は §Q-10 4 でそもそも次の n を呼ばない）
+      const prior = [...(read.records.get(vid.id)?.values() ?? [])].filter((r) => r.attempt === o.attempt).length;
+      for (let made = prior; ; ) {
+        if (made >= VIDEO_MAX_CALLS_PER_ATTEMPT) {
+          log(vid.id, { call: n, result: 'attempt_cap' });
+          return null;
+        }
         if (o.deadline - Date.now() < VIDEO_CALL_MIN_MS) return null;
         const role: VideoModelRole = n >= 2 && fallbackOn ? 'fallback' : 'primary';
         const model = role === 'fallback' ? c.videoFallbackModel : gemini.model;
@@ -733,6 +752,12 @@ export async function loadVideoNotes(
           return null;
         }
         made++;
+        if (o.deadline - Date.now() < VIDEO_CALL_MIN_MS) {
+          // 取り置きの後に時間が足りない → 呼ばない。何も送っていないので retryable の記録を残す（後の試行が次の n を呼べる）
+          const written = await writeRecord({ v: 1, video_id: vid.id, n, model, model_role: role, outcome: 'retryable', error: 'deadline_before_call', attempt: o.attempt, at: nowIso() });
+          log(vid.id, { call: n, model_role: role, result: 'deadline_before_call', ...(written ? {} : { record: 'not_written' }) });
+          return null;
+        }
         let outcome: VideoCallOutcome;
         let error: string | null = null;
         let text = '';
@@ -763,15 +788,11 @@ export async function loadVideoNotes(
           outcome,
           error,
           ...(outcome === 'ok' ? { text, ...(usage ? { usage } : {}) } : {}),
+          attempt: o.attempt,
           at: nowIso(),
         };
-        // 1 呼び出し 1 ファイル。key の n は D1 の取り置きで一意なので、書き手は 1 つだけ（条件なしの put。§Q-10 3）。null・例外 → この呼び出しの結果はこの試行に出さない
-        let written = false;
-        try {
-          written = (await env.R2.put(videoCallKey(v.r2_prefix, vid.id, n), JSON.stringify(record))) !== null;
-        } catch {
-          written = false;
-        }
+        // null・例外 → この呼び出しの結果はこの試行に出さない
+        const written = await writeRecord(record);
         log(vid.id, { call: n, model_role: role, result: outcome === 'ok' ? 'ok' : `error:${error}`, ...(written ? {} : { record: 'not_written' }) });
         if (!written) return null;
         if (outcome === 'ok') return videoNoteOfRecord(vid, record);
@@ -1322,13 +1343,22 @@ type AttemptResult =
   /** cron の期限が近くて次のターンを始めなかった（試行は確定させない）。unstarted=true は最初のターンも始めていない（API を 1 度も呼んでいない） */
   | { ok: false; reason: 'deadline'; microDollars: number; abandoned: true; unstarted?: true };
 
-async function runAttempt(env: Env, port: FactoryPort, v: VersionForVerify, deadline: number | undefined, gemini?: GeminiPort, videoSleep?: VideoSleep): Promise<AttemptResult> {
+async function runAttempt(
+  env: Env,
+  port: FactoryPort,
+  v: VersionForVerify,
+  deadline: number | undefined,
+  gemini: GeminiPort | undefined,
+  videoSleep: VideoSleep | undefined,
+  /** 試行の識別子（lease で入れた verification_token。§Q-10 1 の試行の中の回数を数える） */
+  attempt: string,
+): Promise<AttemptResult> {
   const claimIds = claimIdsOf(v.claims_json);
   const videos = await versionVideos(env, v.id);
   // §P b 1: 取得記録（失敗・締め切りでも記録なしで進む）。読む時間は最初のターンの分（SYNC_MIN_TURN_MS + 余裕）を必ず残す。YouTube の出典は作らない（§Q-9.10）
   const captures = await loadSourceCaptures(env, port, v, { deadline: captureDeadlineOf(deadline, CAPTURE_SYNC_RESERVE_MS), videos });
   // §Q-3 3: 動画の記録（同じく最初のターンの分を残す。無い・呼べない動画は記録なし）
-  const videoNotes = await loadVideoNotes(env, gemini, v, videos, { deadline: videoDeadlineOf(deadline, CAPTURE_SYNC_RESERVE_MS), sleep: videoSleep });
+  const videoNotes = await loadVideoNotes(env, gemini, v, videos, { deadline: videoDeadlineOf(deadline, CAPTURE_SYNC_RESERVE_MS), sleep: videoSleep, attempt });
   const input = await buildVerifyInput(env, v, { captures, videos, videoNotes });
   if (input === null) return { ok: false, reason: 'input_too_large', microDollars: 0, terminal: true };
   if ('error' in input) return { ok: false, reason: input.error, microDollars: 0, terminal: true };
@@ -1429,7 +1459,7 @@ async function runSyncStep(env: Env, port: FactoryPort, deadline: number | undef
 
   let result: AttemptResult;
   try {
-    result = await runAttempt(env, port, v, deadline, gemini, videoSleep);
+    result = await runAttempt(env, port, v, deadline, gemini, videoSleep, token);
   } catch (e) {
     result = { ok: false, reason: errorKind(e), microDollars: 0 };
   }
@@ -1776,7 +1806,12 @@ export async function submitOne(env: Env, port: FactoryPort, r: BatchRow, deadli
       const videos = await versionVideos(env, r.id);
       const captures = await loadSourceCaptures(env, port, r, { deadline: captureDeadlineOf(deadline, CAPTURE_SUBMIT_RESERVE_MS), videos });
       // §Q-3 3: 動画の記録も最初のターンの送信の時だけ（提出の分を残す。回収では Gemini を呼ばない §Q-9.4）
-      const videoNotes = await loadVideoNotes(env, gemini, r, videos, { deadline: videoDeadlineOf(deadline, CAPTURE_SUBMIT_RESERVE_MS), sleep: videoSleep });
+      const videoNotes = await loadVideoNotes(env, gemini, r, videos, {
+        deadline: videoDeadlineOf(deadline, CAPTURE_SUBMIT_RESERVE_MS),
+        sleep: videoSleep,
+        // §Q-10 1: 試行の識別子（plan.json の key と同じ token。to_submit に戻って再開しても同じ値）
+        attempt: r.verification_token,
+      });
       const input = await buildVerifyInput(env, r, { captures, videos, videoNotes });
       if (input === null) return failAttempt(env, l, r.material_id, { reason: 'input_too_large', terminal: true });
       if ('error' in input) return failAttempt(env, l, r.material_id, { reason: input.error, terminal: true });

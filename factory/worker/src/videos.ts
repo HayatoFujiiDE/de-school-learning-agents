@@ -184,6 +184,8 @@ export interface VideoCallRecord {
   error: string | null;
   text?: string;
   usage?: GeminiUsage;
+  /** 呼んだ検証の試行（material_versions.verification_token）。試行の中の回数（§Q-10 1）をこれで数える。無い記録は null */
+  attempt?: string | null;
   at: string;
 }
 
@@ -195,6 +197,7 @@ export const videoCallKey = (r2Prefix: string, videoId: string, n: number): stri
  * それ以外は final
  */
 export const VIDEO_RETRYABLE_ERRORS: ReadonlySet<string> = new Set(['server', 'rate_limited', 'timeout', 'connection', 'deadline']);
+// 取り置いた後に時間が足りず送らなかった呼び出しは、記録の error を 'deadline_before_call'・outcome を retryable にする（src/verify.ts の loadVideoNotes）
 
 /** 保存済みの呼び出しの記録を読む（形が違う・video_id / n が key と合わない・ok なのに本文が無い → null = 記録が無い扱い） */
 export function parseVideoCallRecord(text: string, videoId: string, n: number): VideoCallRecord | null {
@@ -212,6 +215,7 @@ export function parseVideoCallRecord(text: string, videoId: string, n: number): 
       model_role: o.model_role as VideoModelRole,
       outcome: o.outcome as VideoCallOutcome,
       error: isStr(o.error) ? o.error : null,
+      attempt: isStr(o.attempt) ? o.attempt : null,
       at: isStr(o.at) ? o.at : '',
     };
     if (o.outcome !== 'ok') return base;
