@@ -1282,3 +1282,9 @@ v3.5（2026-11-04 段階 0 の実測。最初の本物の session sesn_01Jfui3ap
 ## §T お題のストック（v3.12。2026-11-06 凍結。§J の「『今日のお題』（`topics`）は本スライスに含めない」と §R-35 の「`topics` は別裁定へ」を置き換える）
 
 正本: `docs/plans/topics-variety/contract-T.md`（v2.2。Astra high 3 回の指摘への裁定は同 T-16）。素材の §B-6（`publishSwitch` が唯一の切替・人の承認）は変えない。お題は別の表と別の関数（`src/topics/gate.ts`）で扱う。
+
+公式ドキュメントでの確認（T-4 の求め。2026-11-06、実装担当）:
+- ツールの型名: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool ・ https://platform.claude.com/docs/en/agents-and-tools/tool-use/server-tools と SDK 1.3.0 の型（`resources/messages/messages.d.ts` の `WebSearchTool20250305` / `WebFetchTool20250910`）。`_20260209` 以降は動的フィルタで code execution を内部で使うので、お題は基本版 `web_search_20250305` / `web_fetch_20250910` にした（検証係 §R-49 (b) と同じ）。web_fetch は会話に出た URL だけを開ける（`url_not_in_prior_context`）。料金は web_search $10 / 1,000 回・web_fetch は追加なし・Sonnet 5.5 は入力 $2 / 出力 $10 per 1M（https://platform.claude.com/docs/en/about-claude/pricing）。
+- 強制呼び出し: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools の表で、Opus 5.5・Sonnet 5.5・Fable 5.1・Mythos 5.1 は `tool_choice` の `any` / `tool` が 400。よって生成・検査とも `tool_choice: auto`。生成は `save_topics` が無ければ `failed: no_output`（T-4 の「併用できない時」）。検査（T-5 の 3 の「強制呼び出し」）も auto にし、`save_check` に `strict: true`（https://platform.claude.com/docs/en/agents-and-tools/tool-use/strict-tool-use: 呼んだ時の入力の形は保証するが、呼ぶことは保証しない）。呼ばなければ T-7 の「応答が使えない」。（強制は応答の先頭を tool_use にするので、先に web_search・web_fetch を走らせられないとも読める。これは公式に明記の無い推論）
+- サーバーツールと `save_topics` が同じ並列の呼び出しに入ると、API はサーバーツールを走らせずに `stop_reason: tool_use` で返す（server-tools）。お題の生成は継続の呼び出しをしない（1 回だけ。`pause_turn` も同じ）ので、その時の出典は `gen_fetch` にならず、検査の Worker の fetch で確かめる。
+- 再送と締め切り: SDK 1.3.0 `internal/request-options.d.ts` の `RequestOptions.maxRetries`（既定 2）・`timeout`・`signal` を呼び出しごとに渡す。`src/anthropic.ts` の `CallOpts` に `maxRetries` を足した（省略時は従来どおり）。お題の呼び出しは `maxRetries: 0` と、`deadline` = min(cron の締め切り, 今 + 150 秒 / 60 秒) を渡す。
