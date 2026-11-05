@@ -508,6 +508,25 @@ describe('§Q-11 5・12 Gemini との関係（not_found の抑止）', () => {
     expect(savedResult().videos).toEqual([{ id: 'v1', verdict: 'not_seen', reason: '' }]);
   });
 
+  it('not_found（Gemini の記録がまだ無い動画）: 取り置きも呼び出しも無い。restricted の動画は同じ試行で呼ぶ', async () => {
+    seed([video(), V2()]);
+    enable();
+    const env = makeEnv(SYNC);
+    const g = gemini(['ok']);
+    const o = oembed([{ outcome: 'not_found' }, { outcome: 'restricted' }]);
+    const { port, seen } = syncPort(reportMsg([{ id: 'v2', verdict: 'ok', reason: 'x' }]));
+    expect(await runVerificationStep(env, port, { gemini: g.port, oembed: o.port })).toBe('done');
+    expect(o.calls).toEqual([YT1, YT2]);
+    expect(g.calls.map((c) => c.youtubeId)).toEqual([YT2]);
+    expect(vvRows()).toEqual(['vv:v1:v2']);
+    expect(texts(seen[0])).toContain(`## 動画 v1 ${watchUrl(YT1)} 80〜185 秒${NONE}`);
+    // 再検証の後の試行でも呼ばない（not_found の記録がある）
+    db.prepare("UPDATE material_versions SET verification_status = 'pending', verify_phase = NULL, verification_token = NULL WHERE id = 'v1'").run();
+    expect(await runVerificationStep(env, port, { gemini: g.port, oembed: o.port })).toBe('done');
+    expect(g.calls.map((c) => c.youtubeId)).toEqual([YT2]);
+    expect(vvRows()).toEqual(['vv:v1:v2']);
+  });
+
   it('404 の put が失敗した試行でも、v1 の video-notes.json の ok を入力に入れない（同期）', async () => {
     seed([video()]);
     enable();
