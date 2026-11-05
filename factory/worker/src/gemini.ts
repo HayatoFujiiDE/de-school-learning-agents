@@ -68,6 +68,8 @@ export interface GeminiWatchRequest {
   prompt: string;
   /** false の時だけ区間（processing）を付けない。probe の診断用（通常の経路は常に付ける） */
   clip?: boolean;
+  /** 呼ぶモデル（§Q-10 7・10。予備のモデルで呼ぶ時だけ渡す）。無ければ port の model（GEMINI_VIDEO_MODEL） */
+  model?: string;
 }
 
 export interface GeminiWatchResult {
@@ -105,9 +107,13 @@ export function validWatchRequest(req: GeminiWatchRequest): boolean {
     startSec >= 0 &&
     startSec < endSec &&
     typeof req.prompt === 'string' &&
-    req.prompt.length > 0
+    req.prompt.length > 0 &&
+    (req.model === undefined || validModelName(req.model))
   );
 }
+
+/** モデルの名前として送れる形か（英小文字・数字・`.`・`-` だけ。64 字まで） */
+export const validModelName = (m: unknown): m is string => typeof m === 'string' && /^[a-z0-9][a-z0-9.-]{0,63}$/.test(m);
 
 /** 送る本文（公式 docs の YouTube の例 + clip の processing + 出力の上限） */
 export function geminiRequestBody(model: string, req: GeminiWatchRequest): Record<string, unknown> {
@@ -240,7 +246,7 @@ export function geminiPort(env: Env, opts: { fetchImpl?: typeof fetch } = {}): G
         res = await f(GEMINI_INTERACTIONS_URL, {
           method: 'POST',
           headers: { 'x-goog-api-key': key, 'content-type': 'application/json', 'api-revision': GEMINI_API_REVISION },
-          body: JSON.stringify(geminiRequestBody(model, req)),
+          body: JSON.stringify(geminiRequestBody(req.model ?? model, req)),
           signal,
         });
       } catch {

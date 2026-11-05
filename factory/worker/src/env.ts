@@ -45,6 +45,8 @@ export interface Env {
   VIDEO_U_CENTS?: string;
   /** 動画（ref_id vv:*）の月の記帳の上限（セント） */
   VIDEO_MONTHLY_CAP_CENTS?: string;
+  /** 予備のモデル（§Q-10 10）。settings video_fallback_enabled が '1' の時だけ、n ≥ 2 の呼び出しに使う。空なら予備なし */
+  GEMINI_VIDEO_FALLBACK_MODEL?: string;
 
   // secrets
   ANTHROPIC_API_KEY?: string;
@@ -99,6 +101,8 @@ export const cfg = (env: Env) => ({
   videoModel: (env.GEMINI_VIDEO_MODEL || 'gemini-3.6-flash').trim(),
   videoUCents: Math.max(1, intVar(env.VIDEO_U_CENTS, 10)),
   videoMonthlyCapCents: intVar(env.VIDEO_MONTHLY_CAP_CENTS, 1000),
+  // §Q-10 10（既定は無し = 予備を使わない。wrangler.jsonc の値は gemini-3.8-flash）
+  videoFallbackModel: (env.GEMINI_VIDEO_FALLBACK_MODEL ?? '').trim(),
 });
 
 /** SCOUT_MAX_TURNS を var で大きくしても 1 run の X 検索がこれ以上の turn を使わない（外部コストの有限化） */

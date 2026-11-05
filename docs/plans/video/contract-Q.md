@@ -188,7 +188,7 @@
    - plan.json の `videos.shown` と `videos.not_seen` は、それぞれの中で重複を許さず、互いに交わらない。受け入れテストに入れる。
    - SQL は `day = tokyoDay(now)`、`month = day.slice(0,7)`、`dailyReservedSql(day, …)` を同じ日付で組み立て、既存の位置パラメータで bind する。
    - 日次の保証は「取り置きを入れる時点の条件」である（全台帳の hard cap ではない。既存の記帳方式と同じ）。
-10. **watch ページの扱い（自動のセキュリティ確認の指摘）**: allowlist の hosts（作業場の通信）には YouTube を入れない。domains（web_fetch / web_search）だけに入れる。watch ページの題名・概要欄は投稿者が自由に書ける文なので、検証係は watch ページの本文だけを根拠に claim を confirmed にしない。動画を出典にした claim を confirmed にできるのは「動画の記録で確認:」の時だけとする（PR-Q2 の system 段落と検査に入れる）。
+10. **watch ページの扱い（自動のセキュリティ確認の指摘）**: ~~allowlist の hosts（作業場の通信）には YouTube を入れない。domains（web_fetch / web_search）だけに入れる。~~ **改め（2026-11-05）**: API は web ツールの allowed_domains が limited 環境の allowed_hosts の中にあることを求め、外れると sessions.create が 400 `invalid_request_error`（「web tool `allowed_domains` must stay within the `allowed_hosts`…」）になる。本番で新しい素材がすべて始まらなくなったため、ふじさんの判断で hosts に `youtube.com` と `*.youtube.com` だけを足す（動画の本体の googlevideo.com・画像の ytimg.com は入れない。package manager は閉じたまま）。整合は test/allowlist-env.test.ts で検査する。watch ページの題名・概要欄は投稿者が自由に書ける文なので、検証係は watch ページの本文だけを根拠に claim を confirmed にしない。動画を出典にした claim を confirmed にできるのは「動画の記録で確認:」の時だけとする（PR-Q2 の system 段落と検査に入れる）。
 11. **Q-9.10 の有界な形（実装レビュー R1〜R3 の後の裁定）**: 「watch ページだけで confirmed にしない」は、モデルの振る舞いの約束ではなく、Worker が判定の後に当てる次の検査として保証する。
    - **見せないもの**: 検証係は YouTube のページの文を受け取らない。入力の sources_json では、YouTube の出典の quoted_excerpt を伏せる。取得記録にも入れない。検証係の web_fetch の許可にも入れない。YouTube の出典は、url が YouTube の行と、版の動画が指す行の両方とする。
    - **残してよい条件**: YouTube の出典を含む claim は、次のどれかの構造化された証拠がある時だけ confirmed のまま残す。
@@ -202,3 +202,47 @@
 12. **probe の診断（本番で 503 が 2 回続いた後の追加）**: probe の応答に `clip`（区間を付けたか）と `api_error`（Google の error の status と message の先頭 200 字。鍵らしい文字列は伏せる）を足す。入力 `clip:false` で区間を付けない診断の呼び出しを 1 回だけできる（取り置きの ref は `…:noclip`）。通常の経路は常に区間を付ける。
 
 凍結: 2026-11-05（Astra high R2 GO）。
+
+## Q-10 混雑時のやり直しと予備のモデル（2026-11-05。本節は Q-9.1 の「生涯 1 回」と video-notes.json の書き方に優先する）
+
+起点: probe 4 回がすべて 503 `UNAVAILABLE`（Google の message「gemini-3.6-flash is currently experiencing high demand…」）。区間あり・区間なしの両方で同じだった。Google の開発者フォーラムには、同じ 503 の報告がモデルを問わず数か月分ある。Q-9.1 のままでは、混雑した日に検証した版の動画は二度と確認されない。ふじさん: 「頻繁にあるんだったら、代替手段を持っておかないといけないんじゃないの？」
+
+1. **保証（有界）**: 版 × 動画ごとの Gemini の呼び出しは、生涯 `VIDEO_MAX_CALLS = 3` 回まで。1 回の検証の試行の中では 2 回まで。記帳は呼び出し 1 回ごとに U_video で、精算しない（行は消さない）。最悪の記帳は 1 動画あたり 3U（30¢）。月と日の上限は Q-9.1 の 1 文のまま、呼び出しごとに当てる。
+2. **呼び出しの権利の行**: n 回目の呼び出しの ref は、n = 1 なら `vv:{version_id}:{video_id}`（Q-9.1 と同じ。既存の行と互換）、n ≥ 2 なら `vv:{version_id}:{video_id}:r{n}`。n は D1 にある行（この 3 つの ref）の最大 + 1 で決め、**n > 3 なら取り置きを試みない**。取り置きは Q-9.1 の 1 文（`NOT EXISTS ref`）をそのまま使う。同時に 2 つの試行が同じ n を取ろうとしても、入れられるのは 1 つだけで、負けた側はその動画を呼ばない（この試行では not_seen）。
+3. **呼び出しの記録（1 呼び出し 1 ファイル・書き直さない）**: 取り置きに勝った側だけが、呼び出しの後に `{r2_prefix}video-calls/{video_id}/{n}.json` を作る。中身は `{"v":1,"video_id","n","model","model_role":"primary"|"fallback","outcome":"ok"|"retryable"|"final","error":<kind or null>,"text"?,"usage"?,"at"}`（text は ok の時だけ。8,000 文字で切る）。put は条件なし（実装時の追記: Workers の R2 binding で `etagDoesNotMatch: "*"` を「まだ無い時だけ」に使えることは公式 docs に無いため、それに頼らない）。n は D1 の取り置きで一意なので、書き手は 1 つだけ。put が null を返した時と、put の例外の時は、その呼び出しの結果はこの試行に出さない（not_seen。呼び出しは記帳済み）。
+4. **動画の状態は記録から組み立てる**（毎試行・回収では行わない）: その動画の D1 の行（n = 1..3）と、R2 の呼び出しの記録を読み、次で決める。
+   - ok の記録が 1 つでもある → note にする（n がいちばん小さい ok を採る）。以後は呼ばない。
+   - final の記録がある → 呼ばない（not_seen）。
+   - 次の n を呼んでよいのは、**いちばん大きい n の行に記録があり、その outcome が retryable で、n < 3 の時だけ**。行があるのに記録が無い（呼び出し中・結果不明・put 失敗）時は、時間がたっても呼ばない（not_seen）。後から retryable の記録が届けば、その後の試行で呼べる。final の記録が届けば、以後は呼ばない。時間で retryable に格上げする規則は置かない（結果が retryable だった証拠にならないため）。
+   - 試行の締め切りまでの残りが `VIDEO_CALL_MIN_MS` 未満なら呼ばない（従来どおり）。
+5. **やり直す失敗（retryable）**: `GeminiErrorKind` の `server`（5xx）・`rate_limited`（429）・`timeout`・`connection`、および外側の締め切り（`beforeDeadline`）で待ちきれなかったもの。それ以外（`auth`・`not_found`・`bad_request`・`bad_response`・`not_completed`・`no_text`・`no_key`・`bad_input`）は final。
+6. **1 回の試行の中**: 呼べる動画について 1 回呼ぶ。retryable で、`deadline - now ≥ VIDEO_RETRY_WAIT_MS(20,000) + VIDEO_CALL_MIN_MS` の時だけ、20 秒待って次の n を取り置いてもう 1 回呼ぶ（試行内で 2 回まで）。SDK・fetch の自動 retry は引き続き使わない。
+7. **予備のモデルの使いどころ**: n ≥ 2 の呼び出しは、予備のモデルが有効なら予備のモデルで呼ぶ（試行の中でも、後の試行でも同じ）。無効なら主のモデル。これで、主のモデルが混んでいる間に予備が一度も使われない形を避ける。
+8. **試行をまたぐやり直し**: 後の試行（再検証の操作、または mismatch による作り直し）で、4 の規則で呼んでよい動画を呼ぶ。Batch の回収（collect）では呼ばない・組み立てない（Q-9.4 のまま。plan.json の videos を使う）。自動の定期実行は足さない。
+9. **video-notes.json の扱い**: 新しい版では書かない。既に v1 のファイルがある版はそのファイルを使い、呼ばない（Q-9.1 のまま。既存の missing は救わない）。読む側は 1 つの関数（`src/videos.ts` の `readVersionVideoNotes`）にまとめる。v1 のファイルがあればそれを、無ければ呼び出しの記録から 4 の規則で組み立てた `{notes, missing}` を返す。検証係の入力と review API（`src/routes/review.ts` の video_notes）は、どちらもこの関数を使う。review API の応答の形は変えない。
+10. **予備のモデル**: env `GEMINI_VIDEO_FALLBACK_MODEL`（wrangler の値は `gemini-3.8-flash`。公式の pricing で、入力の単価は 3.6 Flash と同じ「$0.75 / 1M tokens、2026-12-31 まで」）。settings `video_fallback_enabled` が `'1'` の時だけ使う。既定は無し。区間の指定が 3.8 Flash で効くかは公式の docs で確かめられていないので、有効にする手順は Q-9.5 と同じとする。probe（入力 `model: "fallback"`。取り置きの ref に `:fb` を足す）の text_head を司令塔が見て、区間の中身に効いていると確かめてから、`POST /api/videos/enable` に `{"fallback": true}` を送って立てる。予備のモデルが未設定なら 409。
+11. **記録とログ**: note の `model` は、実際に答えたモデル。ログ `video_notes` に `call`（n）と `model_role` を足す（数とラベルだけ）。
+12. **変えないもの**: plan.json と回収、Q-9.11 の検査、確認画面、review API の形（verify_cost_cents の `vv:{version_id}:*` は r2・r3 の行も含む）。probe は Q-9.12 に `model` の入力を足すだけ（ref は primary/fallback × clip/noclip で別）。
+13. **受け入れ（vitest。fake の GeminiPort・fake の時計・fake の R2 の条件つき put）**:
+    - 503 → 20 秒待ち → 2 回目で成功: note になり、行が 2 つ（`vv:…` と `…:r2`）、記録が 2 つ。
+    - 503 が 2 回 → 次の試行で 3 回目を呼ぶ。3 回目も 503 なら、その後の試行では呼ばない（D1 に r3 があれば R2 の状態に関係なく追加の取り置きはゼロ）。
+    - `auth` や `no_text` は 1 回で final。外側の締め切りは retryable。
+    - 締め切りが足りない時は待たずに 1 回で終わり、後の試行で呼べる。
+    - 同じ n を 2 つの試行が同時に取りに行くと、片方だけが呼ぶ。負けた側は記録を書かず、勝った側の ok が残る。
+    - 記録が無い行: 時間がたっても呼ばない。n=1 が auth で put に失敗 → 何分たっても n=2 を取り置かない。欠損を読んだ後に retryable の記録が届く → 次の試行で呼べる。final が届く → 呼ばない。
+    - 複数の ok（n=1 と n=2）がある時は n=1 だけを note にし、入力にも 1 回だけ出す。
+    - 呼び出しの記録だけがある版で、review API の video_notes が note を返し、確認画面に出る（v1 の版も従来どおり）。
+    - 予備のモデルが有効な時、n ≥ 2 の送信 body の model が予備のモデルである。probe の ref は primary/fallback × clip/noclip の 4 組で別になる。
+    - 予備のモデル: 無効なら n ≥ 2 も主のモデル。有効なら n ≥ 2 は予備の名前で呼び、note の model もそれになる。
+    - 条件つき put が null を返す時と例外の時は、その試行では not_seen。
+    - 月・日の上限で n = 1 / n = 2 の取り置きが入らない時は呼ばず、上限が空いた後の試行で呼べる（行が増えていないこと）。
+    - v1 の video-notes.json がある版は呼ばない。
+    - 回収（collect）は Gemini を呼ばず、R2 の記録も読まない。提出後に記録が増えても、回収は plan.json のまま。
+    - 動画の確認が無効の時は呼び出しゼロ。予備のモデルが未設定の時の enable は 409。
+    - 過去の retryable に引きずられない: n=1 が retryable、n=2 は行だけ（記録なし）→ 何分たっても n=3 を取り置かない。
+    - 遅れて届く ok: 欠損として扱った後に ok の記録が届く → 次の試行では呼ばず、検証係の入力と review API の両方に同じ note が出る。
+    - readVersionVideoNotes の返す形の互換: 動画の記録が 1 つも無い版は従来どおり null（確認画面は「まだありません」のまま）。記録がある版は `v:1` と、動画ごとの id・区間などを含む従来の完全な形。
+    - 既存のテストが green。新しいテストが変更前のコードで落ちる（mutation）。
+14. **範囲**: 触るのは `src/verify.ts`・`src/videos.ts`・`src/routes/review.ts`（video_notes の読み方だけ）・`src/routes/videos.ts`・`src/env.ts`・`src/fake/gemini.ts`・fake の R2（条件つき put が無ければ足す）・`wrangler.jsonc`（var 1 つ）・test/。migration は無し。職人の定義・admin.js は変えない。
+
+凍結（Q-10）: 2026-11-05（Astra high R3 GO）。

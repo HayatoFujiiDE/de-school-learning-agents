@@ -17,6 +17,7 @@
     "mext.go.jp", "*.mext.go.jp",
     "nier.go.jp", "*.nier.go.jp",
     "ja.wikipedia.org",
-    "developer.mozilla.org"
+    "developer.mozilla.org",
+    "youtube.com", "*.youtube.com"
   ]
 }

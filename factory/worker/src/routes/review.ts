@@ -8,7 +8,7 @@ import { AUTO_ITEMS, type AutoItem } from '../checks/triage';
 import { computeTriage, latestVerificationOf } from '../triage-step';
 import { generatedImagesOf } from './images';
 import { serveVersionFile } from './library';
-import { VIDEO_NOTES_FILE, parseVideoNotesFile, type VideoNotesFile } from '../videos';
+import { readVersionVideoNotes, versionVideosOf, type VideoNotesFile } from '../videos';
 
 export const CHECKLIST_KEYS = [
   'content_and_evidence',
@@ -146,8 +146,8 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
   const material = parseJsonField<unknown>(v.material_json, null);
   // 生成した画像の情報（§O-7 6。prompt は認証済みの運営にだけ返す）
   const generatedImages = await generatedImagesOf(db, v.job_id, material);
-  // §Q-5: R2 の video-notes.json（無い・読めなければ null）
-  const videoNotes = await readVideoNotes(c.env.R2, v.r2_prefix);
+  // §Q-5・§Q-10 9: 版の動画の記録（v1 の video-notes.json か、呼び出しの記録から組み立てたもの。何も無い・読めなければ null）
+  const videoNotes = await readVideoNotes(c.env.R2, v.r2_prefix, v.material_json);
   return json(200, {
     version: {
       id: v.id,
@@ -217,11 +217,10 @@ function videoVerdictsOf(raw: unknown): Array<{ id: string; verdict: string; rea
     .map((x) => ({ id: x.id as string, verdict: typeof x.verdict === 'string' ? x.verdict : '', reason: typeof x.reason === 'string' ? x.reason : '' }));
 }
 
-/** R2 の {r2_prefix}video-notes.json（§Q-3 3）。無い・読めない・形が違えば null */
-async function readVideoNotes(r2: R2Bucket, prefix: string): Promise<VideoNotesFile | null> {
+/** 版の動画の記録（§Q-10 9 の readVersionVideoNotes。検証係の入力と同じ関数）。記録が 1 つも無い・読めない・形が違えば null */
+async function readVideoNotes(r2: R2Bucket, prefix: string, materialJson: string): Promise<VideoNotesFile | null> {
   try {
-    const o = await r2.get(prefix + VIDEO_NOTES_FILE);
-    return o ? parseVideoNotesFile(await o.text()) : null;
+    return (await readVersionVideoNotes(r2, prefix, versionVideosOf(materialJson))).file;
   } catch {
     return null;
   }

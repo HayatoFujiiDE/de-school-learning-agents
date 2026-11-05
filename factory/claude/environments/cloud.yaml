@@ -18,3 +18,5 @@ config:
       - "*.nier.go.jp"
       - ja.wikipedia.org
       - developer.mozilla.org
+      - youtube.com
+      - "*.youtube.com"
