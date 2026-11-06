@@ -307,7 +307,8 @@ describe('§P d1 制作時の取得記録（同期）', () => {
   });
 
   it('本文だけで上限ぎりぎり（記録の行も入らない）→ 取得記録の節を出さずに成功', async () => {
-    seed([['s1', URL_A]], 'x'.repeat(VERIFY_INPUT_CHAR_LIMIT - 200));
+    // 余白 260: 1 行に詰めた sources.json は整形して渡す（readableSourcesText）ので、その分（数十文字）を見込む
+    seed([['s1', URL_A]], 'x'.repeat(VERIFY_INPUT_CHAR_LIMIT - 260));
     const { port, seen } = syncPort(eventsStub([use('u1', URL_A), result('u1', 'あ'.repeat(1000))]), [reportMsg()]);
     expect(await runVerificationStep(makeEnv({ VERIFY_MODE: 'sync' }), port)).toBe('done');
     expect(section(seen[0])).toBeNull();
