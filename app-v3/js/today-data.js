@@ -960,11 +960,30 @@
     var nx = t.next;
     if (!lPair(nx.talk) || !lPair(nx.makeTitle) || !Array.isArray(nx.makeSteps) || nx.makeSteps.length < 3 || nx.makeSteps.length > 4 || !nx.makeSteps.every(lPair)) return null;
     if (bad) return null;
-    return { id: t.id, kind: t.kind, date: t.kind === 'news' ? lCopy(t.date) : null, heavy: t.heavy === true,
+    var d = { id: t.id, kind: t.kind, date: t.kind === 'news' ? lCopy(t.date) : null, heavy: t.heavy === true,
       art: typeof t.art === 'string' && ART[t.art] ? t.art : null, source: 'factory',
       title: lCopy(t.title), lead: lCopy(t.lead), reason: lPair(t.reason) ? lCopy(t.reason) : null,
       facts: facts, views: views, asks: asks, stances: stances, sources: sources,
       next: { talk: lCopy(nx.talk), makeTitle: lCopy(nx.makeTitle), makeSteps: nx.makeSteps.map(lCopy) } };
+    // 子どもが読む文（中・小の両方）に禁止語があれば捨てる（tools/check.sh の禁止語と同じ。理由コード forbidden）
+    return hasForbidden(d) ? null : d;
+  }
+  // 禁止語（tools/check.sh の forbidden と同じ語。tools/pull-topics.mjs の FORBIDDEN と同じ配列。一致は tools/today-test.js が確かめる）
+  TDD.FORBIDDEN = ['点数', 'ランキング', '順位', '評価', '成績', 'レベル'];
+  // 子どもが読む文: title / lead / reason / facts / views / asks / stances / next の中・小（出典の名前・url は含めない）
+  TDD.kidTexts = function (d) {
+    var out = [];
+    function add(p) { if (Array.isArray(p)) out.push(p[0], p[1]); }
+    add(d.title); add(d.lead); add(d.reason);
+    (d.facts || []).forEach(function (f) { add(f && f.text); });
+    (d.views || []).forEach(function (v) { add(v && v.who); add(v && v.stance); });
+    (d.asks || []).forEach(function (a) { add(a && a.text); });
+    (d.stances || []).forEach(function (s) { add(s && s.label); });
+    if (d.next) { add(d.next.talk); add(d.next.makeTitle); (d.next.makeSteps || []).forEach(add); }
+    return out;
+  };
+  function hasForbidden(d) {
+    return TDD.kidTexts(d).some(function (s) { return typeof s === 'string' && TDD.FORBIDDEN.some(function (w) { return s.indexOf(w) >= 0; }); });
   }
   var LEVELS_SORTED = TDD.LEVELS.slice().sort().join();
   // list: 工場のお題の配列 / base: 既にあるお題（id が重なるものを捨てる）→ 取り込んだお題の配列（純関数・例外を外へ出さない）
