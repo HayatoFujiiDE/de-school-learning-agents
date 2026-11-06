@@ -5,6 +5,7 @@ import { all, getSetting, isoPlus, nowIso, setSetting, stmt, tokyoDay } from './
 import { cfg, type Env } from './env';
 import { IMAGE_CRON_BUDGET_MS, imageCronStep } from './images';
 import { meetingTick } from './meeting';
+import { retroTick } from './retro';
 import { runScout, scoutDueOn } from './scout';
 import { getJob, markWebhookProcessed, reconcileJob, recoverCreating, startJob, type JobRow } from './jobs';
 import { runVerificationStep } from './verify';
@@ -102,6 +103,13 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
     else out.meeting = await meetingTick(env, port, { deadline: intakeDeadline });
   } catch (e) {
     out.meeting_error = e instanceof Error ? e.name : 'error';
+  }
+  // 振り返り係（§S-2）。会議の後に 1 回。回収（費用なし）は止めている間も行い、送信は pause 中と retro_enabled='0' の時はしない（retroTick が見る）
+  try {
+    if (!enough()) out.retro = 'skipped_time';
+    else out.retro = await retroTick(env, port, { deadline: intakeDeadline });
+  } catch (e) {
+    out.retro_error = e instanceof Error ? e.name : 'error';
   }
   try {
     const now = new Date();

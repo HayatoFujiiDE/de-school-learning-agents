@@ -1,0 +1,14 @@
+{
+  "_note": "fake の batches.results の 1 行（振り返り係 §S-4）。custom_id は振り返りの job_id（job_retros に submitted の行がある時だけこの fixture を使う）。output を JSON 文字列にして text block で返す",
+  "result_type": "succeeded",
+  "stop_reason": "end_turn",
+  "usage": { "input_tokens": 6000, "output_tokens": 600, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0 },
+  "output": {
+    "summary": "fake の振り返り: 開けないサイトの試し直しが 2 回あった",
+    "wastes": [{ "kind": "failed_fetch", "evidence": "同じホストで失敗 2 回の後に 1 回開いた", "est_cents": 1 }],
+    "suggestions": [
+      { "target": "maker_note", "text": "同じサイトで 2 回開けなければ、そのサイトは使わず別の出典を探す", "reason": "失敗の後の取得 1 回", "expected_saving_cents": 1, "quality_risk": "none" }
+    ],
+    "tip_reviews": []
+  }
+}

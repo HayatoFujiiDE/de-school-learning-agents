@@ -5,7 +5,7 @@
 import type { BetaManagedAgentsEventParams } from '@anthropic-ai/sdk/resources/beta/sessions/events';
 import type { SessionCreateParams } from '@anthropic-ai/sdk/resources/beta/sessions/sessions';
 import { PortError, type CallOpts, type FactoryPort, type FileMeta } from './anthropic';
-import { accumulateCitations, finishCitations, isCitationAcc, newCitationAcc, type CitationAcc } from './checks/citations';
+import { accumulateCitations, applyCarry, finishCitations, isCitationAcc, newCitationAcc, type CitationAcc } from './checks/citations';
 import { versionVideosOf } from './videos';
 import { checkForbidden } from './checks/forbidden';
 import { basenameOf, duplicateBasename, resolveOutputLayout } from './checks/layout';
@@ -49,6 +49,8 @@ import {
   keptImageInput,
   registerImage,
 } from './images';
+import { activeMakerNotes, makerNoteLines } from './retro';
+import { carryForIngest, prevForStart, prevSectionLines } from './rework';
 import { OutOfTime, SAVE_FAILURES_MAX, ScanLimit, ScanStalled, runScan, stateJsonForSave, type ScanIO, type ScanState } from './scan';
 import { isActiveJob, isReingestable, isTerminalJob } from './state';
 import {
@@ -191,7 +193,16 @@ export function defineOutcomeEvent(kinds: number[]): BetaManagedAgentsEventParam
   };
 }
 
-export async function buildPhase1Message(db: D1Database, briefMd: string, kinds: number[]): Promise<string> {
+/**
+ * prev: §S-8-1 作り直しで前の版のファイルを付けた時だけ（付けたファイル名と開き直さなくてよい出典）。
+ * 注文票の直後・編集基準の前に「前の版」の区画を入れる。無ければ従来の文と 1 文字も変わらない
+ */
+export async function buildPhase1Message(
+  db: D1Database,
+  briefMd: string,
+  kinds: number[],
+  prev: { names: readonly string[]; reopenFree: readonly string[] } | null = null,
+): Promise<string> {
   const logs = await all<{ kind: string; question: string | null; answer: string }>(
     db,
     stmt(
@@ -207,15 +218,25 @@ export async function buildPhase1Message(db: D1Database, briefMd: string, kinds:
   );
   const kindLines = kinds.map((k) => `- 型 ${k}（${KIND_LABEL[k] ?? '不明'}）`);
   const kindRubrics = kinds.map((k) => RUBRIC_KINDS[k]).filter(Boolean);
+  // §S-5 2: 振り返り係の active の maker_note（古い順 8 件まで）。1 件も無ければ見出しごと出さない（従来の文と 1 文字も変わらない）。
+  // 作り直し（rework）の job も startJob からこの文で始まる。読めない時（migration 0006 の前など）は入れずに進める
+  let notes: string[] = [];
+  try {
+    notes = await activeMakerNotes(db);
+  } catch (e) {
+    console.log(JSON.stringify({ at: 'phase1', retro_notes: 'unavailable', kind: errorKind(e) }));
+  }
   return [
     '# 注文票',
     briefMd,
     '',
+    ...(prev ? prevSectionLines(prev.names, prev.reopenFree) : []),
     '# 編集基準',
     EDITORIAL_STANDARDS.trim(),
     '## これまでの回答と差し戻し理由（全素材・新しい順・最大 40 件）',
     ...(lines.length ? lines : ['- （まだありません）']),
     '',
+    ...makerNoteLines(notes),
     '# 今回の型',
     ...kindLines,
     '',
@@ -335,7 +356,10 @@ export async function startJob(env: Env, port: FactoryPort, jobId: string): Prom
   // 3. sessions.create（§D-4）
   const kinds = parseJson<number[]>(material.kinds_json, []);
   const budgetCents = job.budget_cents > 0 ? job.budget_cents : job.kind === 'rework' ? c.budgetReworkCents : c.budgetDraftCents;
-  const phase1Message = await buildPhase1Message(db, job.brief_md, kinds);
+  // §S-8-1: 作り直しの最初の create（claim の前に読んだ create_attempts が 0）だけ、前の版のファイルを付ける。
+  // 2 回目以降（失敗して queued に戻った後・復旧の後）は付けない（resources が原因で create が失敗し続けない）
+  const prev = await prevForStart(env, port, job);
+  const phase1Message = await buildPhase1Message(db, job.brief_md, kinds, prev);
   const params: SessionCreateParams = {
     agent:
       job.kind === 'rework'
@@ -346,6 +370,7 @@ export async function startJob(env: Env, port: FactoryPort, jobId: string): Prom
     metadata: { job_id: jobId, material_id: material.id, kind: job.kind },
     budget: { type: 'limit', max_list_cost: { amount: String(budgetCents), currency: 'USD' } },
     initial_events: [{ type: 'user.message', content: [{ type: 'text', text: phase1Message }] }],
+    ...(prev ? { resources: prev.resources } : {}),
   };
 
   let sessionId: string;
@@ -847,6 +872,17 @@ export async function answerJob(env: Env, port: FactoryPort, jobId: string, body
 
 const LEASE_MS = 120_000;
 const MIN_REMAINING_MS = 5_000;
+/** §S-8-2: 取り込みで親の版の取得記録を読みに行くのに要る残り時間（これより少なければ次の reconcile に回す） */
+const CARRY_MIN_REMAINING_MS = 15_000;
+/** §S-8-2 裁定 3: その先送りの上限（1 つの job で。超えたら引き継ぎなしで取り込む） */
+export const CARRY_DEFER_MAX = 3;
+/** §S-8-3 裁定 1: 前の job の画像も合わせた 1 版の異なる image_id の上限（この job が作った分は IMAGE_JOB_LIMIT まで） */
+export const IMAGE_TOTAL_LIMIT = 16;
+
+/** generatedImage の結果: 画像 / 依頼は正しいが元の物体が R2 に無い（親の版から写すのを試す）/ 受け付けない */
+type GeneratedImage = { format: string; bytes: Uint8Array } | { missing: true; format: string; sha256: string } | null;
+const sha256Hex = async (bytes: Uint8Array): Promise<string> =>
+  [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');
 /**
  * 保存済みの走査から集計（agg / 続き位置）だけを捨て、連続時間切れの回数（stalls・ctx）は残す。
  * pages=0 の state は decideResume が必ず restart にし、carriedStalls は stalls を引き継ぐ（scan.ts の契約）
@@ -895,6 +931,8 @@ interface ReconcileState {
    * 値は毎回 (前の info_event_ids ∩ 今の idle の event_ids) ∪ 今回処理する id（今の待ちの分だけ。件数の上限は置かない）
    */
   info_event_ids?: string[];
+  /** §S-8-2 裁定 3: 親の版の記録を読む時間が無くて取り込みを先送りした回数（CARRY_DEFER_MAX まで） */
+  carry_defers?: number;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -1546,20 +1584,62 @@ class Reconciler {
   }
 
   /**
-   * §O-7（旧 §M-2-7 2）: image_id の画像を D1 と R2 から採る。条件（すべて）: 依頼の job_id がこの job・state = 'done'・
+   * §O-7（旧 §M-2-7 2）: image_id の画像を D1 と R2 から採る。条件（すべて）: 依頼の job_id がこの job（§S-8-3: または同じ素材の、この job より前の job）・state = 'done'・
    * R2 の r2_key の物体があり SHA-256 が sha256 と一致・大きさ ≤ MAX_FILE_BYTES。違えば null（bad_image_ref）。
    * format が拡張子と同じかは呼び出し側が path ごとに見る。先頭バイトの検査は従来どおり validateOutputs が掛ける
    */
-  private async generatedImage(job: JobRow, imageId: string): Promise<{ format: string; bytes: Uint8Array } | null> {
+  private async generatedImage(job: JobRow, imageId: string): Promise<GeneratedImage> {
     const row = await getImage(this.db, imageId);
-    if (!row || row.job_id !== job.id || row.state !== 'done' || !row.r2_key || !row.sha256 || !row.format) return null;
+    if (!row || row.state !== 'done' || !row.r2_key || !row.sha256 || !row.format) return null;
+    if (row.job_id !== job.id && !(await this.isPreviousJobOfMaterial(job, row.job_id))) return null; // §S-8-3: 別の素材・後の job の画像は拒む
     const obj = await this.env.R2.get(row.r2_key);
+    // §S-8-3 裁定 2: 依頼は正しいが元の物体が無い（30 日後の掃除）→ 呼び出し側が親の版の R2 の同じ path を試す
+    if (!obj) return { missing: true, format: row.format, sha256: row.sha256 };
+    const bytes = new Uint8Array(await obj.arrayBuffer());
+    if (bytes.byteLength > MAX_FILE_BYTES) return null;
+    return (await sha256Hex(bytes)) === row.sha256 ? { format: row.format, bytes } : null;
+  }
+
+  /** §S-8-3: この job が作り直しで、otherJobId が同じ素材の、この job より前の job か（結果は 1 回の取り込みの中で覚える） */
+  private prevJobCache = new Map<string, boolean>();
+  private async isPreviousJobOfMaterial(job: JobRow, otherJobId: string): Promise<boolean> {
+    // レビュー裁定 2: 前の job の画像を受け付けるのは作り直し（rework かつ parent_version_id あり）だけ。draft は今までどおり拒む
+    if (otherJobId === job.id || job.kind !== 'rework' || !job.parent_version_id) return false;
+    const hit = this.prevJobCache.get(otherJobId);
+    if (hit !== undefined) return hit;
+    const owner = await first<{ ok: number }>(
+      this.db,
+      stmt('SELECT 1 AS ok FROM factory_jobs WHERE id = ? AND material_id = ? AND id <> ? AND created_at < ?', otherJobId, job.material_id, job.id, job.created_at),
+    );
+    this.prevJobCache.set(otherJobId, !!owner);
+    return !!owner;
+  }
+
+  /** §S-8-3 裁定 1: image_id が前の job（同じ素材・この job より前）の画像か。行が無い・この job の画像・別の素材の画像は false（この job の分に数える） */
+  private async isPreviousJobImage(job: JobRow, imageId: string): Promise<boolean> {
+    const row = await first<{ job_id: string }>(this.db, stmt('SELECT job_id FROM image_requests WHERE id = ?', imageId));
+    return !!row && row.job_id !== job.id && (await this.isPreviousJobOfMaterial(job, row.job_id));
+  }
+
+  /**
+   * §S-8-3 裁定 2: 元の画像が R2 に無い時、親の版（job.parent_version_id。同じ素材の版）の R2 の同じ path から写す。条件（すべて）:
+   * 親の版の material.json の同じ path の行が同じ image_id を指す・親の版の r2_prefix がこの素材の materials/{material_id}/ の中・
+   * {親の r2_prefix}{path} の物体がある・大きさ ≤ MAX_FILE_BYTES・SHA-256 が依頼の sha256 と一致。path は既存の検査（isSafeRelativePath）を通ったものだけ渡す
+   */
+  private async parentVersionImage(job: JobRow, path: string, imageId: string, want: { format: string; sha256: string }): Promise<{ format: string; bytes: Uint8Array } | null> {
+    if (!job.parent_version_id || !isSafeRelativePath(path)) return null;
+    const pv = await first<{ r2_prefix: string; material_json: string }>(
+      this.db,
+      stmt('SELECT r2_prefix, material_json FROM material_versions WHERE id = ? AND material_id = ?', job.parent_version_id, job.material_id),
+    );
+    if (!pv || !pv.r2_prefix.startsWith(`materials/${job.material_id}/`) || !pv.r2_prefix.endsWith('/') || pv.r2_prefix.includes('..')) return null;
+    const prevRefs = imageRefsOf(pv.material_json);
+    if (!prevRefs.ok || !prevRefs.refs.some((r) => r.path === path && r.image_id === imageId)) return null;
+    const obj = await this.env.R2.get(pv.r2_prefix + path);
     if (!obj) return null;
     const bytes = new Uint8Array(await obj.arrayBuffer());
     if (bytes.byteLength > MAX_FILE_BYTES) return null;
-    const digest = await crypto.subtle.digest('SHA-256', bytes);
-    const sha = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-    return sha === row.sha256 ? { format: row.format, bytes } : null;
+    return (await sha256Hex(bytes)) === want.sha256 ? { format: want.format, bytes } : null;
   }
 
   /** §B-4-d 手順 6: inspected → listed → ingested → versioned。各段階の途中経過は reconcile_state_json に置き、ページ / ファイル単位で再開する */
@@ -1642,7 +1722,8 @@ class Reconciler {
     for (const name of new Set(rawNames)) {
       const obj = await this.env.R2.get(`${prefix}raw/${name}`);
       if (!obj) {
-        await this.writeState(job, 'listed', { files: state.files, done: [] }); // raw/ に無い → 取り直す
+        // raw/ に無い → 取り直す（§S-8-2 の先送りの回数は持ち越す）
+        await this.writeState(job, 'listed', { files: state.files, done: [], ...(state.carry_defers !== undefined ? { carry_defers: state.carry_defers } : {}) });
         return 'refetch';
       }
       raw.set(name, new Uint8Array(await obj.arrayBuffer()));
@@ -1665,10 +1746,19 @@ class Reconciler {
       await this.casJob('last_error = ?', '', `too_many_files:${rawCount + refPaths.size}`);
       return this.fail(job, 'invalid_outputs');
     }
-    const imageIdsSeen = new Set<string>();
+    // §S-8-3 裁定 1: この job が作った image_id（前の job の画像と分からないものを含む）は 8 枚まで、前の job の画像と合わせて 16 枚まで。
+    // 前の job の画像が無い draft は従来どおり「異なる image_id が 8 を超えたら」。分類は D1 だけで行い、R2 は読まない
+    const ownIds = new Set<string>();
+    const prevIds = new Set<string>();
     for (const ref of refs) {
-      imageIdsSeen.add(ref.image_id);
-      if (imageIdsSeen.size > IMAGE_JOB_LIMIT) {
+      if (ownIds.has(ref.image_id) || prevIds.has(ref.image_id)) continue;
+      if (ownIds.size + prevIds.size + 1 > IMAGE_TOTAL_LIMIT) {
+        await this.casJob('last_error = ?', '', `bad_image_ref:${ref.path}`.slice(0, 200));
+        return this.fail(job, 'invalid_outputs');
+      }
+      if (await this.isPreviousJobImage(job, ref.image_id)) prevIds.add(ref.image_id);
+      else ownIds.add(ref.image_id);
+      if (ownIds.size > IMAGE_JOB_LIMIT) {
         await this.casJob('last_error = ?', '', `bad_image_ref:${ref.path}`.slice(0, 200));
         return this.fail(job, 'invalid_outputs');
       }
@@ -1681,7 +1771,7 @@ class Reconciler {
     const files = new Map<string, Uint8Array>();
     for (const [logical, base] of layout.files) files.set(logical, raw.get(base)!);
     // 同じ image_id は 1 回だけ読む（契約は 2 つの path からの参照を禁じていないので許し、同じバイト列を両方の path に置く）
-    const loaded = new Map<string, { format: string; bytes: Uint8Array } | null>();
+    const loaded = new Map<string, GeneratedImage>();
     const pathImage = new Map<string, string>();
     for (const ref of refs) {
       // 同じ path の重複した参照: 同じ image_id なら 1 回だけ置く。別の image_id なら後の参照を検査せずに通さない（取り違え・別 job の画像の混入を防ぐ）
@@ -1693,7 +1783,8 @@ class Reconciler {
       }
       pathImage.set(ref.path, ref.image_id);
       if (!loaded.has(ref.image_id)) loaded.set(ref.image_id, await this.generatedImage(job, ref.image_id));
-      const img = loaded.get(ref.image_id) ?? null;
+      const got = loaded.get(ref.image_id) ?? null;
+      const img = got && 'missing' in got ? await this.parentVersionImage(job, ref.path, ref.image_id, got) : got;
       const ext = ref.path.endsWith('.webp') ? 'webp' : ref.path.endsWith('.png') ? 'png' : null;
       if (!img || ext === null || img.format !== ext) {
         await this.casJob('last_error = ?', '', `bad_image_ref:${ref.path}`.slice(0, 200));
@@ -1752,7 +1843,27 @@ class Reconciler {
       await this.writeState(job, 'ingested', state);
     }
     // §Q-11 9: 版の動画（versionVideosOf と同じ読み方）を渡す。動画に紐づく行（動画の出典）だけを、開けたか・引用の検査から外す
-    const cit = finishCitations(ev.acc, citeSources, versionVideosOf(dec.decode(files.get('material.json')!)));
+    const videosOfVersion = versionVideosOf(dec.decode(files.get('material.json')!));
+    const sessionCit = finishCitations(ev.acc, citeSources, videosOfVersion);
+    // §S-8-2: 作り直しは、この session で開いていない出典を親の版の取得記録で確かめたことにできる。読むのは親の版の R2 にある記録だけ
+    // （親の events は読まず、親の記録も書かない。レビュー裁定 1）。無い・読めない時は引き継がない（取り込みは失敗させない・carried の項目も付けない）。
+    // 読み始める時間も残っていなければ、版を書かずに次の reconcile へ回す（events の集計は保存済みなので、次はこの段から始まる）
+    let cit = sessionCit;
+    // 裁定 3: 先送りは 1 つの job で CARRY_DEFER_MAX 回まで（reconcile_state_json.carry_defers）。使い切ったら引き継ぎなしで取り込む
+    if (job.kind === 'rework' && job.parent_version_id) {
+      const defers = Number.isInteger(state.carry_defers) ? state.carry_defers! : 0;
+      const short = Date.now() > this.deadline - CARRY_MIN_REMAINING_MS;
+      if (short && defers < CARRY_DEFER_MAX) {
+        state = { ...state, carry_defers: defers + 1 };
+        await this.writeState(job, null, state);
+        throw new OutOfTime();
+      }
+      if (!short) {
+        await this.extend();
+        const carry = await carryForIngest(this.env, job);
+        if (carry) cit = applyCarry(sessionCit, citeSources, videosOfVersion, carry.records, Date.now());
+      }
+    }
     const grader = ev.grader;
 
     const texts = new Map<string, string>();

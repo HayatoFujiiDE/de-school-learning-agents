@@ -33,7 +33,7 @@ export { createFakeOEmbedPort } from './youtube-oembed';
 export { topicFetch } from './topics';
 
 /** 入口（§K-8）の fixture。job の scenario ではない */
-const INTAKE_FIXTURE_DIRS = ['scout', 'meeting'];
+const INTAKE_FIXTURE_DIRS = ['scout', 'meeting', 'retro'];
 
 interface Call {
   op: string;
@@ -489,6 +489,26 @@ export function createFakePort(env: Env): FactoryPort {
         const rt = typeof k.fake_batch_result === 'string' ? k.fake_batch_result : 'succeeded';
         if (rt !== 'succeeded') return [{ custom_id: c.custom_id ?? '', result: { type: rt } } as unknown as MessageBatchIndividualResponse];
         const message = verifierReply(VERIFIER_FAKE_MODEL, c.verify.claims_text, c.verify.assistant_turns, c.verify.figures ?? [], c.verify.videos ?? []);
+        return [{ custom_id: c.custom_id ?? '', result: { type: 'succeeded', message } } as unknown as MessageBatchIndividualResponse];
+      }
+      // 振り返り係（§S-4）: custom_id が振り返りの job_id（job_retros の submitted の行）なら retro の fixture を返す（本番のコードは分けない）
+      const retro = c.custom_id
+        ? await db.prepare("SELECT 1 AS x FROM job_retros WHERE job_id = ? AND status = 'submitted'").bind(c.custom_id).first<{ x: number }>()
+        : null;
+      if (retro) {
+        const rf = JSON.parse(FIXTURE_FILES['retro/results.json'] ?? '{}') as { result_type?: string; stop_reason?: string; usage?: Record<string, number>; output?: unknown };
+        if (rf.result_type && rf.result_type !== 'succeeded') return [{ custom_id: c.custom_id ?? '', result: { type: rf.result_type } } as unknown as MessageBatchIndividualResponse];
+        const message = {
+          id: `msg_fake_${crypto.randomUUID().slice(0, 8)}`,
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-sonnet-5-5',
+          container: null,
+          content: [{ type: 'text', text: JSON.stringify(rf.output ?? {}), citations: null }],
+          stop_reason: rf.stop_reason ?? 'end_turn',
+          stop_sequence: null,
+          usage: { cache_creation_input_tokens: 0, cache_read_input_tokens: 0, ...(rf.usage ?? {}) },
+        };
         return [{ custom_id: c.custom_id ?? '', result: { type: 'succeeded', message } } as unknown as MessageBatchIndividualResponse];
       }
       const fx = JSON.parse(FIXTURE_FILES['meeting/results.json'] ?? '{}') as {
