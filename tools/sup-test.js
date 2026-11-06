@@ -41,7 +41,8 @@ var good = C.normalize({
   ideas: [{ id: 'i1', msgId: 'm1', text: 't', catalogId: null, state: 'planned', rowId: 'p9', day: '11/2', time: '10:20', foo: 1 }, { id: 'i2', text: 't', state: 'x' }],
   advice: [{ id: 'a1', aim: 'ねらい', state: 'new', stages: { view: 'v', trial: 3 } }],
   notes: [{ id: 'n1', axis: 'int', text: 'x', day: '11/2', time: '10:20' }, { id: 'n2', axis: 'zz', text: 'x' }],
-  report: { edits: { a: 'x', b: 2 }, off: { a: true, b: 'y' }, extra: 'e', state: 'sent', sentAt: '11/2 10:20', body: [{ id: 'talk' }] },
+  report: { edits: { a: 'x', b: 2 }, off: { a: true, b: 'y' }, extra: 'e', state: 'sent', sentAt: '11/2 10:20',
+    body: [{ id: 'talk', head: 'H', items: [{ id: 'r-t1', text: 'T', orig: 'O', src: 'own', edited: 'yes', off: true, zz: 1 }], note: 3, qq: 1 }, { id: 'extra', text: 'e' }] },
   logFilter: 'make', helped: { odai: { 'od-a': true, 'od-b': 1 } }
 });
 eq(good.join, { child: 'haruto', stance: 'voice', since: '10:20' }, 'normalize join の知らない欄を捨てる');
@@ -50,8 +51,23 @@ eq(good.log, [{ id: 'l1', day: '11/2', time: '10:20', scene: 'talk', how: 'proxy
 eq(good.ideas, [{ id: 'i1', msgId: 'm1', text: 't', catalogId: null, state: 'planned', day: '11/2', time: '10:20', rowId: 'p9' }], 'normalize ideas');
 eq(good.advice[0].stages, { view: 'v', trial: null, result: null, update: null }, 'normalize advice の段は 文 か null');
 eq(good.notes.map(function (n) { return n.id; }), ['n1'], 'normalize notes の知らない軸を捨てる');
-eq(good.report, { edits: { a: 'x' }, off: { a: true }, extra: 'e', state: 'sent', sentAt: '11/2 10:20', body: [{ id: 'talk' }] }, 'normalize report（body は配列か null）');
+eq(good.report, { edits: { a: 'x' }, off: { a: true }, extra: 'e', state: 'sent', sentAt: '11/2 10:20',
+  body: [{ id: 'talk', head: 'H', items: [{ id: 'r-t1', text: 'T', orig: 'O', src: 'own', edited: false, off: true }] }, { id: 'extra', text: 'e' }] }, 'normalize report（body の中身の形を確かめ、知らない欄・形の違う欄を捨てる）');
 eq(C.normalize({ report: { body: 'x' } }).report.body, null, 'normalize report.body 形が違えば null');
+// 壊れた写し（W2 レビュー 6）: 中身の形が違えば body = null・確かめた / 送った は下書きに戻す
+function nb(r) { var x = C.normalize({ report: r }).report; return [x.state, x.body, x.sentAt]; }
+var okSec = { id: 'talk', head: 'H', items: [{ id: 'i', text: 't', src: 'own' }] };
+eq(nb({ state: 'checked', body: [okSec, { id: 'own', head: 'H', items: [{ id: 'j', text: 3, src: 'calc' }] }] }), ['draft', null, null], 'normalize body の項目の text が文字列でない → null・checked は下書きに');
+eq(nb({ state: 'sent', sentAt: '11/2 10:20', body: [okSec, { id: 'x', items: [] }] }), ['draft', null, null], 'normalize body の節に head が無い → null・sent は下書きに（sentAt も消す）');
+eq(nb({ state: 'checked', body: [okSec, 'zz'] }), ['draft', null, null], 'normalize body に節でないもの → null');
+eq(nb({ state: 'checked', body: [{ id: 'talk', head: 'H', items: 'x' }] }), ['draft', null, null], 'normalize body の items が配列でない → null');
+eq(nb({ state: 'checked', body: [] }), ['draft', null, null], 'normalize body が空 → null');
+eq(nb({ state: 'checked', body: null }), ['draft', null, null], 'normalize checked で body が null → 下書きに');
+eq(nb({ state: 'sent', sentAt: '11/2 10:20' }), ['draft', null, null], 'normalize sent で body が無い → 下書きに');
+eq(nb({ state: 'checked', body: [okSec, { id: 'extra', text: 'e' }] }), ['checked', [{ id: 'talk', head: 'H', items: [{ id: 'i', text: 't', src: 'own', edited: false, off: false }] }, { id: 'extra', text: 'e' }], null], 'normalize 形の合った写しは checked のまま');
+var frozenOk = C.reportFreeze(C.reportDraft({ report: SD.report, fade: [], plan: D.plan, text: SD.text, names: NAMES }), 'x');
+eq(C.normalize({ report: { state: 'checked', body: frozenOk } }).report.body, frozenOk, 'normalize reportFreeze の写しはそのまま読める');
+eq(C.normalize({ report: { state: 'draft', body: [okSec] } }).report.state, 'draft', 'normalize draft は draft のまま');
 eq(good.logFilter, 'make', 'normalize logFilter');
 eq(good.helped, { odai: { 'od-a': true } }, 'normalize helped（true だけ）');
 eq(C.normalize({ helped: { odai: [] } }).helped, { odai: {} }, 'normalize helped 形が違えば { odai: {} }');
@@ -206,6 +222,11 @@ eq(fl.map(function (l) { return l.kind; }), ['up', 'flat', 'none'], 'fadeLines �
 eq(fl[0].line, '予定を決める: 10/5 の週は 6 回のうち自分で 1 回。今週は 4 回のうち 3 回。自分で進める割合が上がっている', 'fadeLines up の文');
 eq(fl[1].line, 'バディに話す: 10/12 の週は 2 回のうち自分で 2 回。今週は 2 回のうち 1 回。田中さんと一緒に進めている', 'fadeLines flat の文（最初の回数 > 0 の週と比べる）');
 eq(fl[2].line, '作る: 今週の記録はこれから', 'fadeLines none の文');
+// 過去の週がすべて 0 回: 今週と今週を比べず、今週だけの文（fade_only）
+var flOnly = C.fadeLines([{ scene: 'plan', label: '予定を決める', weeks: [{ label: '10/5 の週', own: 0, cue: 0, by: 0 }, { label: '10/12 の週', own: 0, cue: 0, by: 0 }, { label: '今週', own: 1, cue: 0, by: 2 }] }], SD.text, NAMES);
+eq([flOnly[0].kind, flOnly[0].line], ['flat', '予定を決める: 今週は 3 回のうち自分で 1 回'], 'fadeLines 過去の週がすべて 0 回 → fade_only');
+eq(C.reportDraft({ report: SD.report, fade: [{ scene: 'plan', label: '予定を決める', weeks: [{ label: '10/5 の週', own: 0, cue: 0, by: 0 }, { label: '今週', own: 1, cue: 0, by: 2 }] }], plan: [], text: SD.text, names: NAMES })[4].items[0].text,
+  '予定を決めるは、田中さんと一緒に進めています（今週: 3 回のうち自分で 1 回）', 'reportDraft 過去の週がすべて 0 回 → 比べない文');
 
 // ---------- howCounts ----------
 eq(C.howCounts([{ day: '11/2', how: 'proxy' }, { day: '11/2', how: 'proxy' }, { day: '11/2', how: 'voice' }, { day: '11/2', how: 'in' }, { day: '10/30', how: 'hands' }, { day: '11/4', how: 'idea' }], ['11/2', '11/4', '11/6']),
@@ -346,6 +367,28 @@ var keys = {}, km, KRE = /(?:^|[^.\w])t\('([a-z0-9_]+)'\s*[,)]/g;
 while ((km = KRE.exec(viewSrc))) keys[km[1]] = true;
 var missing = Object.keys(keys).filter(function (k) { return SD.text[k] == null; });
 ok(Object.keys(keys).length > 50 && !missing.length, 'W2 sup-view.js の文言 key が supData.text に在る' + (missing.length ? ' 無い: ' + missing.join(',') : ''));
+// 接頭辞つきの動的 key（t('how_' + …) など）: 接頭辞ごとに取りうる値を列挙して在るか見る。知らない接頭辞が増えたら FAIL（列挙を足す）
+var DYN = {
+  src_: ['own', 'record', 'ai', 'gap'], ad_scene_: ['none', 'talk', 'plan', 'make', 'today'], ad_st_: ['new', 'waiting', 'adjusted', 'tried', 'pending', 'withdrawn'],
+  how_: ['proxy', 'hands', 'voice', 'idea', 'in', 'out', 'desk'], sc_: ['plan', 'talk', 'make', 'works', 'today', 'join', 'advice', 'note', 'report'],
+  lg_f_: C.FILTERS, rp_st_: ['draft', 'checked', 'sent'], ad_e: ['2', '3', '4', '5'], ad_s: ['1', '2', '3', '4', '5'], tab_: ['today', 'clues', 'advice', 'log', 'report'],
+  ph_: C.STANCES, stance_: C.STANCES, mode_: ['js', 'es'], log_idea_: ['withdraw', 'back']
+};
+var seenPre = {}, DRE = /(?:^|[^.\w])(?:t|SUP\.t)\('([a-z0-9_]+_)'\s*\+/g, dm;
+['sup-view.js', 'sup.js'].forEach(function (f) { var src = fs.readFileSync(path.join(JS, f), 'utf8'); while ((dm = DRE.exec(src))) seenPre[dm[1]] = true; });
+var unknownPre = Object.keys(seenPre).filter(function (p) { return !DYN[p]; });
+var dynMissing = [];
+Object.keys(seenPre).forEach(function (p) { (DYN[p] || []).forEach(function (v) { if (SD.text[p + v] == null) dynMissing.push(p + v); }); });
+ok(Object.keys(seenPre).length >= 6 && !unknownPre.length && !dynMissing.length, 'W2 接頭辞つきの動的 key がすべて在る' + (unknownPre.length ? ' 列挙の無い接頭辞: ' + unknownPre.join(',') : '') + (dynMissing.length ? ' 無い: ' + dynMissing.join(',') : ''));
+// 三項演算子・対応表・凡例で選ぶ key（t(c ? 'a' : 'b') / IDEA_LABEL / PROP_LABEL / 凡例の配列）
+var picked = [], pm, PRE = /'([a-z][a-z0-9]*_[a-z0-9_]+)'/g, blocks = [];
+var TRE = /(?:^|[^.\w])t\(([^()]*\?[^()]*)\)/g;
+while ((pm = TRE.exec(viewSrc))) blocks.push(pm[1]);
+['IDEA_LABEL', 'PROP_LABEL'].forEach(function (n) { var m = new RegExp('var ' + n + ' = \\{([^}]*)\\}').exec(viewSrc) || new RegExp(n + ' = \\{([^}]*)\\}').exec(viewSrc); if (m) blocks.push(m[1].replace(/\w+:/g, '')); });
+var lg = /\[\['own', 'fd_own'\][^;]*?\]\]/.exec(viewSrc); if (lg) blocks.push(lg[0]);
+blocks.forEach(function (b) { while ((pm = PRE.exec(b))) picked.push(pm[1]); });
+var pickMissing = picked.filter(function (k) { return SD.text[k] == null; });
+ok(picked.length >= 18 && !pickMissing.length, 'W2 三項演算子・対応表・凡例で選ぶ key が在る（' + picked.length + ' 件）' + (pickMissing.length ? ' 無い: ' + pickMissing.join(',') : ''));
 
 console.log('sup-test: ' + pass + ' pass, ' + fail + ' fail');
 console.log('SUP_TEST=' + (fail ? 'FAIL' : 'PASS'));

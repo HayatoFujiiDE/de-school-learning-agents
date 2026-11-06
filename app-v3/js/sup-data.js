@@ -187,7 +187,7 @@
       sc_plan: '予定', sc_talk: '話す', sc_make: '作る', sc_works: '作品', sc_today: '今日のお題', sc_join: '一緒に入る', sc_advice: '助言', sc_note: '観察', sc_report: 'レポート',
       // レポート
       rp_sub: 'おうちの人に届ける 1 週間のまとめの下書き。直す・載せない・補足する ができる。送る前に{sup}が確かめる',
-      rp_rule1: '予定だけのことは「これから」に分ける', rp_rule2: '気持ちの見立ては入れない', rp_rule3: 'ほかの子のことは入れない',
+      rp_rule1: '予定だけのことは『これから』に分ける', rp_rule2: '気持ちの見立ては入れない', rp_rule3: 'ほかの子のことは入れない',
       rp_span: '{from}〜{to}', rp_st_draft: '下書き', rp_st_checked: '確かめた', rp_st_sent: '送った',
       rp_src_own: '本人の言葉', rp_src_record: '記録', rp_src_calc: '記録から', rp_edited: '{sup}が直した', rp_off_chip: '載せない',
       rp_edit: '直す', rp_restore: '元の文に戻す', rp_off: '載せない', rp_on: '載せる',
@@ -202,7 +202,9 @@
       // W2 で足した文言（観察メモの「元に戻す」の記録）
       log_note_back: '{axis}の観察を戻した',
       // W1 レビューの直しで足した書式（日付・時間帯）
-      date_fmt: '{m}/{d}（{w}）', range_fmt: '{start}〜{end}'
+      date_fmt: '{m}/{d}（{w}）', range_fmt: '{start}〜{end}',
+      // W2 レビューの直しで足した文（過去の週がすべて 0 回の時の読み取り）
+      fade_only: '{label}: 今週は {n1} 回のうち自分で {o1} 回'
     }
   };
   DES.supData = SD;

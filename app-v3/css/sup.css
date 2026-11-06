@@ -89,7 +89,8 @@ html[data-mode="es"] .sup-form textarea,html[data-mode="es"] .sup-field textarea
 /* 手がかり・レポートの畳み（<details>） */
 .sup-page summary{cursor:pointer;min-height:44px;padding:11px 0;font-size:12px;font-weight:600;color:var(--olive);line-height:1.6}
 /* 開いた時にフォーカスを置く行・カード（tabindex=-1）は輪を出さない（他ページと同じ） */
-.sp-idea:focus,.sup-note-row:focus,.sup-adv:focus,.rp-item:focus,.sup-dialog h2:focus{outline:none}
+.sp-idea:focus,.sup-note-row:focus,.sup-adv:focus,.rp-item:focus,.rp-st:focus,.sup-dialog h2:focus{outline:none}
+.sp-idea:focus-visible,.sup-note-row:focus-visible,.sup-adv:focus-visible,.rp-item:focus-visible,.rp-st:focus-visible,.sup-dialog h2:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
 
 /* ---------- 教室の一覧（AD-7）: ≥ 951 は 名前 | 今 | 次 | 相談 | 確認 | 操作 の 6 列 / それ以下は縦に積む ---------- */
 .sup-kids{list-style:none;margin:0;padding:0;display:grid;gap:10px}

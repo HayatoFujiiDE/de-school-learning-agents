@@ -190,10 +190,15 @@
     var v = vv(), busy = !!DES.ui.sending;
     var ideas = SUP.ideas().slice().reverse();
     var list = ideas.length ? H('ul', { class: 'sp-ideas' }, ideas.map(function (x) {
-      var view = SUP.ideaView(x.id), st = view ? view.state : x.state;
+      var view = SUP.ideaView(x.id), st = view ? view.state : x.state, label = t(IDEA_LABEL[st]), again = null;
+      // 子どもの画面のカードと同じ状態表示: 予定から外した行 → 「予定から外した」+「予定に入れる」をもう一度 / 終わった行 → 「終わった」
+      if (st === 'planned' && view && view.row && view.row.gone === 'removed') {
+        label = t('st_removed');
+        if (x.catalogId && DES.plan.item(x.catalogId)) again = btn(DES.t('idea_plan'), 'idea-plan', { id: x.id });
+      } else if (st === 'planned' && view && view.row && view.row.gone === 'finished') label = t('st_finished');
       return H('li', { class: 'sp-idea', 'data-fk': 'idea:' + x.id, tabindex: '-1' }, [
         H('span', { class: 'sp-say' }, x.text),
-        H('span', { class: 'sp-idea-foot' }, [H('span', { class: 'pill' }, t(IDEA_LABEL[st])), SUP.canWithdraw(x.id) ? link(t('withdraw'), 'idea-withdraw', { id: x.id }) : null])
+        H('span', { class: 'sp-idea-foot' }, [H('span', { class: 'pill' }, label), again, SUP.canWithdraw(x.id) ? link(t('withdraw'), 'idea-withdraw', { id: x.id }) : null])
       ]);
     })) : H('p', { class: 'sup-empty' }, t('td_idea_none'));
     return box('idea', t('td_idea_h'), [
@@ -280,14 +285,14 @@
     return out;
   }
   function noteRow(n) {
-    var v = vv(), ax = SD.axisHead[n.axis];
+    var v = vv();
     if (v.noteEdit[n.id] != null) {
       return H('li', { class: 'sup-note-row is-edit', 'data-fk': 'note:' + n.id }, [editor({
         id: n.id, fk: 'note-ed:' + n.id, ui: 'sv-note-edit', label: t('cl_obs'), ph: t('cl_obs_ph'), value: v.noteEdit[n.id], need: v.noteEdit[n.id],
         save: 'sup-note-update', cancel: 'sup-note-ecancel', rows: 2
       })]);
     }
-    return H('li', { class: 'sup-note-row', 'data-fk': 'note:' + n.id, tabindex: '-1', 'aria-label': ax }, [
+    return H('li', { class: 'sup-note-row', 'data-fk': 'note:' + n.id, tabindex: '-1' }, [
       H('div', { class: 'srow-meta' }, [recChip(t('cl_obs')), stamp(n.day, n.time)]),
       H('span', { class: 'srow-text' }, n.text),
       H('span', { class: 'sup-row-ops' }, [link(t('edit'), 'sup-note-edit', { id: n.id }), link(t('remove'), 'sup-note-del', { id: n.id })])
@@ -336,6 +341,10 @@
     x = clone(s);
     x.added = false;
     x.prev = null;
+    // 写す時に {sup} {child} を埋めた文にする（記録と画面が同じ文になる。直した文には埋め込みをかけない）
+    x.aim = nm(s, s.aim);
+    x.basis = s.basis == null ? null : nm(s, s.basis);
+    ['view', 'trial', 'result', 'update'].forEach(function (k) { if (x.stages && x.stages[k] != null) x.stages[k] = nm(s, x.stages[k]); });
     St().advice = (St().advice || []).concat([x]);
     return x;
   }
@@ -361,7 +370,7 @@
   }
   function advDirty() { var a = vv().adv; return !!(a.aim || a.basis || (a.scene && a.scene !== 'none')); }
   // seed の文の {sup} {child} を埋める（足した文は自由入力なので埋めない）
-  function nm(x, s) { return x && !x.added ? C.fmt(s, SUP.names()) : s; }
+  function nm(x, s) { return SD.advice.indexOf(x) >= 0 ? C.fmt(s, SUP.names()) : s; }
   function stageDd(x, text, empty) { return text ? H('dd', null, nm(x, text)) : H('dd', { class: 'is-empty' }, t(empty)); }
   function adviceCard(x) {
     var ed = vv().advEdit[x.id], wd = x.state === 'withdrawn', st = x.stages || {};
@@ -472,17 +481,19 @@
   // ======================================================================
   // 画面と「届く形」に出す中身: 確かめた・送った の間は body（写し）、下書きの間は今の記録から作る
   function reportNow() {
-    var rp = St().report, draft = SUP.reportDraft(), b = rp.state !== 'draft' && rp.body ? C.reportThaw(rp.body) : null;
-    return { rp: rp, draft: draft, frozen: !!b, sections: b ? b.sections : draft, extra: b ? b.extra : rp.extra, stale: !!b && !C.reportSame(rp.body, draft, rp.extra) };
+    var rp = St().report, draft = SUP.reportDraft(), b = rp.state !== 'draft' && rp.body ? C.reportThaw(rp.body) : null, ids = {};
+    draft.forEach(function (s) { s.items.forEach(function (it) { ids[it.id] = true; }); });
+    return { rp: rp, draft: draft, ids: ids, frozen: !!b, sections: b ? b.sections : draft, extra: b ? b.extra : rp.extra, stale: !!b && !C.reportSame(rp.body, draft, rp.extra) };
   }
   function srcOf(src) { return src === 'own' ? srcChip('own', t('rp_src_own')) : srcChip('record', t(src === 'calc' ? 'rp_src_calc' : 'rp_src_record')); }
-  function rpItem(it, locked) {
-    var ed = vv().rpEdit[it.id];
+  // live = 今の記録にもある項目。写しにだけある項目（確かめた後に消えた行など）は 直す・載せない を出さない（rp_stale の文で案内）
+  function rpItem(it, locked, live) {
+    var ed = live ? vv().rpEdit[it.id] : null;
     var chips = [srcOf(it.src), it.edited ? recChip(t('rp_edited')) : null, it.off ? chip(t('rp_off_chip'), 'k-off') : null];
     var main = ed != null && !locked
       ? editor({ id: it.id, fk: 'rp-ed:' + it.id, ui: 'sv-rp-edit', label: t('rp_edit'), value: ed, need: ed, save: 'sup-rp-save', cancel: 'sup-rp-ecancel', rows: 3 })
       : H('p', { class: 'rp-text' }, it.text);
-    var ops = ed != null && !locked ? null : H('span', { class: 'sup-row-ops' }, [
+    var ops = (ed != null && !locked) || !live ? null : H('span', { class: 'sup-row-ops' }, [
       link(t('rp_edit'), 'sup-rp-edit', { id: it.id, disabled: locked }),
       it.edited ? link(t('rp_restore'), 'sup-rp-restore', { id: it.id, disabled: locked }) : null,
       link(t(it.off ? 'rp_on' : 'rp_off'), 'sup-rp-off', { id: it.id, disabled: locked })
@@ -495,8 +506,9 @@
       kids.push(H('button', { class: 'btn orange', type: 'button', 'data-action': 'sup-rp-check', 'data-fk': 'rp-main', disabled: !on }, t('rp_check')));
       if (!on) kids.push(H('p', { class: 'sup-warn' }, t('rp_need_one')));
     } else if (rp.state === 'checked') {
-      kids.push(H('span', { class: 'rp-send' }, [H('button', { class: 'btn orange', type: 'button', 'data-action': 'sup-rp-send', 'data-fk': 'rp-main' }, t('rp_send')), H('small', { class: 'sup-note' }, t('rp_send_note'))]));
+      // 「送る」は列の末尾（二度押しで「確かめた」の位置に来ないように。先頭側は「下書きに戻す」）
       kids.push(btn(t('rp_to_draft'), 'sup-rp-draft'));
+      kids.push(H('span', { class: 'rp-send' }, [H('button', { class: 'btn orange', type: 'button', 'data-action': 'sup-rp-send', 'data-fk': 'rp-main' }, t('rp_send')), H('small', { class: 'sup-note' }, t('rp_send_note'))]));
     } else {
       kids.push(H('span', { class: 'rp-sent' }, t('rp_sent_line', { at: rp.sentAt || '' })));
       kids.push(H('button', { class: 'btn small', type: 'button', 'data-action': 'sup-rp-draft', 'data-fk': 'rp-main' }, t('rp_to_draft')));
@@ -506,14 +518,14 @@
   RT.report = function (host) {
     var now = reportNow(), rp = now.rp, locked = rp.state === 'sent', span = SD.report.span;
     host.appendChild(H('div', { class: 'sup-lead' }, [H('p', null, t('rp_sub')), H('ul', { class: 'rp-rules' }, [t('rp_rule1'), t('rp_rule2'), t('rp_rule3')].map(function (x) { return H('li', null, x); }))]));
-    var kids = [H('div', { class: 'rp-head' }, [H('span', { class: 'rp-span' }, t('rp_span', { from: span[0], to: span[1] })), chip(t('rp_st_' + rp.state), 'rp-st rp-st-' + rp.state)])];
+    var kids = [H('div', { class: 'rp-head' }, [H('span', { class: 'rp-span' }, t('rp_span', { from: span[0], to: span[1] })), H('span', { class: 'chip rp-st rp-st-' + rp.state, 'data-fk': 'rp-state', tabindex: '-1' }, [H('span', null, t('rp_st_' + rp.state))])])];
     if (now.stale) kids.push(H('p', { class: 'sup-warn' }, t('rp_stale')));
     if (locked) kids.push(H('p', { class: 'sup-warn' }, t('rp_locked')));
     now.sections.forEach(function (s) {
       var hid = 'rps-' + s.id;
       kids.push(H('section', { class: 'rp-sec', 'aria-labelledby': hid }, [
         H('h2', { id: hid }, s.head),
-        s.items.length ? H('ul', { class: 'rp-items' }, s.items.map(function (it) { return rpItem(it, locked); })) : null,
+        s.items.length ? H('ul', { class: 'rp-items' }, s.items.map(function (it) { return rpItem(it, locked, !!now.ids[it.id]); })) : null,
         s.note ? H('p', { class: 'sup-note' }, s.note) : null
       ]));
     });
@@ -627,7 +639,7 @@
   A['sup-adv-edit'] = function (el) {
     var id = el.getAttribute('data-id'), x = find(adviceAll(), id);
     if (!x) return;
-    vv().advEdit[id] = { aim: x.aim, basis: x.basis || '' };
+    vv().advEdit[id] = { aim: nm(x, x.aim), basis: x.basis ? nm(x, x.basis) : '' };
     rerender('adv-ed-aim:' + id);
   };
   A['sup-adv-ecancel'] = function (el) { var id = el.getAttribute('data-id'); delete vv().advEdit[id]; DES.app.render(); focusSel(btnSel('sup-adv-edit', id)); };
@@ -636,7 +648,7 @@
     if (!e || !cur) return;
     var aim = trim(e.aim), basis = trim(e.basis) || null;
     if (!aim) return;
-    if (aim === cur.aim && basis === (cur.basis || null)) { delete v.advEdit[id]; DES.app.render(); focusSel(btnSel('sup-adv-edit', id)); return; }
+    if (aim === nm(cur, cur.aim) && basis === (cur.basis ? nm(cur, cur.basis) : null)) { delete v.advEdit[id]; DES.app.render(); focusSel(btnSel('sup-adv-edit', id)); return; }
     DES.app.change(function () {
       var x = adviceMine(id);
       x.aim = aim;
@@ -687,6 +699,7 @@
 
   // レポート
   function toDraft(rp) { if (rp.state === 'checked') { rp.state = 'draft'; rp.body = null; } }
+  function rpLive(id) { return !!reportNow().ids[id]; }
   function rpItemNow(id) {
     var hit = null;
     reportNow().sections.forEach(function (s) { (s.items || []).forEach(function (it) { if (it.id === id) hit = it; }); });
@@ -699,14 +712,14 @@
   }
   A['sup-rp-edit'] = function (el) {
     var id = el.getAttribute('data-id'), it = rpItemNow(id);
-    if (!it || St().report.state === 'sent') return;
+    if (!it || !rpLive(id) || St().report.state === 'sent') return;
     vv().rpEdit[id] = it.text;
     rerender('rp-ed:' + id);
   };
   A['sup-rp-ecancel'] = function (el) { var id = el.getAttribute('data-id'); delete vv().rpEdit[id]; DES.app.render(); focusSel(btnSel('sup-rp-edit', id)); };
   A['sup-rp-save'] = function (el) {
     var id = el.getAttribute('data-id'), v = vv(), text = trim(v.rpEdit[id]), rp = St().report, o = rpOrig(id);
-    if (!text || rp.state === 'sent') return;
+    if (!text || rp.state === 'sent' || !rpLive(id)) return;
     DES.app.change(function () {
       if (o && text === o.orig) delete rp.edits[id]; else rp.edits[id] = text;
       toDraft(rp);
@@ -716,42 +729,50 @@
   };
   A['sup-rp-restore'] = function (el) {
     var id = el.getAttribute('data-id'), rp = St().report;
-    if (rp.state === 'sent') return;
+    if (rp.state === 'sent' || !rpLive(id)) return;
     DES.app.change(function () { delete rp.edits[id]; toDraft(rp); }, { sel: btnSel('sup-rp-edit', id) });
   };
   A['sup-rp-off'] = function (el) {
     var id = el.getAttribute('data-id'), rp = St().report;
-    if (rp.state === 'sent') return;
+    if (rp.state === 'sent' || !rpLive(id)) return;
     DES.app.change(function () { if (rp.off[id]) delete rp.off[id]; else rp.off[id] = true; toDraft(rp); });
   };
+  // 確かめた → 送る → 下書きに戻す は、状態が変わった直後の押し直し（二度押し・連打）を受けない。フォーカスは状態チップへ移す
+  // 受けないのは「その遷移で作った状態のまま」の間だけ（補足の入力などで状態が変わっていれば、すぐ押せる）
+  var rpAt = 0, rpTo = null, RP_GAP = 600, RP_FOCUS = { sel: '[data-fk="rp-state"]', focus: 'rp-state' };
+  function rpBusy() { return Date.now() - rpAt < RP_GAP && St().report.state === rpTo; }
+  function rpMark(to) { rpAt = Date.now(); rpTo = to; }
   A['sup-rp-check'] = function () {
     var rp = St().report, d = SUP.reportDraft();
-    if (rp.state !== 'draft' || !C.reportOnCount(d)) return;
+    if (rpBusy() || rp.state !== 'draft' || !C.reportOnCount(d)) return;
+    rpMark('checked');
     DES.app.change(function () {
       rp.state = 'checked';
       rp.body = C.reportFreeze(d, rp.extra);
       SUP.addLog('report', 'desk', t('log_report_checked'));
-    }, { focus: 'rp-main' });
+    }, RP_FOCUS);
   };
   A['sup-rp-send'] = function () {
     var rp = St().report;
-    if (rp.state !== 'checked') return;
+    if (rpBusy() || rp.state !== 'checked') return;
+    rpMark('sent');
     DES.app.change(function () {
       rp.state = 'sent';
       rp.sentAt = SUP.today() + ' ' + DES.data.now;
       SUP.addLog('report', 'desk', t('log_report_sent'));
-    }, { focus: 'rp-main' });
+    }, RP_FOCUS);
     DES.app.toast(t('rp_sent_toast'));
   };
   A['sup-rp-draft'] = function () {
     var rp = St().report;
-    if (rp.state === 'draft') return;
+    if (rpBusy() || rp.state === 'draft') return;
+    rpMark('draft');
     DES.app.change(function () {
       rp.state = 'draft';
       rp.body = null;
       rp.sentAt = null;
       SUP.addLog('report', 'desk', t('log_report_draft'));
-    }, { focus: 'rp-main', sel: btnSel('sup-rp-preview') });
+    }, RP_FOCUS);
   };
   A['sup-rp-preview'] = function (el) { openPreview(el); };
 
