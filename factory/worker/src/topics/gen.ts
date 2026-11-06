@@ -213,20 +213,6 @@ export function genActualCents(msg: Pick<Message, 'usage'>): number {
   return microToCents(sonnetMicroDollars(u)) + (Number.isFinite(searches) && searches > 0 ? searches * WEB_SEARCH_CENTS : 0);
 }
 
-/**
- * 催促の 1 回の見込み（セント。v2.7 のレビューの裁定）: 催促の呼び出しはサーバーツールを使わない前提で、
- * 前半（それまでの会話）を cache read（$0.10 / 1M）で 1 回読み、出力を max_tokens まで出した額。
- * 前半の大きさは直前の呼び出しの usage の合計（入力 + cache write + cache read + 出力）で上から抑える
- * （サーバーツールのループの中では前半を何度も読むので、合計は最後の 1 回の入力より大きい）。
- * pause_turn の続きは開く・探すを続けるので、見込みは直前の 1 回の実額のまま（同じ仕事の続き）
- */
-export function nudgeEstimateCents(msg: Pick<Message, 'usage'>): number {
-  const u = msg.usage as Message['usage'] | undefined;
-  const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
-  const prefix = n(u?.input_tokens) + n(u?.cache_creation_input_tokens) + n(u?.cache_read_input_tokens) + n(u?.output_tokens);
-  return microToCents(sonnetMicroDollars({ cache_read_input_tokens: prefix, output_tokens: TOPIC_GEN_MAX_TOKENS }));
-}
-
 type RawBlock = { type?: unknown; id?: unknown; name?: unknown; tool_use_id?: unknown; content?: unknown };
 const SERVER_RESULT_TYPES = new Set(['web_fetch_tool_result', 'web_search_tool_result']);
 
@@ -690,7 +676,7 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
   }
   // 呼び出し（v2.7: 1 回 + 続き。再送なし・1 回ごとに絶対の締め切り = min(残り, 150 秒)）。
   // 続き: pause_turn か結果の無いサーバーツール → 応答の content を as-is で積んで同じ params で / end_turn で save_topics が無い → 催促を 1 回だけ足して。
-  // 有限: 続きは合計 TOPIC_GEN_MAX_CONTINUES 回・残りが TOPIC_CONTINUE_MIN_LEFT_MS 未満なら続けない・これまでの実額 + 次の 1 回の見込み（pause_turn の続き = 直前の 1 回の実額・催促 = nudgeEstimateCents）> 取り置き額なら続けない（cost_cap）
+  // 有限: 続きは合計 TOPIC_GEN_MAX_CONTINUES 回・残りが TOPIC_CONTINUE_MIN_LEFT_MS 未満なら続けない・これまでの実額 + 次の 1 回の見込み（直前の 1 回の実額。pause_turn の続きも催促も同じ）> 取り置き額なら続けない（cost_cap）
   const reserveCents = c.topicGenReserveCents;
   const messages: MessageParam[] = [...params.messages];
   const contents: unknown[][] = [];
@@ -752,16 +738,11 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
       stopWhy = 'no_time';
       break;
     }
-    // 次の 1 回の見込み: pause_turn の続き = 直前の 1 回の実額 / 催促 = 前半を cache read で読み + 出力 max_tokens（nudgeEstimateCents）
-    let estimate = lastCents;
-    if (next === 'nudge') {
-      try {
-        estimate = nudgeEstimateCents(msg);
-      } catch {
-        estimate = lastCents;
-      }
-    }
-    if (totalCents + estimate > reserveCents) {
+    // 次の 1 回の見込み = 直前の 1 回の実額（pause_turn の続きも催促も同じ。凍結 spec 2）。
+    // 催促は user の文 = 新しいターンなので、web_search / web_fetch の max_uses が新しくなり、開く・探すをもう一度全部できる
+    // （公式 web-search-tool の Max uses: 同じターンの続きは pause_turn の後か、最後の message が tool_result だけのリクエストだけ）。
+    // 「催促はサーバーツールを使わない」「前半はキャッシュに当たる」は強制も確認もできないので、安い見込みにしない
+    if (totalCents + lastCents > reserveCents) {
       stopWhy = 'cost_cap';
       break;
     }
