@@ -795,6 +795,14 @@ t('W-4 相手に見える内容（作品だけ / 流れも）', function () {
   var two = cl(py); two.roles.people = [{ name: 'A', n: 2 }, { name: 'B', n: 1 }];
   eq(W.shareItems(two, actOf(py), 'story')[4].roles.with, 3, 'W-4 複数の人もまとめて回数だけ（境界）');
   eq(W.shareItems(Object.assign(cl(py), { roles: null }), actOf(py), 'story')[4].roles, null, 'W-4 関わりが無ければ null（境界）');
+  // サポーターの手伝いは回数に入れない（contract-AD AD-0 / AD-10。sup-data が読まれている時、名前一致で見分ける）
+  var prevSup = global.DES.supData;
+  global.DES.supData = { supporter: { id: 'tanaka', name: '田中さん' } };
+  try {
+    eq(W.shareItems(py, actOf(py), 'story')[4].roles, { own: 4, ai: 1, with: 0, withSup: true }, 'AH 見せる: サポーターだけなら回数 0・いっしょに作った人がいる印');
+    var mix = cl(py); mix.roles.people = [{ name: '田中さん', n: 3 }, { name: 'A', n: 2 }];
+    eq(W.shareItems(mix, actOf(py), 'story')[4].roles, { own: 4, ai: 1, with: 2, withSup: true }, 'AH 見せる: ほかの人の回数だけ数える');
+  } finally { global.DES.supData = prevSup; }
 });
 t('W-6 見本の作品', function () {
   var acts = MD.seedActivities(), sw = MD.seedWorks(acts), g = W.group(sw);

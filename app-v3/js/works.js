@@ -154,9 +154,12 @@
     out.push(fr.length ? { k: 'pv_story', v: { n: fr.length } } : { k: 'pv_story_lost' });
     var read = w.from === 'capture' && w.read && w.read.text && !w.read.declined ? w.read.text : null;
     // 相手に見せるものには個人名を入れない（§W-4）: 手伝った人は名前でなく「いっしょに作った人 n 回」にまとめる。名前は本人の詳細だけ
-    var r = w.roles || null, withN = 0;
-    if (r && r.people) r.people.forEach(function (p) { withN += p.n || 0; });
-    out.push({ k: 'pv_roles', src: 'record', roles: r ? { own: r.own || 0, ai: r.ai || 0, with: withN } : null, read: read });
+    // サポーターの手伝いは回数に入れない（contract-AD AD-0 / AD-10: 子どもに見える面に手伝いの量を出さない。見分け方は make.js rolesParts と同じ名前一致）
+    var r = w.roles || null, withN = 0, withSup = false, sd = DES.supData && DES.supData.supporter, supName = sd ? sd.name : null;
+    if (r && r.people) r.people.forEach(function (p) { if (supName && p.name === supName) withSup = true; else withN += p.n || 0; });
+    var rr = r ? { own: r.own || 0, ai: r.ai || 0, with: withN } : null;
+    if (rr && withSup) rr.withSup = true;
+    out.push({ k: 'pv_roles', src: 'record', roles: rr, read: read });
     return out;
   }
 
@@ -548,6 +551,7 @@
   function ownPeople(r) {
     var parts = [T('roles_count', { who: T('who_own'), n: r.own })];
     if (r.with) parts.push(T('roles_count', { who: T('who_with'), n: r.with }));
+    else if (r.withSup) parts.push(T('who_with'));
     return parts.join(' · ');
   }
   function previewItem(it) {
