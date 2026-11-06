@@ -154,3 +154,139 @@ describe('出典カードの HTML（reviewHtml の中）', () => {
     expect(n(h, /data-videos="1"/g)).toBe(1);
   });
 });
+
+const md = (p: string) => readFileSync(new URL(`./fixtures/review-preview/files/${p}`, import.meta.url), 'utf8');
+const BASE = '/api/review/vfix-0001/files/';
+
+describe('教材プレビュー: [cN] は教材として見る時は出さない（inlineMd の中で外す）', () => {
+  it('opts.cites を渡すと参照を外して id を集める。渡さなければ今までどおり', () => {
+    const cites: string[] = [];
+    expect(R.inlineMd('さんそを はこぶ。[c1, c3] つぶ [c2]', { cites, known: {} })).toBe('さんそを はこぶ。 つぶ');
+    expect(cites).toEqual(['c1', 'c3', 'c2']);
+    expect(R.inlineMd('はこぶ [c1]')).toBe('はこぶ [c1]');
+  });
+
+  it('リンクの記法・コードの中・主張 id でない括弧は残す。known にある id（c 以外の形）も外す', () => {
+    const cites: string[] = [];
+    expect(R.inlineMd('[c1](https://example.org/a) と `[c2]` と [注] と [claim-a]', { cites, known: { 'claim-a': 0 } })).toBe(
+      '<a href="https://example.org/a" rel="noopener noreferrer" target="_blank">c1</a> と <code>[c2]</code> と [注] と',
+    );
+    expect(cites).toEqual(['claim-a']);
+  });
+
+  it('エスケープした後に外す（参照の中の記号でタグを作れない）', () => {
+    const cites: string[] = [];
+    const h = R.inlineMd('<b>x</b> [c1]', { cites, known: {} });
+    expect(h).toBe('&lt;b&gt;x&lt;/b&gt;');
+  });
+});
+
+describe('教材プレビュー: 本文（previewBodyHtml）', () => {
+  const d = fixture();
+  const p1 = d.version.material.parts[0];
+  const p2 = d.version.material.parts[1];
+  const model = R.sourceCardsOf(d);
+  const o = (x: Obj = {}) => ({
+    fileBase: BASE,
+    marks: true,
+    chips: true,
+    stick: true,
+    markIds: { c2: true, c5: true },
+    claimIdx: Object.fromEntries(d.claims.map((c: Obj, i: number) => [c.id, i])),
+    claimRef: R.claimRefsOf(d, model),
+    frame: 0,
+    pi: 0,
+    ...x,
+  });
+
+  it('本文に [c1] 等が出ない（印 OFF でも ON でも）', () => {
+    for (const marks of [false, true]) {
+      const h = R.previewBodyHtml(md('parts/p1/p1-elementary-short.md'), p1, o({ marks }));
+      expect(h).not.toMatch(/\[c\d/);
+    }
+  });
+
+  it('図と動画は先頭の段落の直後（2 つ目の段落より前）', () => {
+    const h = R.previewBodyHtml(md('parts/p1/p1-elementary-short.md'), p1, o());
+    const fig = h.indexOf('<figure class="mp-fig"><img alt="図" src="/api/review/vfix-0001/files/parts/p1/p1-figure-1.svg"></figure>');
+    const first = h.indexOf('data-para="0"');
+    const second = h.indexOf('data-para="1"');
+    expect(fig).toBeGreaterThan(first);
+    expect(fig).toBeLessThan(second);
+    const vid = h.indexOf('<div class="mp-video"><iframe src="https://www.youtube-nocookie.com/embed/abcdefghijk?start=30&amp;end=95&amp;rel=0"');
+    expect(vid).toBeGreaterThan(fig);
+    expect(vid).toBeLessThan(second);
+    expect(h).toContain('見どころ</span>細い血管の中を');
+    // youtube.com/embed は使わない
+    expect(h).not.toContain('youtube.com/embed');
+  });
+
+  it('型 4 の app.html は本文の上（sandbox="allow-scripts" だけ）', () => {
+    const h = R.previewBodyHtml(md('parts/p2/p2-elementary-short.md'), p2, o({ pi: 1 }));
+    const app = h.indexOf('<div class="mp-app"><iframe class="mp-app-frame" sandbox="allow-scripts" title="動かせるもの" src="/api/review/vfix-0001/files/parts/p2/p2-app.html"></iframe></div>');
+    expect(app).toBeGreaterThan(-1);
+    expect(app).toBeLessThan(h.indexOf('data-para="0"'));
+    expect(h).not.toContain('allow-same-origin');
+  });
+
+  it('型 4 以外の app.html は図と同じ位置。図の無い md（段落なし）でも図を出す', () => {
+    const part = { ...p1, kind: 3, files: [{ path: 'parts/p1/x-app.html' }, { path: 'parts/p1/a.png', alt: '<図>' }], videos: [] };
+    const h = R.previewBodyHtml('## 見出しだけ', part, o());
+    expect(h).toContain('alt="&lt;図&gt;"');
+    expect(h.indexOf('mp-app')).toBeGreaterThan(h.indexOf('見出しだけ'));
+    expect(R.previewBodyHtml('', part, o())).toContain('mp-fig');
+  });
+
+  it('段落・箇条に data-para（0 始まり）・data-head（先頭 20 字）・data-cl（主張の番号）', () => {
+    const h = R.previewBodyHtml(md('parts/p1/p1-elementary-short.md'), p1, o());
+    expect(n(h, /data-para="/g)).toBe(7);
+    expect(h).toContain('data-para="1" data-head="赤血球（せっけっきゅう）は、からだじゅう…" data-cl="0 2"');
+    expect(h).toContain('id="mp-p-0-0-4" data-para="4"');
+  });
+
+  it('動画の id が正しくない時は埋め込まない', () => {
+    const part = { ...p1, files: [], videos: [{ id: 'v1', youtube_id: 'bad"id', start_sec: 1, end_sec: 2 }] };
+    const h = R.previewBodyHtml('a', part, o());
+    expect(h).not.toContain('<iframe');
+    expect(h).toContain('埋め込みません');
+  });
+});
+
+describe('教材プレビュー: 枠（型の名前・最初にやること・要約・変奏の選び方）', () => {
+  it('型の名前は日本語（数字でない）・最初にやること（種類つき）・子ども向けの要約', () => {
+    const h = R.previewFrameHtml(fixture(), R.defaultPv(), 0);
+    expect(h).toContain('<span class="mp-kind">説明と図解</span>');
+    expect(h).toContain('<span class="mp-kind">動かせるもの</span>');
+    expect(h).not.toContain('型 3');
+    expect(h).toContain('最初にやること（見る）</span><p>図の 赤い 丸を 数えてみよう</p>');
+    expect(h).toContain('最初にやること（さわる）');
+    expect(h).toContain('<p class="mp-summary">赤血球が からだじゅうに');
+    expect(h).toContain('data-mode="es"');
+    expect(h).toContain('いま表示: <b>小学生・短い</b>');
+    const js = R.previewFrameHtml(fixture(), { aud: 'secondary', len: 'long', game: false }, 1);
+    expect(js).toContain('data-mode="js"');
+    expect(js).toContain('<p class="mp-summary">赤血球が酸素を全身へ運ぶ仕組みを');
+    expect(js).toContain('id="mp-body-1-0"');
+    expect(R.kindName(9)).toBe('型 9');
+  });
+
+  it('既定は「小学生・短い」1 枠。変奏は学年 × 長さ、ゲーム版は同じ学年を先に。無ければ null', () => {
+    const p1 = fixture().version.material.parts[0];
+    const p2 = fixture().version.material.parts[1];
+    expect(R.defaultPv()).toMatchObject({ aud: 'elementary', len: 'short', game: false, compare: false });
+    expect(R.pickVariant(p1, { aud: 'elementary', len: 'short', game: false }).path).toBe('parts/p1/p1-elementary-short.md');
+    expect(R.pickVariant(p1, { aud: 'secondary', len: 'long', game: false }).path).toBe('parts/p1/p1-secondary-long.md');
+    expect(R.pickVariant(p1, { aud: 'secondary', len: 'short', game: true }).path).toBe('parts/p1/p1-game.md');
+    expect(R.pickVariant(p2, { aud: 'elementary', len: 'short', game: true })).toBe(null);
+    expect(R.newReviewState().pv).toEqual(R.defaultPv());
+  });
+
+  it('reviewHtml には本文の骨組みだけ（iframe・図は本文を読んでから入れる。既存の数える DOM は変えない）', () => {
+    const h = R.reviewHtml(fixture(), R.newReviewState(), {});
+    expect(h).toContain('id="mp-frames"');
+    expect(n(h, /class="mat-preview"/g)).toBe(1);
+    expect(n(h, /<iframe /g)).toBe(1); // 「説明と表現」の動画だけ
+    expect(h).not.toContain('class="mp-fig"');
+    expect(h).toContain('aria-pressed="true">小学生</button>');
+  });
+});

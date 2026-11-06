@@ -544,3 +544,60 @@ button.sc-cid { text-decoration: underline; text-underline-offset: 2px; }
 .sc-okbox { margin: 4px 0 0; }
 .sc-okbox > summary { cursor: pointer; font-weight: 600; color: var(--green); padding: 6px 0; }
 .sc-okbox[open] > summary { margin: 0 0 8px; }
+
+/* ---- 確認画面: 教材プレビュー（「教材として見る」）----
+ * app-v3/css/tokens.css の :root の値（Noto Sans JP・ink / paper / orange / green・radius 18px）と、
+ * app-v3/css/shell.css の小学生モード（html[data-mode="es"] の本文 15px・p の行間 1.9・ふりがな rt 9px）を複製して .mat-preview の中に閉じ込める。
+ * app-v3 の CSS は読み込まない（管理画面のほかの部分の見た目を変えないため）。将来アプリ側に教材画面ができたら、その CSS に差し替える */
+.rv-pv-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; margin: 0 0 4px; }
+.rv-pv-head h2 { margin: 0; }
+.rv-pv-lead { margin: 0 0 12px; font-size: 13px; }
+.mp-bar, .mp-frame-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mp-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--white); }
+.mp-seg.is-off .mp-tg { color: var(--muted); }
+.mp-tg { font: inherit; font-size: 13px; padding: 6px 12px; border: 0; border-left: 1px solid var(--line); background: var(--white); color: var(--ink); cursor: pointer; }
+.mp-seg .mp-tg:first-child { border-left: 0; }
+.mp-tg.on { background: var(--orange-soft); color: #8a5000; font-weight: 700; box-shadow: inset 0 -2px 0 var(--orange); }
+.mp-tg:focus-visible { outline: 3px solid #a9590b; outline-offset: -3px; }
+.mp-frames { display: grid; gap: 16px; }
+.mat-preview {
+  --mp-paper: #f7f5f0; --mp-white: #fff; --mp-ink: #292c29; --mp-muted: #6c7068; --mp-line: #e3e3db;
+  --mp-orange: #ed922c; --mp-orange-soft: #fbecd7; --mp-green: #467060; --mp-green-soft: #edf3ec; --mp-cream: #fff8e8;
+  --mp-radius: 18px; --mp-shadow: 0 12px 38px #292c290a;
+  font-family: 'Noto Sans JP', -apple-system, BlinkMacSystemFont, sans-serif; font-size: 14px; color: var(--mp-ink); background: var(--mp-paper);
+  font-synthesis: none; border-radius: var(--mp-radius); padding: 22px 26px 26px; min-width: 0; overflow-wrap: anywhere;
+}
+.mat-preview[data-mode="es"] { font-size: 15px; }
+.mat-preview p { margin: 0 0 12px; line-height: 1.9; }
+.mat-preview h2 { font-size: 20px; line-height: 1.6; margin: 0; }
+.mat-preview h3 { font-size: 16px; line-height: 1.7; margin: 0; }
+.mat-preview h4 { font-size: 15px; line-height: 1.7; margin: 14px 0 6px; }
+.mat-preview rt { font-size: 9px; }
+.mat-preview small { font-size: 12px; }
+.mp-now { font-size: 12px !important; color: var(--mp-muted); margin: 0 0 8px !important; line-height: 1.6 !important; }
+.mp-now b { color: #8a5000; }
+.mp-cover { margin: 0 0 18px; }
+.mp-summary { margin: 6px 0 0 !important; color: var(--mp-muted); }
+.mp-part { background: var(--mp-white); border: 1px solid var(--mp-line); border-radius: var(--mp-radius); box-shadow: var(--mp-shadow); padding: 20px 22px; margin: 0 0 16px; }
+.mp-part:last-child { margin-bottom: 0; }
+.mp-part-head { display: grid; gap: 4px; margin: 0 0 12px; }
+.mp-kind { justify-self: start; font-size: 12px; font-weight: 700; color: var(--mp-green); background: var(--mp-green-soft); border-radius: 999px; padding: 2px 10px; }
+.mp-entry { background: var(--mp-orange-soft); border-radius: 12px; padding: 10px 14px; margin: 0 0 16px; }
+.mp-entry-k { display: block; font-size: 12px; font-weight: 700; color: #8a5000; }
+.mp-entry p { margin: 2px 0 0; font-weight: 600; }
+.mp-md { min-width: 0; }
+.mp-ul { margin: 0 0 12px; padding-left: 1.4em; }
+.mp-ul li { line-height: 1.9; margin: 0 0 4px; }
+.mp-pre { background: var(--mp-paper); border-radius: 10px; padding: 10px 12px; white-space: pre-wrap; }
+.mp-fig { margin: 4px 0 16px; }
+.mp-fig img { display: block; max-width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--mp-line); background: var(--mp-white); }
+.mp-app { margin: 0 0 16px; }
+.mp-app-frame { display: block; width: 100%; height: 360px; border: 1px solid var(--mp-line); border-radius: 12px; background: var(--mp-white); }
+.mp-video { margin: 4px 0 16px; }
+.mp-video iframe { display: block; width: 100%; max-width: 640px; aspect-ratio: 16 / 9; height: auto; border: 0; border-radius: 12px; background: #000; }
+.mp-video-why { margin: 8px 0 0 !important; font-size: 0.93em; }
+.mp-k { display: inline-block; font-size: 12px; font-weight: 700; color: var(--mp-green); margin-right: 8px; }
+.mp-missing { color: var(--mp-muted); background: var(--mp-paper); border: 1px dashed #cfcabd; border-radius: 12px; padding: 10px 14px; }
+.mp-loading { color: var(--mp-muted); }
+.mp-file a { color: var(--mp-green); }
+.mp-para.is-flag { background: #fff4de; box-shadow: inset 3px 0 0 #e3a94a; border-radius: 6px; padding: 2px 8px; margin-left: -8px; margin-right: -8px; }

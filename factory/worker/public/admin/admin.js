@@ -174,8 +174,24 @@
   }
 
   // ---- md 描画（全部エスケープ → 見出し・段落・箇条書き・コード・http(s) リンクだけ）----
-  function inlineMd(s) {
+  // 主張 id の参照（[c3] / [c3, c4]。直後が「(」のもの = リンクの記法は除く）
+  var CITE_RE = /[ \t　]*\[([A-Za-z][\w-]*(?:[ \t]*[,、][ \t]*[A-Za-z][\w-]*)*)\](?!\()/g;
+  /** text の中の主張 id の参照を取り除き、見つけた id を out に足す（known = 主張 id の表。c<数字> の形か known にある id だけを参照とみなす） */
+  function stripCites(text, known, out) {
+    return String(text).replace(CITE_RE, function (m, inner) {
+      var toks = inner.split(/[\s,、]+/).filter(Boolean);
+      var ok = toks.length && toks.every(function (x) { return /^c\d+$/i.test(x) || (!!known && Object.prototype.hasOwnProperty.call(known, x)); });
+      if (!ok) return m;
+      toks.forEach(function (x) { if (out.indexOf(x) < 0) out.push(x); });
+      return '';
+    });
+  }
+  /** opts（任意）: { cites: [] , known } を渡すと、主張 id の参照を本文から外して opts.cites に集める（教材として見る時。コードの中は触らない） */
+  function inlineMd(s, opts) {
     var t = esc(s);
+    if (opts && opts.cites) {
+      t = t.split(/(`[^`]+`)/).map(function (seg, i) { return i % 2 ? seg : stripCites(seg, opts.known, opts.cites); }).join('');
+    }
     t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
     t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, function (_m, text, href) {
       return '<a href="' + href + '" rel="noopener noreferrer" target="_blank">' + text + '</a>';
@@ -1950,12 +1966,8 @@
   function fmtSec(n) { var s = n % 60; return Math.floor(n / 60) + ':' + (s < 10 ? '0' : '') + s; }
   function videoHtml(v, vc) {
     var s = v.start_sec, e = v.end_sec;
-    var okId = typeof v.youtube_id === 'string' && YT_ID_RE.test(v.youtube_id);
     var okRange = isSec(s) && isSec(e) && s < e;
-    var embed = okId && okRange
-      ? '<iframe src="' + esc('https://www.youtube-nocookie.com/embed/' + v.youtube_id + '?start=' + s + '&end=' + e + '&rel=0') + '" title="' + esc(v.title) +
-        '" allow="encrypted-media; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin" loading="lazy"></iframe>'
-      : '<p class="err" data-video-bad="1">動画の id か区間の形が正しくないため、埋め込みません</p>';
+    var embed = ytEmbedHtml(v) || '<p class="err" data-video-bad="1">動画の id か区間の形が正しくないため、埋め込みません</p>';
     return '<div class="rv-video" data-video="' + esc(v.id) + '"><p><b>動画 ' + esc(v.id) + '</b> ' + esc(v.title) + '</p>' + embed +
       '<p>区間 ' + (okRange ? esc(fmtSec(s)) + '〜' + esc(fmtSec(e)) : '<span class="muted">不明</span>') + ' ・ チャンネル ' + esc(v.channel) + '</p>' +
       videoMetaHtml(v, vc) +
@@ -2005,7 +2017,7 @@
     ((mat && mat.parts) || []).forEach(function (p) { (p.files || []).forEach(function (f) { if (f && IMAGE_RE.test(f.path || '')) out.push(f.path); }); });
     return out;
   }
-  function newReviewState() { return { ck: {}, mode: null, note: '', append: '', draftShown: false }; }
+  function newReviewState() { return { ck: {}, mode: null, note: '', append: '', draftShown: false, pv: defaultPv(), stickies: [], stickySeq: 0 }; }
   function hasDraft(st) { return !!((st.note || '').trim() || (st.append || '').trim()); }
 
   /** 検証の状態の文（§L-6 1.）。待ちの理由は API が版に verify_wait_reason を出す時だけ、または停止中が分かる時だけ付ける */
@@ -2145,27 +2157,174 @@
       '<input type="text" class="rv-ngnote' + (c.result === 'ng' ? '' : ' hidden') + '" data-note="' + k + '" maxlength="2000" placeholder="NG の理由（メモ）" value="' + esc(c.note || '') + '"></div>';
   }
 
-  function partsHtml(d) {
-    var vid = d.version.id, mat = d.version.material || { parts: [] };
-    var fileBase = '/api/review/' + encodeURIComponent(vid) + '/files/';
-    return (mat.parts || []).map(function (p, pi) {
-      var vars = p.variants || [];
-      var first = -1; // 既定は「小学生・短い」（無ければ最初の変奏）
-      vars.forEach(function (vr, vi) { if (first < 0 && !vr.game && vr.audience === 'elementary' && vr.length === 'short') first = vi; });
-      if (first < 0) first = 0;
-      var tabs = vars.map(function (vr, vi) {
-        var label = vr.game ? 'ゲーム' : (vr.audience === 'elementary' ? '小' : '中') + '・' + (vr.length === 'short' ? '短' : '長');
-        return '<button type="button" class="btn small" data-part="' + pi + '" data-path="' + esc(vr.path) + '"' + (vi === first ? ' data-first="1"' : '') + '>' + esc(label) + '</button>';
-      }).join('');
-      var filesHtml = (p.files || []).map(function (f) {
-        if (IMAGE_RE.test(f.path)) return '<img class="figure" alt="図" src="' + esc(fileBase + f.path) + '">';
-        if (/\.html$/.test(f.path)) return '<iframe class="frame" sandbox="allow-scripts" title="動かせるもの" src="' + esc(fileBase + f.path) + '"></iframe>';
-        return '<a href="' + esc(fileBase + f.path) + '" target="_blank" rel="noopener noreferrer">' + esc(f.path) + '</a>';
-      }).join('');
-      return '<div class="rv-part"><h3>' + esc(p.id) + ' ' + esc(p.title) + ' <span class="muted">型 ' + esc(p.kind) + '</span></h3>' +
-        '<p>最初にやること（' + esc(p.entry_point && p.entry_point.type) + '）: ' + esc(p.entry_point && p.entry_point.text) + '</p>' +
-        '<div class="tabs">' + tabs + '</div><div class="md-body" id="part-body-' + pi + '"><p class="muted">変奏を選んでください</p></div>' + filesHtml + '</div>';
+  // ---- 教材プレビュー（「教材として見る」。子どもが見る形 = app-v3 の見た目を .mat-preview に閉じ込めて出す）----
+  // 型の名前（docs/content-factory-design.md §5）と最初にやることの種類（§E-1 entry_point.type）
+  var KIND_NAME = { 1: '活動レシピ', 2: '作例と見本', 3: '説明と図解', 4: '動かせるもの', 5: '見る', 6: '今日のお題', 7: '基礎学習の足場', 8: '世界との接続' };
+  var ENTRY_LABEL = { look: '見る', touch: 'さわる', 'try': 'ためす', make: 'つくる' };
+  var AUD_LABEL = { elementary: '小学生', secondary: '中学生' };
+  var LEN_LABEL = { 'short': '短い', 'long': '長い' };
+  function kindName(k) { return vhas(KIND_NAME, k) ? KIND_NAME[k] : '型 ' + String(k === undefined || k === null ? '?' : k); }
+  /** 既定は「小学生・短い」1 枠。見比べの右の枠は「中学生・短い」から */
+  function defaultPv() { return { aud: 'elementary', len: 'short', game: false, compare: false, cmp: { aud: 'secondary', len: 'short', game: false } }; }
+  function pvLabel(sel) { return sel.game ? 'ゲーム版' : (AUD_LABEL[sel.aud] || sel.aud) + '・' + (LEN_LABEL[sel.len] || sel.len); }
+  function variantLabel(vr) { return vr.game ? 'ゲーム版' : (AUD_LABEL[vr.audience] || String(vr.audience)) + '・' + (LEN_LABEL[vr.length] || String(vr.length)); }
+  /** 表示する変奏（無ければ null）。ゲーム版は同じ学年のものを先に */
+  function pickVariant(part, sel) {
+    var vars = (part && Array.isArray(part.variants) ? part.variants : []).filter(function (v) { return v && typeof v === 'object' && typeof v.path === 'string'; });
+    if (sel.game) {
+      var games = vars.filter(function (v) { return v.game === true; });
+      return games.filter(function (v) { return v.audience === sel.aud; })[0] || games[0] || null;
+    }
+    return vars.filter(function (v) { return v.game !== true && v.audience === sel.aud && v.length === sel.len; })[0] || null;
+  }
+  /** md を塊に分ける（renderMd と同じ規則: 見出し・段落・箇条書き・コード） */
+  function mdBlocks(src) {
+    var lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
+    var out = [], para = [], list = null, code = null;
+    function flushPara() { if (para.length) { out.push({ t: 'p', raw: para.join(' ') }); para = []; } }
+    function flushList() { if (list) { out.push({ t: 'ul', items: list }); list = null; } }
+    lines.forEach(function (line) {
+      if (code !== null) {
+        if (/^```/.test(line)) { out.push({ t: 'pre', text: code.join('\n') }); code = null; } else code.push(line);
+        return;
+      }
+      if (/^```/.test(line)) { flushPara(); flushList(); code = []; return; }
+      var h = /^(#{1,4})\s+(.*)$/.exec(line);
+      if (h) { flushPara(); flushList(); out.push({ t: 'h', level: Math.min(h[1].length + 1, 4), raw: h[2] }); return; }
+      var li = /^\s*[-*]\s+(.*)$/.exec(line);
+      if (li) { flushPara(); (list = list || []).push(li[1]); return; }
+      if (!line.trim()) { flushPara(); flushList(); return; }
+      flushList(); para.push(line.trim());
+    });
+    if (code !== null) out.push({ t: 'pre', text: code.join('\n') });
+    flushPara(); flushList();
+    return out;
+  }
+  /** 段落の先頭 20 字（付箋の場所の目印。主張 id の参照と md の記号を除く） */
+  function paraHead(raw, known) {
+    var t = stripCites(raw, known, []).replace(/`/g, '').replace(/\[([^\]]+)\]\((?:[^)]*)\)/g, '$1').replace(/\s+/g, ' ').trim();
+    return t.length > 20 ? t.slice(0, 20) + '…' : t;
+  }
+  /** 動画の埋め込み（§Q-5 の形。youtube_id と区間を確かめてから。だめなら空） */
+  function ytEmbedHtml(v) {
+    var s = v.start_sec, e = v.end_sec;
+    if (!(typeof v.youtube_id === 'string' && YT_ID_RE.test(v.youtube_id) && isSec(s) && isSec(e) && s < e)) return '';
+    return '<iframe src="' + esc('https://www.youtube-nocookie.com/embed/' + v.youtube_id + '?start=' + s + '&end=' + e + '&rel=0') + '" title="' + esc(v.title) +
+      '" allow="encrypted-media; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin" loading="lazy"></iframe>';
+  }
+  /** 本文の中に置く図・動かせるもの・動画（図と動画は先頭の段落の直後、型 4 の app は本文の上） */
+  function previewMedia(part, fileBase) {
+    var figs = [], apps = [], others = [];
+    (Array.isArray(part.files) ? part.files : []).forEach(function (f) {
+      if (!f || typeof f.path !== 'string') return;
+      var src = esc(fileBase + f.path);
+      if (IMAGE_RE.test(f.path)) figs.push('<figure class="mp-fig"><img alt="' + esc(typeof f.alt === 'string' && f.alt ? f.alt : '図') + '" src="' + src + '"></figure>');
+      else if (/\.html$/i.test(f.path)) apps.push('<div class="mp-app"><iframe class="mp-app-frame" sandbox="allow-scripts" title="動かせるもの" src="' + src + '"></iframe></div>');
+      else others.push('<p class="mp-file"><a href="' + src + '" target="_blank" rel="noopener noreferrer">' + esc(f.path) + '</a></p>');
+    });
+    var vids = (Array.isArray(part.videos) ? part.videos : []).map(function (v) {
+      v = v && typeof v === 'object' ? v : {};
+      var emb = ytEmbedHtml(v);
+      return '<div class="mp-video">' + (emb || '<p class="mp-missing">動画の id か区間の形が正しくないため、埋め込みません</p>') +
+        (v.why ? '<p class="mp-video-why"><span class="mp-k">見どころ</span>' + esc(v.why) + '</p>' : '') + '</div>';
+    });
+    var top = part.kind === 4 ? apps : [];
+    var after = figs.concat(part.kind === 4 ? [] : apps, vids);
+    return { top: top.join(''), after: after.join(''), end: others.join('') };
+  }
+  /**
+   * 1 つの変奏の本文（純関数）。o: { fileBase, marks, chips, stick, markIds, claimIdx, claimRef, frame, pi, stickies }
+   * - [cN] は出さない（inlineMd の中で外す）。marks の時だけ、要確認の段落を黄色にし、chips の時は段落末に主張 → 出典の印を出す
+   * - 段落と箇条には data-para（0 始まり）・data-head（先頭 20 字）・data-cl（主張の番号）を付ける
+   */
+  function previewBodyHtml(md, part, o) {
+    o = o || {};
+    var known = o.claimIdx || {}, markIds = o.markIds || {}, ref = o.claimRef || {};
+    var stuck = {};
+    (o.stickies || []).forEach(function (s) { stuck[s.para_index] = (stuck[s.para_index] || 0) + 1; });
+    var media = previewMedia(part || {}, o.fileBase || '');
+    var idx = 0;
+    function chipHtml(id) {
+      var r = vhas(ref, id) ? ref[id] : null;
+      var flag = vhas(markIds, id);
+      if (!r) return '<span class="mp-cite is-missing' + (flag ? ' is-flag' : '') + '">' + esc(id) + '（一覧にない主張）</span>';
+      return r.goto
+        ? '<button type="button" class="mp-cite' + (flag ? ' is-flag' : '') + '" data-goto="' + esc(r.goto) + '" title="' + esc(id + ' の出典カードへ') + '">' + esc(r.label) + '</button>'
+        : '<span class="mp-cite is-missing' + (flag ? ' is-flag' : '') + '">' + esc(r.label) + '</span>';
+    }
+    function para(tag, raw) {
+      var i = idx++, cites = [];
+      var inner = inlineMd(raw, { cites: cites, known: known });
+      var flagged = !!o.marks && cites.some(function (id) { return vhas(markIds, id); });
+      var cl = cites.filter(function (id) { return vhas(known, id); }).map(function (id) { return known[id]; });
+      var cls = 'mp-para' + (flagged ? ' is-flag' : '') + (stuck[i] ? ' has-stick' : '');
+      var tail = '';
+      if (o.marks && o.chips && cites.length) tail += '<span class="mp-cites">' + cites.map(chipHtml).join('') + '</span>';
+      if (stuck[i]) tail += '<span class="mp-stuck" title="この段落の付箋">付箋 ' + stuck[i] + '</span>';
+      if (o.marks && o.stick) tail += '<button type="button" class="mp-stick-btn" data-stick-open="' + i + '">ここに付箋</button>';
+      return '<' + tag + ' class="' + cls + '" id="mp-p-' + (o.frame || 0) + '-' + (o.pi || 0) + '-' + i + '" data-para="' + i + '" data-head="' + esc(paraHead(raw, known)) + '"' +
+        (cl.length ? ' data-cl="' + cl.join(' ') + '"' : '') + '>' + inner + tail + '</' + tag + '>';
+    }
+    var blocks = mdBlocks(md);
+    var firstP = -1;
+    blocks.forEach(function (b, i) { if (firstP < 0 && b.t === 'p') firstP = i; });
+    var at = firstP >= 0 ? firstP : (blocks.length ? 0 : -1);
+    var html = blocks.map(function (b, i) {
+      var h;
+      if (b.t === 'h') h = '<h' + b.level + ' class="mp-h">' + inlineMd(b.raw, { cites: [], known: known }) + '</h' + b.level + '>';
+      else if (b.t === 'pre') h = '<pre class="mp-pre"><code>' + esc(b.text) + '</code></pre>';
+      else if (b.t === 'ul') h = '<ul class="mp-ul">' + b.items.map(function (x) { return para('li', x); }).join('') + '</ul>';
+      else h = para('p', b.raw);
+      return i === at ? h + media.after : h;
     }).join('');
+    if (at < 0) html = media.after;
+    return '<div class="mp-md">' + media.top + html + media.end + '</div>';
+  }
+  /** 主張 id → 段落末の印の文と行き先（出典カード）。出典が無い・一覧に無い時は「出典のない主張」のカードへ */
+  function claimRefsOf(d, model) {
+    var out = Object.create(null);
+    (Array.isArray(d && d.claims) ? d.claims : []).forEach(function (c) {
+      if (!c || typeof c.id !== 'string' || c.id in out) return;
+      var sids = strArr(c.source_ids);
+      var listed = sids.filter(function (sid) { return sid in model.cardOf; });
+      if (!listed.length) out[c.id] = { label: c.id + ' → 出典なし', goto: model.orphans.length ? 'rv-src-orphan' : '' };
+      else out[c.id] = { label: c.id + ' → ' + listed.join('・'), goto: model.cardOf[listed[0]] };
+    });
+    return out;
+  }
+  /** 切り替えの 1 組（学年・長さ・ゲーム版）。fi = 枠の番号（0 = 左 / 1 = 見比べの右） */
+  function pvSwitchHtml(sel, fi) {
+    var b = function (key, val, label, on) {
+      return '<button type="button" class="mp-tg' + (on ? ' on' : '') + '" data-pv="' + key + '" data-val="' + val + '" data-pvf="' + fi + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + label + '</button>';
+    };
+    return '<span class="mp-seg' + (sel.game ? ' is-off' : '') + '" role="group" aria-label="学年">' + b('aud', 'elementary', '小学生', !sel.game && sel.aud === 'elementary') + b('aud', 'secondary', '中学生', !sel.game && sel.aud === 'secondary') + '</span>' +
+      '<span class="mp-seg' + (sel.game ? ' is-off' : '') + '" role="group" aria-label="長さ">' + b('len', 'short', '短い', !sel.game && sel.len === 'short') + b('len', 'long', '長い', !sel.game && sel.len === 'long') + '</span>' +
+      '<span class="mp-seg" role="group" aria-label="ゲーム版">' + b('game', '1', 'ゲーム版', !!sel.game) + '</span>';
+  }
+  /** 1 枠の骨組み（本文は DOM 側が md を読んでから previewBodyHtml で入れる） */
+  function previewFrameHtml(d, sel, fi) {
+    var mat = (d.version && d.version.material) || {};
+    var parts = Array.isArray(mat.parts) ? mat.parts : [];
+    var aud = sel.game ? null : sel.aud;
+    var summary = aud === 'secondary' ? mat.summary_secondary : mat.summary_elementary;
+    return '<div class="mat-preview" data-frame="' + fi + '" data-mode="' + (sel.aud === 'secondary' && !sel.game ? 'js' : 'es') + '">' +
+      (fi > 0 ? '<div class="mp-frame-bar">' + pvSwitchHtml(sel, fi) + '</div>' : '') +
+      '<p class="mp-now" data-mp-now="' + fi + '">いま表示: <b>' + esc(pvLabel(sel)) + '</b></p>' +
+      '<div class="mp-cover"><h2 class="mp-title">' + esc(mat.title || '') + '</h2>' + (summary ? '<p class="mp-summary">' + esc(summary) + '</p>' : '') + '</div>' +
+      parts.map(function (p, pi) {
+        p = p && typeof p === 'object' ? p : {};
+        var ep = p.entry_point && typeof p.entry_point === 'object' ? p.entry_point : {};
+        return '<section class="mp-part" data-mp-part="' + pi + '">' +
+          '<div class="mp-part-head"><span class="mp-kind">' + esc(kindName(p.kind)) + '</span><h3 class="mp-part-title">' + esc(p.title || '') + '</h3></div>' +
+          (ep.text ? '<div class="mp-entry"><span class="mp-entry-k">最初にやること' + (vhas(ENTRY_LABEL, ep.type) ? '（' + ENTRY_LABEL[ep.type] + '）' : '') + '</span><p>' + esc(ep.text) + '</p></div>' : '') +
+          '<div class="mp-body" id="mp-body-' + fi + '-' + pi + '" data-mp-body="' + pi + '"><p class="mp-loading">読み込み中…</p></div></section>';
+      }).join('') +
+      (parts.length ? '' : '<p class="mp-missing">部品（parts）がありません</p>') + '</div>';
+  }
+  /** 変奏が無い時の文 */
+  function missingVariantHtml(part, sel) {
+    var have = (Array.isArray(part && part.variants) ? part.variants : []).filter(function (v) { return v && typeof v === 'object'; }).map(variantLabel);
+    return '<p class="mp-missing">この部品には「' + esc(pvLabel(sel)) + '」がありません' + (have.length ? '（ある形: ' + esc(have.join(' / ')) + '）' : '') + '</p>';
   }
 
   /** 詳細の検証の行に足す図の数（figures がある時だけ。§O-12 d） */
@@ -2429,7 +2588,13 @@
     var groups = '<details class="card rv-sec" id="rv-groups" open><summary><h2>要確認' + (tri.present ? '（' + tri.groups.length + '）' : '') + '</h2></summary>' + groupsBody + '</details>';
 
     var srcModel = sourceCardsOf(d);
-    var body = '<div class="card" id="rv-body"><h2>本文</h2>' + partsHtml(d) + '</div>' + sourcesPanelHtml(d, srcModel);
+    var pv = st.pv || defaultPv();
+    // 教材プレビュー（左）と出典と主張（右）。本文は DOM 側が md を読んでから入れる（renderPreview）
+    var body = '<div class="rv-study" id="rv-study"><section class="card rv-pv" id="rv-body">' +
+      '<div class="rv-pv-head"><h2>教材として見る</h2><div class="mp-bar" id="mp-bar" role="toolbar" aria-label="教材の見え方">' + pvSwitchHtml(pv, 0) + '</div></div>' +
+      '<p class="muted rv-pv-lead">子どもが見る形で出しています。学年と長さを切り替えて、分かりにくい所・分かりやすい所を見てください。</p>' +
+      '<div class="mp-frames" id="mp-frames">' + previewFrameHtml(d, pv, 0) + '</div></section>' +
+      '<aside class="rv-src-col" id="rv-src-col">' + sourcesPanelHtml(d, srcModel) + '</aside></div>';
     var items = reviewItems(tri);
     var check = isReview ? '<div class="card" id="rv-check"><h2>あなたが見る項目</h2>' + items.map(function (k, i) { return itemHtml(k, i, d, st, tri); }).join('') + '</div>' : '';
     // 主張と出典の全件の表（問題のある行も含む。照合の生の値はここに残す）。「問題なし」は出典カードの側で問題の無いものだけを畳む
@@ -2485,18 +2650,8 @@
     var c = reviewCtx, view = c.view, d = c.d, st = c.st;
     view.innerHTML = reviewHtml(d, st, c);
     document.body.classList.toggle('has-foot', d.version.status === 'review');
-    var mark = markIdsOf(triageOf(d));
-    var fileBase = '/api/review/' + encodeURIComponent(c.vid) + '/files/';
-    Array.prototype.forEach.call(view.querySelectorAll('[data-path]'), function (b) {
-      b.addEventListener('click', function () {
-        var pi = b.getAttribute('data-part');
-        Array.prototype.forEach.call(view.querySelectorAll('[data-part="' + pi + '"]'), function (x) { x.classList.toggle('on', x === b); });
-        var body = $('#part-body-' + pi);
-        body.innerHTML = '<p class="loading">読み込み中…</p>';
-        fetchText(fileBase + b.getAttribute('data-path')).then(function (t) { body.innerHTML = renderMd(t, mark); }, function (e) { body.innerHTML = '<p class="err">' + esc(e.message) + '</p>'; });
-      });
-      if (b.getAttribute('data-first')) b.click();
-    });
+    $('#rv-study').addEventListener('click', onStudyClick);
+    fillPreview();
     $('#rv-help').addEventListener('click', openKeys);
     var reload = $('#rv-reload');
     if (reload) reload.addEventListener('click', function () { route(); });
@@ -2559,6 +2714,73 @@
     void el.offsetWidth;
     el.classList.add('flash');
     setTimeout(function () { el.classList.remove('flash'); }, 1500);
+  }
+
+  // ---- 教材プレビューの DOM 側（切り替え・本文の読み込み。md は版ごとに 1 回だけ読む）----
+  function previewFrames(st) {
+    var pv = st.pv || (st.pv = defaultPv());
+    return pv.compare ? [pv, pv.cmp] : [pv];
+  }
+  function mdFor(c, path) {
+    c.md = c.md || Object.create(null);
+    if (!(path in c.md)) {
+      c.md[path] = fetchText('/api/review/' + encodeURIComponent(c.vid) + '/files/' + path).then(null, function (e) { delete c.md[path]; throw e; });
+    }
+    return c.md[path];
+  }
+  /** 枠の本文を入れる（切り替えが重なった時は最後の切り替えの結果だけを入れる） */
+  function fillPreview() {
+    var c = reviewCtx;
+    if (!c) return;
+    var d = c.d, st = c.st, token = c.pvToken = (c.pvToken || 0) + 1;
+    var parts = (d.version.material && Array.isArray(d.version.material.parts)) ? d.version.material.parts : [];
+    var tri = triageOf(d), model = sourceCardsOf(d);
+    var base = { fileBase: '/api/review/' + encodeURIComponent(c.vid) + '/files/', marks: true, chips: false, stick: false, markIds: markIdsOf(tri), claimIdx: claimIndexOf(d), claimRef: claimRefsOf(d, model) };
+    previewFrames(st).forEach(function (sel, fi) {
+      parts.forEach(function (p, pi) {
+        var el = document.getElementById('mp-body-' + fi + '-' + pi);
+        if (!el) return;
+        var vr = pickVariant(p, sel);
+        if (!vr) { el.innerHTML = missingVariantHtml(p, sel); return; }
+        mdFor(c, vr.path).then(function (t) {
+          if (reviewCtx !== c || c.pvToken !== token) return;
+          var o = {};
+          for (var k in base) o[k] = base[k];
+          o.frame = fi; o.pi = pi;
+          el.innerHTML = previewBodyHtml(t, p, o);
+        }, function (e) {
+          if (reviewCtx !== c || c.pvToken !== token) return;
+          el.innerHTML = '<p class="err">' + esc(e.message) + '</p>';
+        });
+      });
+    });
+  }
+  /** 切り替えの後: 枠を描き直し、切り替えボタンの今の状態を出す */
+  function renderPreview() {
+    var c = reviewCtx;
+    if (!c) return;
+    var wrap = $('#mp-frames'), bar = $('#mp-bar');
+    if (!wrap) return;
+    var frames = previewFrames(c.st);
+    if (bar) bar.innerHTML = pvSwitchHtml(frames[0], 0);
+    wrap.innerHTML = frames.map(function (sel, fi) { return previewFrameHtml(c.d, sel, fi); }).join('');
+    fillPreview();
+  }
+  function onStudyClick(e) {
+    var c = reviewCtx;
+    if (!c) return;
+    var t = e.target && e.target.closest ? e.target : null;
+    if (!t) return;
+    var b = t.closest('[data-pv]');
+    if (b) {
+      var frames = previewFrames(c.st), fi = Number(b.getAttribute('data-pvf')) || 0;
+      var sel = frames[fi] || frames[0], key = b.getAttribute('data-pv'), val = b.getAttribute('data-val');
+      if (key === 'game') sel.game = !sel.game;
+      else if (key === 'aud' || key === 'len') { sel[key] = val; sel.game = false; }
+      renderPreview();
+      var again = document.querySelector('[data-pv="' + key + '"][data-pvf="' + fi + '"]' + (key === 'game' ? '' : '[data-val="' + val + '"]'));
+      if (again) again.focus();
+    }
   }
 
   function openKeys() {
@@ -2712,7 +2934,10 @@
     approveState: approveState, checklistPayload: checklistPayload, keyCommand: keyCommand, applyCommand: applyCommand,
     newReviewState: newReviewState, reviewHtml: reviewHtml, renderMd: renderMd,
     // 出典カード（確認画面の「出典と主張」）
-    sourceCardsOf: sourceCardsOf, claimsBySource: claimsBySource, accessedText: accessedText, shortUrl: shortUrl
+    sourceCardsOf: sourceCardsOf, claimsBySource: claimsBySource, accessedText: accessedText, shortUrl: shortUrl,
+    // 教材プレビュー
+    inlineMd: inlineMd, pickVariant: pickVariant, previewBodyHtml: previewBodyHtml, previewFrameHtml: previewFrameHtml, kindName: kindName,
+    defaultPv: defaultPv, claimRefsOf: claimRefsOf
   };
 
   // ---- 画面: 改善係の記録（振り返り係 §S-5 5。画面での名前は「改善係」）----
