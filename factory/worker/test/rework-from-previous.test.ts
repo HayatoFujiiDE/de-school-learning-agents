@@ -550,7 +550,7 @@ describe('§S-8-2 取り込みの引き継ぎ（jobs.ts → citations）', () =>
     expect(srcRows()[0]).toMatchObject({ url_was_fetched: 0, check_detail: 'not_fetched' });
   });
 
-  it('R2 に親の記録が無ければ親の session の events から作って書き、引き継ぐ', async () => {
+  it('R2 に親の記録が無ければ引き継がない（取り込みは親の events を読まず、親の記録を書かない。citations に carried の項目も付けない）', async () => {
     seedRunning();
     const parentEvents = [
       { id: 'e1', type: 'agent.tool_use', name: 'web_fetch', input: { url: URL_A } },
@@ -559,18 +559,41 @@ describe('§S-8-2 取り込みの引き継ぎ（jobs.ts → citations）', () =>
     putParentSourcesJson();
     const p = ingestPort(outputs2(), { parentEvents });
     expect(await rec('jr', 25_000, p.port)).toBe('versioned');
-    expect(p.parentReads.length).toBeGreaterThan(0);
-    expect(srcRows()[0]).toEqual({ source_id: 's1', url_was_fetched: 1, quote_found: 1, check_detail: 'carried' });
-    expect(r2.has(PARENT_PREFIX + SOURCE_CAPTURES_FILE)).toBe(true);
+    expect(p.parentReads).toEqual([]);
+    expect(srcRows()[0]).toEqual({ source_id: 's1', url_was_fetched: 0, quote_found: 0, check_detail: 'not_fetched' });
+    expect(r2.has(PARENT_PREFIX + SOURCE_CAPTURES_FILE)).toBe(false);
+    const checks = JSON.parse(String(one(db, "SELECT checks_json FROM material_versions WHERE job_id = 'jr'").checks_json));
+    expect(checks.citations).toEqual({ total: 2, fetched: 0, quoted: 0 });
+    expect('carried' in checks.citations).toBe(false);
   });
 
-  it('親の events が読めない → 引き継がずに取り込む（取り込みは失敗させない。記録を R2 に書かない）', async () => {
+  it('親の記録が壊れている（形が違う）→ 引き継がず、carried の項目も付けない', async () => {
     seedRunning();
-    putParentSourcesJson();
+    r2.set(PARENT_PREFIX + SOURCE_CAPTURES_FILE, enc.encode('{"v":2}'));
     expect(await rec('jr', 25_000, ingestPort(outputs2()).port)).toBe('versioned');
     expect(srcRows()[0]).toMatchObject({ url_was_fetched: 0, check_detail: 'not_fetched' });
-    expect(citationsOf()).toEqual({ total: 2, fetched: 0, quoted: 0, carried: 0 });
-    expect(r2.has(PARENT_PREFIX + SOURCE_CAPTURES_FILE)).toBe(false);
+    expect(citationsOf()).toEqual({ total: 2, fetched: 0, quoted: 0 });
+  });
+
+  it('startJob が親の events から親の記録を作った後の取り込みでは引き継げる', async () => {
+    seedParent();
+    seedParentSource({ id: 's1', url: URL_A, excerpt: '15 blocks' });
+    seedRework();
+    putParentSourcesJson();
+    const parentEvents = [
+      { id: 'e1', type: 'agent.tool_use', name: 'web_fetch', input: { url: URL_A } },
+      { id: 'e2', type: 'agent.tool_result', tool_use_id: 'e1', content: [{ type: 'text', text: 'signal travels 15 blocks' }] },
+    ];
+    const s = startPort({ parentEvents });
+    expect((await startJob(env, s.port, 'jr')).status).toBe(201);
+    expect(r2.has(PARENT_PREFIX + SOURCE_CAPTURES_FILE)).toBe(true);
+    // session が動き出して制作まで進んだ形にする（作られた session id は sesn_new1）
+    db.prepare("UPDATE factory_jobs SET phase = 'making', status = 'running' WHERE id = 'jr'").run();
+    const p = ingestPort(outputs2());
+    expect(await rec('jr', 25_000, p.port)).toBe('versioned');
+    expect(p.parentReads).toEqual([]);
+    expect(srcRows()[0]).toEqual({ source_id: 's1', url_was_fetched: 1, quote_found: 1, check_detail: 'carried' });
+    expect(citationsOf()).toEqual({ total: 2, fetched: 0, quoted: 0, carried: 1 });
   });
 
   it('読み始める時間が残っていなければ版を書かずに次の reconcile へ回し、次で引き継ぐ', async () => {
@@ -728,6 +751,18 @@ describe('§S-8-3 裁定 1・2: 画像の枚数と、掃除された画像', () 
     for (let i = 0; i < 9; i++) refs.push({ path: `parts/p1/own-${i}.png`, image_id: await seedImg('jd', i) });
     expect(await rec('jd', 25_000, ingestPort(goodFiles(materialWith(refs))).port)).toBe('failed:invalid_outputs');
     expect(lastError('jd')).toBe('bad_image_ref:parts/p1/own-8.png');
+  });
+
+  it('draft は同じ素材の前の job の画像があっても弾く（前の job の画像を受け付けるのは作り直しだけ）', async () => {
+    seedParent();
+    db.prepare(
+      `INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, session_id, parent_version_id, brief_md, created_at, updated_at)
+       VALUES ('jd', 'm1', 'draft', 'claude-sonnet-5-5', 'making', 'running', 'sesn_jd', 'vp', 'b', ?, ?)`,
+    ).run(iso(0), iso(0));
+    const id = await seedImg('jp', 0);
+    expect(await rec('jd', 25_000, ingestPort(goodFiles(materialWith([{ path: 'parts/p1/photo-1.png', image_id: id }]))).port)).toBe('failed:invalid_outputs');
+    expect(lastError('jd')).toBe('bad_image_ref:parts/p1/photo-1.png');
+    expect(r2.has('materials/m1/jd/parts/p1/photo-1.png')).toBe(false);
   });
 
   /** 親の版 vp の material.json と R2 に、前の job（jp）の画像の行とファイルを置く */

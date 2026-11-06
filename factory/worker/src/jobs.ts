@@ -1600,10 +1600,11 @@ class Reconciler {
     return (await sha256Hex(bytes)) === row.sha256 ? { format: row.format, bytes } : null;
   }
 
-  /** §S-8-3: otherJobId が同じ素材の、この job より前の job か（結果は 1 回の取り込みの中で覚える） */
+  /** §S-8-3: この job が作り直しで、otherJobId が同じ素材の、この job より前の job か（結果は 1 回の取り込みの中で覚える） */
   private prevJobCache = new Map<string, boolean>();
   private async isPreviousJobOfMaterial(job: JobRow, otherJobId: string): Promise<boolean> {
-    if (otherJobId === job.id) return false;
+    // レビュー裁定 2: 前の job の画像を受け付けるのは作り直し（rework かつ parent_version_id あり）だけ。draft は今までどおり拒む
+    if (otherJobId === job.id || job.kind !== 'rework' || !job.parent_version_id) return false;
     const hit = this.prevJobCache.get(otherJobId);
     if (hit !== undefined) return hit;
     const owner = await first<{ ok: number }>(
@@ -1844,9 +1845,9 @@ class Reconciler {
     // §Q-11 9: 版の動画（versionVideosOf と同じ読み方）を渡す。動画に紐づく行（動画の出典）だけを、開けたか・引用の検査から外す
     const videosOfVersion = versionVideosOf(dec.decode(files.get('material.json')!));
     const sessionCit = finishCitations(ev.acc, citeSources, videosOfVersion);
-    // §S-8-2: 作り直しは、この session で開いていない出典を親の版の取得記録で確かめたことにできる。親の記録が読めない・作るのが締め切りに
-    // 間に合わない時は引き継がない（取り込みは失敗させない）。読み始める時間も残っていなければ、版を書かずに次の reconcile へ回す
-    // （events の集計は保存済みなので、次はこの段から始まる）
+    // §S-8-2: 作り直しは、この session で開いていない出典を親の版の取得記録で確かめたことにできる。読むのは親の版の R2 にある記録だけ
+    // （親の events は読まず、親の記録も書かない。レビュー裁定 1）。無い・読めない時は引き継がない（取り込みは失敗させない・carried の項目も付けない）。
+    // 読み始める時間も残っていなければ、版を書かずに次の reconcile へ回す（events の集計は保存済みなので、次はこの段から始まる）
     let cit = sessionCit;
     // 裁定 3: 先送りは 1 つの job で CARRY_DEFER_MAX 回まで（reconcile_state_json.carry_defers）。使い切ったら引き継ぎなしで取り込む
     if (job.kind === 'rework' && job.parent_version_id) {
@@ -1859,7 +1860,7 @@ class Reconciler {
       }
       if (!short) {
         await this.extend();
-        const carry = await carryForIngest(this.env, this.port, job, this.deadline);
+        const carry = await carryForIngest(this.env, job);
         if (carry) cit = applyCarry(sessionCit, citeSources, videosOfVersion, carry.records, Date.now());
       }
     }

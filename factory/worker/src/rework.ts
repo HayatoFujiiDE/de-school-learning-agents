@@ -9,7 +9,7 @@ import { reopenFreeUrls, type CarryRecord } from './checks/citations';
 import { basenameOf } from './checks/layout';
 import { all, errorKind, first, stmt } from './db';
 import type { Env } from './env';
-import { captureDeadlineOf, loadSourceCaptures, type SourceCapturesFile } from './verify';
+import { loadSourceCaptures, readSourceCapturesFile, type SourceCapturesFile } from './verify';
 import { versionVideosOf, type VersionVideo } from './videos';
 
 /** 前の版のファイルを置く場所 */
@@ -23,8 +23,6 @@ export const PREV_NAME_RE = /^[A-Za-z0-9._-]{1,80}$/;
 export const PREV_TOP_FILES: readonly string[] = ['material.json', 'claims.json', 'sources.json', 'adapt-rules.md', 'selfcheck.md'];
 /** startJob で親の版の取得記録を作る（R2 に無い時に親の session の events を読む）時間の上限 */
 export const PREV_CAPTURE_START_MAX_MS = 15_000;
-/** 取り込みで親の版の取得記録を読み終えた後に残す時間（版の書き込みの batch の分） */
-export const CARRY_RESERVE_MS = 10_000;
 
 export const PREV_SECTION_HEADING = '# 前の版（作り直しの出発点）';
 
@@ -190,20 +188,21 @@ export async function prevForStart(
 
 /**
  * §S-8-2: 取り込みで引き継ぎの判定に使う親の版の記録。対象は kind='rework' かつ parent_version_id あり。
- * 親の版が同じ素材のものでなければ・記録が読めなければ・時間が足りなければ null（引き継がない）。throw しない
+ * レビュー裁定 1: 親の版の R2 にある source-captures.json だけを読む（親の session の events は読まない・親の記録を書かない。
+ * 親の記録を作ってよいのは startJob の prevForStart だけ）。
+ * 親の版が同じ素材のものでない・R2 に記録が無い・読めない時は null（引き継がない。裁定 3: citations に carried の項目を付けない）。throw しない
  */
 export async function carryForIngest(
   env: Pick<Env, 'DB' | 'R2'>,
-  port: FactoryPort,
   job: { id: string; kind: string; material_id: string; parent_version_id: string | null },
-  deadline: number,
 ): Promise<{ records: CarryRecord[] } | null> {
   if (job.kind !== 'rework' || !job.parent_version_id) return null;
   try {
     const parent = await parentVersionOf(env.DB, job.parent_version_id, job.material_id);
     if (!parent) return null;
-    const { records } = await parentCarry(env, port, parent, captureDeadlineOf(deadline, CARRY_RESERVE_MS));
-    return { records };
+    const file = await readSourceCapturesFile(env, parent.r2_prefix);
+    if (!file) return null;
+    return { records: carryRecordsOf(file, parent.created_at) };
   } catch (e) {
     console.log(JSON.stringify({ at: 'ingest', job_id: job.id, carry: 'unavailable', kind: errorKind(e) }));
     return null;

@@ -488,6 +488,14 @@ function sourceRefsOf(sourcesText: string): SourceRef[] {
 
 const noCaptures = (sources: SourceRef[]): SourceCapturesFile => ({ v: 1, captures: [], missing: sources.map((s) => s.id), truncated: [] });
 
+/**
+ * §S-8-2（レビュー裁定 1）: 版の R2 にある {r2_prefix}source-captures.json だけを読む（無い・形が違えば null）。events は読まず、R2 にも書かない
+ */
+export async function readSourceCapturesFile(env: Pick<Env, 'R2'>, r2Prefix: string): Promise<SourceCapturesFile | null> {
+  const obj = await env.R2.get(r2Prefix + SOURCE_CAPTURES_FILE);
+  return obj ? parseCapturesFile(await obj.text()) : null;
+}
+
 /** 保存済みの取得記録を読む（形が違えば null） */
 function parseCapturesFile(text: string): SourceCapturesFile | null {
   try {
