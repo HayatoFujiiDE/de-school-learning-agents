@@ -3,6 +3,7 @@ import { all, conditionalBatch, first, isUniqueViolation, stmt, type Stmt } from
 import { JOB_MODEL, cfg, consoleUrl } from '../env';
 import { fromResult, isNonEmptyString, json, parseJsonField, readBody, type RouteCtx } from '../http';
 import { SUPPORTED_KINDS, getMaterial, startJob, type ApiResult } from '../jobs';
+import { machineOrderForMaterial } from '../machine-orders';
 import { publishSwitch } from '../publish';
 
 const WORK = ['idle', 'queued', 'making', 'review'];
@@ -54,13 +55,14 @@ export function parseNewMaterialBody(b: Record<string, unknown> | null): { ok: t
   };
 }
 
-/** insertMaterial の条件（adopt 用）。exists を INSERT 2 文の述語にし、last を最後の UPDATE に置く（§B-2） */
+/** insertMaterial の条件（adopt・機械用の注文 §U-3）。exists を INSERT 2 文の述語にし、last を最後の文に置く（§B-2） */
 export interface MaterialGuard {
   exists: Stmt;
   last: (ids: { material_id: string; job_id: string; now: string }) => Stmt;
   /** last の changes が 0 の時の 409 の error */
   conflict: string;
-  proposal_id: string;
+  /** 素材に記録する提案の id（adopt の時だけ）。無ければ materials.proposal_id は NULL */
+  proposal_id?: string;
 }
 
 /**
@@ -78,7 +80,7 @@ export async function insertMaterial(db: D1Database, input: MaterialInput, by: {
     stmt(
       `INSERT INTO materials (id, slug, title, catalog_item_id, concept_codes_json, kinds_json, work_status, publish_status, proposal_id, brief_md, created_at, updated_at)
        SELECT ?, ?, ?, ?, ?, ?, 'queued', 'none', ?, ?, ?, ?${where}`,
-      materialId, input.slug, input.title, input.catalog_item_id, JSON.stringify(input.concept_codes), JSON.stringify(input.kinds), g ? g.proposal_id : null, input.brief_md, now, now, ...gp,
+      materialId, input.slug, input.title, input.catalog_item_id, JSON.stringify(input.concept_codes), JSON.stringify(input.kinds), g?.proposal_id ?? null, input.brief_md, now, now, ...gp,
     ),
     stmt(
       `INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, parent_version_id, brief_md, budget_cents, created_at, updated_at)
@@ -94,7 +96,7 @@ export async function insertMaterial(db: D1Database, input: MaterialInput, by: {
     if (isUniqueViolation(e)) return { status: 409, body: { error: 'slug_taken' } };
     throw e;
   }
-  console.log(JSON.stringify({ at: 'queue', material_id: materialId, job_id: jobId, ...(g ? { proposal_id: g.proposal_id } : {}) }));
+  console.log(JSON.stringify({ at: 'queue', material_id: materialId, job_id: jobId, ...(g?.proposal_id ? { proposal_id: g.proposal_id } : {}) }));
   return { status: 201, body: { material_id: materialId, job_id: jobId } };
 }
 
@@ -191,6 +193,7 @@ export async function getMaterialDetail(c: RouteCtx, id: string): Promise<Respon
     jobs: jobs.map((j) => ({ ...j, console_url: consoleUrl(c.env, (j.session_id as string) ?? null) })),
     review_decisions: decisions.map((d) => ({ ...d, checklist: parseJsonField(d.checklist_json, null) })),
     improvement_notes: notes,
+    machine_order: await machineOrderForMaterial(db, id), // §U-4（最初の注文の行）
   });
 }
 

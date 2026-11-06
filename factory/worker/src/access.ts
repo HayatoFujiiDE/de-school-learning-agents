@@ -3,7 +3,19 @@
 
 import { isLocalHostname, type Env } from './env';
 
-export type AccessResult = { ok: true; email: string } | { ok: false; response: Response };
+/**
+ * Access で確かめた呼び出し元。service は service token（common_name）で通った時だけ true（§U-1 の 2）。
+ * service の判定は必ずこのフィールドで行い、email の文字列（`service:` の接頭辞）で判定しない
+ */
+export interface AccessIdentity {
+  /** 人なら JWT の email。service token なら従来どおり `service:<common_name>`（/api/intake の動作を変えないため。判定には使わない） */
+  email: string;
+  service: boolean;
+  /** service token の common_name（人の時は null） */
+  commonName: string | null;
+}
+
+export type AccessResult = ({ ok: true } & AccessIdentity) | { ok: false; response: Response };
 
 const JWKS_TTL_SECONDS = 600;
 
@@ -50,13 +62,13 @@ async function getJwks(teamDomain: string): Promise<Array<Record<string, unknown
   return Array.isArray(data.keys) ? data.keys : [];
 }
 
-/** opts.allowCommonName: email が無い時に service token の common_name を受ける（/api/intake だけ。§K-3） */
-export async function verifyAccessJwt(
+/** opts.allowCommonName: email が無い時に service token の common_name を受ける（/api/intake と /api/orders だけ。§K-3・§U-1） */
+export async function verifyAccessIdentity(
   token: string,
   env: Env,
   nowSec = Math.floor(Date.now() / 1000),
   opts: { allowCommonName?: boolean } = {},
-): Promise<string | null> {
+): Promise<AccessIdentity | null> {
   const team = (env.ACCESS_TEAM_DOMAIN || '').replace(/\/+$/, '');
   const aud = env.ACCESS_AUD || '';
   if (!team || !aud) return null;
@@ -79,31 +91,44 @@ export async function verifyAccessJwt(
   if (!auds.includes(aud)) return null;
   if (typeof payload.exp !== 'number' || payload.exp <= nowSec) return null;
   if (typeof payload.nbf === 'number' && payload.nbf > nowSec + 60) return null;
-  if (typeof payload.email === 'string' && payload.email.length > 0) return payload.email;
-  if (opts.allowCommonName && typeof payload.common_name === 'string' && payload.common_name.length > 0) return `service:${payload.common_name}`;
+  if (typeof payload.email === 'string' && payload.email.length > 0) return { email: payload.email, service: false, commonName: null };
+  if (opts.allowCommonName && typeof payload.common_name === 'string' && payload.common_name.length > 0) {
+    return { email: `service:${payload.common_name}`, service: true, commonName: payload.common_name };
+  }
   return null;
 }
 
-/** Access の検証。GET 以外は Origin も検証する。opts.allowCommonName は /api/intake だけが付ける（他ルートは email 必須のまま） */
+/** 従来の形（email の文字列）。中身は verifyAccessIdentity と同じ検証 */
+export async function verifyAccessJwt(
+  token: string,
+  env: Env,
+  nowSec = Math.floor(Date.now() / 1000),
+  opts: { allowCommonName?: boolean } = {},
+): Promise<string | null> {
+  const id = await verifyAccessIdentity(token, env, nowSec, opts);
+  return id ? id.email : null;
+}
+
+/** Access の検証。GET 以外は Origin も検証する。opts.allowCommonName は /api/intake と /api/orders だけが付ける（他ルートは email 必須のまま） */
 export async function requireAccess(request: Request, env: Env, opts: { allowCommonName?: boolean } = {}): Promise<AccessResult> {
   const url = new URL(request.url);
-  let email: string | null = null;
+  let id: AccessIdentity | null = null;
   if (env.ACCESS_DEV_BYPASS_EMAIL && isLocalHostname(url.hostname)) {
-    email = env.ACCESS_DEV_BYPASS_EMAIL;
+    id = { email: env.ACCESS_DEV_BYPASS_EMAIL, service: false, commonName: null };
   } else {
     const token = request.headers.get('Cf-Access-Jwt-Assertion');
     if (!token) return denied();
     try {
-      email = await verifyAccessJwt(token, env, undefined, { allowCommonName: opts.allowCommonName === true });
+      id = await verifyAccessIdentity(token, env, undefined, { allowCommonName: opts.allowCommonName === true });
     } catch {
-      email = null;
+      id = null;
     }
-    if (!email) return denied();
+    if (!id) return denied();
   }
   // §B-1「GET 以外」: HEAD も検証する
   if (request.method !== 'GET') {
     const origin = request.headers.get('Origin');
     if (!origin || origin !== url.origin) return { ok: false, response: jsonError(403, 'bad_origin') };
   }
-  return { ok: true, email };
+  return { ok: true, ...id };
 }

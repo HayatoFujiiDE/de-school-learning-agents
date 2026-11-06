@@ -2,6 +2,7 @@
 import { getOEmbedPort } from '../anthropic';
 import { first, stmt } from '../db';
 import { consoleUrl } from '../env';
+import { machineOrderForJob } from '../machine-orders';
 import { fromResult, isNonEmptyString, json, parseJsonField, readBody, type RouteCtx } from '../http';
 import { answerJob, cancelJob, claimReingest, getJob, getMaterial, queueJobForMaterial, reconcileJob, startJob } from '../jobs';
 import { raiseBudget } from '../raise-budget';
@@ -45,6 +46,7 @@ export async function getJobDetail(c: RouteCtx, id: string): Promise<Response> {
       reconcile_state: parseJsonField(j.reconcile_state_json, {}),
       console_url: consoleUrl(c.env, j.session_id),
     },
+    machine_order: await machineOrderForJob(c.env.DB, id), // §U-4
   });
 }
 

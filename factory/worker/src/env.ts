@@ -77,6 +77,8 @@ export interface Env {
   TOPIC_CHECK_MODEL?: string;
   /** 振り返り係（§S-0）の月の上限（セント）。wrangler.jsonc には置かない（無い時は cfg() の既定 300） */
   RETRO_MONTHLY_CENTS?: string;
+  /** 機械用の注文の入口（§U-3 の 1）の 1 日の件数の上限。無い時は 5。0 以下なら全部止まる */
+  ORDER_DAILY_MAX?: string;
 
   // secrets
   ANTHROPIC_API_KEY?: string;
@@ -89,6 +91,8 @@ export interface Env {
   OPENAI_API_KEY_BACKUP?: string;
   /** 動画の確認（§Q-3 1）。読むのは src/gemini.ts だけ。D1・R2・ログに出さない。無ければ呼ばない（取り置きもしない） */
   GEMINI_API_KEY?: string;
+  /** 機械用の注文の入口（§U-1 の 4）で受ける service token の common_name（カンマ区切り）。wrangler secret で入れる。未設定・空なら誰も通さない */
+  ORDER_CLIENT_IDS?: string;
 
   // .dev.vars のみ（hostname が localhost / 127.0.0.1 の時だけ効く）
   ACCESS_DEV_BYPASS_EMAIL?: string;
@@ -148,7 +152,17 @@ export const cfg = (env: Env) => ({
   topicCheckModel: (env.TOPIC_CHECK_MODEL || env.TOPIC_GEN_MODEL || TOPIC_DEFAULT_MODEL).trim(),
   // §S-0
   retroMonthlyCents: intVar(env.RETRO_MONTHLY_CENTS, 300),
+  // §U-3 の 1（intVar は負の値を既定に戻すので使わない。0 以下は「全部止まる」）
+  orderDailyMax: signedIntVar(env.ORDER_DAILY_MAX, 5),
 });
+
+/** 整数の var（負の値もそのまま返す）。空・数でない時は既定 */
+export function signedIntVar(v: string | undefined, def: number): number {
+  const t = String(v ?? '').trim();
+  if (!/^-?\d+$/.test(t)) return def;
+  const n = Number.parseInt(t, 10);
+  return Number.isFinite(n) ? n : def;
+}
 
 /** お題の生成・検査の既定のモデル（contract-T T-4: 会議 MEETING_MODEL と同じ Sonnet 5.5 の id） */
 export const TOPIC_DEFAULT_MODEL = 'claude-sonnet-5-5';
