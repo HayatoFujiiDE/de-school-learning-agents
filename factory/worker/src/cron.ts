@@ -22,6 +22,8 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
   const cronStart = Date.now();
   const portCtx = { hostname: null, fakeEnabledSetting: await getSetting(db, 'fake_enabled') };
   const port = await getPort(env, portCtx);
+  // §Q-11 2・§Q-13: YouTube の oEmbed の port（検証の公式の情報と、回収の reconcile が処理する職人の道具 youtube_info の両方に渡す）
+  const oembed = await getOEmbedPort(env, portCtx);
   const out: Record<string, unknown> = {};
   const reconcileDeadline = Date.now() + CRON_RECONCILE_BUDGET_MS;
 
@@ -49,14 +51,14 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
       ),
     );
     const results: string[] = [];
-    for (const j of due) if (Date.now() < reconcileDeadline - 5_000) results.push(await reconcileJob(env, port, j.id, { deadline: reconcileDeadline }));
+    for (const j of due) if (Date.now() < reconcileDeadline - 5_000) results.push(await reconcileJob(env, port, j.id, { deadline: reconcileDeadline, oembed }));
     const pending = await all<{ event_id: string; resource_id: string }>(
       db,
       stmt('SELECT event_id, resource_id FROM webhook_events WHERE processed_at IS NULL AND received_at < ? ORDER BY received_at ASC LIMIT 10', isoPlus(-2 * 60_000)),
     );
     for (const w of pending) {
       const job = await all<{ id: string }>(db, stmt('SELECT id FROM factory_jobs WHERE session_id = ?', w.resource_id));
-      if (job[0] && (await getJob(db, job[0].id))) results.push(await reconcileJob(env, port, job[0].id, { deadline: reconcileDeadline }));
+      if (job[0] && (await getJob(db, job[0].id))) results.push(await reconcileJob(env, port, job[0].id, { deadline: reconcileDeadline, oembed }));
       await markWebhookProcessed(db, w.event_id);
     }
     out.reconciled = results;
@@ -71,7 +73,7 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
     out.verify = await runVerificationStep(env, port, {
       deadline: cronStart + CRON_LIMIT_MS - INTAKE_END_MARGIN_MS,
       gemini: await getGeminiPort(env, portCtx),
-      oembed: await getOEmbedPort(env, portCtx),
+      oembed,
     });
   } catch (e) {
     out.verify_error = e instanceof Error ? e.name : 'error';

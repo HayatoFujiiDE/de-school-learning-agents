@@ -1082,10 +1082,11 @@ describe('実装レビューの修正（2026-11-05）', () => {
     expect((e2 as OpenAiError).kind).toBe('bad_request');
   });
 
-  it('MAKER_CUSTOM_TOOLS は循環 import の順でも generate_image を持つ（m1）', async () => {
+  it('MAKER_CUSTOM_TOOLS は循環 import の順でも generate_image を持つ（m1。§Q-13 5 で youtube_info も）', async () => {
     const jobs = await import('../src/jobs');
-    expect(jobs.MAKER_CUSTOM_TOOLS).toEqual(['generate_image']);
+    expect(jobs.MAKER_CUSTOM_TOOLS).toEqual(['generate_image', 'youtube_info']);
     expect(jobs.rejectsCustomTool('generate_image')).toBe(false);
+    expect(jobs.rejectsCustomTool('youtube_info')).toBe(false);
     expect(jobs.rejectsCustomTool('draw_chart')).toBe(true);
   });
 });

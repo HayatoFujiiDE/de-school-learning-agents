@@ -7,6 +7,7 @@ import { MAX_FILE_BYTES } from './checks/schema';
 
 import type { BetaManagedAgentsEventParams } from '@anthropic-ai/sdk/resources/beta/sessions/events';
 import type { FactoryPort } from './anthropic';
+import type { OEmbedPort } from './youtube-oembed';
 import { IMAGE_ALT_MAX_CHARS } from './checks/schema';
 import { all, cas, conditionalBatch, first, getSetting, isoPlus, nowIso, stmt, tokyoDay, type Stmt } from './db';
 import { cfg, type Env } from './env';
@@ -692,7 +693,13 @@ export const imageR2Key = (jobId: string, requestId: string, token: string, form
  * D1 の例外は投げ直して Queue の再試行に任せる（再試行の consumer は 1 から。D の後なら 2 が 0 行で呼ばない）。
  * 戻り値はログ・テスト用
  */
-export async function runImage(env: Env, port: FactoryPort, images: ImagePort, requestId: string, o: { deadline: number }): Promise<string> {
+export async function runImage(
+  env: Env,
+  port: FactoryPort,
+  images: ImagePort,
+  requestId: string,
+  o: { deadline: number; oembed?: OEmbedPort },
+): Promise<string> {
   const db = env.DB;
   const row = await getImage(db, requestId);
   if (!row) return 'not_found';
@@ -774,7 +781,7 @@ export async function runImage(env: Env, port: FactoryPort, images: ImagePort, r
   }
   // 5. 職人へ返すのは reconcile だけ（job が終端・lease 競合なら何もしない。失敗は無視。cron が拾う）
   try {
-    await reconcileJob(env, port, row.job_id, { deadline: Math.min(o.deadline, Date.now() + CONSUMER_RECONCILE_MS) });
+    await reconcileJob(env, port, row.job_id, { deadline: Math.min(o.deadline, Date.now() + CONSUMER_RECONCILE_MS), oembed: o.oembed });
   } catch {
     // 無視
   }
