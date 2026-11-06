@@ -67,6 +67,7 @@ export const TOPIC_REASON_LABELS: Record<string, string> = {
   forbidden: '使わない言葉',
   schema: '形が合わない',
   duplicate: '同じ題がある',
+  latin_mix: '英語の小文字が混ざった文（人が読む）',
   ...Object.fromEntries(Object.entries(TOPIC_FLAG_LABELS).map(([k, v]) => [`flagged:${k}`, v])),
 };
 

@@ -76,6 +76,17 @@ export function hasForbidden(body: TopicBody): boolean {
 }
 
 /**
+ * 英語の小文字の混入（司令塔の裁定 2026-11-06・v2.5）: 子どもが読む文のどれかが「日本語の文字を含み、かつ ASCII の小文字が 3 文字以上続く所がある」。
+ * 例: 「両方を use わける」は当たる。「JAXA の MMX」「AI」「H3 ロケット」「Ver.2.0」は当たらない（大文字・数字・2 文字以下の小文字は対象外）。
+ * 「Scratch で作る」も当たるが、人が読めば出せるので held（気になる点）にして人へ回す。出典の引用・名前・URL と thumb_prompt は topicTexts に入らない
+ */
+const JA_CHAR = /[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]/;
+const LATIN_RUN = /[a-z]{3,}/;
+export function hasLatinMix(body: TopicBody): boolean {
+  return topicTexts(body).some((t) => JA_CHAR.test(t) && LATIN_RUN.test(t));
+}
+
+/**
  * 判定（T-5 の 4）。checkOutput が null なのは、形・禁止語で赤になり 3 の呼び出しをしなかった時だけ。
  * opts.slotDay は形の再検査（validateTopicBody）に渡す、お題の slot_day。
  */
@@ -94,6 +105,7 @@ export function judgeCheck(
   for (const code of schema) push(`schema:${code}`);
   const b = body as TopicBody;
   if (isObj(body) && hasForbidden(b)) push('forbidden');
+  if (isObj(body) && hasLatinMix(b)) push('latin_mix');
 
   const required = isObj(body) ? requiredSourceIds(b) : new Set<string>();
   const fetchById = new Map(sourceRows.map((s) => [s.source_id, s.fetch_result]));
@@ -116,14 +128,15 @@ export function judgeCheck(
 
   const sensitivity: Sensitivity = storedSensitivity === 'heavy' || checkOutput?.sensitivity === 'heavy' ? 'heavy' : 'normal';
   const verdict = reasons.length === 0 ? 'green' : 'red';
-  const approvable = reasons.every((r) => r.startsWith('flagged:'));
+  // latin_mix は人が読めば出せる（flags と同じく承認できる）
+  const approvable = reasons.every((r) => r.startsWith('flagged:') || r === 'latin_mix');
   let holdReason: HoldReason | null = null;
   if (reasons.some((r) => r.startsWith('schema:'))) holdReason = 'schema';
   else if (reasons.includes('forbidden')) holdReason = 'forbidden';
   else if (reasons.includes('source_not_found')) holdReason = 'source_not_found';
   else if (reasons.includes('source_unreachable')) holdReason = 'source_unreachable';
   else if (reasons.includes('source_unsupported')) holdReason = 'source_unsupported';
-  else if (reasons.some((r) => r.startsWith('flagged:'))) holdReason = 'flagged';
+  else if (reasons.some((r) => r.startsWith('flagged:') || r === 'latin_mix')) holdReason = 'flagged'; // latin_mix は「気になる点」として人が読む
   else if (sensitivity === 'heavy') holdReason = 'heavy';
   // 必須の出典が 0 個なら sourcesOk は true のまま（T-5 の 4）
   return { verdict, sourcesOk, approvable, holdReason, sensitivity, reasons };

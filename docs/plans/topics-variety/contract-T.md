@@ -528,6 +528,7 @@ strict を外した後の本番の 1 回目（run `114fae42`）は、API は通�
 - system 文の `{kind_rules}` の後ろに「形の決まり」を足す。文は `src/topics/prompts.ts` の `shapeRules` が、検査と同じ定数（`COUNTS`・`TEXT_LIMITS`・`TOPIC_INTERESTS`）から作る（verbatim の対象外。定数と種類だけで、外から来た文は入らない）。`tags.concept_codes` は空の配列にさせる（使える符号の一覧を渡していないため）。
 - user 文の最初の文に「お題を出す日は YYYY-MM-DD です。」を足す（Worker が決めた日。news の `event_day` の範囲の基準）。
 - 捨てた本ごとに、理由コードだけをログに出す（`{at:'topic_run', run_id, dropped_index, reasons}`。本文は出さない）。
+- 検査の判定（`judgeCheck`）に理由コード `latin_mix` を足す: 子どもが読む文（`topicTexts`）のどれかが日本語の文字を含み、かつ ASCII の小文字が 3 文字以上続く所がある時（例「両方を use わける」。「JAXA の MMX」「AI」「H3 ロケット」「Ver.2.0」は当たらない）。捨てずに held（`flagged` = 気になる点）にし、`flags` と同じく人が読んで承認できる（司令塔の裁定 2026-11-06。本番の news の小の文に「use」が混ざった実例から）。
 
 ## T-14 d の記録（2026-11-06、本番の実測。D1 の集計）
 
