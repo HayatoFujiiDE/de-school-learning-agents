@@ -338,3 +338,71 @@ describe('確認の印（ON / OFF）と、段落の印 ⇄ 出典カードの行
     expect(h.indexOf('id="rv-src-col"')).toBeLessThan(h.indexOf('id="rv-check"'));
   });
 });
+
+describe('付箋 → 差し戻しの理由の文', () => {
+  const st1 = { id: 1, part_id: 'p1', part_title: '赤血球のしごと', part_index: 0, variant_path: 'parts/p1/p1-elementary-short.md', variant_label: '小学生・短い', para_index: 2, head: '赤血球は 血の中で いちばん 数が 多い…', kind: 'hard', text: '「いちばん」の根拠', flowed: false };
+  const st2 = { ...st1, id: 2, para_index: 0, head: '図の', kind: 'other', text: '' };
+
+  it('1 件 = 1 行（場所・段落の番号・先頭 20 字・分類・一言）', () => {
+    expect(R.stickyLine(st1)).toBe('- parts/p1/p1-elementary-short.md 3 段落目「赤血球は 血の中で いちばん 数が 多い…」: 言葉が難しい — 「いちばん」の根拠');
+    expect(R.stickyLine(st2)).toBe('- parts/p1/p1-elementary-short.md 1 段落目「図の」: その他');
+    expect(R.STICK_KINDS.map((k: string[]) => k[1])).toEqual(['言葉が難しい', '長い', '図と合わない', '事実が心配', 'その他']);
+  });
+
+  it('既に書いてある理由は消さず、その後ろに箇条書きで足す（空なら付箋の行だけ）', () => {
+    expect(R.stickyNoteText('出典を直してください\n', [st1, st2])).toEqual({
+      note: '出典を直してください\n' + R.stickyLine(st1) + '\n' + R.stickyLine(st2),
+      added: 2,
+    });
+    expect(R.stickyNoteText('', [st1]).note).toBe(R.stickyLine(st1));
+  });
+
+  it('理由の上限 4000 字を超える行は足さない（added で何件入れたかを返す）', () => {
+    const r = R.stickyNoteText('あ'.repeat(3950), [st1, st2]);
+    expect(r.added).toBe(0);
+    expect(r.note.length).toBe(3950);
+    const r2 = R.stickyNoteText('あ'.repeat(3900), [st2, st1]);
+    expect(r2.added).toBe(1);
+    expect(r2.note.length).toBeLessThanOrEqual(4000);
+  });
+
+  it('一覧: 空の時の文・件数・まだ入れていない数・入れた印・1 件ずつの「消す」。文字はエスケープ', () => {
+    expect(R.stickyListHtml([])).toContain('付箋はまだありません');
+    const h = R.stickyListHtml([{ ...st1, text: '<b>x</b>' }, { ...st2, flowed: true }]);
+    expect(h).toContain('<b>付箋 2 件</b>');
+    expect(h).toContain('まだ入れていない 1 件を理由欄に箇条書きで足します');
+    expect(n(h, /data-stick-del="/g)).toBe(2);
+    expect(h).toContain('理由欄に入れました');
+    expect(h).toContain('&lt;b&gt;x&lt;/b&gt;');
+    expect(h).not.toContain('<b>x</b>');
+    expect(R.stickyListHtml([{ ...st1, flowed: true }])).toContain('すべて理由欄に入れました');
+  });
+
+  it('付箋のある段落には「付箋 N」の印。付箋は reviewStates の版ごとの状態に持つ', () => {
+    const d = fixture();
+    const h = R.previewBodyHtml(md('parts/p1/p1-elementary-short.md'), d.version.material.parts[0], { fileBase: BASE, marks: false, stickies: [st1, { ...st1, id: 3 }] });
+    expect(h).toContain('class="mp-para has-stick" id="mp-p-0-0-2"');
+    expect(h).toContain('<span class="mp-stuck" title="この段落の付箋">付箋 2</span>');
+    expect(R.newReviewState()).toMatchObject({ stickies: [], stickySeq: 0 });
+    const withList = R.reviewHtml(d, { ...R.newReviewState(), stickies: [st1] }, {});
+    expect(withList).toContain('id="mp-stickies"');
+    expect(withList).toContain('<b>付箋 1 件</b>');
+  });
+});
+
+describe('見比べ（左右 2 枠）', () => {
+  it('pv.compare で枠が 2 つ・右の枠に自分の切り替え・出典の欄は下へ（2 列をやめる）', () => {
+    const st = R.newReviewState();
+    expect(R.reviewHtml(fixture(), st, {})).toContain('data-pv="compare" data-val="1" data-pvf="0" aria-pressed="false">見比べ</button>');
+    st.pv.compare = true;
+    const h = R.reviewHtml(fixture(), st, {});
+    expect(n(h, /class="mat-preview"/g)).toBe(2);
+    expect(h).toContain('class="rv-study is-compare"');
+    expect(h).toContain('class="mp-frames is-compare"');
+    expect(h).toContain('data-pv="aud" data-val="secondary" data-pvf="1" aria-pressed="true">中学生</button>');
+    expect(h).toContain('見比べの間は、出典と主張の欄を下に移しています。');
+    expect(h).toContain('data-pv="compare" data-val="1" data-pvf="0" aria-pressed="true">見比べ</button>');
+    // 右の枠には見比べのボタンを出さない
+    expect(n(h, /data-pv="compare"/g)).toBe(1);
+  });
+});

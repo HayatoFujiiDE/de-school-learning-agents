@@ -2309,7 +2309,48 @@
     };
     return '<span class="mp-seg' + (sel.game ? ' is-off' : '') + '" role="group" aria-label="学年">' + b('aud', 'elementary', '小学生', !sel.game && sel.aud === 'elementary') + b('aud', 'secondary', '中学生', !sel.game && sel.aud === 'secondary') + '</span>' +
       '<span class="mp-seg' + (sel.game ? ' is-off' : '') + '" role="group" aria-label="長さ">' + b('len', 'short', '短い', !sel.game && sel.len === 'short') + b('len', 'long', '長い', !sel.game && sel.len === 'long') + '</span>' +
-      '<span class="mp-seg" role="group" aria-label="ゲーム版">' + b('game', '1', 'ゲーム版', !!sel.game) + '</span>';
+      '<span class="mp-seg" role="group" aria-label="ゲーム版">' + b('game', '1', 'ゲーム版', !!sel.game) + '</span>' +
+      (fi === 0 ? '<span class="mp-seg" role="group" aria-label="見比べ">' + b('compare', '1', '見比べ', !!sel.compare) + '</span>' : '');
+  }
+  // ---- 付箋（段落に「ここに付箋」→ 分類 + 一言。差し戻す時に理由欄へ箇条書きで流し込む。API・DB は変えない）----
+  var STICK_KINDS = [['hard', '言葉が難しい'], ['long', '長い'], ['figure', '図と合わない'], ['fact', '事実が心配'], ['other', 'その他']];
+  var STICK_LABEL = {};
+  STICK_KINDS.forEach(function (k) { STICK_LABEL[k[0]] = k[1]; });
+  var NOTE_MAX = 4000; // 差し戻しの理由の上限（routes/review.ts の note）
+  /** 付箋 1 件 → 理由の 1 行（例: "- parts/p1/p1-elementary-short.md 3 段落目「赤血球は…」: 言葉が難しい — 一言"） */
+  function stickyLine(s) {
+    return '- ' + s.variant_path + ' ' + (Number(s.para_index) + 1) + ' 段落目「' + s.head + '」: ' + (STICK_LABEL[s.kind] || 'その他') + (s.text ? ' — ' + s.text : '');
+  }
+  /** 理由の文に付箋の行を足す（書いてある理由は消さず、その後ろに。上限を超える行は足さない）→ { note, added } */
+  function stickyNoteText(note, stickies) {
+    var out = String(note || '').replace(/\s+$/, ''), added = 0;
+    for (var i = 0; i < stickies.length; i++) {
+      var next = (out ? out + '\n' : '') + stickyLine(stickies[i]);
+      if (next.length > NOTE_MAX) break;
+      out = next; added++;
+    }
+    return { note: out, added: added };
+  }
+  function stickyListHtml(stickies) {
+    if (!stickies.length) return '<p class="mp-stick-empty">付箋はまだありません。「確認の印を見る」を ON にして、段落の「ここに付箋」から付けられます。</p>';
+    var pending = stickies.filter(function (s) { return !s.flowed; }).length;
+    return '<div class="mp-stick-head"><b>付箋 ' + stickies.length + ' 件</b><span class="muted">' + (pending ? '「差し戻す」を押すと、まだ入れていない ' + pending + ' 件を理由欄に箇条書きで足します（書いてある理由は消しません）' : 'すべて理由欄に入れました') + '</span></div>' +
+      '<ul class="mp-stick-list">' + stickies.map(function (s) {
+        return '<li class="mp-stick-item" data-stick-item="' + s.id + '"><span class="mp-stick-kind">' + esc(STICK_LABEL[s.kind] || 'その他') + '</span>' +
+          '<span class="mp-stick-where">' + esc(s.part_title || s.part_id) + '・' + esc(s.variant_label) + ' ' + (Number(s.para_index) + 1) + ' 段落目「' + esc(s.head) + '」</span>' +
+          (s.text ? '<span class="mp-stick-text">' + esc(s.text) + '</span>' : '') +
+          (s.flowed ? '<span class="pill green">理由欄に入れました</span>' : '') +
+          '<button type="button" class="btn small" data-stick-del="' + s.id + '">消す</button></li>';
+      }).join('') + '</ul>';
+  }
+  function stickyFormHtml(kind) {
+    return '<span class="mp-stick-form" data-stick-form="1" role="group" aria-label="付箋を付ける"><span class="mp-stick-q">この段落に付箋を付けます。どれに近いですか？</span>' +
+      '<span class="mp-chips">' + STICK_KINDS.map(function (k) {
+        return '<button type="button" class="mp-chip' + (kind === k[0] ? ' on' : '') + '" data-stick-kind="' + k[0] + '" aria-pressed="' + (kind === k[0] ? 'true' : 'false') + '">' + k[1] + '</button>';
+      }).join('') + '</span>' +
+      '<input type="text" class="mp-stick-input" maxlength="200" placeholder="一言（任意）例: 「酸素」が小学生には難しい" aria-label="付箋の一言">' +
+      '<span class="mp-stick-btns"><button type="button" class="btn small primary" data-stick-add="1"' + (kind ? '' : ' disabled') + '>付箋を付ける</button><button type="button" class="btn small" data-stick-cancel="1">やめる</button>' +
+      (kind ? '' : '<span class="muted mp-stick-hint">種類を選ぶと付けられます</span>') + '</span></span>';
   }
   /** 1 枠の骨組み（本文は DOM 側が md を読んでから previewBodyHtml で入れる） */
   function previewFrameHtml(d, sel, fi) {
@@ -2600,12 +2641,13 @@
     var srcModel = sourceCardsOf(d);
     var pv = st.pv || defaultPv();
     // 教材プレビュー（左）と出典と主張（右）。本文は DOM 側が md を読んでから入れる（renderPreview）
-    var body = '<div class="rv-study" id="rv-study"><section class="card rv-pv" id="rv-body">' +
+    var body = '<div class="rv-study' + (pv.compare ? ' is-compare' : '') + '" id="rv-study"><section class="card rv-pv" id="rv-body">' +
       '<div class="rv-pv-head"><h2>教材として見る</h2><div class="mp-tools"><div class="mp-bar" id="mp-bar" role="toolbar" aria-label="教材の見え方">' + pvSwitchHtml(pv, 0) + '</div>' +
         marksToggleHtml(ctx.marks !== false) + '</div></div>' +
       '<p class="muted rv-pv-lead">子どもが見る形で出しています。学年と長さを切り替えて、分かりにくい所・分かりやすい所を見てください。</p>' +
-      '<div class="mp-frames" id="mp-frames">' + previewFrameHtml(d, pv, 0) + '</div></section>' +
-      '<aside class="rv-src-col" id="rv-src-col">' + sourcesPanelHtml(d, srcModel) + '</aside></div>';
+      '<div class="mp-frames' + (pv.compare ? ' is-compare' : '') + '" id="mp-frames">' + (pv.compare ? [pv, pv.cmp] : [pv]).map(function (sel, fi) { return previewFrameHtml(d, sel, fi); }).join('') + '</div>' +
+      '<div class="mp-stickies" id="mp-stickies" aria-live="polite">' + stickyListHtml(st.stickies || []) + '</div></section>' +
+      '<aside class="rv-src-col" id="rv-src-col">' + (pv.compare ? '<p class="muted rv-src-note">見比べの間は、出典と主張の欄を下に移しています。</p>' : '') + sourcesPanelHtml(d, srcModel) + '</aside></div>';
     var items = reviewItems(tri);
     var check = isReview ? '<div class="card" id="rv-check"><h2>あなたが見る項目</h2>' + items.map(function (k, i) { return itemHtml(k, i, d, st, tri); }).join('') + '</div>' : '';
     // 主張と出典の全件の表（問題のある行も含む。照合の生の値はここに残す）。「問題なし」は出典カードの側で問題の無いものだけを畳む
@@ -2664,6 +2706,7 @@
     document.body.classList.toggle('has-foot', d.version.status === 'review');
     document.body.classList.add('review-wide');
     $('#rv-study').addEventListener('click', onStudyClick);
+    $('#rv-study').addEventListener('keydown', onStickyKey);
     $('#rv-groups').addEventListener('click', onStudyClick);
     fillPreview();
     $('#rv-help').addEventListener('click', openKeys);
@@ -2749,7 +2792,7 @@
     var d = c.d, st = c.st, token = c.pvToken = (c.pvToken || 0) + 1;
     var parts = (d.version.material && Array.isArray(d.version.material.parts)) ? d.version.material.parts : [];
     var tri = triageOf(d), model = sourceCardsOf(d);
-    var base = { fileBase: '/api/review/' + encodeURIComponent(c.vid) + '/files/', marks: c.marks !== false, chips: true, stick: false, markIds: markIdsOf(tri), claimIdx: claimIndexOf(d), claimRef: claimRefsOf(d, model) };
+    var base = { fileBase: '/api/review/' + encodeURIComponent(c.vid) + '/files/', marks: c.marks !== false, chips: true, stick: true, markIds: markIdsOf(tri), claimIdx: claimIndexOf(d), claimRef: claimRefsOf(d, model) };
     previewFrames(st).forEach(function (sel, fi) {
       parts.forEach(function (p, pi) {
         var el = document.getElementById('mp-body-' + fi + '-' + pi);
@@ -2761,6 +2804,7 @@
           var o = {};
           for (var k in base) o[k] = base[k];
           o.frame = fi; o.pi = pi;
+          o.stickies = (st.stickies || []).filter(function (s) { return s.part_index === pi && s.variant_path === vr.path; });
           el.innerHTML = previewBodyHtml(t, p, o);
         }, function (e) {
           if (reviewCtx !== c || c.pvToken !== token) return;
@@ -2775,9 +2819,16 @@
     if (!c) return;
     var wrap = $('#mp-frames'), bar = $('#mp-bar');
     if (!wrap) return;
-    var frames = previewFrames(c.st);
+    var frames = previewFrames(c.st), cmp = !!c.st.pv.compare;
+    c.stickDraft = null;
     if (bar) bar.innerHTML = pvSwitchHtml(frames[0], 0);
     wrap.innerHTML = frames.map(function (sel, fi) { return previewFrameHtml(c.d, sel, fi); }).join('');
+    wrap.classList.toggle('is-compare', cmp);
+    var study = $('#rv-study');
+    if (study) study.classList.toggle('is-compare', cmp);
+    var col = $('#rv-src-col'), note = col && col.querySelector('.rv-src-note');
+    if (col && cmp && !note) col.insertAdjacentHTML('afterbegin', '<p class="muted rv-src-note">見比べの間は、出典と主張の欄を下に移しています。</p>');
+    if (note && !cmp) note.parentNode.removeChild(note);
     fillPreview();
   }
   function onStudyClick(e) {
@@ -2790,6 +2841,7 @@
       var frames = previewFrames(c.st), fi = Number(b.getAttribute('data-pvf')) || 0;
       var sel = frames[fi] || frames[0], key = b.getAttribute('data-pv'), val = b.getAttribute('data-val');
       if (key === 'game') sel.game = !sel.game;
+      else if (key === 'compare') c.st.pv.compare = !c.st.pv.compare;
       else if (key === 'aud' || key === 'len') { sel[key] = val; sel.game = false; }
       renderPreview();
       var again = document.querySelector('[data-pv="' + key + '"][data-pvf="' + fi + '"]' + (key === 'game' ? '' : '[data-val="' + val + '"]'));
@@ -2809,6 +2861,7 @@
     }
     var g = t.closest('[data-goto]');
     if (g) { gotoTarget(g.getAttribute('data-goto'), '出典カード'); return; }
+    if (onStickyClick(c, t)) return;
     var gc = t.closest('[data-goto-claim]');
     if (gc) {
       var n = gc.getAttribute('data-goto-claim');
@@ -2816,6 +2869,96 @@
       if (para) gotoTarget(para.id, '');
       else toast('いま表示している「' + pvLabel(previewFrames(c.st)[0]) + '」には、この主張の段落がありません。学年・長さを切り替えてください', true);
     }
+  }
+  // ---- 付箋の DOM 側 ----
+  function renderStickies() {
+    var c = reviewCtx, el = $('#mp-stickies');
+    if (c && el) el.innerHTML = stickyListHtml(c.st.stickies || []);
+  }
+  function closeStickyForm() {
+    var f = document.querySelector('[data-stick-form]');
+    if (f) f.parentNode.removeChild(f);
+    if (reviewCtx) reviewCtx.stickDraft = null;
+  }
+  /** まだ理由欄に入れていない付箋を、理由欄の後ろに足す（textarea にも反映し、何件入れたかを出す） */
+  function flowStickies(st) {
+    var pending = (st.stickies || []).filter(function (s) { return !s.flowed; });
+    if (!pending.length) return 0;
+    var r = stickyNoteText(st.note, pending);
+    st.note = r.note;
+    pending.slice(0, r.added).forEach(function (s) { s.flowed = true; });
+    var ta = $('#d-note');
+    if (ta) ta.value = st.note;
+    renderStickies();
+    var left = pending.length - r.added;
+    toast(r.added ? '付箋 ' + r.added + ' 件を差し戻しの理由に足しました' + (left ? '（' + NOTE_MAX + ' 字を超えるため ' + left + ' 件は入れていません）' : '') : '理由が ' + NOTE_MAX + ' 字を超えるため、付箋を足せませんでした', !r.added || left > 0);
+    return r.added;
+  }
+  function addSticky(c) {
+    var dr = c.stickDraft, form = document.querySelector('[data-stick-form]');
+    if (!dr || !dr.kind || !form) return;
+    var inp = form.querySelector('input');
+    var st = c.st;
+    st.stickies = st.stickies || [];
+    st.stickySeq = (st.stickySeq || 0) + 1;
+    st.stickies.push({
+      id: st.stickySeq, part_id: dr.part_id, part_title: dr.part_title, part_index: dr.pi, variant_path: dr.path, variant_label: dr.label,
+      para_index: dr.para, head: dr.head, kind: dr.kind, text: inp ? inp.value.trim().slice(0, 200) : '', flowed: false
+    });
+    c.stickDraft = null;
+    fillPreview();
+    renderStickies();
+    if (st.mode === 'return') flowStickies(st);
+    else toast('付箋を付けました（全部で ' + st.stickies.length + ' 件）。差し戻す時に理由欄へ入ります');
+  }
+  /** 付箋の操作なら true */
+  function onStickyClick(c, t) {
+    var open = t.closest('[data-stick-open]');
+    if (open) {
+      closeStickyForm();
+      var paraEl = open.closest('[data-para]'), body = open.closest('[data-mp-body]'), frame = open.closest('.mat-preview');
+      if (!paraEl || !body || !frame) return true;
+      var fi = Number(frame.getAttribute('data-frame')) || 0, pi = Number(body.getAttribute('data-mp-body')) || 0;
+      var part = ((c.d.version.material || {}).parts || [])[pi] || {};
+      var vr = pickVariant(part, previewFrames(c.st)[fi] || c.st.pv);
+      if (!vr) return true;
+      c.stickDraft = { pi: pi, part_id: String(part.id || ''), part_title: String(part.title || ''), path: vr.path, label: variantLabel(vr), para: Number(paraEl.getAttribute('data-para')), head: paraEl.getAttribute('data-head') || '', kind: null };
+      paraEl.insertAdjacentHTML('beforeend', stickyFormHtml(null));
+      var first = paraEl.querySelector('[data-stick-kind]');
+      if (first) first.focus();
+      return true;
+    }
+    var kind = t.closest('[data-stick-kind]');
+    if (kind) {
+      if (!c.stickDraft) return true;
+      c.stickDraft.kind = kind.getAttribute('data-stick-kind');
+      var form = kind.closest('[data-stick-form]');
+      var text = form.querySelector('input').value;
+      form.outerHTML = stickyFormHtml(c.stickDraft.kind);
+      var nf = document.querySelector('[data-stick-form]');
+      if (nf) { var ni = nf.querySelector('input'); ni.value = text; ni.focus(); }
+      return true;
+    }
+    if (t.closest('[data-stick-add]')) { addSticky(c); return true; }
+    if (t.closest('[data-stick-cancel]')) { closeStickyForm(); return true; }
+    var del = t.closest('[data-stick-del]');
+    if (del) {
+      var id = Number(del.getAttribute('data-stick-del'));
+      c.st.stickies = (c.st.stickies || []).filter(function (s) { return s.id !== id; });
+      fillPreview();
+      renderStickies();
+      toast('付箋を消しました（残り ' + c.st.stickies.length + ' 件）' + (c.st.mode === 'return' ? '。理由欄に入れた行は残っています' : ''));
+      return true;
+    }
+    return false;
+  }
+  /** 付箋の一言の欄: Enter で付ける・Esc でやめる（入力中なので確認画面のキー操作は効かない） */
+  function onStickyKey(e) {
+    var c = reviewCtx;
+    if (!c || !e.target || !e.target.closest || !e.target.closest('[data-stick-form]') || e.target.tagName !== 'INPUT') return;
+    if (e.isComposing) return;
+    if (e.key === 'Enter') { e.preventDefault(); if (c.stickDraft && c.stickDraft.kind) addSticky(c); else toast('付箋の種類を選んでください', true); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeStickyForm(); }
   }
   /** 行き先へスクロールして点滅（閉じている details の中なら開く。既存の scrollToTarget を使う） */
   function gotoTarget(id, what) {
@@ -2847,6 +2990,7 @@
     if (cmd.cmd === 'return' || cmd.cmd === 'reject') {
       if (st.mode !== cmd.cmd) {
         st.mode = cmd.cmd;
+        if (cmd.cmd === 'return') flowStickies(st); // 付箋を理由欄の初期値へ（書いてある理由の後ろに足す）
         syncReview();
         var ta = $('#d-note');
         if (ta) { ta.focus(); ta.scrollIntoView({ block: 'nearest' }); }
@@ -2979,7 +3123,9 @@
     sourceCardsOf: sourceCardsOf, claimsBySource: claimsBySource, accessedText: accessedText, shortUrl: shortUrl,
     // 教材プレビュー
     inlineMd: inlineMd, pickVariant: pickVariant, previewBodyHtml: previewBodyHtml, previewFrameHtml: previewFrameHtml, kindName: kindName,
-    defaultPv: defaultPv, claimRefsOf: claimRefsOf
+    defaultPv: defaultPv, claimRefsOf: claimRefsOf,
+    // 付箋
+    stickyLine: stickyLine, stickyNoteText: stickyNoteText, stickyListHtml: stickyListHtml, STICK_KINDS: STICK_KINDS
   };
 
   // ---- 画面: 改善係の記録（振り返り係 §S-5 5。画面での名前は「改善係」）----

@@ -60,6 +60,28 @@
         });
       });
     },
+    'sticky-del': function () {
+      addSticky(2, 'hard', 'a', function () {
+        addSticky(3, 'fact', 'b', function () {
+          click('[data-stick-del="1"]');
+          // Enter で付ける・Esc でやめる
+          click('#mp-body-0-0 [data-stick-open="4"]');
+          when(function () { return !!$('[data-stick-form]'); }, function () {
+            click('[data-stick-kind="long"]');
+            var inp = $('[data-stick-form] input');
+            inp.value = 'enter';
+            inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+            setTimeout(function () {
+              click('#mp-body-0-0 [data-stick-open="5"]');
+              when(function () { return !!$('[data-stick-form]'); }, function () {
+                $('[data-stick-form] input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+                done();
+              });
+            }, 150);
+          });
+        });
+      });
+    },
     goto: function () {
       toStudy();
       setTimeout(function () { click('#mp-body-0-0 [data-para="3"] .mp-cite'); window.scrollTo(0, 0); setTimeout(done, 200); }, 200);
