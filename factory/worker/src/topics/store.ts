@@ -198,6 +198,37 @@ export function doneQ(topicId: string, attempt: number, token: string): { sql: s
   return { sql: `EXISTS (SELECT 1 FROM topic_checks WHERE topic_id = ? AND attempt = ? AND done_token = ?)`, params: [topicId, attempt, token] };
 }
 
+/**
+ * 取った run の取り消し（v2.4 の裁定 7。取った後、外部を 1 回も呼ぶ前に時間が足りなくなった時）。
+ * 取り置きの台帳の行と run の行を同じ batch で削除する（述語は run の calling と token）。最後の文の changes で成否。その日の枠を消費しない
+ */
+export function runCancelStmts(runId: string, token: string): Stmt[] {
+  return [
+    {
+      sql: `DELETE FROM cost_ledger WHERE kind = 'topic' AND ref_id = ? AND EXISTS (SELECT 1 FROM topic_runs WHERE id = ? AND status = 'calling' AND token = ?)`,
+      params: [genLedgerRef(runId), runId, token],
+    },
+    { sql: `DELETE FROM topic_runs WHERE id = ? AND status = 'calling' AND token = ?`, params: [runId, token] },
+  ];
+}
+
+/**
+ * 取った検査の取り消し（v2.4 の裁定 7。出典を開いた後、外部を呼ぶ前に時間が足りなくなった時）。
+ * 取り置きの台帳の行を削除し、お題を draft に戻して check_attempts を 1 減らす（巡の回数を消費しない）。同じ batch・述語は checking と token
+ */
+export function checkCancelStmts(topicId: string, attempt: number, token: string, now: string): Stmt[] {
+  return [
+    {
+      sql: `DELETE FROM cost_ledger WHERE kind = 'topic' AND ref_id = ? AND EXISTS (SELECT 1 FROM topics WHERE id = ? AND status = 'checking' AND check_token = ?)`,
+      params: [checkLedgerRef(topicId, attempt), topicId, token],
+    },
+    {
+      sql: `UPDATE topics SET status = 'draft', check_attempts = check_attempts - 1, check_token = NULL, check_lease_until = NULL, updated_at = ? WHERE id = ? AND status = 'checking' AND check_token = ?`,
+      params: [now, topicId, token],
+    },
+  ];
+}
+
 /** 確定（T-6）: 実額と取り置き額の小さい方。述語が偽なら 0 行（取り置き額のまま） */
 export function ledgerSettleStmt(ref: string, actualCents: number, pred: { sql: string; params: SqlValue[] }): Stmt {
   return { sql: `UPDATE cost_ledger SET cents = MIN(?, cents) WHERE kind = 'topic' AND ref_id = ? AND ${pred.sql}`, params: [Math.max(0, Math.ceil(actualCents)), ref, ...pred.params] };

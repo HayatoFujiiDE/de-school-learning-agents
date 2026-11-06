@@ -35,11 +35,16 @@ export function foldWidth(s: string): string {
 const NAMED_REFS: Record<string, string> = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0', copy: '©', reg: '®', trade: '™', hellip: '…',
   mdash: '—', ndash: '–', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', yen: '¥', middot: '·', times: '×', deg: '°',
+  // HTML の名前つき参照の一覧にある大文字の別名
+  QUOT: '"', AMP: '&', LT: '<', GT: '>',
 };
 
-/** 文字参照を戻す（数値の参照と NAMED_REFS）。知らない名前・範囲外の数値はそのまま残す。量指定が有限なので入力の長さに比例する */
+/**
+ * 文字参照を戻す（数値の参照と NAMED_REFS）。知らない名前・範囲外（0・0x10FFFF 超・代理領域）の数値はそのまま残す。
+ * 数値は先頭の 0 を許し、桁数の上限（16 進 6・10 進 7）は先頭の 0 を除いた後に当てる。0 の並びは 1 回ずつしか読み直さないので入力の長さに比例する
+ */
 export function decodeCharRefs(s: string): string {
-  return s.replace(/&(?:#[xX]([0-9a-fA-F]{1,6})|#([0-9]{1,7})|([a-zA-Z]{2,8}));/g, (m, hex: string | undefined, dec: string | undefined, name: string | undefined) => {
+  return s.replace(/&(?:#[xX]0*([0-9a-fA-F]{1,6})|#0*([0-9]{1,7})|([a-zA-Z]{2,8}));/g, (m, hex: string | undefined, dec: string | undefined, name: string | undefined) => {
     if (name !== undefined) return Object.prototype.hasOwnProperty.call(NAMED_REFS, name) ? NAMED_REFS[name] : m;
     const n = hex !== undefined ? Number.parseInt(hex, 16) : Number.parseInt(dec as string, 10);
     if (!(n > 0 && n <= 0x10ffff) || (n >= 0xd800 && n <= 0xdfff)) return m;
@@ -48,6 +53,8 @@ export function decodeCharRefs(s: string): string {
 }
 
 const isAsciiLetter = (c: number): boolean => (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+/** タグ名に読む文字（英数字と -） */
+const isTagNameChar = (c: number): boolean => isAsciiLetter(c) || (c >= 48 && c <= 57) || c === 45;
 const isSpace = (c: number): boolean => c === 32 || c === 9 || c === 10 || c === 12 || c === 13;
 
 /**
@@ -92,7 +99,7 @@ function findEndTag(h: string, i: number, name: string): number {
  * HTML → 本文（契約 v2.4 の裁定 1）。先頭から 1 回で読む状態つきの走査で、時間は入力の長さに比例する（どの位置も後戻りして読み直さない）。
  * - `<` の次が英字・`/`・`!`・`?` の時だけマークアップの始まり。それ以外の `<` は文字のまま
  * - タグは属性の値の引用符の中の `>` で終わらない。コメントは `-->` まで。`<!…>`・`<?…>` は `>` まで
- * - `<script>`・`<style>` は中身ごと除く（終わりは `</script` / `</style` だけ）
+ * - `<script>`・`<style>` は中身ごと除く（タグ名は英数字と - を全部読み、名前の完全一致だけ。大文字小文字は区別しない。終わりは `</script` / `</style` だけ）
  * - 閉じていないコメント・タグ・script・style は、そこから終わりまでを本文に入れない
  * - 除いた所は空白 1 つにし、最後に文字参照を戻す。空白の正規化は normalizeForQuote
  */
@@ -131,7 +138,7 @@ export function htmlToText(html: string): string {
       // 開始タグか終了タグ。名前を読む
       let k = lt + (isEnd ? 2 : 1);
       const nameStart = k;
-      while (k < n && isAsciiLetter(h.charCodeAt(k))) k++;
+      while (k < n && isTagNameChar(h.charCodeAt(k))) k++; // 名前は英数字と - を全部読む（<style2-panel> は style ではない）
       const name = h.slice(nameStart, k).toLowerCase();
       next = tagEnd(h, k);
       if (next >= 0 && !isEnd && (name === 'script' || name === 'style')) {

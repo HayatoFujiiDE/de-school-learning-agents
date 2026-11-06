@@ -17,6 +17,7 @@ import { requiredSourceIds, titleJaccard, validateTopicBody, type TopicBody } fr
 import {
   CHECK_BACKOFF_MS,
   CHECK_LEASE_MS,
+  checkCancelStmts,
   checkClaimStmt,
   checkLedgerRef,
   checkPred,
@@ -222,13 +223,11 @@ export async function checkTopic(env: Env, port: FactoryPort, topicId: string, o
     tool_choice: { type: 'auto' },
   };
   if (opts.deadline - Date.now() < TOPIC_CALL_MIN_LEFT_MS) {
-    // 出典を開いた後で残りが 5 秒未満: 呼ばない。呼んでいないので台帳は 0、T-3 の 1 文（check_not_before なし。この巡の回数は 1 使う）
-    const t = nowIso();
-    const P = checkPred(topicId, A, token, t);
-    const r = await conditionalBatch(db, [ledgerSettleStmt(ref, 0, P), failStmt({ id: topicId, attempt: A, token, now: t, max: c.topicCheckMaxAttempts, notBefore: null })]);
-    const after = await readTopic(db, topicId);
-    log(r.ok ? String(after?.status) : 'lost', { error: 'no_time' });
-    return { status: r.ok ? ((after?.status as CheckStatus) ?? 'draft') : 'lost', error: 'no_time', attempt: A };
+    // 出典を開いた後で残りが 5 秒未満: 呼ばない。外部（モデル）を 1 回も呼んでいないので取り消す（v2.4 の裁定 7）:
+    // 取り置きの台帳の行を削除し、draft に戻して check_attempts を 1 減らす（巡の回数を消費しない）。出典を開いた結果は書かない
+    const r = await conditionalBatch(db, checkCancelStmts(topicId, A, token, nowIso()));
+    log(r.ok ? 'cancelled' : 'lost', { error: 'no_time' });
+    return r.ok ? { status: 'not_taken', error: 'no_time' } : { status: 'lost', error: 'no_time', attempt: A };
   }
   const callOpts: CallOpts = { deadline: Math.min(opts.deadline, Date.now() + TOPIC_CHECK_TIMEOUT_MS), maxTimeoutMs: TOPIC_CHECK_TIMEOUT_MS, maxRetries: 0 };
   let msg: Message;

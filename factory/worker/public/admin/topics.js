@@ -588,6 +588,7 @@
       }, function (e) {
         if (!alive(cfg.g)) return false;
         var msg = errorText(e, meta);
+        if (st.open && !st.detail) loadDetail(); // beginOp で捨てた詳細の取得を読み直す（読み込み中の表示を残さない）
         setResult(result, msg, true); result.focus(); toast(msg, true);
         return false;
       });

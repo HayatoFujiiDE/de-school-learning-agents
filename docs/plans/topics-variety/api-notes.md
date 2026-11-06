@@ -60,7 +60,7 @@
 }
 ```
 
-`status`: `calling` | `done` | `failed` | `skipped`。`error` は理由コード 1 つ（`cap` / `abandoned` / `timeout` / `no_output` / `no_valid_topic` / `rate_limited` / `quota` / `auth` / `bad_request` / `server` / `lost_run` / `no_time` など。`no_time` は入力を読んだ後で締め切りまでの残りが 5 秒未満になり、呼ばずに終えた run — 台帳は 0）。
+`status`: `calling` | `done` | `failed` | `skipped`。`error` は理由コード 1 つ（`cap` / `abandoned` / `timeout` / `no_output` / `no_valid_topic` / `rate_limited` / `quota` / `auth` / `bad_request` / `server` / `lost_run` など）。締め切りまでの残りが 5 秒未満の時は run の行を残さない: 取る前なら取らず、入力を読んだ後（モデルを 1 回も呼ぶ前）に 5 秒未満になったら run の行と取り置きの台帳の行を同じ batch で削除して取り消す。どちらも応答は `not_taken`・理由 `no_time` で、その日の枠を消費しない（次の定期処理がまた取れる）。検査も同じく、出典を開いた後に 5 秒未満なら取り置きを削除して draft に戻し、`check_attempts` を 1 減らす（巡の回数を消費しない）。
 
 ## ルート
 

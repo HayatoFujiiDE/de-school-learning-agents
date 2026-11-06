@@ -25,6 +25,7 @@ import {
   overReserveStmt,
   readRun,
   readTopic,
+  runCancelStmts,
   runPred,
   RUN_LEASE_MS,
   TOPIC_GEN_MAX_TOKENS,
@@ -422,8 +423,14 @@ export async function runTopicRun(env: Env, port: FactoryPort, req: RunRequest, 
     return finishFailed('input_failed', false);
   }
 
-  // 呼び出し（1 回・再送なし・絶対の締め切り）。入力（RSS）の後で残りが 5 秒未満なら呼ばない（呼んでいないので台帳は 0）
-  if (opts.deadline - Date.now() < TOPIC_CALL_MIN_LEFT_MS) return finishFailed('no_time', true);
+  // 呼び出し（1 回・再送なし・絶対の締め切り）。入力（RSS）の後で残りが 5 秒未満なら呼ばない。
+  // 外部（モデル）を 1 回も呼んでいないので、run の行と取り置きの台帳の行を削除して取り消す（その日の枠を消費しない。次の tick がまた取れる。v2.4 の裁定 7）
+  if (opts.deadline - Date.now() < TOPIC_CALL_MIN_LEFT_MS) {
+    const r = await conditionalBatch(db, runCancelStmts(runId, token));
+    console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: r.ok ? 'cancelled' : 'lost', reason: 'no_time' }));
+    const run = r.ok ? null : await readRun(db, runId);
+    return { status: 'not_taken', reason: 'no_time', ...(run ? { run } : {}) };
+  }
   const callOpts: CallOpts = { deadline: Math.min(opts.deadline, Date.now() + TOPIC_GEN_TIMEOUT_MS), maxTimeoutMs: TOPIC_GEN_TIMEOUT_MS, maxRetries: 0 };
   let msg: Message;
   try {

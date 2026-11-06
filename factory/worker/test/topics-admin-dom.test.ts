@@ -340,3 +340,31 @@ describe('見直しの子が終わっていない時は「見直す」を出さ�
     expect(button(view.querySelector('article[data-tp-topic="tp_2"]')!, '見直す')).toBeDefined();
   });
 });
+
+describe('派生の POST が失敗した時、開いていて詳細が無ければ読み直す（レビュー残り 4）', () => {
+  it('全文の取得中に「見直す」→ 500 → 古い GET の応答の順でも、読み込み中が残らず詳細が出る', async () => {
+    const slow = deferred();
+    const ready = row({ status: 'ready', hold_reason: null });
+    let gets = 0;
+    route = (m, p) => {
+      if (p === '/api/topics/meta') return meta;
+      if (p.startsWith('/api/topics?status=ready')) return { topics: [ready], next_before: null };
+      if (m === 'GET' && p === '/api/topics/tp_1') return ++gets === 1 ? slow.promise : detail(ready);
+      if (m === 'POST' && p === '/api/topics/tp_1/derive') return Promise.reject({ status: 500, code: 'server' });
+      throw new Error(`unexpected ${m} ${p}`);
+    };
+    await mountAt('#/topics/stock');
+    const card = view.querySelector('article[data-tp-topic="tp_1"]')!;
+    button(card, '全文と系譜を開く')!.click();
+    await flush();
+    expect(card.querySelector('[data-tp-loading]')).not.toBeNull();
+    button(card, '見直す')!.click();
+    await flush();
+    expect(calls.filter((c) => c.method === 'POST').length).toBe(1);
+    slow.resolve(detail(ready));
+    await flush();
+    expect(calls.filter((c) => c.method === 'GET' && c.path === '/api/topics/tp_1').length).toBe(2);
+    expect(card.querySelector('[data-tp-loading]')).toBeNull();
+    expect(card.querySelectorAll('div').some((d) => d.className === 'tp-detail')).toBe(true);
+  });
+});
