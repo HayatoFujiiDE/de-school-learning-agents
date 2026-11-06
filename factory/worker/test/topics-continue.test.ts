@@ -3,11 +3,12 @@
 // (b) end_turn で save なし → 催促 → save → done（催促は 1 回だけ）
 // (c) 4 回目まで save が無い → no_output・呼び出し 4 回 / (d) 費用の見込みが取り置きを超える → 続けず cost_cap
 // (e) max_tokens → 続けず no_output・ログに stop_reason / (f) genActualCents の cache の単価
-// (g) 実額 > 60 → 台帳は実額・上限の判定も実額で数える / (h) philo の本数の上限は 2 / (i) tools の最後に cache_control
+// (g) 実額 > 60 → 台帳は実額・上限の判定も実額で数える / (h) philo の本数の上限は 2 / (i) tools の最後と top-level に cache_control
+// レビューの裁定: 催促の見込みは nudgeEstimateCents（前半を cache read で読み + 出力 max_tokens）。pause_turn の続きは直前の 1 回の実額のまま
 import type { DatabaseSync } from 'node:sqlite';
 import type { Message } from '@anthropic-ai/sdk/resources/messages/messages';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { genActualCents, runMaxCount, runTopicRun, TOPIC_GEN_MAX_CONTINUES, TOPIC_SAVE_NUDGE } from '../src/topics/gen';
+import { genActualCents, nudgeEstimateCents, runMaxCount, runTopicRun, TOPIC_GEN_MAX_CONTINUES, TOPIC_SAVE_NUDGE } from '../src/topics/gen';
 import { enable, fetchStub, genMessage, ledger, makeBody, migratedDb, philoBody, scriptedPort, talkBody, tomorrow, topicEnv } from './topics-helpers';
 
 let db: DatabaseSync;
@@ -145,6 +146,37 @@ describe('v2.7 続きの呼び出し', () => {
     expect(logs.find((l) => l.at === 'topic_run' && l.no_output)).toMatchObject({ no_output: 'cost_cap', turns: 1, cents: 7 });
   });
 
+  it('(d) 催促の見込みは前半を cache read で読む額 + 出力 max_tokens: 1 回目が重い end_turn（45 セント）でも催促して save まで届く', async () => {
+    // 1 回目: cache write 180000 × $2.50 = 45 セント。見込み = 180000 × $0.10 + 8000 × $10 = 9.8 → 10 セント。45 + 10 = 55 ≤ 60
+    // （直前の 1 回の実額を見込みにすると 45 + 45 = 90 > 60 で cost_cap になる）
+    const first = msgOf([{ type: 'text', text: 'おわり' }], 'end_turn', { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 180_000 });
+    const p = scriptedPort([first, genMessage([talkBody()])]);
+    const o = await runTopicRun(topicEnv(db), p.port, genReq(), { deadline: far(), fetchImpl });
+    expect(o.status).toBe('done');
+    expect(p.calls).toHaveLength(2);
+    expect(p.calls[1].params.messages[2]).toEqual({ role: 'user', content: TOPIC_SAVE_NUDGE });
+    expect(run()).toMatchObject({ status: 'done', made: 1, cents: 52 });
+  });
+
+  it('(d) 催促でも これまでの実額 + 催促の見込み > 取り置き額 なら続けず cost_cap', async () => {
+    // 1 回目: cache write 220000 = 55 セント。見込み = 22000 + 80000 µ$ = 11 セント。55 + 11 = 66 > 60
+    const first = msgOf([{ type: 'text', text: 'おわり' }], 'end_turn', { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 220_000 });
+    const p = scriptedPort([first, genMessage([talkBody()])]);
+    const o = await runTopicRun(topicEnv(db), p.port, genReq(), { deadline: far(), fetchImpl });
+    expect(o.status).toBe('failed');
+    expect(p.calls).toHaveLength(1);
+    expect(run()).toMatchObject({ status: 'failed', error: 'cost_cap', cents: 55 });
+  });
+
+  it('(d) pause_turn の続きの見込みは直前の 1 回の実額のまま: 1 回目 31 セントの pause_turn → 31 + 31 > 60 で cost_cap', async () => {
+    const first = msgOf(searchBlocks('srvtoolu_p'), 'pause_turn', { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 124_000 });
+    const p = scriptedPort([first, genMessage([talkBody()])]);
+    const o = await runTopicRun(topicEnv(db), p.port, genReq(), { deadline: far(), fetchImpl });
+    expect(o.status).toBe('failed');
+    expect(p.calls).toHaveLength(1);
+    expect(run()).toMatchObject({ status: 'failed', error: 'cost_cap', cents: 31 });
+  });
+
   it('(d) 締め切りの残りが足りなければ続けない（no_output）', async () => {
     const p = scriptedPort([paused(), genMessage([talkBody()])]);
     const o = await runTopicRun(topicEnv(db), p.port, genReq(), { deadline: Date.now() + 20_000, fetchImpl });
@@ -208,6 +240,16 @@ describe('v2.7 費用', () => {
     expect(genActualCents(all)).toBe(40);
   });
 
+  it('nudgeEstimateCents: (入力 + cache write + cache read + 出力) × $0.10 + 8000 × $10（切り上げ）', () => {
+    const m = (o: Record<string, number>) => ({ usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, ...o } }) as unknown as Message;
+    // 前半 0 でも出力 8000 × $10 = 8 セント
+    expect(nudgeEstimateCents(m({}))).toBe(8);
+    // 20000 + 3000 = 23000 × 0.1 = 2300 µ$ + 80000 µ$ → 9 セント
+    expect(nudgeEstimateCents(m({ input_tokens: 20_000, output_tokens: 3_000 }))).toBe(9);
+    // 1,000,000 の cache read（ループで前半を何度も読んだ）も前半の上からの抑えに数える: 100000 + 80000 → 18 セント
+    expect(nudgeEstimateCents(m({ cache_read_input_tokens: 1_000_000 }))).toBe(18);
+  });
+
   it('(g) 実額が取り置き（60）を超えた時、台帳は実額・topic_over_reserve + 1。次の取り置きの上限の判定も実額で数える', async () => {
     // 1 日のお題の上限 200: 実額 104 + 104 = 208 → 次の 60 は取れない（min(実額, 60) なら 60 + 60 + 60 = 180 で取れてしまう）
     const env = topicEnv(db, { TOPIC_DAILY_CAP_CENTS: '200' });
@@ -239,13 +281,17 @@ describe('v2.7 本数とキャッシュ', () => {
     expect(p.calls[0].params.system as string).toContain('本数: 最大 2 本。');
   });
 
-  it('(i) params の tools の最後（save_topics）にだけ cache_control: ephemeral。system 文の最後に save_topics の決まり', async () => {
-    const p = scriptedPort([genMessage([makeBody()])]);
+  it('(i) params の tools の最後（save_topics）と top-level に cache_control: ephemeral（続きの呼び出しも同じ）。system 文の最後に save_topics の決まり', async () => {
+    const p = scriptedPort([ended(), genMessage([makeBody()])]);
     await runTopicRun(topicEnv(db), p.port, genReq('make'), { deadline: far(), fetchImpl });
-    const tools = p.calls[0].params.tools as Array<Record<string, unknown>>;
-    expect(tools[tools.length - 1]).toMatchObject({ name: 'save_topics', cache_control: { type: 'ephemeral' } });
-    expect(tools.slice(0, -1).every((t) => t.cache_control === undefined)).toBe(true);
-    expect((p.calls[0].params as unknown as Record<string, unknown>).cache_control).toBeUndefined();
+    expect(p.calls).toHaveLength(2);
+    for (const c of p.calls) {
+      const tools = c.params.tools as Array<Record<string, unknown>>;
+      expect(tools[tools.length - 1]).toMatchObject({ name: 'save_topics', cache_control: { type: 'ephemeral' } });
+      expect(tools.slice(0, -1).every((t) => t.cache_control === undefined)).toBe(true);
+      // top-level（自動のキャッシュ）: 区切りが毎回のリクエストの最後の block に置かれ、続きの呼び出しも前の会話をキャッシュから読む
+      expect((c.params as unknown as Record<string, unknown>).cache_control).toEqual({ type: 'ephemeral' });
+    }
     const sys = p.calls[0].params.system as string;
     expect(sys.endsWith('1 本も作れない時も、topics を空の配列（topics: []）にして save_topics を呼びます。')).toBe(true);
   });

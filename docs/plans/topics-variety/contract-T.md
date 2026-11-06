@@ -548,16 +548,23 @@ strict を外した後の本番の 1 回目（run `114fae42`）は、API は通�
 2. **続き（有限）**: 応答の content を手を加えずに assistant として積み、同じ tools・同じ params で呼び直す。
    - `pause_turn`、または `stop_reason: tool_use` で結果の付いていない web_fetch / web_search が残っている（client tool の tool_use が無い。`verify.ts` の `isPendingWebFetch` と同じ判定）→ 続ける。
    - `end_turn` で `save_topics` が無い → user に「ここまでに開けたページだけで、作れる本数だけ save_topics を呼んでください。1 本も作れない時は topics: [] で呼んでください。」を 1 回だけ足して続ける（tools は変えない）。
-   - 上限: 続きは合計 3 回（最初を入れて 4 回）。締め切りの残りが `TOPIC_CALL_MIN_LEFT_MS` + 25 秒（30 秒）未満なら続けない（`no_output`）。続ける前に「これまでの実額の合計 + 直前の 1 回の実額」が取り置き額（`TOPIC_GEN_RESERVE_CENTS`）を超えるなら続けず、`failed: cost_cap`。
+   - 上限: 続きは合計 3 回（最初を入れて 4 回）。締め切りの残りが `TOPIC_CALL_MIN_LEFT_MS` + 25 秒（30 秒）未満なら続けない（`no_output`）。続ける前に「これまでの実額の合計 + 次の 1 回の見込み」が取り置き額（`TOPIC_GEN_RESERVE_CENTS`）を超えるなら続けず、`failed: cost_cap`。見込みは pause_turn の続き = 直前の 1 回の実額、催促 = `nudgeEstimateCents`（下の「レビューの裁定」）。
    - `max_tokens` / `refusal` / 催促の後の `end_turn` / その他 → 続けず `failed: no_output`（どれで止まったかはログの `no_output` に `stop_<stop_reason>` / `turn_limit` / `no_time` / `cost_cap`）。
    - `save_topics` は全部の応答から探す（最後に出てきたもの）。出典の照合（`genFetchTexts` / `matchGenFetch`）も全部の応答の content を合わせる。1 回ごとの締め切りは min(残り, 150 秒)・再送なし。続きの途中で呼び出しが失敗した時は今までの分類のコードで閉じ、台帳はそれまでの実額の合計。
-3. **キャッシュ**: tools の最後（`save_topics`）に `cache_control: {type:'ephemeral'}`。1 つでもあると API がサーバーツールの結果ごとにキャッシュの区切りを自動で置き、ループの後半・続きは伸びた前半をキャッシュから読む。実額は cache write を入力の 1.25 倍・cache read を 0.05 倍で数える（`ledger.ts` の `sonnetMicroDollars`。検査も同じ式。検証係（Opus・`verify.ts`）の式は変えない）。0 回目の params は `cache_control` のほかは変えない。
+3. **キャッシュ**: tools の最後（`save_topics`）と request の top-level（自動のキャッシュ）に `cache_control: {type:'ephemeral'}`。1 つでもあると API がサーバーツールの結果ごとにキャッシュの区切りを自動で置き、同じリクエストの後の繰り返しは伸びた前半をキャッシュから読む。続きのリクエストの最初の繰り返しは top-level の区切り（毎回のリクエストの最後の block に置かれる）で前の会話をキャッシュから読む。実額は cache write を入力の 1.25 倍・cache read を 0.05 倍で数える（`ledger.ts` の `sonnetMicroDollars`。検査も同じ式。検証係（Opus・`verify.ts`）の式は変えない）。0 回目の params は `cache_control` のほかは変えない。
 4. **台帳**: 生成・派生の確定は `min(実額, 取り置き額)` でなく実額（続きで取り置きを超えうるため。超えた時の `topic_over_reserve` は今のまま）。T-6 の上限の判定（台帳の合計）は実額で数える。検査の確定は変えない。
 5. **プロンプト**: system 文の最後（形の決まりの後ろ）に「保存の決まり: 最後に必ず save_topics を 1 回呼びます。守ることや形の決まりに合わない本・出典で確かめられない本は入れません。1 本も作れない時も、topics を空の配列（topics: []）にして save_topics を呼びます。」（`prompts.ts` の `SAVE_RULE`。上の verbatim の本文は変えない）。`topics: []` は `failed: no_valid_topic`（made 0）。
 6. **費用を減らす設定**: philo の 1 run の本数 3 → 2（`TOPIC_PHILO_PER_RUN`）。web_fetch の `max_content_tokens` 6000 → 4000。news / talk / make の本数は変えない。
 7. 検査・cron の枠・queue の受け手・CAS の振る舞いは変えない。
 
 公式資料: https://platform.claude.com/docs/en/agents-and-tools/tool-use/server-tools#the-server-side-loop-and-pause-turn （pause_turn は server tool のループの回数の上限。content をそのまま足して続ける・止まった応答は順番どおり残す・上限を決めて繰り返す）・ https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons ・ https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-use-with-prompt-caching （cache_control が 1 つでもあれば server tool の結果ごとに自動の区切り）・ https://platform.claude.com/docs/en/about-claude/pricing （Sonnet 5.5: 入力 $2・5 分の cache write $2.50・cache read $0.10・出力 $10 per 1M・web_search 1 回 1 セント）。`max_uses` は 1 ターンで数え、pause_turn の続きでは新しくならない。
+
+### v2.7 のレビューの裁定（2026-11-07）
+
+- **続きのキャッシュ**: 自動の区切りは公式に「同じリクエストの中の後の繰り返し（later iterations within the same request）」とだけ書かれ、キャッシュを書くのは区切りの位置だけ・区切りから 20 block まで戻って探す。tools の区切りだけでは、続きのリクエストの最初の繰り返し（催促はサーバーツールを使わないので全部）は tools より後ろ（system・ユーザー文・前の応答の web_fetch の本文）を定価で読み直すはず（実 API では未確認）。request の top-level に `cache_control` を足した（自動のキャッシュ。区切りは毎回のリクエストの最後のキャッシュできる block に置かれ、会話と一緒に前へ動く。区切りは tools と合わせて 2 つ・上限 4。続きも同じ params で messages だけ伸びる。検証係の Batch（`verify.ts` の `verifierParams`）と同じ書き方）。本番では `topic_call` の `cache_r` で効いたかを見る。
+- **催促の見込み**: 催促の呼び出しはサーバーツールを使わない前提で、`nudgeEstimateCents` = 前半を cache read（$0.10 / 1M）で 1 回読む額 + 出力 `max_tokens`（8000 × $10 / 1M = 8 セント）。前半の大きさは直前の呼び出しの usage の合計（入力 + cache write + cache read + 出力）で上から抑える。「直前の 1 回の実額」を見込みにすると、開く・探すをした重い 1 回目ほど、開かない催促が止まる（例: 1 回目 45 セントの end_turn → 45 + 45 > 60 で cost_cap。今は 45 + 10 = 55 で催促する）。キャッシュが外れた時は見込みより高くつきうるが、催促は 1 run に 1 回だけ・台帳は実額。
+- **pause_turn の続きの見込みは直前の 1 回の実額のまま**: 続きは開く・探すを続ける（max_uses の残り）ので、同じ仕事の続きとして数える。philo の 51 セントは v2.7 の前（cache_control が 1 つも無く、サーバーツールのループの毎回の繰り返しが前半を定価で読み直していた）の値で、キャッシュの付いた今の 1 回目はそれより安くなるはず（未確認。`topic_call` の `cache_w`・`cache_r` で見る）。取り置き額 60 セント（`TOPIC_GEN_RESERVE_CENTS`）を上げるかは予算の判断なので変えていない（1 回目が 31 セントを超える pause_turn は続かない）。
+- 公式: https://platform.claude.com/docs/en/build-with-claude/prompt-caching （自動のキャッシュ・書くのは区切りの位置だけ・20 block の戻り）・ https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-use-with-prompt-caching （サーバーツールの結果の自動の区切り）
 
 ## T-14 d の記録（2026-11-06、本番の実測。D1 の集計）
 
