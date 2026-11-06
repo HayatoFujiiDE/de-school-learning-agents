@@ -2,6 +2,7 @@
 # factory/claude/ の rubric・編集基準・allowlist を src/generated/claude-assets.ts に文字列として書き出す（契約 §A）。
 # 実行時に fetch で取りに行かないため、dev / deploy / typecheck の前に必ず走らせる。
 # factory/scout/sources.json は src/generated/scout-sources.ts に書き出す（収集部隊の情報源。契約 §K-1。不正なら止まる）。
+# factory/topics/sources.json は src/generated/topic-sources.ts に書き出す（お題の RSS。contract-T T-13。不正なら止まる）。
 # あわせて fake 用 fixture（test/fixtures/）を src/fake/fixtures.generated.ts に書き出す（fake は src/anthropic.ts のガード内からだけ読み込まれる）。
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -46,6 +47,18 @@ fs.writeFileSync(
     `export const SCOUT_X_HANDLES: string[] = ${JSON.stringify(handles)};\n`,
 );
 
+// お題の RSS（contract-T T-13）。https の URL で 8 件まで。違反なら止まる
+const topicsPath = path.resolve(root, '../topics/sources.json');
+const topicsSrc = JSON.parse(fs.readFileSync(topicsPath, 'utf8'));
+const topicFeeds = (topicsSrc.feeds ?? []).map((f) => f && f.url);
+if (topicFeeds.length > 8) { console.error('topic sources: feeds は 8 件まで'); process.exit(1); }
+for (const u of topicFeeds) { if (typeof u !== 'string' || !/^https:\/\/[^\s]+$/.test(u) || u.length > 500) { console.error('topic sources: feeds[].url は https の URL'); process.exit(1); } }
+fs.writeFileSync(
+  path.join(root, 'src/generated/topic-sources.ts'),
+  '// 生成ファイル。手で編集しない（scripts/sync-claude-assets.sh が factory/topics/sources.json から生成する）\n' +
+    `export const TOPIC_FEEDS: string[] = ${JSON.stringify(topicFeeds)};\n`,
+);
+
 const fixturesDir = path.join(root, 'test/fixtures');
 const files = {};
 const walk = (dir) => {
@@ -63,5 +76,5 @@ fs.writeFileSync(
   '// 生成ファイル。手で編集しない（scripts/sync-claude-assets.sh が test/fixtures/ から生成する）。fake 専用\n' +
     `export const FIXTURE_FILES: Record<string, string> = ${JSON.stringify(sorted, null, 0)};\n`,
 );
-console.log(`claude-assets: kinds=${Object.keys(kinds).join(',')} fixtures=${Object.keys(sorted).length} scout_feeds=${feeds.length} x_handles=${handles.length}`);
+console.log(`claude-assets: kinds=${Object.keys(kinds).join(',')} fixtures=${Object.keys(sorted).length} scout_feeds=${feeds.length} x_handles=${handles.length} topic_feeds=${topicFeeds.length}`);
 NODE

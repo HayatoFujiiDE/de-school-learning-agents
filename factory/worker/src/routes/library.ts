@@ -1,8 +1,10 @@
 // 配信（一方向・認証なし）。契約 §B-7。子どもを表す列・パラメータはこの API に存在しない。
 // 配信条件（available かつ current_version が approved）は SQL の JOIN / WHERE で表現する。
-import { all, first, stmt } from '../db';
+import { all, first, stmt, tokyoDay } from '../db';
 import type { Env } from '../env';
 import { json, parseJsonField } from '../http';
+import { isRealDate } from '../topics/schema';
+import { isTopicKind, topicsSwitch } from '../topics/store';
 
 const HTML_CSP = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:";
 const SVG_CSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'";
@@ -109,4 +111,56 @@ export async function libraryAvailable(env: Env): Promise<Response> {
     };
   });
   return json(200, { materials });
+}
+
+// ---------------------------------------------------------------------------------------------
+// お題の配信（contract-T T-8。認証なし・no-store。子どもを表す引数・項目なし。読むのは day / kind / limit だけ）
+
+const TOPIC_KIND_ORDER = `CASE s.kind WHEN 'news' THEN 1 WHEN 'talk' THEN 2 WHEN 'philo' THEN 3 WHEN 'make' THEN 4 ELSE 5 END`;
+
+async function topicsOn(env: Env): Promise<boolean> {
+  return (await topicsSwitch(env.DB)) === true;
+}
+
+/** GET /api/library/topics?day=YYYY-MM-DD（省略は今日。実在しない日付・今日より後は 400）。予定の行のうち、読む時点で ready のものだけ */
+export async function libraryTopics(env: Env, url: URL): Promise<Response> {
+  const today = tokyoDay();
+  const day = url.searchParams.get('day') || today;
+  if (!isRealDate(day) || day > today) return json(400, { error: 'bad_day' });
+  if (!(await topicsOn(env))) return json(200, { day, topics: [] });
+  const rows = await all<{ topic_id: string; kind: string; pos: number; lineage_id: string; sensitivity: string; body_json: string }>(
+    env.DB,
+    stmt(
+      `SELECT t.id AS topic_id, s.kind, s.pos, s.lineage_id, t.sensitivity, t.body_json
+       FROM topic_schedule s JOIN topics t ON t.id = s.topic_id
+       WHERE s.day = ? AND t.status = 'ready'
+       ORDER BY ${TOPIC_KIND_ORDER}, s.pos`,
+      day,
+    ),
+  );
+  return json(200, {
+    day,
+    topics: rows.map((r) => ({ topic_id: r.topic_id, kind: r.kind, pos: Number(r.pos), needs_supporter: r.sensitivity === 'heavy', lineage_id: r.lineage_id, body: parseJsonField(r.body_json, null) })),
+  });
+}
+
+/** GET /api/library/topics/stock?kind=&limit=（kind は 4 種のどれか。limit 1〜50、既定 20。範囲外は 400）→ evergreen = 1 の ready を新しい順に */
+export async function libraryTopicStock(env: Env, url: URL): Promise<Response> {
+  const kind = url.searchParams.get('kind');
+  const raw = url.searchParams.get('limit');
+  const limit = raw === null || raw === '' ? 20 : Number(raw);
+  if (!isTopicKind(kind) || !Number.isInteger(limit) || limit < 1 || limit > 50) return json(400, { error: 'bad_query' });
+  if (!(await topicsOn(env))) return json(200, { kind, topics: [] });
+  const rows = await all<{ topic_id: string; kind: string; lineage_id: string; sensitivity: string; body_json: string }>(
+    env.DB,
+    stmt(
+      `SELECT id AS topic_id, kind, lineage_id, sensitivity, body_json FROM topics WHERE kind = ? AND evergreen = 1 AND status = 'ready' ORDER BY created_at DESC, id DESC LIMIT ?`,
+      kind,
+      limit,
+    ),
+  );
+  return json(200, {
+    kind,
+    topics: rows.map((r) => ({ topic_id: r.topic_id, kind: r.kind, needs_supporter: r.sensitivity === 'heavy', lineage_id: r.lineage_id, body: parseJsonField(r.body_json, null) })),
+  });
 }
