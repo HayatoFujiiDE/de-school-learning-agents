@@ -10,7 +10,7 @@ import { cfg, type Env } from '../env';
 import { microToCents, sonnetMicroDollars } from '../ledger';
 import { fetchSource } from './fetch-source';
 import { retireParentOnAutoStmts, topicGate } from './gate';
-import { classifyCallError } from './gen';
+import { classifyCallError, TOPIC_CALL_MIN_LEFT_MS } from './gen';
 import { hasForbidden, judgeCheck, parseCheckOutput, type CheckOutput, type Judgement, type SourceFetch } from './judge';
 import { checkSystem, checkUserBlocks, SAVE_CHECK_SCHEMA, SAVE_CHECK_TOOL_NAME } from './prompts';
 import { requiredSourceIds, titleJaccard, validateTopicBody, type TopicBody } from './schema';
@@ -152,6 +152,8 @@ export async function checkTopic(env: Env, port: FactoryPort, topicId: string, o
   const nowD = opts.now ?? new Date();
   const t0 = nowIso(nowD);
   const token = crypto.randomUUID();
+  // 締め切りまでの残りが 5 秒未満なら取らない（取り置きもしない。次の tick に回す。v2.4 の裁定 7）
+  if (opts.deadline - Date.now() < TOPIC_CALL_MIN_LEFT_MS) return { status: 'not_taken', error: 'no_time' };
   let taken = false;
   try {
     taken = (
@@ -219,6 +221,15 @@ export async function checkTopic(env: Env, port: FactoryPort, topicId: string, o
     // 強制呼び出し（tool_choice tool）は Sonnet 5.5 で 400 になるので auto + strict（CONTRACT-factory §T 末尾）。save_check が無ければ「応答が使えない」
     tool_choice: { type: 'auto' },
   };
+  if (opts.deadline - Date.now() < TOPIC_CALL_MIN_LEFT_MS) {
+    // 出典を開いた後で残りが 5 秒未満: 呼ばない。呼んでいないので台帳は 0、T-3 の 1 文（check_not_before なし。この巡の回数は 1 使う）
+    const t = nowIso();
+    const P = checkPred(topicId, A, token, t);
+    const r = await conditionalBatch(db, [ledgerSettleStmt(ref, 0, P), failStmt({ id: topicId, attempt: A, token, now: t, max: c.topicCheckMaxAttempts, notBefore: null })]);
+    const after = await readTopic(db, topicId);
+    log(r.ok ? String(after?.status) : 'lost', { error: 'no_time' });
+    return { status: r.ok ? ((after?.status as CheckStatus) ?? 'draft') : 'lost', error: 'no_time', attempt: A };
+  }
   const callOpts: CallOpts = { deadline: Math.min(opts.deadline, Date.now() + TOPIC_CHECK_TIMEOUT_MS), maxTimeoutMs: TOPIC_CHECK_TIMEOUT_MS, maxRetries: 0 };
   let msg: Message;
   try {
@@ -314,7 +325,7 @@ export async function writeJudgement(
   const P = checkPred(id, A, token, t);
   const Q = doneQ(id, A, token);
   const ref = checkLedgerRef(id, A);
-  const rowWhere = `WHERE id = ? AND status = 'checking' AND check_attempts = ? AND check_token = ? AND check_lease_until > ?`;
+  // UPDATE topics の WHERE は別の変数に分けず、文ごとに 1 つの文字列で書く（T-14 b2 の走査が読めるように。v2.4 の裁定 6）
   const rowParams = [id, A, token, t];
   const detail = {
     sources: sources.map((s) => ({ source_id: s.source_id, required: Number(s.required) === 1, fetch_result: s.fetch_result, evidence: s.evidence })),
@@ -334,19 +345,35 @@ SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${P.sql}`,
       params: [s.fetch_result, s.evidence, s.excerpt, s.checked_at, id, s.source_id, ...P.params],
     });
   }
-  if (j.sensitivity === 'heavy' && row.sensitivity !== 'heavy') stmts.push({ sql: `UPDATE topics SET sensitivity = 'heavy', updated_at = ? ${rowWhere}`, params: [t, ...rowParams] });
+  if (j.sensitivity === 'heavy' && row.sensitivity !== 'heavy') {
+    stmts.push({
+      sql: `UPDATE topics SET sensitivity = 'heavy', updated_at = ? WHERE id = ? AND status = 'checking' AND check_attempts = ? AND check_token = ? AND check_lease_until > ?`,
+      params: [t, ...rowParams],
+    });
+  }
   if (actual === null) stmts.push(ledgerSettleStmt(ref, 0, P));
   else stmts.push(overReserveStmt(ref, actual, t, P), ledgerSettleStmt(ref, actual, P));
   const required = requiredSourceIds(JSON.parse(row.body_json) as TopicBody);
   const allFound = [...required].every((rid) => sources.some((s) => s.source_id === rid && s.fetch_result === 'found'));
-  if (allFound && required.size > 0) stmts.push({ sql: `UPDATE topics SET last_checked_at = ? ${rowWhere}`, params: [t, ...rowParams] });
+  if (allFound && required.size > 0) {
+    stmts.push({
+      sql: `UPDATE topics SET last_checked_at = ? WHERE id = ? AND status = 'checking' AND check_attempts = ? AND check_token = ? AND check_lease_until > ?`,
+      params: [t, ...rowParams],
+    });
+  }
 
   const gate = j.verdict === 'green' && j.sensitivity === 'normal';
   if (gate) {
     stmts.push(topicGate.auto({ id, token, now: t }));
-    stmts.push({ sql: `UPDATE topics SET status = 'held', hold_reason = 'duplicate_race', check_token = NULL, check_lease_until = NULL, updated_at = ? ${rowWhere}`, params: [t, ...rowParams] });
+    stmts.push({
+      sql: `UPDATE topics SET status = 'held', hold_reason = 'duplicate_race', check_token = NULL, check_lease_until = NULL, updated_at = ? WHERE id = ? AND status = 'checking' AND check_attempts = ? AND check_token = ? AND check_lease_until > ?`,
+      params: [t, ...rowParams],
+    });
   } else {
-    stmts.push({ sql: `UPDATE topics SET status = 'held', hold_reason = ?, check_token = NULL, check_lease_until = NULL, updated_at = ? ${rowWhere}`, params: [j.holdReason ?? 'check_failed', t, ...rowParams] });
+    stmts.push({
+      sql: `UPDATE topics SET status = 'held', hold_reason = ?, check_token = NULL, check_lease_until = NULL, updated_at = ? WHERE id = ? AND status = 'checking' AND check_attempts = ? AND check_token = ? AND check_lease_until > ?`,
+      params: [j.holdReason ?? 'check_failed', t, ...rowParams],
+    });
   }
   stmts.push({
     sql: `INSERT OR IGNORE INTO topic_decisions (id, topic_id, decision, by, read_all, content_sha256, note, created_at)
@@ -355,7 +382,7 @@ FROM topics t WHERE t.id = ? AND t.check_attempts = ? AND t.status IN ('ready','
     // id に連結する attempt は文字列で渡す（数値で bind すると REAL になり 'td:<id>:2.0' になる）
     params: [String(A), t, id, A, ...Q.params],
   });
-  stmts.push(...retireParentOnAutoStmts({ childId: id, attempt: A, now: t, q: Q }));
+  stmts.push(...retireParentOnAutoStmts({ childId: id, attempt: A, token, now: t, q: Q }));
   const res = await env.DB.batch(stmts.map((s) => prepare(env.DB, s)));
   if (Number(res[0]?.meta?.changes ?? 0) === 0) return { status: 'lost' };
   const after = await readTopic(env.DB, id);

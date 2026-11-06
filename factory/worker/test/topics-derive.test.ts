@@ -5,6 +5,7 @@ import type { Env } from '../src/env';
 import { checkTopic } from '../src/topics/check';
 import { deriveCandidates, runDerive } from '../src/topics/derive';
 import { runTopicRun } from '../src/topics/gen';
+import { decideTopic, listTopics } from '../src/routes/topics';
 import {
   count,
   enable,
@@ -14,6 +15,7 @@ import {
   migratedDb,
   newsBody,
   philoBody,
+  routeCtx,
   scriptedPort,
   seedTopic,
   supportPassed,
@@ -84,19 +86,62 @@ describe('見直す（refresh）', () => {
     }
   });
 
-  it('生きた見直しの子（draft・checking・ready）が 2 つできない / held の子は次の見直しを塞がない', async () => {
+  it('終わっていない見直しの子（draft・checking・held・ready）は 1 つまで / held の子は次の見直しを塞ぐ（v2.4）', async () => {
     await derive('refresh', [genMessage([newsBody(tomorrow())])]);
     const r2 = await derive('refresh', [genMessage([newsBody(tomorrow())])]);
     expect(r2.o).toMatchObject({ status: 'not_taken', reason: 'parent_not_eligible' });
     expect(r2.calls).toBe(0);
     expect(children('refresh').length).toBe(1);
-    // 索引でも 2 つ目の生きた見直しの子は入らない
+    // 索引でも 2 つ目の終わっていない見直しの子は入らない
     const c = children('refresh')[0];
     expect(() => db.prepare("UPDATE topics SET parent_topic_id = ?, derive_kind = 'refresh', status = 'ready' WHERE id = ?").run(P, P)).toThrow(/UNIQUE|CHECK/);
+    // 子が held で止まっている間は、次の見直しを作れない（run も台帳も呼び出しも増えない）
     db.prepare("UPDATE topics SET status = 'held', hold_reason = 'source_not_found' WHERE id = ?").run(String(c.id));
+    const before = [runs(), ledger(db).length];
     const r3 = await derive('refresh', [genMessage([newsBody(tomorrow())])]);
-    expect(r3.o.status).toBe('done');
-    expect(children('refresh').map((x) => x.status)).toEqual(['held', 'draft']);
+    expect(r3.o).toMatchObject({ status: 'not_taken', reason: 'parent_not_eligible' });
+    expect([runs(), ledger(db).length, r3.calls]).toEqual(before.concat(0));
+    expect(children('refresh').map((x) => x.status)).toEqual(['held']);
+    // 索引: held の子がいる親に、もう 1 つ draft の見直しの子は入らない
+    await seedTopic(db, { id: 'tp_x_1', body: newsBody(tomorrow(), '別の題のニュース') });
+    expect(() => db.prepare("UPDATE topics SET parent_topic_id = ?, derive_kind = 'refresh' WHERE id = ?").run(P, 'tp_x_1')).toThrow(/UNIQUE/);
+    // 止まっている子を「出さない」にすると、次を作れる
+    db.prepare("UPDATE topics SET status = 'rejected' WHERE id = ?").run(String(c.id));
+    const r4 = await derive('refresh', [genMessage([newsBody(tomorrow())])]);
+    expect(r4.o.status).toBe('done');
+    expect(children('refresh').map((x) => x.status)).toEqual(['rejected', 'draft']);
+  });
+
+  it('held の見直しの子のやり直し・承認は、兄弟の一意制約に当たらない（500 にならない）', async () => {
+    await derive('refresh', [genMessage([newsBody(tomorrow())])]);
+    const [c] = children('refresh');
+    const id = String(c.id);
+    const sha = String(topic(db, id).content_sha256);
+    db.prepare("UPDATE topics SET status = 'held', hold_reason = 'source_unreachable' WHERE id = ?").run(id);
+    // 兄弟（2 つ目の子）はもう作れない
+    expect((await derive('refresh', [genMessage([newsBody(tomorrow())])])).o).toMatchObject({ status: 'not_taken', reason: 'parent_not_eligible' });
+    const res = await decideTopic(routeCtx(env, 'POST', `/api/topics/${id}/decide`, { decision: 'recheck', content_sha256: sha }), id);
+    expect(res.status).toBe(200);
+    expect(topic(db, id).status).toBe('draft');
+  });
+
+  it('自動の候補: held の見直しの子がある親は候補に入らない（reject すると入る）', async () => {
+    await seedTopic(db, { id: 'tp_h_1', body: philoBody(), status: 'held', holdReason: 'source_lost' });
+    await seedTopic(db, { id: 'tp_hc_1', body: philoBody(), status: 'held', holdReason: 'source_not_found', parentId: 'tp_h_1', deriveKind: 'refresh', lineageId: 'tp_h_1', depth: 1 });
+    expect(await deriveCandidates(env)).not.toContainEqual({ parentId: 'tp_h_1', kind: 'refresh' });
+    db.prepare("UPDATE topics SET status = 'rejected' WHERE id = 'tp_hc_1'").run();
+    expect(await deriveCandidates(env)).toContainEqual({ parentId: 'tp_h_1', kind: 'refresh' });
+  });
+
+  it('一覧の行に終わっていない見直しの子（id と状態）が出る（管理画面の「見直す」の条件）', async () => {
+    await derive('refresh', [genMessage([newsBody(tomorrow())])]);
+    const [c] = children('refresh');
+    db.prepare("UPDATE topics SET status = 'held', hold_reason = 'source_not_found' WHERE id = ?").run(String(c.id));
+    const j = (await (await listTopics(routeCtx(env, 'GET', '/api/topics?status=ready'))).json()) as { topics: Array<Record<string, unknown>> };
+    expect(j.topics.find((t) => t.id === P)?.refresh_child).toEqual({ id: c.id, status: 'held' });
+    db.prepare("UPDATE topics SET status = 'rejected' WHERE id = ?").run(String(c.id));
+    const j2 = (await (await listTopics(routeCtx(env, 'GET', '/api/topics?status=ready'))).json()) as { topics: Array<Record<string, unknown>> };
+    expect(j2.topics.find((t) => t.id === P)?.refresh_child).toBeNull();
   });
 
   it('応答が 2 本以上・種類違いの時に余りが保存されない（見直しは親と同じ種類で 1 本）', async () => {

@@ -21,7 +21,7 @@ import { SCOUT_MODEL } from '../scout';
 import { parseXaiResponse } from '../xai';
 import { FIXTURE_FILES } from './fixtures.generated';
 import { handleFakeOpenAiControl } from './openai';
-import { fakeTopicCheckReply, fakeTopicGenReply, handleTopicsFakeControl, isTopicCheckParams, isTopicGenParams } from './topics';
+import { fakeTopicCheckReply, fakeTopicGenReply, isTopicCheckParams, isTopicGenParams } from './topics';
 
 // 画像生成の fake（§O-4 e）。src/anthropic.ts の getImagePort が loadFake（動的 import 1 箇所）経由でここから取る
 export { createFakeImagePort } from './openai';
@@ -660,8 +660,6 @@ export async function handleFakeControl(request: Request, env: Env): Promise<Res
   const url = new URL(request.url);
   const openai = await handleFakeOpenAiControl(request, env);
   if (openai) return openai;
-  const topics = await handleTopicsFakeControl(request, env);
-  if (topics) return topics;
   const j = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
   if (url.pathname === '/__fake/settings' && request.method === 'POST') {

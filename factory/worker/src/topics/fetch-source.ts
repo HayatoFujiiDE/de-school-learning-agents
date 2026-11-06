@@ -2,8 +2,6 @@
 // URL の規則 checkSourceUrl と本文の正規化 normalizeForQuote は純関数。fetchSource は fetch を差し替えて試せる（fake・テスト）。
 // 名前が社内の宛先に解決されるかどうかは見ない（Workers の fetch は公開のインターネットに出る。約束しない範囲 T-5）。
 
-import { decodeEntities } from '../scout';
-
 /** URL の規則（T-5 の 2）。満たせば URL、満たさなければ null */
 export function checkSourceUrl(raw: unknown): URL | null {
   if (typeof raw !== 'string' || raw.length === 0 || raw.length > 2000) return null;
@@ -33,13 +31,122 @@ export function foldWidth(s: string): string {
   return s.replace(FULLWIDTH_ALNUM, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).replace(/　/g, ' ');
 }
 
-/** HTML → 本文（<script>・<style>・コメントを除き、タグを除き、文字参照を戻す）。空白の正規化は normalizeForQuote */
+/** 戻す名前つきの文字参照（契約 v2.4 の裁定 1 の一覧） */
+const NAMED_REFS: Record<string, string> = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0', copy: '©', reg: '®', trade: '™', hellip: '…',
+  mdash: '—', ndash: '–', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', yen: '¥', middot: '·', times: '×', deg: '°',
+};
+
+/** 文字参照を戻す（数値の参照と NAMED_REFS）。知らない名前・範囲外の数値はそのまま残す。量指定が有限なので入力の長さに比例する */
+export function decodeCharRefs(s: string): string {
+  return s.replace(/&(?:#[xX]([0-9a-fA-F]{1,6})|#([0-9]{1,7})|([a-zA-Z]{2,8}));/g, (m, hex: string | undefined, dec: string | undefined, name: string | undefined) => {
+    if (name !== undefined) return Object.prototype.hasOwnProperty.call(NAMED_REFS, name) ? NAMED_REFS[name] : m;
+    const n = hex !== undefined ? Number.parseInt(hex, 16) : Number.parseInt(dec as string, 10);
+    if (!(n > 0 && n <= 0x10ffff) || (n >= 0xd800 && n <= 0xdfff)) return m;
+    return String.fromCodePoint(n);
+  });
+}
+
+const isAsciiLetter = (c: number): boolean => (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+const isSpace = (c: number): boolean => c === 32 || c === 9 || c === 10 || c === 12 || c === 13;
+
+/**
+ * タグ（< の次の位置 i から）の終わりの > の次の位置。属性の値の引用符の中の > は終わりにしない。閉じていなければ -1。
+ * 引用符を値の始まりと見るのは = の直後（空白を挟んでよい）だけ。引用符の終わりは indexOf で飛ぶ（後戻りしない）
+ */
+function tagEnd(h: string, i: number): number {
+  const n = h.length;
+  let afterEq = false;
+  while (i < n) {
+    const c = h.charCodeAt(i);
+    if (c === 62 /* > */) return i + 1;
+    if (afterEq && (c === 34 || c === 39) /* " ' */) {
+      const j = h.indexOf(c === 34 ? '"' : "'", i + 1);
+      if (j < 0) return -1;
+      i = j + 1;
+      afterEq = false;
+      continue;
+    }
+    if (c === 61 /* = */) afterEq = true;
+    else if (!isSpace(c)) afterEq = false;
+    i++;
+  }
+  return -1;
+}
+
+/** i から後ろで、大文字小文字を区別しない "</name"（の後ろが空白・/・> か終わり）の位置。無ければ -1 */
+function findEndTag(h: string, i: number, name: string): number {
+  for (;;) {
+    const j = h.indexOf('</', i);
+    if (j < 0) return -1;
+    const k = j + 2 + name.length;
+    if (h.slice(j + 2, k).toLowerCase() === name) {
+      const c = h.charCodeAt(k);
+      if (k >= h.length || isSpace(c) || c === 47 || c === 62) return j;
+    }
+    i = j + 2;
+  }
+}
+
+/**
+ * HTML → 本文（契約 v2.4 の裁定 1）。先頭から 1 回で読む状態つきの走査で、時間は入力の長さに比例する（どの位置も後戻りして読み直さない）。
+ * - `<` の次が英字・`/`・`!`・`?` の時だけマークアップの始まり。それ以外の `<` は文字のまま
+ * - タグは属性の値の引用符の中の `>` で終わらない。コメントは `-->` まで。`<!…>`・`<?…>` は `>` まで
+ * - `<script>`・`<style>` は中身ごと除く（終わりは `</script` / `</style` だけ）
+ * - 閉じていないコメント・タグ・script・style は、そこから終わりまでを本文に入れない
+ * - 除いた所は空白 1 つにし、最後に文字参照を戻す。空白の正規化は normalizeForQuote
+ */
 export function htmlToText(html: string): string {
-  let t = html.replace(/<!--[\s\S]*?-->/g, ' ');
-  t = t.replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, ' ');
-  t = t.replace(/<(script|style)\b[\s\S]*$/gi, ' '); // 閉じていない script / style の後ろは本文に入れない
-  t = t.replace(/<[^>]*>/g, ' ');
-  return decodeEntities(t);
+  const h = String(html ?? '');
+  const n = h.length;
+  const out: string[] = [];
+  let textStart = 0;
+  let i = 0;
+  const cut = (at: number) => {
+    if (at > textStart) out.push(h.slice(textStart, at));
+    out.push(' ');
+  };
+  while (i < n) {
+    const lt = h.indexOf('<', i);
+    if (lt < 0) break;
+    const c = lt + 1 < n ? h.charCodeAt(lt + 1) : -1;
+    const isEnd = c === 47; /* / */
+    if (!(isAsciiLetter(c) || isEnd || c === 33 /* ! */ || c === 63) /* ? */) {
+      i = lt + 1; // 文字の <
+      continue;
+    }
+    cut(lt);
+    let next: number;
+    if (c === 33 && h.startsWith('<!--', lt)) {
+      if (h.startsWith('<!-->', lt)) next = lt + 5;
+      else if (h.startsWith('<!--->', lt)) next = lt + 6;
+      else {
+        const e = h.indexOf('-->', lt + 4);
+        next = e < 0 ? -1 : e + 3;
+      }
+    } else if (c === 33 || c === 63) {
+      const e = h.indexOf('>', lt + 2);
+      next = e < 0 ? -1 : e + 1;
+    } else {
+      // 開始タグか終了タグ。名前を読む
+      let k = lt + (isEnd ? 2 : 1);
+      const nameStart = k;
+      while (k < n && isAsciiLetter(h.charCodeAt(k))) k++;
+      const name = h.slice(nameStart, k).toLowerCase();
+      next = tagEnd(h, k);
+      if (next >= 0 && !isEnd && (name === 'script' || name === 'style')) {
+        const close = findEndTag(h, next, name);
+        next = close < 0 ? -1 : tagEnd(h, close + 2 + name.length);
+      }
+    }
+    if (next < 0) {
+      textStart = n; // 閉じていない: ここから終わりまでを本文に入れない
+      break;
+    }
+    i = textStart = next;
+  }
+  if (textStart < n) out.push(h.slice(textStart));
+  return decodeCharRefs(out.join(''));
 }
 
 /** 引用の照合に使う正規化（空白の連続を 1 つ・全角半角の英数を寄せる）。本文と quote に同じものを当てる */

@@ -20,6 +20,9 @@ interface TopicsUi {
   heldGroup(r: string | null): string;
   isSourceHold(r: string | null): boolean;
   heldActions(t: Topic | null): string[];
+  refreshBlockedText(t: Topic, meta: Meta | null): string;
+  noteValue(v: unknown): string;
+  noteLength(v: unknown): number;
   latestCheck(t: Topic, checks: unknown): Topic | null;
   approveState(t: Topic, detail: unknown, readAll: boolean): ApproveState;
   errorText(e: unknown, meta: Meta | null): string;
@@ -140,6 +143,18 @@ describe('要確認の 3 つの分け方と、出す操作', () => {
     expect(T.heldActions(held({ hold_reason: 'source_unreachable' }))).toEqual(['recheck', 'refresh', 'reject']);
     expect(T.heldActions(held({ hold_reason: 'source_not_found' }))).toEqual(['recheck', 'reject']);
     expect(T.heldActions(held({ hold_reason: 'forbidden' }))).toEqual(['recheck', 'reject']);
+  });
+  it('終わっていない見直しの子（refresh_child）がある時は「見直す」を出さず、止まっている子の文を出す（v2.4）', () => {
+    const blocked = held({ hold_reason: 'source_lost', refresh_child: { id: 'tp_c_1', status: 'held' } });
+    expect(T.heldActions(blocked)).toEqual(['recheck', 'reject']);
+    expect(T.refreshBlockedText(blocked, null)).toContain('tp_c_1');
+    expect(T.refreshBlockedText(blocked, null)).toContain('出さない');
+    expect(T.refreshBlockedText(held({ hold_reason: 'source_lost' }), null)).toBe('');
+  });
+  it('一言の字数はコードポイントで数え、送る値は短くしない（v2.4）', () => {
+    expect(T.noteLength('😀'.repeat(150))).toBe(150);
+    expect(T.noteValue('  😀'.repeat(3) + '  ')).toBe('😀  😀  😀');
+    expect(T.noteValue(null)).toBe('');
   });
   it('held でなければ何も出さない（承認した後の行など）', () => {
     expect(T.heldActions(held({ status: 'ready', hold_reason: null }))).toEqual([]);

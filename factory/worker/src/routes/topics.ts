@@ -69,35 +69,53 @@ export async function topicsMeta(c: RouteCtx): Promise<Response> {
 // ---------------------------------------------------------------------------------------------
 // GET /api/topics?status=&kind=&limit=&before=
 
+/** 一覧の続き（T-10）: 「作成時刻|id」。並び（created_at の新しい順・同じ時刻は id の大きい順）の最後の行を表す */
+export const listCursor = (r: { created_at: string; id: string }): string => `${r.created_at}|${r.id}`;
+
+/** 続きの文字列を解く。形が違えば null（400 bad_query） */
+export function parseListCursor(raw: string): { createdAt: string; id: string } | null {
+  if (raw.length > 160) return null;
+  const i = raw.indexOf('|');
+  if (i <= 0) return null;
+  const createdAt = raw.slice(0, i);
+  const id = raw.slice(i + 1);
+  if (Number.isNaN(Date.parse(createdAt)) || !/^tp_[A-Za-z0-9_-]{1,120}$/.test(id)) return null;
+  return { createdAt, id };
+}
+
 export async function listTopics(c: RouteCtx): Promise<Response> {
   const q = c.url.searchParams;
   const status = q.get('status') || null;
   const kind = q.get('kind') || null;
-  const before = q.get('before') || null;
+  const beforeRaw = q.get('before') || null;
   const limitRaw = q.get('limit');
   const limit = limitRaw === null || limitRaw === '' ? 50 : Number(limitRaw);
   if (status !== null && !(STATUSES as readonly string[]).includes(status)) return bad('bad_query');
   if (kind !== null && !isTopicKind(kind)) return bad('bad_query');
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) return bad('bad_query');
-  if (before !== null && (before.length > 40 || Number.isNaN(Date.parse(before)))) return bad('bad_query');
+  const before = beforeRaw === null ? null : parseListCursor(beforeRaw);
+  if (beforeRaw !== null && !before) return bad('bad_query');
   const rows = await all<TopicDbRow & { latest_approvable: number | null; last_shown_day: string | null }>(
     c.env.DB,
     stmt(
       `SELECT t.*, ${TOPIC_ROW_EXTRA_COLS} FROM topics t
-       WHERE (? IS NULL OR t.status = ?) AND (? IS NULL OR t.kind = ?) AND (? IS NULL OR t.created_at < ?)
+       WHERE (? IS NULL OR t.status = ?) AND (? IS NULL OR t.kind = ?)
+         AND (? IS NULL OR t.created_at < ? OR (t.created_at = ? AND t.id < ?))
        ORDER BY t.created_at DESC, t.id DESC LIMIT ?`,
       tokyoDay(),
       status,
       status,
       kind,
       kind,
-      before,
-      before,
+      before?.createdAt ?? null,
+      before?.createdAt ?? null,
+      before?.createdAt ?? null,
+      before?.id ?? null,
       limit + 1,
     ),
   );
   const page = rows.slice(0, limit);
-  return json(200, { topics: page.map(toTopicRow), next_before: rows.length > limit ? page[page.length - 1].created_at : null });
+  return json(200, { topics: page.map(toTopicRow), next_before: rows.length > limit ? listCursor(page[page.length - 1]) : null });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -205,7 +223,7 @@ export async function decideTopic(c: RouteCtx, id: string): Promise<Response> {
     const pred = approvePred({ id, sha, readAll });
     stmts = [
       decisionStmt({ id, decision, by, readAll, note, now, pred }),
-      ...retireParentOnApproveStmts({ childId: id, now, pred }),
+      ...retireParentOnApproveStmts({ childId: id, sha, readAll, now, pred }),
       topicGate.approve({ id, sha, readAll, now }),
     ];
   } else if (decision === 'reject') {

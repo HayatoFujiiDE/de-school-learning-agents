@@ -377,7 +377,8 @@ export async function sha256Hex(text: string): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// save_topics の入力 schema（T-4。T-1 の本文の配列）。strict は付けない（形は Worker が validateTopicBody で確かめる）
+// save_topics の入力 schema（T-4。T-1 の本文の配列）。strict: true で渡す（v2.4 の裁定 5）ので、公式の strict の制限の中だけで書く
+// （object は全部 additionalProperties: false・長さ・数・個数の制約は書かない — 個数・字数は Worker が validateTopicBody で確かめる）
 
 const locSchema = { type: 'object', additionalProperties: false, required: ['s', 'e'], properties: { s: { type: 'string' }, e: { type: 'string' } } } as const;
 const idSchema = { type: 'string' } as const;

@@ -36,7 +36,8 @@
     bad_day: '日付が正しくありません',
     run_in_progress: '同じ種類の作成がもう動いています。終わってから押してください',
     cap: '費用の上限に届いているため始められません',
-    parent_not_eligible: 'このお題からは今は作れません（状態・深さ・子の数・週の上限の条件に合いません）',
+    parent_not_eligible: 'このお題からは今は作れません（状態・深さ・子の数・週の上限の条件に合いません。見直しの子が終わっていない時は、その子を「出さない」にするか、やり直し・承認で先へ進めてから）',
+    no_time: '定期処理の残り時間が足りないため始めませんでした。次の定期処理で動きます',
     disabled: 'お題が「切」か、工場が一時停止中です（記録のタブで入・切を確かめてください）',
     paused: '工場が一時停止中のため実行できません',
     not_found: '見つかりません（消えたか、id が違います）',
@@ -177,15 +178,35 @@
   }
   function isSourceHold(holdReason) { return has(SOURCE_HOLD, holdReason); }
 
-  /** held のお題に出す操作（T-3・T-9）。approve は hold_reason が heavy / flagged の時だけ。refresh は source_lost / source_unreachable の時だけ */
+  /** 終わっていない見直しの子（TopicRow.refresh_child。draft・checking・held・ready）。あれば次の見直しは作れない（T-9・v2.4） */
+  function refreshChildOf(topic) {
+    var c = topic && topic.refresh_child;
+    return c && typeof c === 'object' && typeof c.id === 'string' ? c : null;
+  }
+  /** 見直しを作れない時の文（無ければ ''） */
+  function refreshBlockedText(topic, meta) {
+    var c = refreshChildOf(topic);
+    if (!c) return '';
+    var st = statusText(c.status, meta);
+    var who = '見直しの子' + (c.id ? '（' + c.id + '）' : '');
+    if (c.status === 'held') return who + 'が「' + st + '」で止まっているので、次の見直しは作れません。要確認のタブで、その子を「出さない」にするか、検査のやり直し・承認で先へ進めてください';
+    return who + 'が「' + st + '」なので、次の見直しは作れません（検査が終わるまで待つか、止まったらその子を「出さない」にします）';
+  }
+
+  /** held のお題に出す操作（T-3・T-9）。approve は hold_reason が heavy / flagged の時だけ。refresh は source_lost / source_unreachable で、終わっていない見直しの子が無い時だけ */
   function heldActions(topic) {
     if (!topic || topic.status !== 'held') return [];
     if (has(APPROVABLE_HOLD, topic.hold_reason)) return ['approve', 'reject'];
     var out = ['recheck'];
-    if (has(REFRESHABLE_HOLD, topic.hold_reason)) out.push('refresh');
+    if (has(REFRESHABLE_HOLD, topic.hold_reason) && !refreshChildOf(topic)) out.push('refresh');
     out.push('reject');
     return out;
   }
+
+  /** 一言（note）: 送る値（前後の空白を除く。短くしない）と、その長さ（コードポイント）。入力欄の数・検査・送る値は全部これで数える（v2.4） */
+  function noteValue(v) { return String(v === null || v === undefined ? '' : v).trim(); }
+  function noteLength(v) { return Array.from(noteValue(v)).length; }
+  function noteOk(v) { return noteLength(v) <= NOTE_MAX; }
 
   /** 最新の検査の記録（attempt = check_attempts。check_attempts が無ければ attempt の一番大きいもの） */
   function latestCheck(topic, checks) {
@@ -328,15 +349,17 @@
     el.className = 'tp-result' + (isErr ? ' err' : text ? ' ok-text' : '');
     if (text) el.setAttribute('role', isErr ? 'alert' : 'status'); else el.removeAttribute('role');
   }
-  /** 通信中は buttons を全部止める（二重送信・同じ行の別操作を防ぐ） */
-  function runBusy(buttons, btn, busyText, p) {
+  /** 通信中は buttons（部品の配列）を全部止める（二重送信・同じ行の別操作を防ぐ）。onDone は戻す前に呼ぶ */
+  function runBusy(buttons, btn, busyText, p, onDone) {
     var label = btn ? btn.textContent : '';
     var prev = buttons.map(function (b) { return b.disabled; });
     buttons.forEach(function (b) { b.disabled = true; });
     if (btn) btn.textContent = busyText || '送信中…';
-    function restore() { buttons.forEach(function (b, i) { b.disabled = prev[i]; }); if (btn) btn.textContent = label; }
+    function restore() { if (onDone) onDone(); buttons.forEach(function (b, i) { b.disabled = prev[i]; }); if (btn) btn.textContent = label; }
     return p.then(function (r) { restore(); return r; }, function (e) { restore(); throw e; });
   }
+  /** 行の中の入力の部品（ボタン・チェック・入力欄・選択） */
+  function controlsOf(root) { return Array.prototype.slice.call(root.querySelectorAll('button, input, textarea, select')); }
 
   // ---- 全文 ----
   function seBlock(se) {
@@ -474,31 +497,37 @@
   // ---- お題 1 本のカード（要確認・ストック共通）----
   /** cfg: { g, mode: 'held'|'stock', open: 全文を最初から開くか } */
   function topicCard(row, cfg) {
-    var st = { topic: row, detail: null, detailErr: null, loading: false, open: !!cfg.open, readAll: false, extendOpen: false };
+    // ver: 行ごとの世代。詳細の取得は始めた時の世代を覚え、操作が始まると世代が進むので、古い取得の結果では描き直さない（v2.4）
+    // busy: 通信中。その間に描き直しても部品は止めたまま
+    var st = { topic: row, detail: null, detailErr: null, loading: false, open: !!cfg.open, readAll: false, extendOpen: false, ver: 0, busy: false };
     var root = h('article', { class: 'tp-card', 'data-tp-topic': row.id });
     var result = resultLine();
     var meta = S.meta;
 
     function loadDetail() {
+      var my = ++st.ver;
       st.loading = true; st.detailErr = null; paint();
       return api('GET', '/api/topics/' + encodeURIComponent(st.topic.id)).then(function (d) {
-        if (!alive(cfg.g)) return;
+        if (!alive(cfg.g) || my !== st.ver) return;
         st.loading = false; st.detail = d && d.topic ? d : null; st.readAll = false;
         if (st.detail) st.topic = mergeTopic(st.topic, st.detail.topic);
         else st.detailErr = '応答の形が違います';
         paint();
       }, function (e) {
-        if (!alive(cfg.g)) return;
+        if (!alive(cfg.g) || my !== st.ver) return;
         st.loading = false; st.detailErr = errorText(e, meta); paint();
       });
     }
+    /** 操作を始める: 世代を進めて取得中の詳細を捨て、行の部品を全部止める */
+    function beginOp() { st.ver++; st.loading = false; st.busy = true; return controlsOf(root); }
+    function endOp() { st.busy = false; }
     function mergeTopic(a, b) { var o = {}; Object.keys(a || {}).forEach(function (k) { o[k] = a[k]; }); Object.keys(b || {}).forEach(function (k) { if (k !== 'body' && k !== 'body_json') o[k] = b[k]; }); return o; }
 
     /** 決定を送る。成功は行の状態を変える・失敗は理由の文。409 は詳細を読み直す（チェックは外れる） */
     function decide(btn, body, okText, nextStatus) {
-      var buttons = Array.prototype.slice.call(root.querySelectorAll('button'));
+      var buttons = beginOp();
       setResult(result, '');
-      return runBusy(buttons, btn, '送信中…', api('POST', '/api/topics/' + encodeURIComponent(st.topic.id) + '/decide', body)).then(function (res) {
+      return runBusy(buttons, btn, '送信中…', api('POST', '/api/topics/' + encodeURIComponent(st.topic.id) + '/decide', body), endOp).then(function (res) {
         if (!alive(cfg.g)) return;
         var t = res && res.topic && typeof res.topic === 'object' ? res.topic : null;
         st.topic = mergeTopic(st.topic, t || nextStatus);
@@ -513,7 +542,11 @@
         toast(msg, true);
         if (e && e.status === 409 && st.open) {
           loadDetail().then(function () { if (alive(cfg.g)) { setResult(result, msg, true); result.focus(); } });
-        } else { setResult(result, msg, true); result.focus(); }
+        } else {
+          if (st.open && !st.detail) loadDetail(); // 操作の間に捨てた取得を読み直す
+          else paint();
+          setResult(result, msg, true); result.focus();
+        }
       });
     }
     function shaThen(fn) {
@@ -526,10 +559,10 @@
     }
     function simpleDecide(btn, decision, okText, nextStatus, confirmOpts) {
       var go = function (note) {
-        if (Array.from(String(note || '').trim()).length > NOTE_MAX) { setResult(result, ERR_TEXT.invalid_note, true); result.focus(); return null; }
+        if (!noteOk(note)) { setResult(result, ERR_TEXT.invalid_note, true); result.focus(); return null; }
         return shaThen(function (sha) {
           var body = { decision: decision, content_sha256: sha };
-          if (note && note.trim()) body.note = note.trim().slice(0, NOTE_MAX);
+          if (noteValue(note)) body.note = noteValue(note); // 数えた値をそのまま送る（短くしない）
           return decide(btn, body, okText, nextStatus);
         });
       };
@@ -537,16 +570,19 @@
       return confirmFirst(confirmOpts).then(function (d) { if (d && d.ok) return go(d.note || ''); });
     }
     function derive(btn, kind, note) {
-      if (Array.from(String(note || '').trim()).length > NOTE_MAX) { setResult(result, ERR_TEXT.invalid_note, true); result.focus(); return Promise.resolve(false); }
-      var buttons = Array.prototype.slice.call(root.querySelectorAll('button'));
+      if (!noteOk(note)) { setResult(result, ERR_TEXT.invalid_note, true); result.focus(); return Promise.resolve(false); }
+      var buttons = beginOp();
       setResult(result, '');
       var body = { kind: kind };
-      if (note && note.trim()) body.note = note.trim().slice(0, NOTE_MAX);
+      if (noteValue(note)) body.note = noteValue(note);
       // 応答は呼び出しが終わってから返る（最大 2〜3 分。api-notes）
-      return runBusy(buttons, btn, '作成中…（2〜3 分かかることがあります）', api('POST', '/api/topics/' + encodeURIComponent(st.topic.id) + '/derive', body)).then(function (res) {
+      return runBusy(buttons, btn, '作成中…（2〜3 分かかることがあります）', api('POST', '/api/topics/' + encodeURIComponent(st.topic.id) + '/derive', body), endOp).then(function (res) {
         if (!alive(cfg.g)) return false;
         var out = runOutcome(res, kind === 'refresh' ? '見直しの子' : '発展の子', meta);
+        // 見直しの子ができたので、この行からは次の見直しを出さない（子の id は応答に無い。開き直すと一覧の refresh_child で出る）
+        if (out.ok && kind === 'refresh' && res.run && res.run.status === 'done') st.topic = mergeTopic(st.topic, { refresh_child: { id: '', status: 'draft' } });
         if (out.ok) { st.extendOpen = false; paint(); }
+        else if (st.open && !st.detail) loadDetail();
         setResult(result, out.text, !out.ok); result.focus(); toast(out.text, !out.ok);
         return out.ok;
       }, function (e) {
@@ -600,6 +636,7 @@
         if (heavy) {
           var cb = h('input', { type: 'checkbox', 'data-tp-readall': '1', checked: st.readAll, disabled: !st.detail });
           cb.addEventListener('change', function () {
+            if (st.busy) { cb.checked = st.readAll; return; } // 通信中は変えない（部品も止めてある）
             st.readAll = cb.checked;
             var s2 = approveState(st.topic, st.detail, st.readAll);
             abtn.disabled = !s2.enabled; why.textContent = s2.why;
@@ -623,6 +660,7 @@
         });
         row2.appendChild(rb);
       }
+      var blockedHeld = has(REFRESHABLE_HOLD, t.hold_reason) ? refreshBlockedText(t, meta) : '';
       if (acts.indexOf('refresh') >= 0) {
         var fb = h('button', { type: 'button', class: 'btn', text: '見直す' });
         fb.addEventListener('click', function () {
@@ -641,6 +679,7 @@
         row2.appendChild(xb);
       }
       if (row2.firstChild) wrap.appendChild(row2);
+      if (blockedHeld) wrap.appendChild(h('p', { class: 'muted tp-refresh-blocked', text: blockedHeld }));
       return wrap;
     }
 
@@ -658,21 +697,26 @@
           title: 'このお題を止めます', body: String(t.title || '') + '\n\n配信と次からの予定に出なくなります（引退）。ここからは元に戻せません。', okText: '止める', note: true, noteRequired: false, noteLabel: 'メモ（任意・200 字まで）'
         });
       });
-      var fb = h('button', { type: 'button', class: 'btn small', text: '見直す' });
-      fb.addEventListener('click', function () {
-        confirmFirst({ title: 'このお題を見直します', body: String(t.title || '') + '\n\n前提・事実・出典を今に合わせた子を 1 本作ります（生成の費用がかかります）。子が出せるようになった時に、このお題は引退します。', okText: '見直す', note: true, noteRequired: false, noteLabel: '運営のひとこと（任意・200 字まで）' })
-          .then(function (d) { if (d && d.ok) derive(fb, 'refresh', d.note || ''); });
-      });
+      var blocked = refreshBlockedText(t, meta);
+      var fb = null;
+      if (!blocked) {
+        fb = h('button', { type: 'button', class: 'btn small', text: '見直す' });
+        fb.addEventListener('click', function () {
+          confirmFirst({ title: 'このお題を見直します', body: String(t.title || '') + '\n\n前提・事実・出典を今に合わせた子を 1 本作ります（生成の費用がかかります）。子が出せるようになった時に、このお題は引退します。', okText: '見直す', note: true, noteRequired: false, noteLabel: '運営のひとこと（任意・200 字まで）' })
+            .then(function (d) { if (d && d.ok) derive(fb, 'refresh', d.note || ''); });
+        });
+      }
       var eb = h('button', { type: 'button', class: 'btn small', 'aria-expanded': st.extendOpen ? 'true' : 'false', text: '発展させる' });
       eb.addEventListener('click', function () { st.extendOpen = !st.extendOpen; paint(); var ta = root.querySelector('textarea[data-tp-extend]'); if (ta) ta.focus(); });
       var form = null;
       if (st.extendOpen) {
-        var ta = h('textarea', { 'data-tp-extend': '1', rows: '2', maxlength: String(NOTE_MAX), placeholder: '例: 作るにつなげたい / 中学生向けの答えのない問いへ' });
+        // maxlength は付けない（UTF-16 で数えるので、絵文字などが 200 字より前で止まる）。字数はコードポイントで数えて、超えたら送らない
+        var ta = h('textarea', { 'data-tp-extend': '1', rows: '2', placeholder: '例: 作るにつなげたい / 中学生向けの答えのない問いへ' });
         var count = h('span', { class: 'muted', 'aria-live': 'polite', text: '0 / ' + NOTE_MAX });
-        ta.addEventListener('input', function () { count.textContent = Array.from(ta.value).length + ' / ' + NOTE_MAX; });
+        ta.addEventListener('input', function () { count.textContent = noteLength(ta.value) + ' / ' + NOTE_MAX; count.className = noteOk(ta.value) ? 'muted' : 'err'; });
         var go = h('button', { type: 'button', class: 'btn primary small', text: '発展の子を作る' });
         go.addEventListener('click', function () {
-          if (Array.from(ta.value).length > NOTE_MAX) { setResult(result, ERR_TEXT.invalid_note, true); return; }
+          if (!noteOk(ta.value)) { setResult(result, ERR_TEXT.invalid_note, true); return; }
           var keep = ta.value;
           derive(go, 'extend', keep).then(function (ok) { if (!ok) { var t2 = root.querySelector('textarea[data-tp-extend]'); if (t2) t2.value = keep; } });
         });
@@ -683,7 +727,7 @@
           h('p', { class: 'muted', text: '子の種類は 話し合い・答えのない問い・作る から選ばれます。生成の費用がかかります。このお題は残ります。' })
         ]);
       }
-      return h('div', { class: 'tp-ops' }, [h('div', { class: 'row' }, [sb, rb, fb, eb]), form]);
+      return h('div', { class: 'tp-ops' }, [h('div', { class: 'row' }, [sb, rb, fb, eb]), blocked ? h('p', { class: 'muted tp-refresh-blocked', text: blocked }) : null, form]);
     }
 
     function paint() {
@@ -691,6 +735,7 @@
       clear(root);
       append(root, [headEl(), h('div', { class: 'row' }, toggleBtn()), bodyEl(), cfg.mode === 'held' ? heldOps() : stockOps(), result]);
       if (keepMsg) setResult(result, keepMsg, keepErr);
+      if (st.busy) controlsOf(root).forEach(function (c) { c.disabled = true; }); // 通信中に描き直しても止めたまま
     }
     paint();
     if (st.open) loadDetail();
@@ -755,24 +800,62 @@
     ['flagged', '気になる点', '検査が気になる点（出典のない主張・偏り・こわがらせる書き方など）を見つけました。全文を読んで判断してください。'],
     ['source', '出典（とそのほかの止まった理由）', '出典・形・禁止語・検査の失敗で止めたお題は「出せるにする」ができません。検査をやり直す・見直す・出さない、から選びます。']
   ];
+  /**
+   * 一覧の続き（T-10: next_before をそのまま before に渡す）の「もっと読む」。path は ?… まで（&before= を足す）。
+   * onRows(rows) で行を足す。押した後は通信中は止め、失敗は理由の文を出して押し直せる
+   */
+  function moreLoader(host, g, path, onRows) {
+    var wrap = h('div', { class: 'tp-more', 'data-tp-more': '1' });
+    host.appendChild(wrap);
+    function show(next) {
+      clear(wrap);
+      if (!next) return;
+      var msg = resultLine();
+      var btn = h('button', { type: 'button', class: 'btn', text: 'もっと読む' });
+      btn.addEventListener('click', function () {
+        setResult(msg, '');
+        runBusy([btn], btn, '読み込み中…', api('GET', path + '&before=' + encodeURIComponent(next))).then(function (res) {
+          if (!alive(g)) return;
+          onRows(res && Array.isArray(res.topics) ? res.topics : []);
+          show(res && typeof res.next_before === 'string' ? res.next_before : null);
+        }, function (e) {
+          if (!alive(g)) return;
+          setResult(msg, '続きを読めませんでした: ' + errorText(e, S.meta), true);
+        });
+      });
+      append(wrap, [btn, msg]);
+    }
+    return show;
+  }
+
   function renderHeld(box, g) {
     clear(box);
     box.appendChild(loadingEl());
-    api('GET', '/api/topics?status=held&limit=100').then(function (res) {
+    var path = '/api/topics?status=held&limit=100';
+    api('GET', path).then(function (res) {
       if (!alive(g)) return;
       clear(box);
-      var rows = res && Array.isArray(res.topics) ? res.topics : [];
+      var groups = {};
       HELD_GROUPS.forEach(function (gr) {
-        var mine = rows.filter(function (t) { return t && heldGroup(t.hold_reason) === gr[0]; });
-        var card = h('section', { class: 'card tp-group', 'data-tp-group': gr[0] }, [
-          h('h2', null, [gr[1], ' ', pill(String(mine.length) + ' 件', mine.length ? 'orange' : 'gray')]),
-          h('p', { class: 'muted', text: gr[2] })
-        ]);
-        if (!mine.length) card.appendChild(h('p', { class: 'muted', 'data-tp-empty': '1', text: 'ありません' }));
-        mine.forEach(function (t) { card.appendChild(topicCard(t, { g: g, mode: 'held', open: gr[0] !== 'source' })); });
+        var count = pill('0 件', 'gray');
+        var empty = h('p', { class: 'muted', 'data-tp-empty': '1', text: 'ありません' });
+        var card = h('section', { class: 'card tp-group', 'data-tp-group': gr[0] }, [h('h2', null, [gr[1], ' ', count]), h('p', { class: 'muted', text: gr[2] }), empty]);
+        groups[gr[0]] = { card: card, count: count, empty: empty, n: 0, open: gr[0] !== 'source' };
         box.appendChild(card);
       });
-      if (res && res.next_before) box.appendChild(h('p', { class: 'muted', text: '100 件より多くあります。処理すると続きが出ます。' }));
+      function addRows(rows) {
+        rows.forEach(function (t) {
+          if (!t) return;
+          var gr = groups[heldGroup(t.hold_reason)];
+          if (gr.n === 0 && gr.empty.parentNode) gr.card.removeChild(gr.empty);
+          gr.n += 1;
+          gr.count.textContent = String(gr.n) + ' 件';
+          gr.count.className = 'pill orange';
+          gr.card.appendChild(topicCard(t, { g: g, mode: 'held', open: gr.open }));
+        });
+      }
+      addRows(res && Array.isArray(res.topics) ? res.topics : []);
+      moreLoader(box, g, path, addRows)(res && typeof res.next_before === 'string' ? res.next_before : null);
     }, function (e) {
       if (!alive(g)) return;
       clear(box);
@@ -791,19 +874,26 @@
     var list = h('div', { class: 'tp-stock' }, loadingEl());
     box.appendChild(h('div', { class: 'card' }, [h('p', { class: 'muted', text: '出せるお題（ready）です。話し合い・答えのない問い・作るは 30 日あけてまた出ます。ニュースは 7 日で役目を終えます。' }), filter]));
     box.appendChild(list);
-    api('GET', '/api/topics?status=ready&limit=100' + (kind ? '&kind=' + encodeURIComponent(kind) : '')).then(function (res) {
+    var path = '/api/topics?status=ready&limit=100' + (kind ? '&kind=' + encodeURIComponent(kind) : '');
+    api('GET', path).then(function (res) {
       if (!alive(g)) return;
       clear(list);
       var rows = res && Array.isArray(res.topics) ? res.topics : [];
       if (!rows.length) { list.appendChild(h('div', { class: 'card' }, h('p', { class: 'muted', 'data-tp-empty': '1', text: 'この種類の出せるお題はありません' }))); return; }
-      rows.forEach(function (t) {
-        var card = topicCard(t, { g: g, mode: 'stock', open: false });
-        card.classList.add('card');
-        var info = h('p', { class: 'muted tp-stock-info', text: '最後に出した日 ' + String(t.last_shown_day || 'まだ出していない') + ' / 系譜の深さ ' + String(typeof t.depth === 'number' ? t.depth : '—') });
-        card.insertBefore(info, card.children[1] || null);
-        list.appendChild(card);
-      });
-      if (res && res.next_before) list.appendChild(h('p', { class: 'muted', text: '100 件より多くあります。種類で絞ると続きが見られます。' }));
+      var cards = h('div', { class: 'tp-stock-cards' });
+      list.appendChild(cards);
+      function addRows(more) {
+        more.forEach(function (t) {
+          if (!t) return;
+          var card = topicCard(t, { g: g, mode: 'stock', open: false });
+          card.classList.add('card');
+          var info = h('p', { class: 'muted tp-stock-info', text: '最後に出した日 ' + String(t.last_shown_day || 'まだ出していない') + ' / 系譜の深さ ' + String(typeof t.depth === 'number' ? t.depth : '—') });
+          card.insertBefore(info, card.children[1] || null);
+          cards.appendChild(card);
+        });
+      }
+      addRows(rows);
+      moreLoader(list, g, path, addRows)(res && typeof res.next_before === 'string' ? res.next_before : null);
     }, function (e) {
       if (!alive(g)) return;
       clear(list);
@@ -967,6 +1057,9 @@
     heldGroup: heldGroup,
     isSourceHold: isSourceHold,
     heldActions: heldActions,
+    refreshBlockedText: refreshBlockedText,
+    noteValue: noteValue,
+    noteLength: noteLength,
     latestCheck: latestCheck,
     approveState: approveState,
     errorText: errorText,

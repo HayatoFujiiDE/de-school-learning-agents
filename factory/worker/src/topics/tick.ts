@@ -83,12 +83,12 @@ export async function topicsTick(env: Env, port: FactoryPort, o: TickOptions): P
       const tomorrow = addDays(tokyoDay(now), 1);
       for (const kind of await dueGenKinds(env, now)) {
         outcome = await runTopicRun(env, port, { purpose: 'gen', kind, trigger: 'cron', slotDay: tomorrow }, { deadline: o.deadline, fetchImpl: o.fetchImpl, now });
-        if (outcome.status !== 'not_taken' || outcome.reason === 'cap' || outcome.reason === 'disabled') break;
+        if (outcome.status !== 'not_taken' || outcome.reason === 'cap' || outcome.reason === 'disabled' || outcome.reason === 'no_time') break;
       }
-      if (!outcome || (outcome.status === 'not_taken' && outcome.reason !== 'cap' && outcome.reason !== 'disabled')) {
+      if (!outcome || (outcome.status === 'not_taken' && outcome.reason !== 'cap' && outcome.reason !== 'disabled' && outcome.reason !== 'no_time')) {
         for (const cand of await deriveCandidates(env, now)) {
           outcome = await runDerive(env, port, { parentId: cand.parentId, kind: cand.kind, trigger: 'cron' }, { deadline: o.deadline, fetchImpl: o.fetchImpl, now });
-          if (outcome.status !== 'not_taken' || outcome.reason === 'cap' || outcome.reason === 'disabled' || outcome.reason === 'week_cap') break;
+          if (outcome.status !== 'not_taken' || outcome.reason === 'cap' || outcome.reason === 'disabled' || outcome.reason === 'week_cap' || outcome.reason === 'no_time') break;
         }
       }
       out.run = outcome ? (outcome.status === 'not_taken' ? `not_taken:${outcome.reason}` : outcome.run.status) : 'none';

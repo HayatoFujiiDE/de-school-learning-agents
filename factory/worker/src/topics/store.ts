@@ -131,7 +131,7 @@ const DERIVE_EXTRA = `NOT EXISTS (SELECT 1 FROM topic_runs WHERE purpose = 'deri
   AND (? = 'manual' OR (SELECT COUNT(*) FROM topic_runs WHERE purpose = 'derive' AND trigger = 'cron' AND week = ?) < ?)
   AND EXISTS (SELECT 1 FROM topics p WHERE p.id = ? AND p.depth < 5 AND (
         (? = 'refresh' AND (p.status = 'ready' OR (p.status = 'held' AND p.hold_reason IN ('source_lost','source_unreachable')))
-           AND NOT EXISTS (SELECT 1 FROM topics c WHERE c.parent_topic_id = p.id AND c.derive_kind = 'refresh' AND c.status IN ('draft','checking','ready')))
+           AND NOT EXISTS (SELECT 1 FROM topics c WHERE c.parent_topic_id = p.id AND c.derive_kind = 'refresh' AND c.status IN ('draft','checking','held','ready')))
      OR (? = 'extend' AND p.status = 'ready' AND (SELECT COUNT(*) FROM topics c WHERE c.parent_topic_id = p.id AND c.derive_kind = 'extend') < 2)))`;
 
 /** 派生の run を取る 1 文目（T-4・T-9）: 取り置き + 親の条件・子の数・週の上限 + calling の排他 + cron の一意 */
@@ -329,9 +329,13 @@ export const HOLD_GROUP: Record<string, 'heavy' | 'flagged' | 'source' | 'other'
 
 /** 一覧・詳細の行に付ける「承認できるか」（最新の検査が同じ sha で approvable = 1）と「最後に出した日」を読む SQL の列 */
 export const TOPIC_ROW_EXTRA_COLS = `(SELECT c.approvable FROM topic_checks c WHERE c.topic_id = t.id AND c.attempt = t.check_attempts AND c.content_sha256 = t.content_sha256) AS latest_approvable,
-  (SELECT MAX(s.day) FROM topic_schedule s WHERE s.topic_id = t.id AND s.day <= ?) AS last_shown_day`;
+  (SELECT MAX(s.day) FROM topic_schedule s WHERE s.topic_id = t.id AND s.day <= ?) AS last_shown_day,
+  (SELECT c.id FROM topics c WHERE c.parent_topic_id = t.id AND c.derive_kind = 'refresh' AND c.status IN ('draft','checking','held','ready')) AS refresh_child_id,
+  (SELECT c.status FROM topics c WHERE c.parent_topic_id = t.id AND c.derive_kind = 'refresh' AND c.status IN ('draft','checking','held','ready')) AS refresh_child_status`;
 
-export function toTopicRow(r: TopicDbRow & { latest_approvable?: number | null; last_shown_day?: string | null }): Record<string, unknown> {
+export function toTopicRow(
+  r: TopicDbRow & { latest_approvable?: number | null; last_shown_day?: string | null; refresh_child_id?: string | null; refresh_child_status?: string | null },
+): Record<string, unknown> {
   const held = r.status === 'held';
   const approvable = held && (r.hold_reason === 'heavy' || r.hold_reason === 'flagged') && Number(r.latest_approvable ?? 0) === 1;
   return {
@@ -356,6 +360,8 @@ export function toTopicRow(r: TopicDbRow & { latest_approvable?: number | null; 
     check_attempts: Number(r.check_attempts),
     last_checked_at: r.last_checked_at,
     last_shown_day: r.last_shown_day ?? null,
+    // 終わっていない見直しの子（1 つの親に 1 つまで。索引 uq_topics_live_refresh）。あれば次の見直しは作れない（T-9）
+    refresh_child: r.refresh_child_id ? { id: r.refresh_child_id, status: r.refresh_child_status ?? null } : null,
     content_sha256: r.content_sha256,
     created_at: r.created_at,
     updated_at: r.updated_at,

@@ -48,7 +48,7 @@ CREATE TABLE topics (
 CREATE INDEX idx_topics_status_kind ON topics(status, kind);
 CREATE INDEX idx_topics_lineage ON topics(lineage_id);
 CREATE UNIQUE INDEX uq_topics_live_refresh ON topics(parent_topic_id)
-  WHERE derive_kind = 'refresh' AND status IN ('draft','checking','ready');
+  WHERE derive_kind = 'refresh' AND status IN ('draft','checking','held','ready');
 
 CREATE TABLE topic_sources (
   topic_id TEXT NOT NULL REFERENCES topics(id),

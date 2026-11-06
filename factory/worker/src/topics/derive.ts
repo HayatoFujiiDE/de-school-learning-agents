@@ -15,7 +15,7 @@ export interface DeriveCandidate {
 
 /**
  * 自動の派生の候補（T-9）。週の上限に達していれば空。
- * 見直し: hold_reason が source_lost・source_unreachable の held（先）/ evergreen = 1 の ready で created_at から TOPIC_REFRESH_DAYS 日を過ぎたもの。どちらも生きている見直しの子が無いもの。
+ * 見直し: hold_reason が source_lost・source_unreachable の held（先）/ evergreen = 1 の ready で created_at から TOPIC_REFRESH_DAYS 日を過ぎたもの。どちらも終わっていない見直しの子（draft・checking・held・ready）が無いもの（held の子も次を塞ぐ。v2.4）。
  * 発展: starred = 1 の ready、または news の ready で fresh_until が今日 + 2 日以内のもの。発展の子（状態を問わない）を 2 つ持つ親は外す。
  * どちらも、同じ親・同じ種類・同じ日の cron の派生がまだ無いもの（失敗しても、その日はもう試さない）
  */
@@ -32,7 +32,7 @@ export async function deriveCandidates(env: Env, now: Date = new Date()): Promis
       `SELECT p.id FROM topics p
        WHERE p.depth < 5
          AND ((p.status = 'held' AND p.hold_reason IN ('source_lost','source_unreachable')) OR (p.evergreen = 1 AND p.status = 'ready' AND p.created_at <= ?))
-         AND NOT EXISTS (SELECT 1 FROM topics c WHERE c.parent_topic_id = p.id AND c.derive_kind = 'refresh' AND c.status IN ('draft','checking','ready'))
+         AND NOT EXISTS (SELECT 1 FROM topics c WHERE c.parent_topic_id = p.id AND c.derive_kind = 'refresh' AND c.status IN ('draft','checking','held','ready'))
          AND NOT EXISTS (SELECT 1 FROM topic_runs r WHERE r.purpose = 'derive' AND r.trigger = 'cron' AND r.parent_topic_id = p.id AND r.kind = 'refresh' AND r.slot_day = ?)
        ORDER BY (p.status = 'held') DESC, p.created_at ASC, p.id ASC LIMIT 5`,
       old,

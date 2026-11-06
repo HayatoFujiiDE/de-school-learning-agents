@@ -31,11 +31,14 @@
   "check_attempts": 1,
   "last_checked_at": "2026-11-06T10:00:00.000Z",
   "last_shown_day": null,               // このお題が予定に入った最後の日（今日まで）。無ければ null
+  "refresh_child": null,                // 終わっていない見直しの子（draft・checking・held・ready）{ "id", "status" }。無ければ null（v2.4）
   "content_sha256": "9a1b…",            // decide に送り返す値
   "created_at": "2026-11-06T09:50:00.000Z",
   "updated_at": "2026-11-06T10:00:00.000Z"
 }
 ```
+
+`refresh_child` が null でない親からは、次の見直しを作れない（T-9。1 つの親に終わっていない見直しの子は 1 つまで。held で止まっている子も数える）。管理画面はこの時「見直す」を出さず、止まっている子を「出さない」にするか、やり直し・承認で先へ進める文を出す。
 
 `hold_group` の分け方:
 
@@ -57,7 +60,7 @@
 }
 ```
 
-`status`: `calling` | `done` | `failed` | `skipped`。`error` は理由コード 1 つ（`cap` / `abandoned` / `timeout` / `no_output` / `no_valid_topic` / `rate_limited` / `quota` / `auth` / `bad_request` / `server` / `lost_run` など）。
+`status`: `calling` | `done` | `failed` | `skipped`。`error` は理由コード 1 つ（`cap` / `abandoned` / `timeout` / `no_output` / `no_valid_topic` / `rate_limited` / `quota` / `auth` / `bad_request` / `server` / `lost_run` / `no_time` など。`no_time` は入力を読んだ後で締め切りまでの残りが 5 秒未満になり、呼ばずに終えた run — 台帳は 0）。
 
 ## ルート
 
@@ -87,14 +90,15 @@
 
 ### `GET /api/topics?status=&kind=&limit=&before=`
 
-- `status` は 6 つのどれか（省略 = 全部）、`kind` は 4 つのどれか（省略 = 全部）、`limit` 1〜100（既定 50）、`before` は前のページの `next_before`（`created_at` の値）。範囲外は 400 `bad_query`。
-- 並びは `created_at` の新しい順。
+- `status` は 6 つのどれか（省略 = 全部）、`kind` は 4 つのどれか（省略 = 全部）、`limit` 1〜100（既定 50）、`before` は前のページの `next_before` をそのまま（URL エンコードして）渡す。範囲外・形の違う `before` は 400 `bad_query`。
+- 並びは `created_at` の新しい順・同じ時刻は `id` の大きい順。
+- `next_before` は「作成時刻と id の組」を表す文字列 `"<created_at>|<id>"`（ページの最後の行）。次のページはこの組より後ろ（`created_at` が前、または同じ時刻で `id` が小さい）の行なので、同じ時刻のお題（同じ run の 2 本目など）がページの境目で抜けない。中身に頼らず、そのまま次の `before` に渡す（v2.4。前は `created_at` だけで、同じ時刻の残りが抜けた）。
 
 ```json
-{ "topics": [ /* TopicRow… */ ], "next_before": "2026-11-05T09:50:00.000Z" }
+{ "topics": [ /* TopicRow… */ ], "next_before": "2026-11-05T09:50:00.000Z|tp_3f2c…_1" }
 ```
 
-`next_before` は次のページが無ければ `null`。
+`next_before` は次のページが無ければ `null`。管理画面の要確認とストックは、`next_before` がある間「もっと読む」を出す。
 
 ### `GET /api/topics/:id`
 
@@ -141,7 +145,7 @@
 
 成功 200: `{ "run": { /* RunRow */ } }`（呼び出しが終わるまで待つ。最大 2〜3 分。`run.status` が `failed` でも 200）
 
-失敗: 400 `bad_request` / 404 `not_found` / 409 `run_in_progress`（同じ種類の run が動いている）/ 409 `parent_not_eligible`（深さ 5・状態が合わない・発展の子が 2 つある・生きている見直しの子がある）/ 409 `cap`（費用の上限）/ 409 `disabled`（入・切が切、または一時停止）
+失敗: 400 `bad_request` / 404 `not_found` / 409 `run_in_progress`（同じ種類の run が動いている）/ 409 `parent_not_eligible`（深さ 5・状態が合わない・発展の子が 2 つある・終わっていない見直しの子（held を含む）がある）/ 409 `cap`（費用の上限）/ 409 `disabled`（入・切が切、または一時停止）
 
 ### `POST /api/topics`
 
@@ -197,6 +201,8 @@
 ```
 
 `needs_review.other` は held のうち重い話題と出典以外（気になる点を含む）。
+
+`last_run` は「最後に実際に呼んだ run」: `status` が `skipped`（上限で始めなかった・呼んでいない）の行は除いた、いちばん新しい run。最新が `skipped: cap` でも、その前に呼んだ run を返す。呼んだ run が 1 つも無ければ `null`（上限で止まっていることは `topic_runs` の一覧＝記録のタブで見る）。
 
 ## 配信（認証なし。管理画面からは使わない）
 

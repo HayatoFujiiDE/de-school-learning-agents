@@ -93,12 +93,26 @@ describe('予定の確定（planDay）', () => {
     expect(count(db, "SELECT COUNT(*) AS n FROM topic_schedule WHERE topic_id = 'tp_m_2'")).toBe(0);
   });
 
-  it('batch の途中の失敗で topic_plans も行も残らない', async () => {
+  it('batch の途中の失敗で topic_plans も行も残らない（now を渡し、2 行目の一意制約で落ちる）', async () => {
     const p = { day: today, kind: 'talk' as const, pos: 1, topic_id: 'tp_t_1', lineage_id: 'tp_t_1' };
-    const stmts = planStmts(today, [p, { ...p, topic_id: 'tp_p_1', lineage_id: 'tp_p_1' }]); // 2 行目が (day, kind, pos) の主キーに当たる
-    await expect(env.DB.batch(stmts.map((s) => env.DB.prepare(s.sql).bind(...s.params)))).rejects.toThrow();
+    const stmts = planStmts(today, [p, { ...p, topic_id: 'tp_p_1', lineage_id: 'tp_p_1' }], new Date().toISOString()); // 2 行目が (day, kind, pos) の主キーに当たる
+    // 1 文目（topic_plans）と 2 文目（予定の 1 行目）だけなら書ける = 落ちるのは 3 文目の一意制約
+    db.exec('BEGIN');
+    for (const s of stmts.slice(0, 2)) db.prepare(s.sql).run(...(s.params as Array<string | number | null>));
+    expect(count(db, 'SELECT COUNT(*) AS n FROM topic_schedule')).toBe(1);
+    db.exec('ROLLBACK');
+    await expect(env.DB.batch(stmts.map((s) => env.DB.prepare(s.sql).bind(...s.params)))).rejects.toThrow(/UNIQUE constraint failed: topic_schedule/);
     expect(count(db, 'SELECT COUNT(*) AS n FROM topic_plans')).toBe(0);
     expect(count(db, 'SELECT COUNT(*) AS n FROM topic_schedule')).toBe(0);
+  });
+
+  it('予定の確定と配信は一時停止（paused）では止めない（入・切だけを見る。v2.4）', async () => {
+    setSetting(db, 'paused', '1');
+    expect(await planDay(env, today, { requireReady: true })).toBe('made');
+    const lib = (await (await libraryTopics(env, new URL('http://x/api/library/topics'))).json()) as { topics: Array<{ topic_id: string }> };
+    expect(lib.topics.length).toBeGreaterThan(0);
+    const morning = new Date(`${today}T01:00:00.000Z`);
+    expect((await planStep(env, morning)).today).toBe('exists');
   });
 
   it('同じ系譜が同じ日に 2 つ入らない（UNIQUE (day, lineage_id)）', async () => {

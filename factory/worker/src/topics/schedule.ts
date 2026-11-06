@@ -1,4 +1,4 @@
-// 出す（毎日の予定。契約 contract-T T-8）。費用なし。入・切が入の時だけ確定する。
+// 出す（毎日の予定。契約 contract-T T-8）。費用なし。入・切が入の時だけ確定する（工場全体の一時停止では止めない）。
 // 確定は 1 日に 1 回だけ: topic_plans の INSERT と、その日の topic_schedule の INSERT 全部を 1 つの D1 batch で行う（主キーに当たれば全部書かれない）。
 // 選び方は決定論の純関数 pickForDay。
 
@@ -6,7 +6,7 @@ import { all, nowIso, prepare, stmt, tokyoDay, isUniqueViolation, type Stmt } fr
 import type { Env } from '../env';
 import { TOPIC_KINDS, type TopicKind } from './locale';
 import { addDays } from './schema';
-import { tokyoHour, topicsEnabled, TOPIC_SLOTS } from './store';
+import { tokyoHour, topicsSwitch, TOPIC_SLOTS } from './store';
 
 export interface PickCandidate {
   id: string;
@@ -92,12 +92,12 @@ export function planStmts(D: string, picked: readonly PickedSlot[], now: string)
 export type PlanResult = 'made' | 'exists' | 'disabled' | 'no_ready';
 
 /**
- * 日 D の予定を確定する。確定済み（topic_plans に行がある）なら何もしない（'exists'）。入・切が切なら 'disabled'。
+ * 日 D の予定を確定する。確定済み（topic_plans に行がある）なら何もしない（'exists'）。入・切が切なら 'disabled'（一時停止は見ない）。
  * requireReady（当日の分）: 出せるお題（ready で evergreen = 1 か fresh_until >= D）が 1 本も無ければ確定せず 'no_ready'（行を作らない。次の tick がまた見る）
  */
 export async function planDay(env: Env, D: string, o: { requireReady?: boolean } = {}): Promise<PlanResult> {
   const db = env.DB;
-  if (!(await topicsEnabled(db))) return 'disabled';
+  if (!(await topicsSwitch(db))) return 'disabled'; // 入・切だけを見る（一時停止 paused は費用のかかる呼び出しだけを止める。T-8・v2.4）
   const has = await all(db, stmt('SELECT 1 FROM topic_plans WHERE day = ?', D));
   if (has.length) return 'exists';
   const candidates = await all<PickCandidate>(

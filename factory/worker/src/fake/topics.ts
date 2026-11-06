@@ -8,7 +8,6 @@
 // 出典のページは PAGES の本文を返す（引用を含む）。/missing/ は引用の無いページ、/gone/ は 404。
 
 import type { Message, MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk/resources/messages/messages';
-import type { Env } from '../env';
 import { TOPIC_FEEDS } from '../generated/topic-sources';
 
 export const FAKE_SOURCE_HOST = 'fake-source.example.org';
@@ -266,19 +265,3 @@ export const topicFetch: typeof fetch = async (input) => {
     headers: { 'content-type': 'text/html; charset=utf-8' },
   });
 };
-
-/** smoke の制御: POST /__fake/topics-replan {day} — その日の予定を消して、次の tick で確定し直させる（fake の時だけ） */
-export async function handleTopicsFakeControl(request: Request, env: Env): Promise<Response | null> {
-  const url = new URL(request.url);
-  if (url.pathname !== '/__fake/topics-replan' || request.method !== 'POST') return null;
-  const j = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
-  let b: { day?: unknown } = {};
-  try {
-    b = (await request.json()) as { day?: unknown };
-  } catch {
-    return j(400, { error: 'invalid_json' });
-  }
-  if (typeof b.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(b.day)) return j(400, { error: 'bad_day' });
-  await env.DB.batch([env.DB.prepare('DELETE FROM topic_schedule WHERE day = ?').bind(b.day), env.DB.prepare('DELETE FROM topic_plans WHERE day = ?').bind(b.day)]);
-  return j(200, { day: b.day, replanned: true });
-}

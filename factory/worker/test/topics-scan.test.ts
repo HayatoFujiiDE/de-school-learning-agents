@@ -108,6 +108,8 @@ export function literals(src: string): string[] {
 }
 
 const UPDATE_TOPICS = /UPDATE\s+topics(?:\s+AS\s+\w+)?\s+SET\s+([\s\S]*?)\s+WHERE\b/gi;
+/** UPDATE topics の文の始まり（WHERE が同じ文字列に無くても数える） */
+const UPDATE_TOPICS_HEAD = /UPDATE\s+topics(?:\s+AS\s+\w+)?\s+SET\b/gi;
 const IMMUTABLE = ['body_json', 'content_sha256', 'title', 'title_norm', 'kind', 'origin', 'slot_day', 'lineage_id', 'parent_topic_id', 'derive_kind', 'depth'];
 
 /** 1 つの文字列の中の UPDATE topics の SET 句 */
@@ -122,10 +124,20 @@ interface Finding {
   what: string;
 }
 
-function scan(files: Array<{ file: string; text: string }>): { ready: Finding[]; retired: Finding[]; immutable: Finding[]; composedSet: Finding[]; updates: number } {
-  const r = { ready: [] as Finding[], retired: [] as Finding[], immutable: [] as Finding[], composedSet: [] as Finding[], updates: 0 };
+function scan(files: Array<{ file: string; text: string }>): {
+  ready: Finding[];
+  retired: Finding[];
+  immutable: Finding[];
+  composedSet: Finding[];
+  splitWhere: Finding[];
+  updates: number;
+} {
+  const r = { ready: [] as Finding[], retired: [] as Finding[], immutable: [] as Finding[], composedSet: [] as Finding[], splitWhere: [] as Finding[], updates: 0 };
   for (const { file, text } of files) {
     for (const lit of literals(text)) {
+      // v2.4 の裁定 6: UPDATE topics の文は WHERE まで 1 つの文字列（WHERE を別の変数に分けない・断片を差し込まない）
+      const heads = [...lit.matchAll(UPDATE_TOPICS_HEAD)].length;
+      if (heads > 0 && (setClauses(lit).length < heads || lit.includes('${}'))) r.splitWhere.push({ file, what: lit.trim().slice(0, 60) });
       for (const set of setClauses(lit)) {
         r.updates++;
         if (writesStatus(set, 'ready')) r.ready.push({ file, what: set.slice(0, 60) });
@@ -154,6 +166,16 @@ describe('走査の道具そのもの（正の検査: 違反を見つけられ�
     expect(bad.immutable).toEqual([{ file: 'x.ts', what: 'title' }]);
     expect(bad.composedSet.map((f) => f.file)).toEqual(['y.ts']);
   });
+  it('WHERE を別の変数に分けた UPDATE topics を違反として見つける（裁定 6 の対照）', () => {
+    const split = scan([
+      { file: 'w.ts', text: "const rowWhere = `WHERE id = ?`; const a = `UPDATE topics SET title = ?, updated_at = ? ${'$'}{rowWhere}`;" },
+      { file: 'p.ts', text: "const b = `UPDATE topics SET status = 'ready' WHERE id = ? AND ${'$'}{pred}`;" },
+      { file: 'ok.ts', text: "const c = `UPDATE topics SET starred = ? WHERE id = ? AND content_sha256 = ?`;" },
+    ]);
+    // WHERE が別の変数だと、SET 句も読めない（書き換えない列・ready の違反を見落とす）ので、それ自体を違反にする
+    expect(split.immutable).toEqual([]);
+    expect(split.splitWhere.map((f) => f.file)).toEqual(['w.ts', 'p.ts']);
+  });
   it('読み（WHERE の status = \'ready\'）は書きと数えない', () => {
     const ok = scan([{ file: 'r.ts', text: "const a = `UPDATE topics SET recheck_tried_at = ? WHERE id = ? AND status = 'ready'`;" }]);
     expect([ok.ready.length, ok.retired.length, ok.updates]).toEqual([0, 0, 1]);
@@ -178,6 +200,9 @@ describe('src/ の走査', () => {
   });
   it('topics の SET 句を断片の連結で組み立てていない（走査が SET 句を全部読める）', () => {
     expect(r.composedSet).toEqual([]);
+  });
+  it('UPDATE topics の文は WHERE まで 1 つの文字列（WHERE を別の変数に分けていない。裁定 6）', () => {
+    expect(r.splitWhere).toEqual([]);
   });
   it('src/topics/**・src/routes/topics.ts に materials・material_versions・factory_jobs への INSERT・UPDATE・DELETE の文字列が無い', () => {
     const own = files.filter((f) => f.file.startsWith('topics/') || f.file === 'routes/topics.ts');

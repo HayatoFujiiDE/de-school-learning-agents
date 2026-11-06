@@ -44,7 +44,7 @@ export type RunRequest =
   | { purpose: 'gen'; kind: TopicKind; trigger: 'cron' | 'manual'; slotDay: string }
   | { purpose: 'derive'; kind: 'refresh' | 'extend'; trigger: 'cron' | 'manual'; parentId: string; note?: string | null };
 
-export type NotTakenReason = 'disabled' | 'run_in_progress' | 'exists' | 'parent_not_eligible' | 'week_cap' | 'cap';
+export type NotTakenReason = 'disabled' | 'no_time' | 'run_in_progress' | 'exists' | 'parent_not_eligible' | 'week_cap' | 'cap';
 
 export type RunOutcome =
   | { status: 'not_taken'; reason: NotTakenReason; run?: RunDbRow }
@@ -58,6 +58,9 @@ export interface RunOptions {
 }
 
 const DERIVE_CHILD_KINDS: readonly TopicKind[] = ['talk', 'philo', 'make'];
+
+/** お題の呼び出しの前に要る、締め切りまでの残り（v2.4 の裁定 7。これ未満なら呼ばない・取り置きもしない。次の tick に回す） */
+export const TOPIC_CALL_MIN_LEFT_MS = 5_000;
 
 /** 1 run の最大本数（T-4・T-9） */
 export function runMaxCount(req: RunRequest): number {
@@ -126,16 +129,18 @@ async function fetchFeed(url: string, fetchImpl: typeof fetch, deadline: number)
   }
 }
 
-/** news の資料: RSS を順に開き（1 本 5 秒まで）、直近 3 日の見出し・リンク・日付を新しい順に最大 40 件（開けない RSS は飛ばす） */
+/** news の資料: RSS を順に開き（1 本 5 秒まで）、直近 3 日（今 + 1 日より先は捨てる）の見出し・リンク・日付を新しい順に最大 40 件（開けない RSS は飛ばす） */
 export async function fetchHeadlines(fetchImpl: typeof fetch, deadline: number, now: Date, feeds: readonly string[] = TOPIC_FEEDS): Promise<FeedHeadline[]> {
   const since = new Date(now.getTime() - TOPIC_FEED_LIMITS.days * 86_400_000).toISOString();
+  // 今より 1 日を超えて先の日付は捨てる（v2.4 の裁定 8: 未来の日付が直近の記事を押し出さない）
+  const until = new Date(now.getTime() + 86_400_000).toISOString();
   const texts: Array<string | null> = [];
   for (const u of feeds.slice(0, TOPIC_FEED_LIMITS.feeds)) texts.push(await fetchFeed(u, fetchImpl, deadline));
   const items: FeedHeadline[] = [];
   texts.forEach((xml, i) => {
     if (xml === null) return;
     for (const it of parseFeed(xml, i)) {
-      if (!it.date || it.date < since || !it.title) continue;
+      if (!it.date || it.date < since || it.date > until || !it.title) continue;
       items.push({ title: it.title.slice(0, 200), link: it.link && checkSourceUrl(it.link) ? it.link : null, date: it.date });
     }
   });
@@ -254,7 +259,7 @@ export async function parentEligible(db: D1Database, p: Pick<TopicDbRow, 'id' | 
   if (Number(p.depth) >= 5) return false;
   if (kind === 'refresh') {
     if (!(p.status === 'ready' || (p.status === 'held' && (p.hold_reason === 'source_lost' || p.hold_reason === 'source_unreachable')))) return false;
-    const live = await all(db, stmt("SELECT 1 FROM topics WHERE parent_topic_id = ? AND derive_kind = 'refresh' AND status IN ('draft','checking','ready') LIMIT 1", p.id));
+    const live = await all(db, stmt("SELECT 1 FROM topics WHERE parent_topic_id = ? AND derive_kind = 'refresh' AND status IN ('draft','checking','held','ready') LIMIT 1", p.id));
     return live.length === 0;
   }
   if (p.status !== 'ready') return false;
@@ -270,6 +275,7 @@ export async function runTopicRun(env: Env, port: FactoryPort, req: RunRequest, 
   const t0 = nowIso(now);
   const today = tokyoDay(now);
   if (!(await topicsEnabled(db))) return { status: 'not_taken', reason: 'disabled' };
+  if (opts.deadline - Date.now() < TOPIC_CALL_MIN_LEFT_MS) return { status: 'not_taken', reason: 'no_time' };
 
   const parent = req.purpose === 'derive' ? await readTopic(db, req.parentId) : null;
   if (req.purpose === 'derive' && !parent) return { status: 'not_taken', reason: 'parent_not_eligible' };
@@ -405,16 +411,19 @@ export async function runTopicRun(env: Env, port: FactoryPort, req: RunRequest, 
           description:
             'できあがったお題を保存します。最後に 1 回だけ呼びます。topics は本文の配列で、形は schema のとおりです。出典（sources）は web_fetch で開けたページだけで、quote はそのページの文を一字も変えずに写します。',
           input_schema: { type: 'object', additionalProperties: false, required: ['topics'], properties: { topics: { type: 'array', items: TOPIC_BODY_JSON_SCHEMA } } } as unknown as Tool['input_schema'],
+          // 呼んだ時の入力の形を保証させる（v2.4 の裁定 5。schema は公式の strict の制限の中: CONTRACT-factory §T 末尾）。呼ぶことは保証しないので無ければ no_output
+          strict: true,
         },
       ],
-      // サーバーツールとの併用で強制呼び出しはしない（Sonnet 5.5 は tool_choice any / tool が 400。CONTRACT-factory §T 末尾）。無ければ no_output
+      // 強制呼び出しはしない（Sonnet 5.5 は tool_choice any / tool が 400。CONTRACT-factory §T 末尾）。auto + strict。無ければ no_output
       tool_choice: { type: 'auto' },
     };
   } catch {
     return finishFailed('input_failed', false);
   }
 
-  // 呼び出し（1 回・再送なし・絶対の締め切り）
+  // 呼び出し（1 回・再送なし・絶対の締め切り）。入力（RSS）の後で残りが 5 秒未満なら呼ばない（呼んでいないので台帳は 0）
+  if (opts.deadline - Date.now() < TOPIC_CALL_MIN_LEFT_MS) return finishFailed('no_time', true);
   const callOpts: CallOpts = { deadline: Math.min(opts.deadline, Date.now() + TOPIC_GEN_TIMEOUT_MS), maxTimeoutMs: TOPIC_GEN_TIMEOUT_MS, maxRetries: 0 };
   let msg: Message;
   try {
