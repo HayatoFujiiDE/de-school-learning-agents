@@ -12,8 +12,10 @@ import { addDays, normalizeTitle, requiredSourceIds, sha256Hex, type TopicBody }
 
 /** news の 1 run の最大本数 */
 export const TOPIC_NEWS_PER_RUN = 2;
-/** talk・philo・make の週 1 回の run の最大本数 */
+/** talk・make の週 1 回の run の最大本数 */
 export const TOPIC_WEEKLY_PER_RUN = 3;
+/** philo の週 1 回の run の最大本数（v2.7: 3 → 2。1 本ごとに出典を開く量が多く、1 回の費用が大きいため） */
+export const TOPIC_PHILO_PER_RUN = 2;
 /** 生成・派生の呼び出しの絶対の締め切りの上限（cron の締め切りと早い方） */
 export const TOPIC_GEN_TIMEOUT_MS = 150_000;
 /** 検査の呼び出しの絶対の締め切りの上限 */
@@ -24,7 +26,8 @@ export const TOPIC_GEN_MAX_TOKENS = 8000;
 export const TOPIC_CHECK_MAX_TOKENS = 2000;
 export const TOPIC_WEB_SEARCH_MAX_USES = 5;
 export const TOPIC_WEB_FETCH_MAX_USES = 8;
-export const TOPIC_WEB_FETCH_MAX_CONTENT_TOKENS = 6000;
+/** web_fetch の 1 ページの本文の上限（v2.7: 6000 → 4000。費用を下げる） */
+export const TOPIC_WEB_FETCH_MAX_CONTENT_TOKENS = 4000;
 /** 1 日の枠（T-8） */
 export const TOPIC_SLOTS: Record<TopicKind, number> = { news: 2, talk: 1, philo: 1, make: 3 };
 /** run の lease（T-7: 15 分）・検査の lease（T-5: 10 分）・429 などの後の待ち（T-6: 6 時間） */
@@ -229,9 +232,17 @@ export function checkCancelStmts(topicId: string, attempt: number, token: string
   ];
 }
 
-/** 確定（T-6）: 実額と取り置き額の小さい方。述語が偽なら 0 行（取り置き額のまま） */
+/** 確定（T-6）: 実額と取り置き額の小さい方。述語が偽なら 0 行（取り置き額のまま）。v2.7 から検査だけが使う（生成・派生は ledgerSettleActualStmt） */
 export function ledgerSettleStmt(ref: string, actualCents: number, pred: { sql: string; params: SqlValue[] }): Stmt {
   return { sql: `UPDATE cost_ledger SET cents = MIN(?, cents) WHERE kind = 'topic' AND ref_id = ? AND ${pred.sql}`, params: [Math.max(0, Math.ceil(actualCents)), ref, ...pred.params] };
+}
+
+/**
+ * 生成・派生の確定（v2.7）: 実額そのもの（取り置き額で丸めない）。続きの呼び出しで実額が取り置き額を超えうるため、台帳と上限の判定に実額を数える。
+ * 述語が偽なら 0 行（取り置き額のまま）。検査の確定は ledgerSettleStmt のまま
+ */
+export function ledgerSettleActualStmt(ref: string, actualCents: number, pred: { sql: string; params: SqlValue[] }): Stmt {
+  return { sql: `UPDATE cost_ledger SET cents = ? WHERE kind = 'topic' AND ref_id = ? AND ${pred.sql}`, params: [Math.max(0, Math.ceil(actualCents)), ref, ...pred.params] };
 }
 
 /** 実額が取り置き額を超えた時だけ settings.topic_over_reserve を 1 増やす（確定の文より前に置く） */

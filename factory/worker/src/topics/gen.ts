@@ -3,8 +3,10 @@
 //       → 応答の保存（全部の文が run の述語を持つ 1 つの batch。最後の文が run を done / failed にする）。
 // ログは run id と状態名・件数だけ。RSS の本文・モデルの出力は log に入れない。
 // v2.6: 取る（reserveTopicRun）と走る（runTaken）を分けた。cron は続けて呼ぶ（runTopicRun）。手動は route が取り、queue の受け手が走る（executeTopicRun）。
+// v2.7: 呼び出しは 1 回 + 続き（pause_turn・結果の無いサーバーツール・end_turn への催促 1 回）を合計 3 回まで。回数・締め切り・費用（取り置き額）の 3 つで有限。
+//       呼び出しごとに {at:'topic_call'} を 1 行（数と種類だけ。本文は出さない）。台帳は実額で精算する。
 
-import type { Message, MessageCreateParamsNonStreaming, Tool } from '@anthropic-ai/sdk/resources/messages/messages';
+import type { Message, MessageCreateParamsNonStreaming, MessageParam, Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { PortError, type CallOpts, type FactoryPort } from '../anthropic';
 import { all, cas, conditionalBatch, isUniqueViolation, nowIso, prepare, stmt, tokyoDay, type Stmt } from '../db';
 import { cfg, type Env } from '../env';
@@ -22,7 +24,7 @@ import {
   genReserveStmt,
   insertTopicStmts,
   isTopicKind,
-  ledgerSettleStmt,
+  ledgerSettleActualStmt,
   mondayOf,
   overReserveStmt,
   readRun,
@@ -33,6 +35,7 @@ import {
   TOPIC_GEN_MAX_TOKENS,
   TOPIC_GEN_TIMEOUT_MS,
   TOPIC_NEWS_PER_RUN,
+  TOPIC_PHILO_PER_RUN,
   TOPIC_WEB_FETCH_MAX_CONTENT_TOKENS,
   TOPIC_WEB_FETCH_MAX_USES,
   TOPIC_WEB_SEARCH_MAX_USES,
@@ -65,10 +68,17 @@ const DERIVE_CHILD_KINDS: readonly TopicKind[] = ['talk', 'philo', 'make'];
 /** お題の呼び出しの前に要る、締め切りまでの残り（v2.4 の裁定 7。これ未満なら呼ばない・取り置きもしない。次の tick に回す） */
 export const TOPIC_CALL_MIN_LEFT_MS = 5_000;
 
-/** 1 run の最大本数（T-4・T-9） */
+/** 続きの呼び出しを始めるのに要る、締め切りまでの残り（呼ばない境界 TOPIC_CALL_MIN_LEFT_MS + 余裕 25 秒。v2.7） */
+export const TOPIC_CONTINUE_MIN_LEFT_MS = TOPIC_CALL_MIN_LEFT_MS + 25_000;
+/** 続きの呼び出しの回数の上限（最初の呼び出しを入れて 4 回。v2.7） */
+export const TOPIC_GEN_MAX_CONTINUES = 3;
+/** end_turn で save_topics が無い時に 1 回だけ足す催促（v2.7。tools は変えない = キャッシュを残す） */
+export const TOPIC_SAVE_NUDGE = 'ここまでに開けたページだけで、作れる本数だけ save_topics を呼んでください。1 本も作れない時は topics: [] で呼んでください。';
+
+/** 1 run の最大本数（T-4・T-9。v2.7: philo は 2） */
 export function runMaxCount(req: RunRequest): number {
   if (req.purpose === 'derive') return 1;
-  return req.kind === 'news' ? TOPIC_NEWS_PER_RUN : TOPIC_WEEKLY_PER_RUN;
+  return req.kind === 'news' ? TOPIC_NEWS_PER_RUN : req.kind === 'philo' ? TOPIC_PHILO_PER_RUN : TOPIC_WEEKLY_PER_RUN;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -201,6 +211,78 @@ export function genActualCents(msg: Pick<Message, 'usage'>): number {
   const u = msg.usage as (Message['usage'] & { server_tool_use?: { web_search_requests?: number } | null }) | undefined;
   const searches = Number(u?.server_tool_use?.web_search_requests ?? 0);
   return microToCents(sonnetMicroDollars(u)) + (Number.isFinite(searches) && searches > 0 ? searches * WEB_SEARCH_CENTS : 0);
+}
+
+type RawBlock = { type?: unknown; id?: unknown; name?: unknown; tool_use_id?: unknown; content?: unknown };
+const SERVER_RESULT_TYPES = new Set(['web_fetch_tool_result', 'web_search_tool_result']);
+
+/** 応答に、結果の付いていない web_fetch / web_search の server_tool_use があるか（数えるだけ。ログ用） */
+export function hasPendingServerTool(content: readonly unknown[]): boolean {
+  const blocks = content as RawBlock[];
+  return blocks.some(
+    (b) =>
+      !!b &&
+      b.type === 'server_tool_use' &&
+      (b.name === 'web_fetch' || b.name === 'web_search') &&
+      !blocks.some((x) => !!x && typeof x.type === 'string' && SERVER_RESULT_TYPES.has(x.type) && x.tool_use_id === b.id),
+  );
+}
+
+/**
+ * 続きにする「サーバーツールの途中」（verify.ts の isPendingWebFetch と同じ判定を web_search にも広げた）:
+ * 結果の付いていない web_fetch / web_search があり、client tool の tool_use が混ざっていない
+ */
+export function isPendingServerTool(content: readonly unknown[]): boolean {
+  if ((content as RawBlock[]).some((b) => !!b && b.type === 'tool_use')) return false;
+  return hasPendingServerTool(content);
+}
+
+const SAFE_CODE = /^[a-z_]{1,40}$/;
+
+/** 1 回の呼び出しのログの数（本文・URL は入れない。種類の名前と数だけ） */
+export function topicCallStats(msg: Pick<Message, 'content' | 'usage' | 'stop_reason'>): {
+  stop_reason: string;
+  in: number;
+  out: number;
+  cache_w: number;
+  cache_r: number;
+  searches: number;
+  fetches: number;
+  fetch_errors: Record<string, number>;
+  blocks: Record<string, number>;
+  pending_server_tool: boolean;
+} {
+  const u = (msg.usage ?? {}) as Partial<Message['usage']> & { server_tool_use?: { web_search_requests?: number; web_fetch_requests?: number } | null };
+  const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+  const fetchErrors: Record<string, number> = {};
+  const blocks: Record<string, number> = {};
+  let fetchUses = 0;
+  for (const raw of msg.content as unknown as RawBlock[]) {
+    if (!raw || typeof raw !== 'object') continue;
+    const t = typeof raw.type === 'string' && SAFE_CODE.test(raw.type) ? raw.type : 'unknown';
+    blocks[t] = (blocks[t] ?? 0) + 1;
+    if (raw.type === 'server_tool_use' && raw.name === 'web_fetch') fetchUses++;
+    if (raw.type === 'web_fetch_tool_result') {
+      const c = raw.content as { type?: unknown; error_code?: unknown } | null;
+      if (c?.type === 'web_fetch_tool_result_error') {
+        const code = typeof c.error_code === 'string' && SAFE_CODE.test(c.error_code) ? c.error_code : 'unknown';
+        fetchErrors[code] = (fetchErrors[code] ?? 0) + 1;
+      }
+    }
+  }
+  const stop = typeof msg.stop_reason === 'string' && SAFE_CODE.test(msg.stop_reason) ? msg.stop_reason : String(msg.stop_reason === null ? 'null' : 'unknown');
+  return {
+    stop_reason: stop,
+    in: n(u.input_tokens),
+    out: n(u.output_tokens),
+    cache_w: n(u.cache_creation_input_tokens),
+    cache_r: n(u.cache_read_input_tokens),
+    searches: n(u.server_tool_use?.web_search_requests),
+    fetches: u.server_tool_use?.web_fetch_requests !== undefined ? n(u.server_tool_use?.web_fetch_requests) : fetchUses,
+    fetch_errors: fetchErrors,
+    blocks,
+    pending_server_tool: hasPendingServerTool(msg.content as unknown[]),
+  };
 }
 
 /** 失敗の理由コードと、課金なしと分かる失敗か（T-6: 429・quota・認証・その他の 4xx は 0。5xx・応答不明は取り置き額のまま） */
@@ -366,13 +448,16 @@ async function closeFailed(
   charge: { noCharge: boolean; actualCents?: number },
   made = 0,
   dropped = 0,
+  /** run の終わりのログに足す数（v2.7: 呼び出しの回数と実額） */
+  extra?: { turns: number; cents: number },
 ): Promise<RunDbRow | null> {
   const ref = genLedgerRef(runId);
   const t = nowIso();
   const P = runPred(runId, token, t);
   const stmts: Stmt[] = [];
-  if (charge.noCharge) stmts.push(ledgerSettleStmt(ref, 0, P));
-  else if (charge.actualCents !== undefined) stmts.push(overReserveStmt(ref, charge.actualCents, t, P), ledgerSettleStmt(ref, charge.actualCents, P));
+  // 確定は実額そのもの（v2.7。取り置き額で丸めない。超えた時の topic_over_reserve は今のまま）
+  if (charge.noCharge) stmts.push(ledgerSettleActualStmt(ref, 0, P));
+  else if (charge.actualCents !== undefined) stmts.push(overReserveStmt(ref, charge.actualCents, t, P), ledgerSettleActualStmt(ref, charge.actualCents, P));
   stmts.push(runFinishStmt({ runId, token, now: t, status: 'failed', error: code, made, dropped }));
   try {
     await conditionalBatch(db, stmts);
@@ -381,7 +466,7 @@ async function closeFailed(
     throw e;
   }
   const run = await readRun(db, runId);
-  console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: run?.status ?? null, error: run?.error ?? null }));
+  console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: run?.status ?? null, error: run?.error ?? null, ...(extra ?? {}) }));
   return run;
 }
 
@@ -489,7 +574,7 @@ export async function reserveTopicRun(env: Env, req: RunRequest, opts: Pick<RunO
   return { status: 'taken', taken: { runId, token, slotDay, today, parent } };
 }
 
-/** 走る（入力づくり → 呼び出し → 保存）。取った run を必ず done / failed で閉じる（保存中の例外は save_failed。v2.6） */
+/** 走る（入力づくり → 呼び出し（+ 続き。v2.7）→ 保存）。取った run を必ず done / failed で閉じる（保存中の例外は save_failed。v2.6） */
 async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: TakenRun, opts: RunOptions): Promise<RunOutcome> {
   const db = env.DB;
   const c = cfg(env);
@@ -498,8 +583,8 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
   const ref = genLedgerRef(runId);
 
   /** failed で閉じる（closeFailed）。台帳: noCharge なら 0・actualCents があれば実額・どちらでもなければ取り置き額のまま */
-  const finishFailed = async (code: string, noCharge: boolean, made = 0, dropped = 0, actualCents?: number): Promise<RunOutcome> => {
-    const run = (await closeFailed(db, runId, token, code, { noCharge, actualCents }, made, dropped))!;
+  const finishFailed = async (code: string, noCharge: boolean, made = 0, dropped = 0, actualCents?: number, extra?: { turns: number; cents: number }): Promise<RunOutcome> => {
+    const run = (await closeFailed(db, runId, token, code, { noCharge, actualCents }, made, dropped, extra))!;
     return { status: 'failed', run };
   };
 
@@ -563,17 +648,25 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
           input_schema: { type: 'object', additionalProperties: false, required: ['topics'], properties: { topics: { type: 'array', items: TOPIC_BODY_JSON_SCHEMA } } } as unknown as Tool['input_schema'],
           // strict は付けない: 本番で 400「The compiled grammar is too large」（v2.5 の裁定。CONTRACT-factory §T 末尾）。
           // 形は保証されないので、Worker の validateTopicBody が 1 本ずつ確かめ、合わない本は捨てる（dropped）
+          // v2.7: tools の最後に cache_control（tools の前半をキャッシュする）。tools は続きでも変えない（変えるとキャッシュが全部無効）
+          cache_control: { type: 'ephemeral' },
         },
       ],
       // 強制呼び出しはしない（Sonnet 5.5 は tool_choice any / tool が 400。CONTRACT-factory §T 末尾）。auto。無ければ no_output
       tool_choice: { type: 'auto' },
+      // v2.7（レビューの裁定）: top-level の cache_control（自動のキャッシュ）。区切りは毎回のリクエストの最後のキャッシュできる block に置かれ、
+      // 会話が伸びると一緒に前へ動く。これで続きの呼び出しの最初の繰り返しも、前の呼び出しまでの会話をキャッシュから読む（0.05 倍）。
+      // 同じリクエストの中のサーバーツールの結果ごとの自動の区切りは「同じリクエストの後の繰り返し」にしか効かず、
+      // tools の区切りだけでは続きのリクエストは tools より後ろ（system・ユーザー文・前の応答）を定価で読み直す。
+      // 区切りは tools と合わせて 2 つ（上限 4）。続きも同じ params（messages だけ伸びる）
+      cache_control: { type: 'ephemeral' },
     };
   } catch {
     // モデルを呼ぶ前の失敗は台帳 0（司令塔の裁定。cron も同じ）
     return finishFailed('input_failed', true);
   }
 
-  // 呼び出し（1 回・再送なし・絶対の締め切り）。入力（RSS）の後で残りが 5 秒未満なら呼ばない。
+  // 最初の呼び出しの前: 入力（RSS）の後で残りが 5 秒未満なら呼ばない。
   // 外部（モデル）を 1 回も呼んでいないので、run の行と取り置きの台帳の行を削除して取り消す（その日の枠を消費しない。次の tick がまた取れる。v2.4 の裁定 7）
   if (opts.deadline - Date.now() < TOPIC_CALL_MIN_LEFT_MS) {
     const r = await conditionalBatch(db, runCancelStmts(runId, token));
@@ -581,32 +674,104 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
     const run = r.ok ? null : await readRun(db, runId);
     return { status: 'not_taken', reason: 'no_time', ...(run ? { run } : {}) };
   }
-  const callOpts: CallOpts = { deadline: Math.min(opts.deadline, Date.now() + TOPIC_GEN_TIMEOUT_MS), maxTimeoutMs: TOPIC_GEN_TIMEOUT_MS, maxRetries: 0 };
-  let msg: Message;
-  try {
-    msg = await port.createMessage(params, callOpts);
-  } catch (e) {
-    const k = classifyCallError(e);
-    // 4xx の原因の切り分け: API の error.message（200 字）だけをログに出す（request 本文・鍵は出さない）
-    if (k.detail) console.log(JSON.stringify({ at: 'topic_run', run_id: runId, call_error: k.code, status: k.status, detail: k.detail }));
-    return finishFailed(k.code, k.noCharge);
+  // 呼び出し（v2.7: 1 回 + 続き。再送なし・1 回ごとに絶対の締め切り = min(残り, 150 秒)）。
+  // 続き: pause_turn か結果の無いサーバーツール → 応答の content を as-is で積んで同じ params で / end_turn で save_topics が無い → 催促を 1 回だけ足して。
+  // 有限: 続きは合計 TOPIC_GEN_MAX_CONTINUES 回・残りが TOPIC_CONTINUE_MIN_LEFT_MS 未満なら続けない・これまでの実額 + 次の 1 回の見込み（直前の 1 回の実額。pause_turn の続きも催促も同じ）> 取り置き額なら続けない（cost_cap）
+  const reserveCents = c.topicGenReserveCents;
+  const messages: MessageParam[] = [...params.messages];
+  const contents: unknown[][] = [];
+  let totalCents = 0;
+  let lastCents = 0;
+  let nudged = false;
+  let turns = 0;
+  /** save_topics が無いまま止めた理由（no_output のログ。cost_cap だけは run の error にもする） */
+  let stopWhy: string | null = null;
+  for (let turn = 0; ; turn++) {
+    const callParams: MessageCreateParamsNonStreaming = turn === 0 ? params : { ...params, messages: [...messages] };
+    const callOpts: CallOpts = { deadline: Math.min(opts.deadline, Date.now() + TOPIC_GEN_TIMEOUT_MS), maxTimeoutMs: TOPIC_GEN_TIMEOUT_MS, maxRetries: 0 };
+    const t0 = Date.now();
+    let msg: Message;
+    try {
+      msg = await port.createMessage(callParams, callOpts);
+    } catch (e) {
+      const k = classifyCallError(e);
+      // 4xx の原因の切り分け: API の error.message（200 字）だけをログに出す（request 本文・鍵は出さない）
+      if (k.detail) console.log(JSON.stringify({ at: 'topic_run', run_id: runId, call_error: k.code, status: k.status, detail: k.detail, turn }));
+      // 最初の呼び出しの失敗は今までどおり（課金なし = 0・それ以外 = 取り置き額のまま）。
+      // 続きの途中の失敗は同じ分類のコードで閉じ、台帳はそれまでの実額の合計（v2.7）
+      if (turn === 0) return finishFailed(k.code, k.noCharge, 0, 0, undefined, { turns: 0, cents: 0 });
+      return finishFailed(k.code, false, 0, 0, totalCents, { turns, cents: totalCents });
+    }
+    turns = turn + 1;
+    // 実額（呼び出しごと）。万一数えられない時は取り置き額で数える（少なく数えない）
+    let cents: number;
+    try {
+      cents = genActualCents(msg);
+    } catch {
+      cents = reserveCents;
+    }
+    totalCents += cents;
+    lastCents = cents;
+    const content = Array.isArray(msg.content) ? (msg.content as unknown[]) : [];
+    contents.push(content);
+    messages.push({ role: 'assistant', content: content as MessageParam['content'] });
+    try {
+      console.log(JSON.stringify({ at: 'topic_call', run_id: runId, turn, ...topicCallStats({ ...msg, content: content as Message['content'] }), ms: Date.now() - t0 }));
+    } catch {
+      // ログの組み立ての失敗で run を止めない
+    }
+    if (content.some((b) => (b as RawBlock)?.type === 'tool_use' && (b as RawBlock).name === SAVE_TOPICS_TOOL_NAME)) break;
+    const stop = msg.stop_reason;
+    let next: 'continue' | 'nudge' | null = null;
+    if (stop === 'pause_turn' || (stop === 'tool_use' && isPendingServerTool(content))) next = 'continue';
+    else if (stop === 'end_turn' && !nudged) next = 'nudge';
+    if (next === null) {
+      // max_tokens / refusal / 催促の後の end_turn / その他: 続けない
+      stopWhy = `stop_${typeof stop === 'string' && SAFE_CODE.test(stop) ? stop : 'unknown'}`;
+      break;
+    }
+    if (turn >= TOPIC_GEN_MAX_CONTINUES) {
+      stopWhy = 'turn_limit';
+      break;
+    }
+    if (opts.deadline - Date.now() < TOPIC_CONTINUE_MIN_LEFT_MS) {
+      stopWhy = 'no_time';
+      break;
+    }
+    // 次の 1 回の見込み = 直前の 1 回の実額（pause_turn の続きも催促も同じ。凍結 spec 2）。
+    // 催促は user の文 = 新しいターンなので、web_search / web_fetch の max_uses が新しくなり、開く・探すをもう一度全部できる
+    // （公式 web-search-tool の Max uses: 同じターンの続きは pause_turn の後か、最後の message が tool_result だけのリクエストだけ）。
+    // 「催促はサーバーツールを使わない」「前半はキャッシュに当たる」は強制も確認もできないので、安い見込みにしない
+    if (totalCents + lastCents > reserveCents) {
+      stopWhy = 'cost_cap';
+      break;
+    }
+    if (next === 'nudge') {
+      messages.push({ role: 'user', content: TOPIC_SAVE_NUDGE });
+      nudged = true;
+    }
   }
 
-  // 応答の保存。ここで例外が出たら save_failed で閉じ、台帳は実額で精算する（calling を残さない・取り置き額を残さない。v2.6）
-  let actual: number | undefined;
+  // 応答の保存。ここで例外が出たら save_failed で閉じ、台帳は実額（全部の呼び出しの合計）で精算する（calling を残さない・取り置き額を残さない。v2.6・v2.7）
+  const actual = totalCents;
+  const runLog = { turns, cents: actual };
   let saved: { noOutput: true } | { noOutput: false; ok: boolean; made: number; dropped: number };
   try {
-    actual = genActualCents(msg);
-    const call = msg.content.find((b) => b.type === 'tool_use' && b.name === SAVE_TOPICS_TOOL_NAME) as { input?: unknown } | undefined;
+    // save_topics は全部の応答から探す（最後に出てきたもの）。web_fetch の結果も全部の応答を合わせて照合する
+    const allContent = contents.flat();
+    let call: { input?: unknown } | undefined;
+    for (const b of allContent) if ((b as RawBlock)?.type === 'tool_use' && (b as RawBlock).name === SAVE_TOPICS_TOOL_NAME) call = b as { input?: unknown };
     const t = nowIso();
     const P = runPred(runId, token, t);
-    const settle = [overReserveStmt(ref, actual, t, P), ledgerSettleStmt(ref, actual, P)];
+    const settle = [overReserveStmt(ref, actual, t, P), ledgerSettleActualStmt(ref, actual, P)];
     if (!call) {
-      await conditionalBatch(db, [...settle, runFinishStmt({ runId, token, now: t, status: 'failed', error: 'no_output', made: 0, dropped: 0 })]);
+      const error = stopWhy === 'cost_cap' ? 'cost_cap' : 'no_output';
+      console.log(JSON.stringify({ at: 'topic_run', run_id: runId, no_output: stopWhy ?? 'unknown', ...runLog }));
+      await conditionalBatch(db, [...settle, runFinishStmt({ runId, token, now: t, status: 'failed', error, made: 0, dropped: 0 })]);
       saved = { noOutput: true };
     } else {
       const items = Array.isArray((call.input as { topics?: unknown } | undefined)?.topics) ? ((call.input as { topics: unknown[] }).topics as unknown[]) : [];
-      const fetched = genFetchTexts(msg.content as unknown[]);
+      const fetched = genFetchTexts(allContent);
       const max = runMaxCount(req);
       const childSlot = addDays(today, 1);
       const accepted: NewTopic[] = [];
@@ -648,13 +813,13 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
   } catch (e) {
     // 例外の名前だけ（本文・鍵は出さない）
     console.log(JSON.stringify({ at: 'topic_run', run_id: runId, save_error: e instanceof Error ? e.name : 'error' }));
-    return finishFailed('save_failed', false, 0, 0, actual);
+    return finishFailed('save_failed', false, 0, 0, actual, runLog);
   }
   const run = (await readRun(db, runId))!;
   if (saved.noOutput) {
-    console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: run.status, error: run.error }));
+    console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: run.status, error: run.error, ...runLog }));
     return { status: 'failed', run };
   }
-  console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: run.status, error: run.error, made: saved.ok ? saved.made : 0, dropped: saved.dropped }));
+  console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: run.status, error: run.error, made: saved.ok ? saved.made : 0, dropped: saved.dropped, ...runLog }));
   return { status: run.status === 'done' ? 'done' : 'failed', run };
 }
