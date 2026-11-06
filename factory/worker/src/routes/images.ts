@@ -5,6 +5,7 @@ import { all, cas, first, getSetting, nowIso, stmt } from '../db';
 import { intVar, type Env } from '../env';
 import { json, type RouteCtx } from '../http';
 import { tokyoMonth } from '../ledger';
+import { OPENAI_BACKUP_LAST_USED_KEY, openAiBackupPresent } from '../openai';
 
 /** settings の key（§O-1） */
 export const IMAGE_HALT_KEY = 'image_gen_halted';
@@ -28,12 +29,20 @@ export async function imageMonthCents(db: D1Database, d: Date = new Date()): Pro
   return Number(r?.c ?? 0);
 }
 
-/** `GET /api/status` の `images`（§O-5 e） */
-export async function imageStatusSummary(env: Env): Promise<{ halted: string | null; month_cents: number; month_cap_cents: number }> {
+/** `GET /api/status` の `images`（§O-5 e）。§O-13 5: 予備の鍵は有無（boolean）と最後に使った時刻だけ（値は返さない） */
+export async function imageStatusSummary(env: Env): Promise<{
+  halted: string | null;
+  month_cents: number;
+  month_cap_cents: number;
+  backup_configured: boolean;
+  backup_last_used_at: string | null;
+}> {
   return {
     halted: await getSetting(env.DB, IMAGE_HALT_KEY),
     month_cents: await imageMonthCents(env.DB),
     month_cap_cents: imageMonthCapCents(env),
+    backup_configured: openAiBackupPresent(env),
+    backup_last_used_at: await getSetting(env.DB, OPENAI_BACKUP_LAST_USED_KEY),
   };
 }
 
@@ -74,6 +83,8 @@ export async function getImagesStatus(c: RouteCtx): Promise<Response> {
     halted: s.halted,
     month_cents: s.month_cents,
     month_cap_cents: s.month_cap_cents,
+    backup_configured: s.backup_configured,
+    backup_last_used_at: s.backup_last_used_at,
     holds_open: Number(counts?.holds_open ?? 0),
     dispatched: Number(counts?.dispatched ?? 0),
     recent,

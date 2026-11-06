@@ -55,6 +55,8 @@ export interface Env {
   XAI_API_KEY?: string;
   /** 画像生成（§O-0）。読むのは src/openai.ts だけ。D1・R2・ログ・作業場・custom_tool_result に出さない */
   OPENAI_API_KEY?: string;
+  /** 画像生成の予備の鍵（§O-13 1。任意）。主の鍵が quota / auth の時だけ 1 回使う。読むのは src/openai.ts だけ。D1・R2・ログ・作業場・custom_tool_result に出さない */
+  OPENAI_API_KEY_BACKUP?: string;
   /** 動画の確認（§Q-3 1）。読むのは src/gemini.ts だけ。D1・R2・ログに出さない。無ければ呼ばない（取り置きもしない） */
   GEMINI_API_KEY?: string;
 

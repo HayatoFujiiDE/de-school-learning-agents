@@ -116,7 +116,16 @@ describe('GET /api/images/status（§O-5 e）', () => {
   it('何も無い時: 停止なし・今月 0・上限 3000（既定）・一覧は空', async () => {
     const res = await getImagesStatus(ctx());
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ halted: null, month_cents: 0, month_cap_cents: 3000, holds_open: 0, dispatched: 0, recent: [] });
+    expect(await res.json()).toEqual({
+      halted: null,
+      month_cents: 0,
+      month_cap_cents: 3000,
+      backup_configured: false, // §O-13 5（予備の鍵なし・未使用）
+      backup_last_used_at: null,
+      holds_open: 0,
+      dispatched: 0,
+      recent: [],
+    });
   });
 
   it('上限は IMAGE_MONTHLY_CAP_CENTS を読む', async () => {
@@ -199,7 +208,7 @@ describe('POST /api/images/halt・unhalt（H1・H2）', () => {
 
   it('止める → 再開する → 止める の往復（GET /api/status の images にも反映）', async () => {
     const st = async () => (await (await getStatus(ctx('GET', '/api/status'))).json()).images;
-    expect(await st()).toEqual({ halted: null, month_cents: 0, month_cap_cents: 3000 });
+    expect(await st()).toEqual({ halted: null, month_cents: 0, month_cap_cents: 3000, backup_configured: false, backup_last_used_at: null }); // §O-13 5
     await haltImages(ctx('POST'));
     expect((await st()).halted).toBe('manual');
     expect((await unhaltImages(ctx('POST'))).status).toBe(200);

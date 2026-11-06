@@ -9,10 +9,10 @@ import type { BetaManagedAgentsEventParams } from '@anthropic-ai/sdk/resources/b
 import type { FactoryPort } from './anthropic';
 import type { OEmbedPort } from './youtube-oembed';
 import { IMAGE_ALT_MAX_CHARS } from './checks/schema';
-import { all, cas, conditionalBatch, first, getSetting, isoPlus, nowIso, stmt, tokyoDay, type Stmt } from './db';
+import { all, cas, conditionalBatch, first, getSetting, isoPlus, nowIso, setSetting, stmt, tokyoDay, type Stmt } from './db';
 import { cfg, type Env } from './env';
 import { reconcileJob } from './jobs';
-import { OpenAiError, openAiKeyPresent, type ImagePort, type ImageUsage } from './openai';
+import { OPENAI_BACKUP_LAST_USED_KEY, OpenAiError, openAiKeyPresent, type ImagePort, type ImageUsage } from './openai';
 import { dailyReservedSql } from './verify';
 
 // ---------------------------------------------------------------------------
@@ -718,6 +718,9 @@ export async function runImage(
       const format = row.format === 'webp' ? 'webp' : 'png';
       let outcome: GenOutcome;
       let put: { key: string; sha: string; bytes: number; mediaType: string } | null = null;
+      // §O-13 4: 予備の鍵で呼んだか（成功は戻り値の key、失敗は OpenAiError.key で知る。鍵の値は読まない）と、その呼び出しが成功したか
+      let usedBackup = false;
+      let backupOk = false;
       try {
         const g = await images.generate(
           {
@@ -731,6 +734,10 @@ export async function runImage(
           },
           { deadline: Math.min(o.deadline, Date.now() + IMAGE_GEN_TIMEOUT_MS) },
         );
+        if (g.key === 'backup') {
+          usedBackup = true;
+          backupOk = true;
+        }
         const img = decodeImage(g.b64, format);
         if (!img.ok) outcome = { kind: 'image', usable: false, error: img.error, usage: g.usage };
         else {
@@ -746,6 +753,7 @@ export async function runImage(
         }
       } catch (e) {
         outcome = { kind: 'error', error: e };
+        if (e instanceof OpenAiError && e.key === 'backup') usedBackup = true;
       }
       const r = classifyImageOutcome(outcome);
       const halt = haltReasonFor({ requestId: row.id, u: row.u_cents ?? 0, result: r });
@@ -777,6 +785,11 @@ export async function runImage(
           halt: wrote && halt ? halt.split(':')[0] : null,
         }),
       );
+      // §O-13 4: 予備の鍵で呼んだ時（成功・失敗とも）だけ、最後に使った時刻を残す。ログは request id と成否だけ（鍵の値・prompt は出さない）
+      if (usedBackup) {
+        await setSetting(db, OPENAI_BACKUP_LAST_USED_KEY, nowIso());
+        console.log(JSON.stringify({ at: 'openai_backup', request_id: row.id, ok: backupOk }));
+      }
     }
   }
   // 5. 職人へ返すのは reconcile だけ（job が終端・lease 競合なら何もしない。失敗は無視。cron が拾う）

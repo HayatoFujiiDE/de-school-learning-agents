@@ -154,13 +154,15 @@ export function createFakeImagePort(env: Env): ImagePort {
       await appendOpenAiCall(env.DB, p, scenario);
       await waitGate(env.DB);
       const image = () => (p.output_format === 'webp' ? TINY_WEBP_B64 : bytesToBase64(grayPng(1, 1)));
+      // fake は鍵を持たないので、成功はいつも key: 'primary'（§O-13 3）
+      const key = 'primary' as const;
       switch (scenario) {
         case 'ok':
-          return { b64: image(), usage: { ...NORMAL_USAGE } };
+          return { b64: image(), usage: { ...NORMAL_USAGE }, key };
         case 'ok_webp':
-          return { b64: TINY_WEBP_B64, usage: { ...NORMAL_USAGE } };
+          return { b64: TINY_WEBP_B64, usage: { ...NORMAL_USAGE }, key };
         case 'ok_large':
-          return { b64: largePngBase64(), usage: { ...NORMAL_USAGE } };
+          return { b64: largePngBase64(), usage: { ...NORMAL_USAGE }, key };
         case 'rate_limited':
           throw new OpenAiError(true, 429, 'rate_limited', null);
         case 'quota':
@@ -172,13 +174,13 @@ export function createFakeImagePort(env: Env): ImagePort {
         case 'timeout':
           throw new OpenAiError(false, undefined, 'timeout', null);
         case 'no_usage':
-          return { b64: image(), usage: null };
+          return { b64: image(), usage: null, key };
         case 'over_reserve':
-          return { b64: image(), usage: { ...OVER_USAGE } };
+          return { b64: image(), usage: { ...OVER_USAGE }, key };
         case 'bad_bytes':
-          return { b64: btoa('not an image'), usage: { ...NORMAL_USAGE } };
+          return { b64: btoa('not an image'), usage: { ...NORMAL_USAGE }, key };
         case 'bad_bytes_with_usage':
-          return { b64: btoa('not an image'), usage: { ...OVER_USAGE } };
+          return { b64: btoa('not an image'), usage: { ...OVER_USAGE }, key };
       }
     },
   };

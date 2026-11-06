@@ -308,11 +308,22 @@
     return Object.prototype.hasOwnProperty.call(HALT_TEXT, k) ? HALT_TEXT[k] : String(code);
   }
   function cents(c) { return c === null || c === undefined ? '—' : esc(c) + '¢'; }
-  /** 状況帯の 1 行（§O-5 e）。images が無い応答（古い Worker）では何も出さない */
-  function imagesBandHtml(im) {
+  /** 予備の鍵を最後に使った時刻が、now から 7 日以内か（§O-13 5 の状況帯の印） */
+  var BACKUP_RECENT_MS = 7 * 24 * 60 * 60 * 1000;
+  function backupUsedRecently(t, nowMs) {
+    if (!t) return false;
+    var ts = Date.parse(String(t));
+    return isFinite(ts) && nowMs - ts <= BACKUP_RECENT_MS;
+  }
+  /** 状況帯の 1 行（§O-5 e）。images が無い応答（古い Worker）では何も出さない。nowMs はテストの時だけ渡す */
+  function imagesBandHtml(im, nowMs) {
     if (!im || typeof im !== 'object') return '';
+    var now = typeof nowMs === 'number' ? nowMs : Date.now();
     return '<span class="item" data-img-band="1">画像: 今月 <b>' + cents(im.month_cents) + '</b> / ' + cents(im.month_cap_cents) + '<span class="muted">（U で数えた記帳）</span></span>' +
       (im.halted ? '<span class="item" data-img-halted="1">' + pill('画像の生成を止めています（' + haltText(im.halted) + '）', 'red') + '</span>' : '') +
+      (backupUsedRecently(im.backup_last_used_at, now)
+        ? '<a class="item" href="#/images" data-img-backup-band="1">' + pill('画像: 予備の鍵を使いました（' + fmtTime(im.backup_last_used_at) + '）', 'orange') + '</a>'
+        : '') +
       '<a class="item" href="#/images">' + (im.halted ? '画像の停止を見る' : '画像の生成') + '</a>';
   }
   /** 確認画面のサムネイルの下の 1 行（§O-7 6）: 「生成: {accuracy}・{prompt の先頭 80 字}」 */
@@ -347,8 +358,12 @@
         '<p class="muted">新しい画像は断り、職人には「今は画像を作れません」と返しています。再開は「再開する」を押すまで自動ではされません。</p>' +
         (disp > 0 ? '<p class="err" data-img-disp="1">生成中の画像が ' + esc(disp) + ' 枚あります。終わるまで再開できません（10 分ごとの定期処理で進みます）。</p>' : '')
       : '<p>' + pill('生成できます', 'green') + '</p>';
+    // §O-13 5: 予備の鍵は有無と最後に使った時刻だけ（値は Worker も返さない）
+    var backupHtml =
+      '<p data-img-backup="' + (d.backup_configured === true ? 'yes' : 'no') + '">予備の鍵: ' + (d.backup_configured === true ? 'あり' : 'なし') + '</p>' +
+      '<p data-img-backup-used="1">予備の鍵を最後に使った: ' + (d.backup_last_used_at ? esc(fmtTime(d.backup_last_used_at)) : 'まだ無い') + '</p>';
     return '<h1>画像の生成</h1>' +
-      '<div class="card" data-img-state="' + (halted ? 'halted' : 'running') + '"><h2>停止の状態</h2>' + stateHtml +
+      '<div class="card" data-img-state="' + (halted ? 'halted' : 'running') + '"><h2>停止の状態</h2>' + stateHtml + backupHtml +
         '<div class="row">' +
           '<button type="button" class="btn danger" id="img-halt-btn"' + (halted ? ' disabled' : '') + '>止める</button>' +
           '<button type="button" class="btn primary" id="img-unhalt-btn"' + (halted ? '' : ' disabled') + '>再開する</button>' +
