@@ -100,12 +100,12 @@
       out.push({ e: e, ord: ord, dk: dayKey(e.day), tm: toMin(e.time) });
     }
     // 予定の記録: 終わった行だけ（見送り・外した・非表示は出さない）
-    var fin = {};
+    var fin = {}, finBy = {};
     (o.plan || []).forEach(function (r, i) {
       if (!r || r.gone !== 'finished' || r.hidden) return;
       var e = { id: 'plan:' + r.id, kind: 'plan', sub: 'finished', day: today, time: r.start, rowId: r.id, title: r.title, start: r.start, end: r.end,
         catalogId: r.activity || null, recId: null, by: r.by || null };
-      if (o.finishTpl) fin[fmt(o.finishTpl, { title: r.title, start: r.start, end: r.end })] = e;
+      if (o.finishTpl) { var fk = fmt(o.finishTpl, { title: r.title, start: r.start, end: r.end }); fin[fk] = e; finBy[fk] = r.by || null; }
       add(e, i);
     });
     // 会話: 記録行は「予定の記録」、本人の発言 + 直後の返事は「話した」。
@@ -114,8 +114,9 @@
     ms.forEach(function (m, i) {
       if (!m || m.who !== 'record') return;
       var text = String(m.text == null ? '' : m.text), f = fin[text];
-      // まとめた終わりの記録行に by があれば、終わった行の by にする（行か記録行のどちらか。contract-AD §18-7）
-      if (f) { if (!f.recId) { f.recId = m.id; if (!f.by && m.by) f.by = m.by; } return; }
+      // 同じ文の終わりの記録行が複数ある時（終わった → 戻した → もう一度終わった）、行の今の「終わった」に当たるのは最新の 1 件。
+      // recId と by は最新の一致から取る（行自身の by があればそれが先。contract-AD §18-7）。古い記録行も出さない
+      if (f) { f.recId = m.id; f.by = finBy[text] || m.by || null; return; }
       if (hide.some(function (re) { return re.test(text); })) return;
       add({ id: 'rec:' + m.id, kind: 'plan', sub: 'record', day: today, time: m.time, msgId: m.id, text: text, by: m.by || null }, 1000 + i);
     });

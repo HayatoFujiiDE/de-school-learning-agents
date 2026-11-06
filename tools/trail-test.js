@@ -152,7 +152,8 @@ eq(es.filter(function (e) { return e.id === 'work:w-seed-build'; })[0].status, '
 eq(of('talk').map(function (e) { return e.msgId; }), ['talk-4', 'talk-2', 'talk-0'], 'Z-4 話した: 新しい順');
 var pl = of('plan');
 eq(pl.map(function (e) { return e.id; }), ['rec:rec-undo', 'rec:rec-1', 'rec:rec-old', 'plan:pf'], 'Z-4 予定の記録: 終わった行 + 会話の記録行（見送り・外した・非表示の行とその記録行は出さない）');
-eq(pl[3].recId, 'rec-fin', 'Z-4 終わった行と同じ終わりの記録行は 1 回だけ（行にまとめ、記録行の id を持つ）');
+// 同じ文の記録行が 2 つ（rec-fin・rec-fin2）: 行が持つのは最新の 1 件（実装レビュー MAJOR 3 の裁定。以前は最初の 1 件だった）
+eq(pl[3].recId, 'rec-fin2', 'Z-4 終わった行と同じ終わりの記録行は 1 回だけ（行にまとめ、最新の記録行の id を持つ）');
 ok(!es.some(function (e) { return /^rec:rec-(fin|fin2|dec|rem|skip)$/.test(e.id); }), 'Z-4 見送った・外した・運動を見送った・終わった行と重なる 記録行は出さない');
 var raw = ids(TR.entries({ messages: msgs, plan: plan, today: TODAY }).filter(function (e) { return e.kind === 'plan'; }));
 eq(raw.length, 9, 'entries テンプレートを渡さなければ記録行はすべて出る（8 + 終わった行 1）');
@@ -207,6 +208,29 @@ eq(ids(TR.filter(he, 'own')).sort(), ['found:od-b:0', 'plan:f3', 'talk:h3', 'wor
 eq(he.filter(function (e) { return e.id === 'talk:h1'; })[0].by, 'tanaka', 'AD-10 m.by が話したの entry に渡る');
 eq(he.filter(function (e) { return e.id === 'plan:f2'; })[0].by, 'tanaka', '18-7 まとめた終わりの記録行の by が終わった行に渡る');
 eq(TR.talkTopics([{ id: 'c', who: 'child', text: 'a' }, { id: 'b', who: 'buddy', text: 'r', ideaReply: 'i1' }])[0].reply, null, '18-5 ideaReply は本人の発言の返事にしない');
+// 実装レビュー MAJOR 3: 本人が終わった → 戻した → {sup}が入って もう一度終わった。今の「終わった」に当たるのは最新の終わりの記録行（recId と by は最新から）
+var againMsgs = [
+  { id: 'g1', who: 'record', time: '10:30', text: '「やり直し」が終わった（9:00〜9:30）' },
+  { id: 'g2', who: 'record', time: '10:31', text: '「やり直し」を戻した' },
+  { id: 'g3', who: 'record', time: '10:32', text: '「やり直し」が終わった（9:00〜9:30）', by: 'tanaka' }
+];
+var againPlan = [{ id: 'ag', start: '9:00', end: '9:30', title: 'やり直し', kind: 'mine', gone: 'finished' }];
+var ag = TR.entries({ messages: againMsgs, plan: againPlan, today: TODAY, finishTpl: FIN });
+var agRow = ag.filter(function (e) { return e.id === 'plan:ag'; })[0];
+eq([agRow.recId, agRow.by], ['g3', 'tanaka'], 'MAJOR3 同じ文の終わりの記録行が複数ある時は最新の 1 件（recId と by）');
+ok(!TR.filter(ag, 'own').some(function (e) { return e.id === 'plan:ag'; }), 'MAJOR3 {sup}が終わりにした行は「自分で」に出ない');
+eq(ids(ag).filter(function (id) { return /^rec:g[13]$/.test(id); }), [], 'MAJOR3 同じ文の古い記録行も出さない');
+// 逆向き（{sup}が終わった → 戻した → 本人がもう一度終わった）: 今の終わりは本人なので「自分で」に出る
+var revMsgs = [
+  { id: 'v1', who: 'record', time: '10:30', text: '「やり直し」が終わった（9:00〜9:30）', by: 'tanaka' },
+  { id: 'v2', who: 'record', time: '10:31', text: '「やり直し」を戻した', by: 'tanaka' },
+  { id: 'v3', who: 'record', time: '10:32', text: '「やり直し」が終わった（9:00〜9:30）' }
+];
+var rv = TR.entries({ messages: revMsgs, plan: againPlan, today: TODAY, finishTpl: FIN }).filter(function (e) { return e.id === 'plan:ag'; })[0];
+eq([rv.recId, rv.by], ['v3', null], 'MAJOR3 最新の終わりが本人なら by は無い');
+// 行自身の by が先（既存の規則）: 最新の記録行に by が無くても 行の by を使う
+var rowBy = TR.entries({ messages: revMsgs, plan: [{ id: 'ag', start: '9:00', end: '9:30', title: 'やり直し', kind: 'mine', gone: 'finished', by: 'tanaka' }], today: TODAY, finishTpl: FIN }).filter(function (e) { return e.id === 'plan:ag'; })[0];
+eq([rowBy.recId, rowBy.by], ['v3', 'tanaka'], 'MAJOR3 行自身の by があればそれが先');
 
 // ---------- TR.buddyLine（§Z-3 / Z-8） ----------
 eq(TR.buddyLine([], true), { kind: 'neutral' }, 'Z-3 上段が無い時は中立の 1 文');
