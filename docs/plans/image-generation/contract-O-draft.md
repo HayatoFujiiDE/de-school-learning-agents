@@ -541,3 +541,27 @@ gitleaks detect --no-git
 | `test/*` / `scripts/smoke.mjs` | §O-8 |
 
 司令塔が書くもの: 職人定義の tools と本文（§O-2）、rubric（files の image_id に alt があることだけ見る）、`CONTRACT-factory.md` への反映。
+
+## §O-13 OpenAI の予備の鍵 `OPENAI_API_KEY_BACKUP`（2026-11-06。オーナー指示「もう一つバックアップで API 登録したい」）
+
+背景: 2026-11-06、職人の generate_image が 2 回とも失敗し、工場は `quota`（OpenAI が残高か上限の不足を返した）で止まった（今月の画像の記帳は 10¢ で、工場側の上限ではない）。主の鍵が使えない時に、別の OpenAI の組織・プロジェクトの鍵で続けられるようにする。
+
+1. **secret**: `OPENAI_API_KEY_BACKUP`（任意）。投入はふじさんの agent 外のターミナルで `wrangler secret put OPENAI_API_KEY_BACKUP`。値は Worker secret だけ（D1・R2・ログ・作業場・custom_tool_result に出ない。§O-0 と同じ）。読むのは `src/env.ts` と `src/openai.ts` だけ（§O-8 の grep の対象に `OPENAI_API_KEY_BACKUP` も入る。該当は同じ 2 ファイル）。
+2. **使い方**（`openAiPort.generate`）: 主の鍵で 1 回呼ぶ。**応答があり、kind が `quota` か `auth`** で、予備の鍵があり主と値が異なる時だけ、同じ入力で予備の鍵で 1 回呼ぶ（締め切りは同じ `o.deadline`。残りが 1 秒未満なら呼ばず主の失敗を投げる）。timeout・connection・bad_response・rate_limited・server・bad_request・moderation では呼び直さない（応答不明の二重課金と、同じ結果の繰り返しを避ける）。主の鍵が無く予備だけある時は、予備で 1 回だけ呼ぶ（`no_key` にしない）。両方無い時は従来どおり `no_key`。
+3. **結果**: 成功は `{b64, usage, key: 'primary' | 'backup'}`（`ImagePort` の戻り値に `key` を足す。fake の port は `'primary'`）。予備でも失敗した時は予備の `OpenAiError` を投げる（主の失敗は捨てる）。`OpenAiError` に `key?: 'backup'`（予備で呼んだ失敗の印）を足す。停止の理由の表（§O-3 c・§O-5 d）は変えない: 両方 quota → `quota`、主 quota・予備 auth → `auth`、主 quota・予備 timeout → `result_unknown`。
+4. **記録**（consumer `runImage`）: 予備の鍵で呼んだ時（成功・失敗とも）、settings `openai_backup_last_used_at` を now（ISO）で書く（`INSERT … ON CONFLICT DO UPDATE`）。ログ `{at:'openai_backup', ok:<boolean>}`（鍵の値・prompt・request id 以外は出さない。request id は出してよい）。
+5. **画面**: `GET /api/status` の `images` と `GET /api/images/status` に `backup_configured: <boolean>`（鍵の有無だけ。値は返さない）と `backup_last_used_at: <ISO | null>` を足す。管理画面 `#/images` の「停止の状態」のカードに「予備の鍵: あり / なし」と「予備の鍵を最後に使った: <日時> / まだ無い」を出す。状況帯には、`backup_last_used_at` が 7 日以内なら「画像: 予備の鍵を使いました（<日時>）」の印（`#/images` へのリンク）を出す。
+6. **費用・上限**: 変えない（どちらの鍵でも同じ記帳・同じ U・同じ上限）。
+7. **停止からの復帰**: 停止中（`quota` / `auth`）は従来の `POST /api/images/unhalt`（人が押す）。予備の鍵を入れただけでは自動で再開しない。
+8. **受け入れ**（vitest。fetchImpl の台本）:
+   - 主 quota → 予備 ok: `done`、`key: 'backup'`、settings が書かれる、ログ 1 行。fetch は 2 回で、2 回目の authorization が予備の値（テストの値）。
+   - 主 quota → 予備 quota: `failed / quota`、停止 `quota`、settings が書かれる。
+   - 主 auth → 予備 ok: `done`。
+   - 主 timeout / rate_limited / server / moderation / bad_response: fetch 1 回（予備を呼ばない）、settings は書かれない。
+   - 主 ok: fetch 1 回。
+   - 予備なし: 従来どおり（主 quota → `quota` 停止、fetch 1 回）。
+   - 主なし・予備あり: fetch 1 回（予備）、`key: 'backup'`。主と予備が同じ値: fetch 1 回。
+   - 残り 1 秒未満: 予備を呼ばず主の失敗。
+   - `GET /api/status` と `GET /api/images/status` の 2 項目。管理画面は escape して出す。
+   - §O-8 の grep が `src/env.ts` と `src/openai.ts` の 2 ファイルのまま。既存のテストが green。新しいテストが変更前のコードで落ちる。
+9. **範囲**: `src/openai.ts`・`src/env.ts`・`src/images.ts`（consumer の記録だけ）・`src/routes/images.ts`・`GET /api/status` を組み立てる所・`src/fake/openai.ts`・`public/admin/admin.js`・`test/`。migration・`wrangler.jsonc`（secret は書かない）・職人の定義・rubric は触らない。
