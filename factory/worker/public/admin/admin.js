@@ -313,7 +313,8 @@
   function backupUsedRecently(t, nowMs) {
     if (!t) return false;
     var ts = Date.parse(String(t));
-    return isFinite(ts) && nowMs - ts <= BACKUP_RECENT_MS;
+    // 未来の日時（端末の時計のずれ）は 7 日以内に数えない（Astra レビューの指摘）
+    return isFinite(ts) && nowMs - ts >= 0 && nowMs - ts <= BACKUP_RECENT_MS;
   }
   /** 状況帯の 1 行（§O-5 e）。images が無い応答（古い Worker）では何も出さない。nowMs はテストの時だけ渡す */
   function imagesBandHtml(im, nowMs) {
