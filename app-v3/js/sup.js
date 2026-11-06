@@ -218,7 +218,7 @@
     return C.reportDraft({ report: SD.report, fade: f, lines: C.fadeLines(f, SD.text, names()), plan: S().plan, text: SD.text, names: names(), edits: rp.edits, off: rp.off });
   };
   SUP.childRow = function () {
-    return C.childRow({ plan: S().plan, messages: DES.talk.messages(), ideas: SUP.ideas(), joined: SUP.isJoined(), now: DES.data.now, child: DES.data.child, mode: DES.mode(), text: SD.text });
+    return C.childRow({ plan: S().plan, messages: DES.talk.messages(), ideas: SUP.ideas().map(function (x) { var v = SUP.ideaView(x.id); return { id: x.id, state: v ? v.state : x.state }; }), joined: SUP.isJoined(), now: DES.data.now, child: DES.data.child, mode: DES.mode(), text: SD.text });
   };
   // 記録の全部（seed の過去の日 + このブラウザの記録。並べ替えは W2）
   SUP.logAll = function () { return (SD.log || []).concat(S().sup.log || []); };
@@ -319,6 +319,8 @@
     var u = ui();
     u.fresh = true;
     if (DES.app.route() !== 'sup') u.last = null;
+    // タブ・ルートを移ったら、開いている「直す」欄・書きかけの欄（sup-view.js の一時値）を消す（レポートの補足は保存済みなので残る）
+    DES.ui.supv = null;
   };
 
   // ---------- 操作 ----------

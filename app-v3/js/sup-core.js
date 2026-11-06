@@ -79,8 +79,35 @@
     if (isStr(r.extra)) d.extra = r.extra;
     if (RP_ST.indexOf(r.state) >= 0) d.state = r.state;
     d.sentAt = strOrNull(r.sentAt);
-    d.body = Array.isArray(r.body) ? clone(r.body) : null;
+    d.body = normBody(r.body);
+    // 確かめた・送った なのに写しが無い（壊れた保存）→ 下書きに戻す
+    if (d.state !== 'draft' && !d.body) { d.state = 'draft'; d.sentAt = null; }
     return d;
+  }
+  // 写し（18-13）: [ { id, head, items: [ { id, text, orig?, src, edited, off } ], note? } …, { id: 'extra', text } ]。形が違えば null
+  function normBody(b) {
+    if (!Array.isArray(b)) return null;
+    var out = [], bad = false;
+    b.forEach(function (s) {
+      if (bad) return;
+      if (!isObj(s) || !isStr(s.id)) { bad = true; return; }
+      if (s.id === 'extra' && !Array.isArray(s.items)) { if (isStr(s.text)) out.push({ id: 'extra', text: s.text }); else bad = true; return; }
+      if (!isStr(s.head) || !Array.isArray(s.items)) { bad = true; return; }
+      var items = [];
+      s.items.forEach(function (it) {
+        if (!isObj(it) || !isStr(it.id) || !isStr(it.text) || !isStr(it.src)) { bad = true; return; }
+        var o = { id: it.id, text: it.text };
+        if (isStr(it.orig)) o.orig = it.orig;
+        o.src = it.src;
+        o.edited = it.edited === true;
+        o.off = it.off === true;
+        items.push(o);
+      });
+      var sec = { id: s.id, head: s.head, items: items };
+      if (isStr(s.note)) sec.note = s.note;
+      out.push(sec);
+    });
+    return bad || !out.length ? null : out;
   }
   function normHelped(h) {
     var out = { odai: {} };
@@ -273,7 +300,7 @@
     for (var i = 0; i < ws.length - 1; i++) if (total(ws[i]) > 0) { first = ws[i]; break; }
     var n1 = total(last);
     if (!n1) return { kind: 'none', first: first, last: last };
-    if (!first) first = last;
+    if (!first) return { kind: 'flat', only: true, first: null, last: last };
     var n0 = total(first);
     return { kind: last.own * n0 > first.own * n1 ? 'up' : 'flat', first: first, last: last };
   }
@@ -284,7 +311,9 @@
     var tx = text || {};
     return (fd || []).map(function (f) {
       var cp = compare(f);
-      return { scene: f.scene, kind: cp.kind, line: fmt(tx['fade_' + cp.kind], cmpVars(f, cp, names)) };
+      // 過去の週がすべて 0 回: 比べる相手が無いので 今週だけの文（fade_only）
+      var key = cp.kind === 'flat' && cp.only ? 'fade_only' : 'fade_' + cp.kind;
+      return { scene: f.scene, kind: cp.kind, line: fmt(tx[key], cmpVars(f, cp, names)) };
     });
   }
 
