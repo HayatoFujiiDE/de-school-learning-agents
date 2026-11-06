@@ -607,7 +607,7 @@ body.review-wide .view { max-width: 1440px; }
 body.review-wide .rv-foot-row, body.review-wide .rv-reason { max-width: 1440px; }
 .rv-study { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 460px); gap: 16px; align-items: start; margin: 0 0 16px; }
 .rv-study > .card, .rv-src-col > .card { margin: 0; }
-.rv-src-col { position: sticky; top: 76px; max-height: calc(100vh - 76px - 112px); overflow-y: auto; overscroll-behavior: contain; border-radius: var(--radius); }
+.rv-src-col { position: sticky; top: var(--rv-top, 76px); max-height: calc(100vh - var(--rv-top, 76px) - var(--rv-bottom, 112px)); overflow-y: auto; overscroll-behavior: contain; border-radius: var(--radius); }
 .mp-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .mp-marks { font: inherit; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--white); cursor: pointer; color: var(--muted); }
 .mp-marks.on { border-color: var(--ai); background: var(--ai-soft); color: #8a5a00; font-weight: 600; }

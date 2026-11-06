@@ -175,16 +175,25 @@
 
   // ---- md 描画（全部エスケープ → 見出し・段落・箇条書き・コード・http(s) リンクだけ）----
   // 主張 id の参照（[c3] / [c3, c4]。直後が「(」のもの = リンクの記法は除く）
-  var CITE_RE = /[ \t　]*\[([A-Za-z][\w-]*(?:[ \t]*[,、][ \t]*[A-Za-z][\w-]*)*)\](?!\()/g;
-  /** text の中の主張 id の参照を取り除き、見つけた id を out に足す（known = 主張 id の表。c<数字> の形か known にある id だけを参照とみなす） */
+  // 前の空白は正規表現に入れない（長い空白の行で 2 乗の時間にならないように、外した後で手で詰める）
+  var CITE_RE = /\[([A-Za-z][\w-]*(?:[ \t]*[,、][ \t]*[A-Za-z][\w-]*)*)\](?!\()/g;
+  function isCiteSpace(code) { return code === 32 || code === 9 || code === 0x3000; }
+  /** text の中の主張 id の参照を取り除き（直前の空白も）、見つけた id を out に足す（known = 主張 id の表。c<数字> の形か known にある id だけを参照とみなす） */
   function stripCites(text, known, out) {
-    return String(text).replace(CITE_RE, function (m, inner) {
-      var toks = inner.split(/[\s,、]+/).filter(Boolean);
+    var src = String(text), res = '', last = 0, m;
+    CITE_RE.lastIndex = 0;
+    while ((m = CITE_RE.exec(src))) {
+      var toks = m[1].split(/[\s,、]+/).filter(Boolean);
       var ok = toks.length && toks.every(function (x) { return /^c\d+$/i.test(x) || (!!known && Object.prototype.hasOwnProperty.call(known, x)); });
-      if (!ok) return m;
+      if (!ok) continue;
+      res += src.slice(last, m.index);
+      var e = res.length;
+      while (e > 0 && isCiteSpace(res.charCodeAt(e - 1))) e--;
+      res = res.slice(0, e);
       toks.forEach(function (x) { if (out.indexOf(x) < 0) out.push(x); });
-      return '';
-    });
+      last = m.index + m[0].length;
+    }
+    return res + src.slice(last);
   }
   /** opts（任意）: { cites: [] , known } を渡すと、主張 id の参照を本文から外して opts.cites に集める（教材として見る時。コードの中は触らない） */
   function inlineMd(s, opts) {
@@ -2017,7 +2026,7 @@
     ((mat && mat.parts) || []).forEach(function (p) { (p.files || []).forEach(function (f) { if (f && IMAGE_RE.test(f.path || '')) out.push(f.path); }); });
     return out;
   }
-  function newReviewState() { return { ck: {}, mode: null, note: '', append: '', draftShown: false, pv: defaultPv(), stickies: [], stickySeq: 0 }; }
+  function newReviewState() { return { ck: {}, mode: null, note: '', append: '', draftShown: false, pv: defaultPv(), stickies: [], stickySeq: 0, flowedLines: [] }; }
   function hasDraft(st) { return !!((st.note || '').trim() || (st.append || '').trim()); }
 
   /** 検証の状態の文（§L-6 1.）。待ちの理由は API が版に verify_wait_reason を出す時だけ、または停止中が分かる時だけ付ける */
@@ -2213,7 +2222,8 @@
   /** 段落の先頭 20 字（付箋の場所の目印。主張 id の参照と md の記号を除く） */
   function paraHead(raw, known) {
     var t = stripCites(raw, known, []).replace(/`/g, '').replace(/\[([^\]]+)\]\((?:[^)]*)\)/g, '$1').replace(/\s+/g, ' ').trim();
-    return t.length > 20 ? t.slice(0, 20) + '…' : t;
+    var cps = Array.from(t);
+    return cps.length > 20 ? cps.slice(0, 20).join('') + '…' : t;
   }
   /** 動画の埋め込み（§Q-5 の形。youtube_id と区間を確かめてから。だめなら空） */
   function ytEmbedHtml(v) {
@@ -2267,10 +2277,11 @@
       var inner = inlineMd(raw, { cites: cites, known: known });
       var flagged = !!o.marks && cites.some(function (id) { return vhas(markIds, id); });
       var cl = cites.filter(function (id) { return vhas(known, id); }).map(function (id) { return known[id]; });
-      var cls = 'mp-para' + (flagged ? ' is-flag' : '') + (stuck[i] ? ' has-stick' : '');
+      var showStuck = !!o.marks && !!stuck[i]; // 印 OFF は子どもが見るのと同じ見た目（付箋そのものは消さない）
+      var cls = 'mp-para' + (flagged ? ' is-flag' : '') + (showStuck ? ' has-stick' : '');
       var tail = '';
       if (o.marks && o.chips && cites.length) tail += '<span class="mp-cites">' + cites.map(chipHtml).join('') + '</span>';
-      if (stuck[i]) tail += '<span class="mp-stuck" title="この段落の付箋">付箋 ' + stuck[i] + '</span>';
+      if (showStuck) tail += '<span class="mp-stuck" title="この段落の付箋">付箋 ' + stuck[i] + '</span>';
       if (o.marks && o.stick) tail += '<button type="button" class="mp-stick-btn" data-stick-open="' + i + '">ここに付箋</button>';
       return '<' + tag + ' class="' + cls + '" id="mp-p-' + (o.frame || 0) + '-' + (o.pi || 0) + '-' + i + '" data-para="' + i + '" data-head="' + esc(paraHead(raw, known)) + '"' +
         (cl.length ? ' data-cl="' + cl.join(' ') + '"' : '') + '>' + inner + tail + '</' + tag + '>';
@@ -2321,15 +2332,51 @@
   function stickyLine(s) {
     return '- ' + s.variant_path + ' ' + (Number(s.para_index) + 1) + ' 段落目「' + s.head + '」: ' + (STICK_LABEL[s.kind] || 'その他') + (s.text ? ' — ' + s.text : '');
   }
-  /** 理由の文に付箋の行を足す（書いてある理由は消さず、その後ろに。上限を超える行は足さない）→ { note, added } */
+  /**
+   * 理由の文に付箋の行を足す（書いてある理由は 1 字も変えず、その後ろに。区切りの改行だけ足す。上限を超える行は足さない）
+   * → { note, added, lines }（lines = 足した行。却下の時に外すため）。1 件も足せなければ note は元のまま
+   */
   function stickyNoteText(note, stickies) {
-    var out = String(note || '').replace(/\s+$/, ''), added = 0;
+    var base = String(note || ''), out = base, added = 0, lines = [];
     for (var i = 0; i < stickies.length; i++) {
-      var next = (out ? out + '\n' : '') + stickyLine(stickies[i]);
+      var line = stickyLine(stickies[i]);
+      var next = out + (out && out.charAt(out.length - 1) !== '\n' ? '\n' : '') + line;
       if (next.length > NOTE_MAX) break;
-      out = next; added++;
+      out = next; added++; lines.push(line);
     }
-    return { note: out, added: added };
+    return { note: added ? out : base, added: added, lines: lines };
+  }
+  /** 却下で送る理由: 流し込んだ付箋の行（lines）を 1 行ずつ外す（理由欄の表示は変えない） */
+  function noteWithoutStickyLines(note, lines) {
+    var left = (lines || []).slice();
+    return String(note || '').split('\n').filter(function (l) {
+      var k = left.indexOf(l);
+      if (k < 0) return true;
+      left.splice(k, 1);
+      return false;
+    }).join('\n');
+  }
+  /** decision に送る理由（却下だけ、流し込んだ付箋の行を外す） */
+  function decisionNote(st, decision) {
+    return decision === 'reject' ? noteWithoutStickyLines(st.note, st.flowedLines) : String(st.note || '');
+  }
+  /** 主張（番号 n）の段落を探す順: 左の枠 → 見比べの時は右の枠 */
+  function claimParaSelectors(n, compare) {
+    var sel = '[data-cl~="' + String(n).replace(/[^0-9]/g, '') + '"]';
+    return ['.mat-preview[data-frame="0"] ' + sel].concat(compare ? ['.mat-preview[data-frame="1"] ' + sel] : []);
+  }
+  /** 確認画面のキー操作を止める「入力中」: 入力欄・選択・編集できる要素、または付箋の入力の枠の中（種類ボタン・付ける/やめるを含む） */
+  function inInputOf(a) {
+    if (!a) return false;
+    if (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable) return true;
+    return !!(a.closest && a.closest('[data-stick-form]'));
+  }
+  /** 付箋の一言欄のキー → 'add' / 'need_kind' / 'cancel' / null（IME の変換中 = isComposing か keyCode 229 の Enter は付けない） */
+  function stickyKeyAction(e, hasKind) {
+    if (!e || e.isComposing || e.keyCode === 229) return null;
+    if (e.key === 'Enter') return hasKind ? 'add' : 'need_kind';
+    if (e.key === 'Escape') return 'cancel';
+    return null;
   }
   function stickyListHtml(stickies) {
     if (!stickies.length) return '<p class="mp-stick-empty">付箋はまだありません。「確認の印を見る」を ON にして、段落の「ここに付箋」から付けられます。</p>';
@@ -2707,6 +2754,7 @@
     document.body.classList.add('review-wide');
     $('#rv-study').addEventListener('click', onStudyClick);
     $('#rv-study').addEventListener('keydown', onStickyKey);
+    watchReviewChrome();
     $('#rv-groups').addEventListener('click', onStudyClick);
     fillPreview();
     $('#rv-help').addEventListener('click', openKeys);
@@ -2760,6 +2808,28 @@
     var why = $('#approve-why');
     why.textContent = ap.enabled ? '承認できます' : '承認するには: ' + ap.why.map(function (w) { return w.text; }).join(' / ');
     why.setAttribute('data-target', ap.why[0] ? ap.why[0].target : '');
+    measureReviewChrome(); // 理由欄の開閉でフッターの高さが変わる
+  }
+
+  // 右の出典の欄（sticky）の上端と高さを、判定帯とフッターの実際の高さに合わせる（--rv-top / --rv-bottom）
+  var reviewRO = null;
+  function measureReviewChrome() {
+    var study = $('#rv-study');
+    if (!study) return;
+    var band = $('#rv-band'), foot = $('#rv-foot');
+    var top = (band ? band.getBoundingClientRect().height : 0) + 12;
+    var bottom = (foot ? foot.getBoundingClientRect().height : 0) + 12; // fixed の要素は offsetParent が null なので高さだけで見る（隠れている時は 0）
+    study.style.setProperty('--rv-top', Math.ceil(top) + 'px');
+    study.style.setProperty('--rv-bottom', Math.ceil(bottom) + 'px');
+  }
+  /** 描画の時に測り、判定帯・フッターの大きさが変わった時（折り返し・理由欄の高さの変更）にも測り直す */
+  function watchReviewChrome() {
+    if (reviewRO) { reviewRO.disconnect(); reviewRO = null; }
+    measureReviewChrome();
+    if (typeof window.ResizeObserver === 'function') {
+      reviewRO = new window.ResizeObserver(function () { if (reviewCtx) measureReviewChrome(); });
+      ['#rv-band', '#rv-foot'].forEach(function (sel) { var el = $(sel); if (el) reviewRO.observe(el); });
+    }
   }
 
   function scrollToTarget(id) {
@@ -2865,9 +2935,10 @@
     var gc = t.closest('[data-goto-claim]');
     if (gc) {
       var n = gc.getAttribute('data-goto-claim');
-      var para = document.querySelector('.mat-preview[data-frame="0"] [data-cl~="' + n.replace(/[^0-9]/g, '') + '"]');
+      var para = null;
+      claimParaSelectors(n, !!c.st.pv.compare).some(function (q) { para = document.querySelector(q); return !!para; });
       if (para) gotoTarget(para.id, '');
-      else toast('いま表示している「' + pvLabel(previewFrames(c.st)[0]) + '」には、この主張の段落がありません。学年・長さを切り替えてください', true);
+      else toast('いま表示している「' + previewFrames(c.st).map(pvLabel).join('」「') + '」には、この主張の段落がありません。学年・長さを切り替えてください', true);
     }
   }
   // ---- 付箋の DOM 側 ----
@@ -2885,11 +2956,14 @@
     var pending = (st.stickies || []).filter(function (s) { return !s.flowed; });
     if (!pending.length) return 0;
     var r = stickyNoteText(st.note, pending);
-    st.note = r.note;
-    pending.slice(0, r.added).forEach(function (s) { s.flowed = true; });
-    var ta = $('#d-note');
-    if (ta) ta.value = st.note;
-    renderStickies();
+    if (r.added) {
+      st.note = r.note;
+      st.flowedLines = (st.flowedLines || []).concat(r.lines);
+      pending.slice(0, r.added).forEach(function (s) { s.flowed = true; });
+      var ta = $('#d-note');
+      if (ta) ta.value = st.note;
+      renderStickies();
+    }
     var left = pending.length - r.added;
     toast(r.added ? '付箋 ' + r.added + ' 件を差し戻しの理由に足しました' + (left ? '（' + NOTE_MAX + ' 字を超えるため ' + left + ' 件は入れていません）' : '') : '理由が ' + NOTE_MAX + ' 字を超えるため、付箋を足せませんでした', !r.added || left > 0);
     return r.added;
@@ -2956,9 +3030,12 @@
   function onStickyKey(e) {
     var c = reviewCtx;
     if (!c || !e.target || !e.target.closest || !e.target.closest('[data-stick-form]') || e.target.tagName !== 'INPUT') return;
-    if (e.isComposing) return;
-    if (e.key === 'Enter') { e.preventDefault(); if (c.stickDraft && c.stickDraft.kind) addSticky(c); else toast('付箋の種類を選んでください', true); }
-    else if (e.key === 'Escape') { e.preventDefault(); closeStickyForm(); }
+    var act = stickyKeyAction(e, !!(c.stickDraft && c.stickDraft.kind));
+    if (!act) return;
+    e.preventDefault();
+    if (act === 'add') addSticky(c);
+    else if (act === 'need_kind') toast('付箋の種類を選んでください', true);
+    else closeStickyForm();
   }
   /** 行き先へスクロールして点滅（閉じている details の中なら開く。既存の scrollToTarget を使う） */
   function gotoTarget(id, what) {
@@ -2996,10 +3073,11 @@
         if (ta) { ta.focus(); ta.scrollIntoView({ block: 'nearest' }); }
         return;
       }
-      if (!st.note.trim()) { toast('理由を入力してください', true); $('#d-note').focus(); return; }
+      var sendNote = decisionNote(st, cmd.cmd); // 却下は流し込んだ付箋の行を外して送る
+      if (!sendNote.trim()) { toast('理由を入力してください', true); $('#d-note').focus(); return; }
       return cmd.cmd === 'return'
         ? sendDecision('return', 'この版を差し戻します', '理由を添えて改善 job を注文します（rework）。\n\n理由: ' + st.note)
-        : sendDecision('reject', 'この版を却下します', '配信の状態は変わりません。\n\n理由: ' + st.note);
+        : sendDecision('reject', 'この版を却下します', '配信の状態は変わりません。\n\n理由: ' + sendNote);
     }
   }
 
@@ -3020,7 +3098,7 @@
       var label = btn ? btn.innerHTML : '';
       syncReview();
       if (btn) btn.textContent = '送信中…';
-      var payload = { decision: decision, checklist: checklistPayload(c.d, st, decision === 'approve'), note: decision === 'approve' ? '' : st.note, verification_id: c.d.verification_id };
+      var payload = { decision: decision, checklist: checklistPayload(c.d, st, decision === 'approve'), note: decision === 'approve' ? '' : decisionNote(st, decision), verification_id: c.d.verification_id };
       if (decision === 'return') payload.brief_append = st.append;
       api('POST', '/api/review/' + encodeURIComponent(vid) + '/decision', payload).then(function (res) {
         delete reviewStates[vid];
@@ -3051,7 +3129,7 @@
     if (!c || !c.d || c.d.version.status !== 'review') return;
     var a = document.activeElement;
     var env = {
-      inInput: !!(a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable)),
+      inInput: inInputOf(a),
       dialogOpen: !!document.querySelector('dialog[open]'),
       busy: !!c.busy,
       draft: hasDraft(c.st)
@@ -3125,7 +3203,8 @@
     inlineMd: inlineMd, pickVariant: pickVariant, previewBodyHtml: previewBodyHtml, previewFrameHtml: previewFrameHtml, kindName: kindName,
     defaultPv: defaultPv, claimRefsOf: claimRefsOf,
     // 付箋
-    stickyLine: stickyLine, stickyNoteText: stickyNoteText, stickyListHtml: stickyListHtml, STICK_KINDS: STICK_KINDS
+    stickyLine: stickyLine, stickyNoteText: stickyNoteText, stickyListHtml: stickyListHtml, STICK_KINDS: STICK_KINDS,
+    noteWithoutStickyLines: noteWithoutStickyLines, decisionNote: decisionNote, inInputOf: inInputOf, claimParaSelectors: claimParaSelectors, stickyKeyAction: stickyKeyAction, stripCites: stripCites
   };
 
   // ---- 画面: 改善係の記録（振り返り係 §S-5 5。画面での名前は「改善係」）----
@@ -3343,6 +3422,7 @@
   };
   if (window.__FACTORY_ADMIN_NO_BOOT__) return; // smoke が純関数だけを読む時
   window.addEventListener('hashchange', route);
+  window.addEventListener('resize', function () { if (reviewCtx) measureReviewChrome(); });
   document.addEventListener('keydown', onReviewKey);
   document.addEventListener('visibilitychange', onFloorVisibility);
   route();

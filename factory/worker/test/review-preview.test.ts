@@ -353,6 +353,7 @@ describe('付箋 → 差し戻しの理由の文', () => {
     expect(R.stickyNoteText('出典を直してください\n', [st1, st2])).toEqual({
       note: '出典を直してください\n' + R.stickyLine(st1) + '\n' + R.stickyLine(st2),
       added: 2,
+      lines: [R.stickyLine(st1), R.stickyLine(st2)],
     });
     expect(R.stickyNoteText('', [st1]).note).toBe(R.stickyLine(st1));
   });
@@ -380,7 +381,7 @@ describe('付箋 → 差し戻しの理由の文', () => {
 
   it('付箋のある段落には「付箋 N」の印。付箋は reviewStates の版ごとの状態に持つ', () => {
     const d = fixture();
-    const h = R.previewBodyHtml(md('parts/p1/p1-elementary-short.md'), d.version.material.parts[0], { fileBase: BASE, marks: false, stickies: [st1, { ...st1, id: 3 }] });
+    const h = R.previewBodyHtml(md('parts/p1/p1-elementary-short.md'), d.version.material.parts[0], { fileBase: BASE, marks: true, stickies: [st1, { ...st1, id: 3 }] });
     expect(h).toContain('class="mp-para has-stick" id="mp-p-0-0-2"');
     expect(h).toContain('<span class="mp-stuck" title="この段落の付箋">付箋 2</span>');
     expect(R.newReviewState()).toMatchObject({ stickies: [], stickySeq: 0 });
@@ -404,5 +405,95 @@ describe('見比べ（左右 2 枠）', () => {
     expect(h).toContain('data-pv="compare" data-val="1" data-pvf="0" aria-pressed="true">見比べ</button>');
     // 右の枠には見比べのボタンを出さない
     expect(n(h, /data-pv="compare"/g)).toBe(1);
+  });
+});
+
+describe('レビューの指摘への対応（2026-11-07）', () => {
+  const st1 = { id: 1, part_id: 'p1', part_title: 't', part_index: 0, variant_path: 'parts/p1/p1-elementary-short.md', variant_label: '小学生・短い', para_index: 2, head: '赤血球は', kind: 'hard', text: '難しい', flowed: false };
+  const st2 = { ...st1, id: 2, para_index: 3, kind: 'fact', text: '' };
+
+  it('1. 印 OFF の時は付箋の目印（has-stick・「付箋 N」）も出さない（付箋の一覧には残る）', () => {
+    const d = fixture();
+    const src = md('parts/p1/p1-elementary-short.md');
+    const off = R.previewBodyHtml(src, d.version.material.parts[0], { fileBase: BASE, marks: false, stickies: [st1] });
+    expect(off).not.toContain('has-stick');
+    expect(off).not.toContain('mp-stuck');
+    const on = R.previewBodyHtml(src, d.version.material.parts[0], { fileBase: BASE, marks: true, stickies: [st1] });
+    expect(on).toContain('class="mp-para has-stick" id="mp-p-0-0-2"');
+    expect(on).toContain('付箋 1</span>');
+    expect(R.reviewHtml(d, { ...R.newReviewState(), stickies: [st1] }, { marks: false })).toContain('<b>付箋 1 件</b>');
+  });
+
+  it('2. 却下で送る理由には流し込んだ付箋の行を入れない（差し戻しは入れる・理由欄はそのまま）。外して空なら空', () => {
+    const r = R.stickyNoteText('出典を直して', [st1, st2]);
+    const st = { ...R.newReviewState(), note: r.note, flowedLines: r.lines };
+    expect(R.decisionNote(st, 'reject')).toBe('出典を直して');
+    expect(R.decisionNote(st, 'return')).toBe(r.note);
+    expect(st.note).toBe(r.note);
+    const only = R.stickyNoteText('', [st1]);
+    expect(R.decisionNote({ note: only.note, flowedLines: only.lines }, 'reject').trim()).toBe('');
+    // 同じ文の行をオーナーが自分でも書いていたら、流し込んだ数だけ外す
+    const dup = R.stickyLine(st1);
+    expect(R.noteWithoutStickyLines(`${dup}\n${dup}`, [dup])).toBe(dup);
+    expect(R.decisionNote({ note: 'a', flowedLines: undefined }, 'reject')).toBe('a');
+  });
+
+  it('3. オーナーの理由の末尾の空白・改行は削らない（区切りの改行だけ足す）。1 件も足せない時は元のまま', () => {
+    expect(R.stickyNoteText('理由  ', [st1]).note).toBe('理由  \n' + R.stickyLine(st1));
+    expect(R.stickyNoteText('理由\n\n', [st1]).note).toBe('理由\n\n' + R.stickyLine(st1));
+    expect(R.stickyNoteText('理由\n', [st1]).note).toBe('理由\n' + R.stickyLine(st1));
+    const full = 'あ'.repeat(3999) + ' ';
+    const r = R.stickyNoteText(full, [st1]);
+    expect(r).toEqual({ note: full, added: 0, lines: [] });
+  });
+
+  it('4. 段落の先頭 20 字はコードポイントで切る（サロゲートペアを割らない）', () => {
+    const d = fixture();
+    const raw = '𠮷'.repeat(25) + ' [c1]';
+    const h = R.previewBodyHtml(raw, d.version.material.parts[0], { fileBase: BASE, marks: false });
+    expect(h).toContain(`data-head="${'𠮷'.repeat(20)}…"`);
+    const h2 = R.previewBodyHtml('😀'.repeat(20), d.version.material.parts[0], { fileBase: BASE, marks: false });
+    expect(h2).toContain(`data-head="${'😀'.repeat(20)}"`);
+  });
+
+  it('5. 主張 id を外す処理は長い空白の行で 2 乗にならない（16 万個の空白で 100ms 以内）', () => {
+    const spaces = ' '.repeat(160000);
+    for (const line of [spaces + 'x', spaces + '[注', spaces + '[c1', 'a' + spaces + '[c1]', spaces]) {
+      const t0 = performance.now();
+      R.stripCites(line, {}, []);
+      expect(performance.now() - t0).toBeLessThan(100);
+    }
+    const t1 = performance.now();
+    R.inlineMd(spaces + 'x', { cites: [], known: {} });
+    expect(performance.now() - t1).toBeLessThan(100);
+    // 直前の空白（半角・タブ・全角）も外す
+    const out: string[] = [];
+    expect(R.stripCites('a \t　[c1]。b', {}, out)).toBe('a。b');
+    expect(out).toEqual(['c1']);
+  });
+
+  it('7. 付箋の一言欄の Enter は IME の変換中（isComposing・keyCode 229）は付けない', () => {
+    expect(R.stickyKeyAction({ key: 'Enter' }, true)).toBe('add');
+    expect(R.stickyKeyAction({ key: 'Enter' }, false)).toBe('need_kind');
+    expect(R.stickyKeyAction({ key: 'Enter', isComposing: true }, true)).toBe(null);
+    expect(R.stickyKeyAction({ key: 'Enter', keyCode: 229 }, true)).toBe(null);
+    expect(R.stickyKeyAction({ key: 'Process', keyCode: 229 }, true)).toBe(null);
+    expect(R.stickyKeyAction({ key: 'Escape' }, true)).toBe('cancel');
+    expect(R.stickyKeyAction({ key: 'a' }, true)).toBe(null);
+  });
+
+  it('8. 付箋の入力の枠の中（種類ボタン・付ける/やめる）にフォーカスがある時は「入力中」= キー操作が効かない。見比べの時は右の枠も探す', () => {
+    const el = (tagName: string, inForm: boolean) => ({ tagName, closest: (q: string) => (q === '[data-stick-form]' && inForm ? {} : null) });
+    expect(R.inInputOf(el('BUTTON', true))).toBe(true);
+    expect(R.inInputOf(el('BUTTON', false))).toBe(false);
+    expect(R.inInputOf(el('INPUT', false))).toBe(true);
+    expect(R.inInputOf(el('TEXTAREA', false))).toBe(true);
+    expect(R.inInputOf({ tagName: 'DIV', isContentEditable: true })).toBe(true);
+    expect(R.inInputOf(null)).toBe(false);
+    const env = { inInput: R.inInputOf(el('BUTTON', true)), dialogOpen: false, busy: false, draft: false };
+    for (const k of ['1', 'a', 'r', 'x', 'j', 'k']) expect(R.keyCommand({ key: k, code: /\d/.test(k) ? `Digit${k}` : `Key${k.toUpperCase()}` }, env)).toBe(null);
+    expect(R.keyCommand({ key: 'a', code: 'KeyA' }, { ...env, inInput: R.inInputOf(el('BUTTON', false)) })).toEqual({ cmd: 'approve' });
+    expect(R.claimParaSelectors(4, false)).toEqual(['.mat-preview[data-frame="0"] [data-cl~="4"]']);
+    expect(R.claimParaSelectors('4"]x', true)).toEqual(['.mat-preview[data-frame="0"] [data-cl~="4"]', '.mat-preview[data-frame="1"] [data-cl~="4"]']);
   });
 });
