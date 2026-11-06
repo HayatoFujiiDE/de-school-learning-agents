@@ -7,7 +7,7 @@ import { PortError, VERIFY_RESULTS_MAX_BYTES, type FactoryPort } from './anthrop
 import { all, conditionalBatch, errorKind, first, getSetting, isoPlus, nowIso, stmt, tokyoDay, cas, type SqlValue, type Stmt } from './db';
 import { cfg, type Env } from './env';
 import { imageRefsOf } from './checks/schema';
-import { looksOffloaded, normalizeUrl, resultText } from './checks/citations';
+import { carryRecordFor, looksOffloaded, normalizeUrl, resultText } from './checks/citations';
 import { ALLOWLIST } from './generated/claude-assets';
 import { GEMINI_TEXT_MAX_CHARS, GeminiError, capChars, type GeminiPort } from './gemini';
 import { todayCostCents } from './jobs';
@@ -428,10 +428,13 @@ export const CAPTURE_YOUTUBE_MARK = '（YouTube の出典。動画の記録で�
 const CAPTURES_OPEN = '<source_captures>';
 const CAPTURES_CLOSE = '</source_captures>';
 
-/** R2 の {r2_prefix}source-captures.json（一度書いたら書き直さない） */
+/**
+ * R2 の {r2_prefix}source-captures.json（一度書いたら書き直さない）。
+ * §S-8-2: 作り直しの版で前の版の記録から写した行だけ、captured_at（最初に取った時刻）と carried_from（写した元の版の id）を持つ
+ */
 export interface SourceCapturesFile {
   v: 1;
-  captures: Array<{ source_id: string; url: string; chars: number; text: string }>;
+  captures: Array<{ source_id: string; url: string; chars: number; text: string; captured_at?: string; carried_from?: string }>;
   missing: string[];
   truncated: string[];
 }
@@ -494,7 +497,14 @@ function parseCapturesFile(text: string): SourceCapturesFile | null {
       .filter((c): c is Record<string, unknown> => !!c && typeof c === 'object' && typeof c.source_id === 'string' && typeof c.url === 'string' && typeof c.text === 'string')
       .map((c) => {
         const text = (c.text as string).slice(0, SOURCE_CAPTURE_MAX_CHARS);
-        return { source_id: c.source_id as string, url: c.url as string, chars: text.length, text };
+        return {
+          source_id: c.source_id as string,
+          url: c.url as string,
+          chars: text.length,
+          text,
+          ...(typeof c.captured_at === 'string' ? { captured_at: c.captured_at } : {}),
+          ...(typeof c.carried_from === 'string' ? { carried_from: c.carried_from } : {}),
+        };
       });
     const strs = (a: unknown[]) => a.filter((x): x is string => typeof x === 'string');
     return { v: 1, captures, missing: strs(o.missing as unknown[]), truncated: strs(o.truncated as unknown[]) };
@@ -612,6 +622,7 @@ export async function loadSourceCaptures(
       o.deadline,
     );
     if (yt.size) file.missing = sources.filter((s) => yt.has(s.id) || file.missing.includes(s.id)).map((s) => s.id);
+    await addCarriedCaptures(env as Pick<Env, 'R2'> & { DB: D1Database }, v, file, sources, yt);
     try {
       await env.R2.put(key, JSON.stringify(file));
     } catch {
@@ -620,6 +631,65 @@ export async function loadSourceCaptures(
     return file;
   } catch {
     return noCaptures(sources);
+  }
+}
+
+/**
+ * §S-8-2（裁定 4）: 作り直し（rework）の版の取得記録に、親の版の記録を写す（file を直接書き換える）。対象 = この版の sources のうち、
+ * この session の記録が無く（missing）、YouTube の出典（動画の出典を含む）でなく、親の記録に同じ URL（normalizeUrl で一致）の空でない text があり、
+ * 最初に取った時刻（captured_at。無ければ親の版の created_at）から 14 日以内のもの。check_detail（引用の検査の結果）には関係なく写す
+ * （取得記録は「その URL の本文として持っているもの」）。captured_at は元の値を保ち、carried_from = 親の版の id。
+ * 親の版 = この版の job の parent_version_id（同じ素材の版であることを SQL で確かめる）。親の記録は R2 の {親の r2_prefix}source-captures.json だけを読む
+ * （ここでは作らない。作ると親が写した行を持たない記録が書き直せない形で残る）。失敗しても throw しない（写さないだけ）
+ */
+async function addCarriedCaptures(
+  env: Pick<Env, 'R2'> & { DB: D1Database },
+  v: VersionForVerify,
+  file: SourceCapturesFile,
+  sources: readonly SourceRef[],
+  yt: ReadonlySet<string>,
+  now = Date.now(),
+): Promise<void> {
+  try {
+    const parent = await first<{ id: string; r2_prefix: string; created_at: string }>(
+      env.DB,
+      stmt(
+        `SELECT p.id, p.r2_prefix, p.created_at FROM material_versions cv
+           JOIN factory_jobs j ON j.id = cv.job_id AND j.material_id = cv.material_id
+           JOIN material_versions p ON p.id = j.parent_version_id AND p.material_id = cv.material_id
+         WHERE cv.id = ? AND cv.material_id = ? AND j.kind = 'rework' AND p.id <> cv.id`,
+        v.id,
+        v.material_id,
+      ),
+    );
+    if (!parent) return;
+    const want = sources.filter((s) => file.missing.includes(s.id) && !yt.has(s.id));
+    if (want.length === 0) return;
+    const obj = await env.R2.get(parent.r2_prefix + SOURCE_CAPTURES_FILE);
+    const pf = obj ? parseCapturesFile(await obj.text()) : null;
+    if (!pf) return;
+    const have = new Set(file.captures.map((c) => c.source_id));
+    const ptrunc = new Set(pf.truncated);
+    for (const s of want) {
+      if (have.has(s.id)) continue;
+      const rec = pf.captures.find(
+        (c) => carryRecordFor({ url: s.url, quoted_excerpt: null }, [{ url: c.url, text: c.text, captured_at: c.captured_at ?? parent.created_at }], now, false) !== null,
+      );
+      if (!rec) continue;
+      file.captures.push({
+        source_id: s.id,
+        url: s.url,
+        chars: rec.text.length,
+        text: rec.text,
+        captured_at: rec.captured_at ?? parent.created_at,
+        carried_from: parent.id,
+      });
+      have.add(s.id);
+      file.missing = file.missing.filter((x) => x !== s.id);
+      if (ptrunc.has(rec.source_id) && !file.truncated.includes(s.id)) file.truncated.push(s.id);
+    }
+  } catch {
+    // 写せなくても記録は events から作った分で進む
   }
 }
 

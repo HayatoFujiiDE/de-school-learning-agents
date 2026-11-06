@@ -11,7 +11,8 @@ export interface CitationSourceInput {
   is_primary: boolean;
 }
 
-export type CheckDetail = 'ok' | 'not_fetched' | 'quote_not_found' | 'no_excerpt' | 'result_unavailable' | 'secondary';
+/** carried = 作り直し（rework）で、この session では開いていないが前の版の取得記録で確かめた（§S-8-2） */
+export type CheckDetail = 'ok' | 'not_fetched' | 'quote_not_found' | 'no_excerpt' | 'result_unavailable' | 'secondary' | 'carried';
 
 /** 版の動画のうち、動画の出典の判定に要る値（src/videos.ts の VersionVideo と同じ名前） */
 export interface CitationVideo {
@@ -37,7 +38,8 @@ export const VIDEO_SOURCE_CHECK_DETAIL: CheckDetail = 'no_excerpt';
 
 export interface CitationResult {
   sources: Array<{ source_id: string; url_was_fetched: 0 | 1; quote_found: 0 | 1; check_detail: CheckDetail }>;
-  summary: { total: number; fetched: number; quoted: number };
+  /** carried は作り直しの取り込みで引き継ぎを判定した時だけ（§S-8-2。件数）。fetched・quoted はこの session の検査の数のまま */
+  summary: { total: number; fetched: number; quoted: number; carried?: number };
 }
 
 /** 小文字 host、#fragment 除去、末尾 / 除去、http→https 同一視 */
@@ -215,4 +217,104 @@ export function finishCitations(acc: CitationAcc, sources: CitationSourceInput[]
 
 export function checkCitations(sources: CitationSourceInput[], events: unknown[], videos: readonly CitationVideo[] = []): CitationResult {
   return finishCitations(accumulateCitations(newCitationAcc(), sources, events), sources, videos);
+}
+
+// ---------------------------------------------------------------------------------------------
+// §S-8-2 作り直し（rework）の取り込みで、変えていない出典を前の版の取得記録で確かめたことにする（純関数）
+// ---------------------------------------------------------------------------------------------
+
+/** 引き継げる記録の古さの上限: 最初に取った時刻から 14 日 */
+export const CARRY_MAX_AGE_MS = 14 * 86_400_000;
+/** 記録の時刻が今より未来に見える時の許容（時計のずれ）。これより未来の時刻は使わない */
+const CARRY_FUTURE_SKEW_MS = 5 * 60_000;
+/** 「開き直さなくてよい出典」の一覧の上限 */
+export const REOPEN_FREE_URLS_MAX = 30;
+
+/** 親の版の取得記録の 1 件（captured_at = 最初に取った時刻。記録に無ければ呼び出し側が親の版の created_at を入れる） */
+export interface CarryRecord {
+  url: string;
+  text: string;
+  captured_at: string;
+}
+
+/** 条件 3 の「text が空でない」と条件 4（最初に取った時刻から 14 日以内） */
+function freshRecord(r: CarryRecord, now: number): boolean {
+  if (typeof r.text !== 'string' || normalizeSpace(r.text).length === 0) return false;
+  const t = Date.parse(String(r.captured_at ?? ''));
+  return Number.isFinite(t) && t <= now + CARRY_FUTURE_SKEW_MS && now - t <= CARRY_MAX_AGE_MS;
+}
+
+/**
+ * 条件 3〜5 を満たす記録（最初の 1 件）。URL は normalizeUrl で、引用は normalizeSpace した完全な部分文字列で比べる（緩い一致にしない）。
+ * requireExcerpt=false の時は条件 5 を見ない
+ */
+export function carryRecordFor(
+  s: { url: string; quoted_excerpt: string | null },
+  records: readonly CarryRecord[],
+  now: number,
+  requireExcerpt = true,
+): CarryRecord | null {
+  const target = normalizeUrl(s.url);
+  const ex = normalizeSpace(s.quoted_excerpt ?? '');
+  if (requireExcerpt && ex.length === 0) return null;
+  for (const r of records) {
+    if (!r || typeof r.url !== 'string' || normalizeUrl(r.url) !== target) continue;
+    if (!freshRecord(r, now)) continue;
+    if (requireExcerpt && !normalizeSpace(r.text).includes(ex)) continue;
+    return r;
+  }
+  return null;
+}
+
+/**
+ * §S-8-2: この session の検査（finishCitations）の結果に、前の版の記録での確認を重ねる。行が次を全部満たす時だけ
+ * url_was_fetched=1・quote_found=1・check_detail='carried'（一次でない行は 'secondary'）:
+ * 1. この session で開いていない（url_was_fetched=0 = not_fetched。一次でない行は表示が secondary でも中身は not_fetched）
+ * 2. 動画の出典ではない（videoSourceIds）
+ * 3〜5. carryRecordFor
+ * 満たさない行は今のまま。summary.fetched・quoted はこの session の数のまま、carried に引き継いだ件数
+ */
+export function applyCarry(
+  result: CitationResult,
+  sources: CitationSourceInput[],
+  videos: readonly CitationVideo[],
+  records: readonly CarryRecord[],
+  now: number,
+): CitationResult {
+  const videoIds = videoSourceIds(sources, videos);
+  let carried = 0;
+  const out = result.sources.map((row) => {
+    if (row.url_was_fetched !== 0 || videoIds.has(row.source_id)) return row;
+    const s = sources.find((x) => x.id === row.source_id);
+    if (!s || !carryRecordFor(s, records, now)) return row;
+    carried++;
+    return { source_id: row.source_id, url_was_fetched: 1 as const, quote_found: 1 as const, check_detail: (s.is_primary ? 'carried' : 'secondary') as CheckDetail };
+  });
+  return { sources: out, summary: { ...result.summary, carried } };
+}
+
+/**
+ * §S-8-1・2: 「開き直さなくてよい出典」= 親の版の出典のうち、動画の出典でなく（条件 2）、記録があり text が空でなく（3）、
+ * 14 日以内（4）のものの URL。取り込みで引き継げない行を載せないため、親の版の引用が記録に含まれること（5）も求める。
+ * 重複（normalizeUrl で同じ）を除き、出現順に max 件まで。URL は親の版の sources の値のまま（http/https で、改行などを含まないもの）
+ */
+export function reopenFreeUrls(
+  sources: ReadonlyArray<{ id: string; url: string; quoted_excerpt: string | null }>,
+  videos: readonly CitationVideo[],
+  records: readonly CarryRecord[],
+  now: number,
+  max = REOPEN_FREE_URLS_MAX,
+): string[] {
+  const videoIds = videoSourceIds(sources, videos);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const s of sources) {
+    if (out.length >= max) break;
+    if (typeof s.url !== 'string' || s.url.length > 2000 || !/^https?:\/\/[^\s]+$/.test(s.url) || videoIds.has(s.id)) continue;
+    const n = normalizeUrl(s.url);
+    if (seen.has(n) || !carryRecordFor(s, records, now)) continue;
+    seen.add(n);
+    out.push(s.url);
+  }
+  return out;
 }
