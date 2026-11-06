@@ -801,7 +801,14 @@
       if (key === 'aim' || key === 'basis') ae[key] = val;
       setDisabled('sup-adv-update', id, !trim(ae.aim));
     } else if (k === 'sv-rp-edit') {
+      // 項目の直しかけ（一時値）。確かめた の間に入力したら、補足と同じく下書きに戻る（凍結した旧本文のまま 送る を押せないように。18-10 / 18-13）
       v.rpEdit[id] = val;
+      var rpe = St().report;
+      if (rpe.state === 'checked') {
+        if (e.isComposing) return;
+        draftKeep(el, function () { toDraft(rpe); }, 'rp-ed:' + id);
+        return;
+      }
       setDisabled('sup-rp-save', id, !trim(val));
     } else if (k === 'sv-rp-extra') {
       // 補足だけは入力ごとに保存（記録は付けない）。確かめた の間に触ると下書きに戻る（18-10 / 18-13）
@@ -809,17 +816,22 @@
       if (rp.state === 'sent') return;
       if (rp.state === 'checked') {
         if (e.isComposing) return;
-        var s0 = el.selectionStart, s1 = el.selectionEnd;
-        DES.app.change(function () { rp.extra = val; toDraft(rp); }, { focus: 'rp-extra' });
-        var n = document.querySelector('[data-fk="rp-extra"]');
-        if (n) { n.focus(); try { n.setSelectionRange(s0, s1); } catch (x) { /* 範囲を戻せなくても入力は残る */ } }
+        draftKeep(el, function () { rp.extra = val; toDraft(rp); }, 'rp-extra');
         return;
       }
       rp.extra = val;
       saveSup();
     }
   }
+  // 確かめた → 下書き に戻す変更をして、入力欄のフォーカスと入力位置を保つ（再描画で欄が作り直されるため、fk で探し直す）
+  function draftKeep(el, fn, fk) {
+    var s0 = el.selectionStart, s1 = el.selectionEnd;
+    DES.app.change(fn, { focus: fk });
+    var n = document.querySelector('[data-fk="' + esc(fk) + '"]');
+    if (n) { n.focus(); try { n.setSelectionRange(s0, s1); } catch (x) { /* 範囲を戻せなくても入力は残る */ } }
+  }
+  var DRAFT_UI = ['sv-rp-extra', 'sv-rp-edit'];
   document.addEventListener('input', onInput);
   document.addEventListener('change', function (e) { if (e.target && e.target.tagName === 'SELECT') onInput(e); });
-  document.addEventListener('compositionend', function (e) { if (e.target && e.target.getAttribute && e.target.getAttribute('data-ui') === 'sv-rp-extra') onInput(e); });
+  document.addEventListener('compositionend', function (e) { if (e.target && e.target.getAttribute && DRAFT_UI.indexOf(e.target.getAttribute('data-ui')) >= 0) onInput(e); });
 })();

@@ -148,6 +148,18 @@ window.DES = window.DES || {};
     var t = findVisible(k) || (o.sel && findVisible(o.sel)) || (cfk && findVisible('[data-fk="' + esc(cfk) + '"]')) || (fk && findVisible('[data-fk="' + esc(fk) + '"]'));
     if (t) t.focus();
   };
+  // 行の退場（o.leave）の 200ms の間、変更はまだ走っていない。走る前の変更を今すぐ済ませる口が flushPending。
+  // 誰の操作かは押した時点で決まる（contract-AD §18-1）ため、サポーターが「出る」時は先にこれを呼ぶ（DES.sup.leave）
+  var pending = [];
+  function runPending(p) {
+    var i = pending.indexOf(p);
+    if (i < 0) return;
+    pending.splice(i, 1);
+    clearTimeout(p.timer);
+    p.fn();
+    APP.commit(p.o);
+  }
+  APP.flushPending = function () { while (pending.length) runPending(pending[0]); };
   APP.change = function (fn, o) {
     o = o || {};
     if (o.leave && motionOK()) {
@@ -155,7 +167,9 @@ window.DES = window.DES || {};
       if (els.length) {
         Array.prototype.forEach.call(els, function (n) { n.style.maxHeight = n.offsetHeight + 'px'; void n.offsetHeight; n.classList.add('leave'); });
         DES.ui.leaving = true;
-        setTimeout(function () { fn(); APP.commit(o); }, 200);
+        var p = { fn: fn, o: o, timer: null };
+        pending.push(p);
+        p.timer = setTimeout(function () { runPending(p); }, 200);
         return;
       }
     }
