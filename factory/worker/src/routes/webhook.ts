@@ -1,5 +1,5 @@
 // POST /webhook（契約 §B-1, §B-4-d）。Anthropic 署名のみ。署名 NG は 400、それ以外は常に 2xx（3xx を返さない）
-import { getPort, unwrapWebhook } from '../anthropic';
+import { getOEmbedPort, getPort, unwrapWebhook } from '../anthropic';
 import { first, nowIso, prepare, stmt } from '../db';
 import type { Env } from '../env';
 import { json } from '../http';
@@ -47,7 +47,9 @@ export async function handleWebhook(request: Request, env: Env, exec: ExecutionC
     exec.waitUntil(
       (async () => {
         const port = await getPort(env, { hostname });
-        await reconcileJob(env, port, job.id, { deadline: Date.now() + WAIT_UNTIL_BUDGET_MS });
+        // §Q-13: 職人の道具 youtube_info の oEmbed の port
+        const oembed = await getOEmbedPort(env, { hostname });
+        await reconcileJob(env, port, job.id, { deadline: Date.now() + WAIT_UNTIL_BUDGET_MS, oembed });
       })()
         .catch(() => undefined)
         .finally(() => markWebhookProcessed(env.DB, eventId).catch(() => undefined)),

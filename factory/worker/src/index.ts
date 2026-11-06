@@ -1,6 +1,6 @@
 // fetch / scheduled の入口とルーティング（契約 §B-1, §B-3）。フレームワークは使わない。
 // run_worker_first: true なので静的ファイルを含む全リクエストがここを通る。
-import { getImagePort, getPort, handleFakeControl } from './anthropic';
+import { getImagePort, getOEmbedPort, getPort, handleFakeControl } from './anthropic';
 import { jsonError, requireAccess } from './access';
 import { runCron } from './cron';
 import type { Env } from './env';
@@ -162,11 +162,13 @@ export default {
     const portCtx = { hostname: null, fakeEnabledSetting: await getSetting(env.DB, 'fake_enabled') };
     const port = await getPort(env, portCtx);
     const images = await getImagePort(env, portCtx);
+    // §Q-13: consumer の後の reconcile が職人の道具 youtube_info を処理する時の oEmbed の port
+    const oembed = await getOEmbedPort(env, portCtx);
     for (const msg of batch.messages) {
       const id = String((msg.body as { request_id?: unknown })?.request_id ?? '');
       if (!/^img_[0-9a-f]{32}$/.test(id)) { msg.ack(); continue; }
       try {
-        await runImage(env, port, images, id, { deadline: Date.now() + 5 * 60_000 });
+        await runImage(env, port, images, id, { deadline: Date.now() + 5 * 60_000, oembed });
         msg.ack();
       } catch (e) {
         console.log(JSON.stringify({ at: 'image_queue', request_id: id, error: e instanceof Error ? e.name : 'error' }));

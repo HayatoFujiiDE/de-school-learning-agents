@@ -51,6 +51,19 @@ import {
 } from './images';
 import { OutOfTime, SAVE_FAILURES_MAX, ScanLimit, ScanStalled, runScan, stateJsonForSave, type ScanIO, type ScanState } from './scan';
 import { isActiveJob, isReingestable, isTerminalJob } from './state';
+import {
+  YOUTUBE_INFO_PER_RECONCILE,
+  YOUTUBE_INFO_TOOL_NAME,
+  keptYoutubeInfoInput,
+  youtubeInfoIdOf,
+  youtubeInfoResult,
+  ytInfoCallClaimStmt,
+  ytInfoSentClaimStmt,
+  ytInfoSentKey,
+  ytInfoSentOver,
+  type OEmbedPort,
+  type OEmbedResult,
+} from './youtube-oembed';
 
 export { OutOfTime } from './scan';
 
@@ -111,10 +124,10 @@ const err = (status: number, error: string, message?: string): ApiResult => ({ s
 export const DENY_MESSAGE = '無人運用のためこの操作は許可できません。別の方法で進めてください。';
 /** §M-5: 職人定義に無い custom tool への custom_tool_result の本文（generate_image は §O の画像生成で扱う） */
 export const CUSTOM_TOOL_UNAVAILABLE_MESSAGE = '画像生成はまだ使えません。図は SVG で描いてください。';
-/** 職人（factory/claude/agents/material-maker.md）が定義する custom tool の名前（§O-2 = 旧 §M-2-2 b） */
+/** 職人（factory/claude/agents/material-maker.md）が定義する custom tool の名前（§O-2 = 旧 §M-2-2 b・§Q-13 5 の youtube_info） */
 // 文字列で持つ（images.ts からの import は index → cron → images → jobs の循環で初期化前に評価され undefined になる）
-export const MAKER_CUSTOM_TOOLS: readonly string[] = ['generate_image'];
-/** §M-5: この custom tool 呼び出しは is_error の結果で返すか（generate_image 以外の custom tool は従来どおり is_error） */
+export const MAKER_CUSTOM_TOOLS: readonly string[] = ['generate_image', 'youtube_info'];
+/** §M-5: この custom tool 呼び出しは is_error の結果で返すか（generate_image・youtube_info 以外の custom tool は従来どおり is_error） */
 export const rejectsCustomTool = (name: string): boolean => !MAKER_CUSTOM_TOOLS.includes(name);
 /**
  * §M-5b: requires_action の event_ids のうち、events を最後のページまで辿っても種別が分からないものには何も送らない
@@ -877,12 +890,20 @@ interface ReconcileState {
   placed_clean?: boolean;
   /** ingested: events（古い順）の途中経過。本文は持たず、出典照合の集計と採点結果だけ */
   ev?: { cursor: string | null; acc: CitationAcc; grader: { result: string; explanation: string } | null; complete: boolean };
+  /**
+   * §Q-13 5・裁定 a: 「この id は youtube_info」という種別の記録（返したかどうかの記録ではない）。送る前に保存する。
+   * 値は毎回 (前の info_event_ids ∩ 今の idle の event_ids) ∪ 今回処理する id（今の待ちの分だけ。件数の上限は置かない）
+   */
+  info_event_ids?: string[];
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** deadline: waitUntil 経由は開始から 25 秒、cron 経由は 10 分。外部呼び出しは min(残り時間, 60 秒)・再試行 0 */
-export async function reconcileJob(env: Env, port: FactoryPort, jobId: string, opts: { deadline: number }): Promise<string> {
+/**
+ * deadline: waitUntil 経由は開始から 25 秒、cron 経由は 10 分。外部呼び出しは min(残り時間, 60 秒)・再試行 0。
+ * opts.oembed: 職人の道具 youtube_info（§Q-13）が使う oEmbed の port。渡されなければ oEmbed を呼ばず unavailable の結果を返す（fail-soft）
+ */
+export async function reconcileJob(env: Env, port: FactoryPort, jobId: string, opts: { deadline: number; oembed?: OEmbedPort }): Promise<string> {
   const db = env.DB;
   const token = crypto.randomUUID();
   const now = nowIso();
@@ -897,7 +918,7 @@ export async function reconcileJob(env: Env, port: FactoryPort, jobId: string, o
     ),
   );
   if (!leased) return 'leased';
-  const r = new Reconciler(env, port, jobId, token, opts.deadline);
+  const r = new Reconciler(env, port, jobId, token, opts.deadline, opts.oembed);
   let result = 'error';
   try {
     result = await r.run();
@@ -942,6 +963,7 @@ class Reconciler {
     private jobId: string,
     private token: string,
     private deadline: number,
+    private oembed?: OEmbedPort,
   ) {
     this.db = env.DB;
   }
@@ -997,6 +1019,9 @@ class Reconciler {
     // 数 = deny_count + 画像の断り・失敗（§O-3 b の imageDenies）
     const overLimit = await this.stopIfTooManyDenies(job, job.deny_count + (await imageDenies(this.db, job.id)));
     if (overLimit !== null) return overLimit;
+    // 0-a'. youtube_info の結果の数が上限を超えた印（値 41。裁定 i）があれば、session の状態に関わらずここで止める
+    // （interrupt・archive の後、failed の保存の前に落ちた形をやり直す。行が無い job = 道具を使っていない job は止まらない）
+    if (ytInfoSentOver(await getSetting(this.db, ytInfoSentKey(job.id)))) return this.tooManyDenies(job, 'too_many_youtube_info');
 
     // 0-b. needs_answer は terminated 判定だけ（fail は読んだ status/phase を述語に含めるので、途中で answer が進んでいれば何もしない）
     if (job.status === 'needs_answer') {
@@ -1126,12 +1151,12 @@ class Reconciler {
     return count > DENY_MAX ? this.tooManyDenies(job) : null;
   }
 
-  /** deny 数が上限を超えた: 止めて片付け、failed にする */
-  private async tooManyDenies(job: JobRow): Promise<string> {
+  /** deny 数が上限を超えた（error = too_many_denies）/ youtube_info の結果の数が上限を超えた（too_many_youtube_info。裁定 b・i）: 止めて片付け、failed にする */
+  private async tooManyDenies(job: JobRow, error: 'too_many_denies' | 'too_many_youtube_info' = 'too_many_denies'): Promise<string> {
     await this.extend();
     await this.port.sendEvents(job.session_id!, [{ type: 'user.interrupt' }], this.call).catch(() => undefined);
     await this.port.archiveSession(job.session_id!, this.call).catch(() => undefined);
-    return this.fail(job, 'too_many_denies');
+    return this.fail(job, error);
   }
 
   private async onIdle(job: JobRow, sessionStatus: string): Promise<string> {
@@ -1158,7 +1183,7 @@ class Reconciler {
       base: { purpose: 'idle', job_status: job.status, job_phase: job.phase, session_status: sessionStatus },
       init: () => ({ idle: null, evalEnd: null, hasOutcome: false, blocked: {}, answered: [] }),
       // answered を持たない古い保存形式の集計は、idle より新しい返答を集めていない。続きから使うと返答を見落として送り直すので捨てる。
-      // generate_image なのに input を持たない項目（§O の前の保存形式）がある集計も捨てる（§O-3 b 1）
+      // generate_image・youtube_info なのに input を持たない項目（§O・§Q-13 の前の保存形式）がある集計も捨てる（§O-3 b 1・§Q-13 5）
       keepSaved: (saved) => {
         const agg = (saved as { agg?: unknown } | null)?.agg;
         if (!(agg && typeof agg === 'object')) return true;
@@ -1166,7 +1191,7 @@ class Reconciler {
         const blocked = (agg as { blocked?: unknown }).blocked;
         if (!blocked || typeof blocked !== 'object') return true;
         return Object.values(blocked as Record<string, Blocked>).every(
-          (b) => !(b && b.type === 'agent.custom_tool_use' && b.name === IMAGE_TOOL_NAME && !('input' in b)),
+          (b) => !(b && b.type === 'agent.custom_tool_use' && (b.name === IMAGE_TOOL_NAME || b.name === YOUTUBE_INFO_TOOL_NAME) && !('input' in b)),
         );
       },
       fetch: (cursor) => this.port.listEventsPage(job.session_id!, { order: 'desc', page: cursor }, this.call),
@@ -1209,7 +1234,9 @@ class Reconciler {
                 e.type === 'agent.custom_tool_use'
                   ? name === IMAGE_TOOL_NAME
                     ? { type: String(e.type), name, input: keptImageInput(e.input) }
-                    : { type: String(e.type), name }
+                    : name === YOUTUBE_INFO_TOOL_NAME
+                      ? { type: String(e.type), name, input: keptYoutubeInfoInput(e.input) } // §Q-13 2: url の先頭 200 文字だけ
+                      : { type: String(e.type), name }
                   : { type: String(e.type ?? '') };
             }
             if (agg.idle.event_ids.every((id) => alreadyDenied.has(id) || blocked[id] || agg.answered?.includes(id))) return true;
@@ -1240,9 +1267,25 @@ class Reconciler {
         const b = seen.blocked?.[id];
         if (b && b.type === 'agent.custom_tool_use' && b.name === IMAGE_TOOL_NAME) imageIds.add(id);
       }
-      const recovered = idleEv.event_ids.filter((id) => !imageIds.has(id) && !denied.has(id) && answered.has(id));
-      const pending = idleEv.event_ids.filter((id) => !imageIds.has(id) && !denied.has(id) && !answered.has(id));
-      const imagePending = idleEv.event_ids.filter((id) => imageIds.has(id) && !denied.has(id) && !answered.has(id));
+      // §Q-13 5・裁定 d: info の id（state の info_event_ids にある ∪ 走査で youtube_info と分かった）は、どの場合も recovered にも pending の deny にも入れない。
+      // answered にある info の id は何もしない。走査が answered を先に見て元の tool_use を読まずに終わっても、送る前に保存した state で分かる
+      const prevInfo = Array.isArray(this.state.info_event_ids) ? this.state.info_event_ids.filter((x): x is string => typeof x === 'string') : [];
+      const infoIds = new Set(idleEv.event_ids.filter((id) => prevInfo.includes(id)));
+      for (const id of idleEv.event_ids) {
+        const b = seen.blocked?.[id];
+        if (b && b.type === 'agent.custom_tool_use' && b.name === YOUTUBE_INFO_TOOL_NAME) infoIds.add(id);
+      }
+      const recovered = idleEv.event_ids.filter((id) => !infoIds.has(id) && !imageIds.has(id) && !denied.has(id) && answered.has(id));
+      const pending = idleEv.event_ids.filter((id) => !infoIds.has(id) && !imageIds.has(id) && !denied.has(id) && !answered.has(id));
+      const imagePending = idleEv.event_ids.filter((id) => !infoIds.has(id) && imageIds.has(id) && !denied.has(id) && !answered.has(id));
+      // 処理するのは blocked[id]（youtube_info の input つき）がある id だけ。種別だけ分かり入力が無い id には何も送らず §M-5b の数え方（裁定 d）
+      const infoPending = idleEv.event_ids.filter((id) => infoIds.has(id) && !denied.has(id) && !answered.has(id));
+      const infoReady = (id: string) => {
+        const b = seen.blocked?.[id];
+        return !!b && b.type === 'agent.custom_tool_use' && b.name === YOUTUBE_INFO_TOOL_NAME && 'input' in b;
+      };
+      const infoTodo = infoPending.filter(infoReady);
+      const infoUnresolved = infoPending.length - infoTodo.length;
       // 送るものがあってもなくても（§M-5b の早期 return より前に）先に保存し、上限も判定する（入口の判定は保存済みの件数だけを見る）
       let count = job.deny_count;
       if (recovered.length > 0) {
@@ -1253,19 +1296,31 @@ class Reconciler {
         const over = await this.stopIfTooManyDenies(job, count + (await imageDenies(this.db, job.id)));
         if (over !== null) return over;
       }
+      // §Q-13 5: youtube_info を先に処理する（最大 4 件。残りは次の reconcile）。結果の数の上限を超えたら何も送らずに止める（裁定 b・i）
+      let infoSent = 0;
+      const infoRest = Math.max(0, infoTodo.length - YOUTUBE_INFO_PER_RECONCILE);
+      if (infoTodo.length > 0) {
+        const r = await this.advanceYoutubeInfo(job, infoTodo.slice(0, YOUTUBE_INFO_PER_RECONCILE), seen.blocked ?? {}, idleEv.event_ids, prevInfo);
+        if (typeof r === 'string') return r;
+        infoSent = r.sent;
+      }
       // §O-3 b 3: 画像の依頼（無ければ登録 → queued なら queue へ / 終端なら 1 件ずつ返す / queued・dispatched なら待つ）
       const img = imagePending.length > 0 ? await this.advanceImages(job, imagePending, seen.blocked ?? {}) : { sent: 0, waiting: 0 };
-      if (pending.length === 0) {
+      if (pending.length === 0 && infoUnresolved === 0) {
         await this.clearBlockedWait(job);
         if (img.sent > 0) return `image_results:${img.sent}`;
         // §O-3 b 5: 送るものが無く、待っている generate_image だけ（§M-5b の「種別が分からない待ち」には数えない）
         if (img.waiting > 0) return `awaiting_image:${img.waiting}`;
+        // §Q-13 5: 画像のものを優先し、その次に youtube_info
+        if (infoSent > 0) return `youtube_info:${infoSent}`;
+        if (infoRest > 0) return `youtube_info_pending:${infoRest}`;
         return recovered.length > 0 ? `already_answered:${recovered.length}` : 'already_denied';
       }
       // §M-5b: 最後のページまで辿っても種別の分からない id には何も送らず、deny にも数えない（誤った種別の応答は API が 400 で拒み、回復を塞ぐ）。
-      // 次の reconcile で先頭から探し直す（scan.idle を捨てる）。同じ idle event について 5 分以上の間隔でだけ数え、3 回で failed
+      // 次の reconcile で先頭から探し直す（scan.idle を捨てる）。同じ idle event について 5 分以上の間隔でだけ数え、3 回で failed。
+      // 裁定 d: youtube_info と分かるが入力の無い id（走査が元の tool_use に届かなかった）も同じに数える
       const ids = pending.filter((id) => seen.blocked?.[id]);
-      const unresolved = pending.length - ids.length;
+      const unresolved = pending.length - ids.length + infoUnresolved;
       if (unresolved > 0) {
         const now = Date.now();
         const idleId = idleEv.id ?? null;
@@ -1416,6 +1471,50 @@ class Reconciler {
       } else waiting++;
     }
     return { sent, waiting };
+  }
+
+  /**
+   * §Q-13 5・裁定 a〜c・i: requires_action の youtube_info（answered にも denied にも無く、blocked[id] に入力がある id。最大 4 件）を処理する。
+   * id 1 件ごとに: 結果の数の 1 文（値が 40 を超えたら何も送らず止める）→ 入力の検査（無効ならその結果）→ oEmbed の GET の 1 文（取れなければ上限の結果）
+   * → extend → oEmbed（reconcile の締め切りを渡す）→ 結果。全件の後に info_event_ids を保存 → extend → 1 回の sendEvents。
+   * 止めた時は結果（failed:too_many_youtube_info 等）の文字列を返す。時間切れ（OutOfTime）は送らずに抜ける（数は使ったまま）
+   */
+  private async advanceYoutubeInfo(
+    job: JobRow,
+    ids: string[],
+    blocked: Record<string, { type: string; name?: string; input?: unknown }>,
+    idleEventIds: string[],
+    prevInfo: string[],
+  ): Promise<{ sent: number } | string> {
+    const events: BetaManagedAgentsEventParams[] = [];
+    for (const id of ids) {
+      await cas(this.db, ytInfoSentClaimStmt(job.id, nowIso()));
+      if (ytInfoSentOver(await getSetting(this.db, ytInfoSentKey(job.id)))) return this.tooManyDenies(job, 'too_many_youtube_info');
+      const youtubeId = youtubeInfoIdOf(blocked[id]?.input);
+      let r: OEmbedResult | { outcome: 'invalid_url' | 'limit_reached' };
+      if (youtubeId === null) r = { outcome: 'invalid_url' }; // 数（oEmbed の GET）を使わない
+      else if (!this.oembed) r = { outcome: 'unavailable' }; // port が届いていない呼び出し元（fail-soft。GET しないので数も使わない）
+      else if (!(await cas(this.db, ytInfoCallClaimStmt(job.id, nowIso())))) r = { outcome: 'limit_reached' };
+      else {
+        await this.extend();
+        r = await this.oembed.lookup(youtubeId, { deadline: this.deadline }).catch((): OEmbedResult => ({ outcome: 'unavailable' }));
+      }
+      const res = youtubeInfoResult(r);
+      events.push({
+        type: 'user.custom_tool_result',
+        custom_tool_use_id: id,
+        content: [{ type: 'text', text: res.text }],
+        is_error: res.is_error,
+      } as BetaManagedAgentsEventParams);
+      console.log(JSON.stringify({ at: 'youtube_info', job_id: job.id, outcome: r.outcome }));
+    }
+    // 送る前に種別を保存する（裁定 a: 今の待ちの分だけ。writeState でメモリの state と揃える）
+    const keep = prevInfo.filter((x) => idleEventIds.includes(x));
+    const info_event_ids = [...keep, ...ids.filter((x) => !keep.includes(x))];
+    await this.writeState(job, null, { ...this.state, info_event_ids });
+    await this.extend();
+    await this.port.sendEvents(job.session_id!, events, this.call);
+    return { sent: events.length };
   }
 
   /** §M-5b の待ちの状態があれば消す（無ければ書かない） */

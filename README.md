@@ -4,6 +4,7 @@
 
 - **`app-v3/`** — 子ども向け画面のモック（「話す」+ 右パネル「今日の予定」）。ビルド無し、`app-v3/index.html` を `file://` で開くと動きます
 - **`CONTRACT-v3.md`** — モックの実装契約（文言・状態機械・禁止語・検証コマンド）
+- **`docs/plans/supporter-view/contract-AD.md`** — サポーターの画面（教室の一覧・個別画面・「一緒に入る」・足場かけの記録・保護者レポートの下書き）の契約。画面右上の役タブ「サポーター」か `app-v3/index.html#sup` で開きます
 - **`BRIEF-v3.md`** — モック v3 の制作ブリーフ
 - **`docs/content-factory-design.md`** — コンテンツファクトリー（Claude Managed Agents × Cloudflare Workers）の設計書
 - **`docs/handoff-for-codex-basic-learning.md`** — 基礎学習教材（別企画）向けの引き継ぎ資料

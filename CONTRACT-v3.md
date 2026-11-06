@@ -717,3 +717,13 @@ design-v3 の裁定「画面に『版』の語を出さない。時刻で指す�
 ## AG. 作品展示（`#gallery` / `#gallery/<itemId>`）（2026-11-06 凍結）
 
 正本: `docs/plans/topics-variety/contract-app.md` §AG。§W-4 の「見せる」は変えない。
+
+## AH. サポーターの画面と「一緒に入る」（`#sup` / `#sup/haruto[/<tab>]`）（2026-11-06 凍結）
+
+正本は **`docs/plans/supporter-view/contract-AD.md`**（末尾の AD-18 裁定が AD-1〜17 より優先）。本書の次の所を置き換える:
+
+- §B「role-tabs は 子ども だけ active・他 3 つは disabled」→ `子ども` と `サポーター` を押せる（contract-AD AD-4）
+- §K / §S-6 の「サポーター・保護者画面」「サポーター側の観察入力」は範囲外 → サポーターの画面を作る（保護者の画面は作らず、保護者レポートの下書きまで。AD-11 / AD-17）
+- §G の会話の `who` に `supporter` を足す。会話・予定の行・活動・作品に出所の印（`by` / `idea`）、変化に `day` を足す（AD-2 / AD-18-1）
+- §Z-7 の絞り込みに「自分で」を足す（AD-10 / AD-18-7）。§Z-1 の「新しい履歴ストアを作らない」は あしあと の話で、足場かけの記録は `des3.sup` に持つ（AD-2）
+- 検証: `node tools/sup-test.js`（SUP_TEST=PASS）と、`tools/check.sh` に `sup sup/haruto sup/haruto/clues sup/haruto/advice sup/haruto/log sup/haruto/report sup/haruto/in` を足す（AD-16 / AD-18-11）
