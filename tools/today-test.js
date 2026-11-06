@@ -543,6 +543,141 @@ t('裁定 8 フォーカス: 考えの保存の失敗の後 / 古い考えを外
   ok(p.indexOf('DES.app.render()') < 0 && /putOdai\(next, \{[^}]*ok:/.test(p), '裁定 8 置くの保存の失敗の後は描き直しを 1 回（フォーカスを消さない）');
 });
 
+// ======================================================================
+// §AF-9 工場のお題を出す（tools/pull-topics.mjs → app-v3/js/topics-live.js → today-data.js の取り込み）
+// ======================================================================
+var cp = require('child_process'), os = require('os'), vm = require('vm');
+var PULL = path.join(__dirname, 'pull-topics.mjs'), FIX = path.join(__dirname, 'fixtures/topics-live-sample.json');
+var TMPD = fs.mkdtempSync(path.join(os.tmpdir(), 'des-pull-'));
+function runPull(args) {
+  var r = cp.spawnSync(process.execPath, [PULL].concat(args), { encoding: 'utf8', timeout: 20000 });
+  var lines = String(r.stdout || '').split('\n'), last = lines.filter(function (l) { return /^PULL_TOPICS /.test(l); }).pop() || '';
+  return { rc: r.status, line: last, out: String(r.stdout || '') + String(r.stderr || '') };
+}
+function tokyoToday() { return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); }
+// ブラウザと同じ順（topics-live.js → make-data.js → today-data.js → today.js）で 1 つの別の global に読む
+function loadApp(liveSrc) {
+  var ctx = vm.createContext({ console: console });
+  ctx.window = ctx;
+  if (liveSrc != null) vm.runInContext(liveSrc, ctx, { filename: 'topics-live.js' });
+  ['make-data.js', 'today-data.js', 'today.js'].forEach(function (f) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../app-v3/js', f), 'utf8'), ctx, { filename: f });
+  });
+  return ctx.DES;
+}
+var LIVE_OUT = path.join(TMPD, 'topics-live.js'), LIVE_IDS = ['fx-tp_fixture-news-new_1', 'fx-tp_fixture-talk-ok-1', 'fx-tp_fixture-philo-ok_1'];
+t('AF-9 pull-topics --from-file: 件数の 1 行・書き出したファイルの中身', function () {
+  var r = runPull(['--from-file', FIX, '--out', LIVE_OUT]);
+  eq([r.rc, r.line], [0, 'PULL_TOPICS http=0 ok=3 topics=8 kept=3 dropped=4 make_skipped=1 wrote=yes'], 'AF-9 件数の 1 行（壊れた応答 1 つ・make 1 本・捨てる 4 本）');
+  ok(/drop asks=1/.test(r.out) && /drop url=1/.test(r.out) && /drop missing=1/.test(r.out) && /drop dup_lineage=1/.test(r.out), 'AF-9 捨てた理由コードと件数');
+  ok(!/見出し|リード|事実|example\.org/.test(r.out), 'AF-9 標準出力にお題の本文を出さない');
+  var src = fs.readFileSync(LIVE_OUT, 'utf8');
+  ok(src.indexOf('/* 工場のお題（tools/pull-topics.mjs が書き出す。手で直さない） */\nwindow.DES = window.DES || {};\nwindow.DES.topicsLive = {') === 0, 'AF-9 ファイルの頭 3 行');
+  ok(src.indexOf('<') < 0, 'AF-9 < を \\u003c にする（script の閉じタグを出さない）');
+  ok(src.indexOf('\\u003c/script>') > 0, 'AF-9 本文の </script> は \\u003c/script> で残る');
+  ok(!new RegExp('[\\u2028\\u2029]').test(src) && src.indexOf('\\u2028') > 0, 'AF-9 U+2028 / U+2029 は \\u エスケープ');
+  ok(fs.readdirSync(TMPD).every(function (f) { return f.indexOf('.tmp-') < 0; }), 'AF-9 一時ファイルを残さない（rename）');
+  var D = loadApp(src), L = D.topicsLive;
+  ok(typeof L.pulledAt === 'string' && !isNaN(Date.parse(L.pulledAt)) && L.base === 'from-file', 'AF-9 pulledAt / base');
+  eq(L.topics.map(function (x) { return x.id; }), LIVE_IDS, 'AF-9 残ったお題（日付の新しい順・ストックは後ろ・id の記号は - に）');
+  var nw = L.topics[0], tk = L.topics[1], ph = L.topics[2], today = tokyoToday();
+  eq([nw.kind, nw.date, nw.heavy, nw.source, nw.art, nw.reason], ['news', ['11 月 4 日', '11 月 4 日'], true, 'factory', null, null], 'AF-9 変換: kind / date（event_day）/ heavy（needs_supporter）/ source / art / reason');
+  eq([nw.title[0].indexOf('</script>') > 0, nw.title[1], nw.facts.map(function (f) { return f.src; })], [true, 'あたらしい見出し（小）', ['s1', ['s1', 's2']]], 'AF-9 変換: [中, 小] と src（1 つは文字列・2 つ以上は配列）');
+  eq(nw.asks.map(function (a) { return a.level; }), ['open', 'check', 'self'], 'AF-9 変換: asks（level と [中, 小]）');
+  eq(nw.sources.map(function (s) { return [s.id, s.url, s.checked]; }), [['s1', 'https://example.org/news-1', today], ['s2', 'https://example.org/news-2', today]], 'AF-9 変換: sources の checked は取り込んだ日');
+  eq(nw.next.makeSteps.length, 4, 'AF-9 変換: next.makeSteps');
+  eq([tk.date, tk.facts, tk.views.map(function (v) { return [v.who, v.src]; }), tk.sources], [null, [{ text: ['前提の 1 文（中）', 'ぜんていの 1 文（小）'], src: null }], [[['A という考え', 'A という考え'], null], [['B という考え', 'B という考え'], null]], []], 'AF-9 変換: premises は出典なしの前提・who は [name, name]・src 0 は null');
+  eq(ph.facts.map(function (f) { return [f.text[0], f.src]; }), [['前提（中）', null], ['事実（中）', 's2']], 'AF-9 変換: premises は facts の前');
+  eq([ph.stances.map(function (s) { return s.id; }), Object.keys(ph.next)], [['st1', 'st2', 'st3'], ['talk', 'makeTitle', 'makeSteps']], 'AF-9 変換: stances / next の形');
+});
+t('AF-9 pull-topics: --dry-run は書かない・全部失敗したら書かずに終了コード 1（前のファイルを壊さない）', function () {
+  var dry = path.join(TMPD, 'dry.js'), r = runPull(['--from-file', FIX, '--out', dry, '--dry-run']);
+  eq([r.rc, /wrote=no$/.test(r.line), fs.existsSync(dry)], [0, true, false], 'AF-9 --dry-run は件数だけ');
+  var empty = path.join(TMPD, 'empty.json'), keep = path.join(TMPD, 'keep.js');
+  fs.writeFileSync(empty, JSON.stringify({ responses: ['x', 3] }));
+  fs.writeFileSync(keep, 'PREVIOUS');
+  var r2 = runPull(['--from-file', empty, '--out', keep]);
+  eq([r2.rc, r2.line, fs.readFileSync(keep, 'utf8')], [1, 'PULL_TOPICS http=0 ok=0 topics=0 kept=0 dropped=0 make_skipped=0 wrote=no', 'PREVIOUS'], 'AF-9 全部失敗 → rc 1・書かない');
+  eq(runPull(['--nope']).rc, 2, 'AF-9 知らない引数は終了コード 2');
+});
+t('AF-9 工場のお題がある時: 同じ kind の先頭に来る / 既存の対話のお題はそのまま', function () {
+  var D = loadApp(fs.readFileSync(LIVE_OUT, 'utf8')), K = D.todayData, TDx = D.today;
+  eq(K.live.map(function (x) { return x.id; }), LIVE_IDS, 'AF-9 取り込んだお題');
+  eq(K.dialogs.length, 12, 'AF-9 対話のお題 = 工場 3 + 既存 9');
+  eq([K.kindPool('news'), K.kindPool('talk')[0], K.kindPool('philo')[0]], [['fx-tp_fixture-news-new_1', 'od-news-mmx', 'od-news-bosai', 'od-news-election'], 'fx-tp_fixture-talk-ok-1', 'fx-tp_fixture-philo-ok_1'], 'AF-9 工場のお題が同じ kind の先頭');
+  eq(TDx.initial().dslots, { news: LIVE_IDS[0], talk: LIVE_IDS[1], philo: LIVE_IDS[2] }, 'AF-9 初めの一覧に工場のお題が出る');
+  var w = TDx.swapKind(TDx.initial(), 'news');
+  eq([w.dslots.news, TDx.swapKind(TDx.swapKind(TDx.swapKind(w, 'news'), 'news'), 'news').dslots.news], ['od-news-mmx', LIVE_IDS[0]], 'AF-9 別のお題を見る: 工場 → 既存 → 一巡で工場へ');
+  eq(K.getDialog('od-philo-ai').source, 'buddy', 'AF-9 既存のお題の出所は buddy のまま');
+  var f = K.getDialog(LIVE_IDS[0]);
+  ok(f.source === 'factory' && f.reason === null && f.art === null, 'AF-9 工場のお題の出所・reason・art');
+  ok(twoColor(K.cardArt(f)) && /^<svg class="mk-art/.test(K.cardArt(f)), 'AF-9 art null のお題は既定の 2 色線画');
+  ok(K.cardArt(f) === K.drawArt('dk_news', {}) && K.cardArt(K.getDialog(LIVE_IDS[1])) === K.drawArt('dk_talk', {}) && K.cardArt(K.getDialog(LIVE_IDS[2])) === K.drawArt('dk_philo', {}), 'AF-9 既定の絵は kind ごと');
+  ok(K.cardArt(K.getDialog('od-news-mmx')) === TDD.cardArt(TDD.getDialog('od-news-mmx')), 'AF-9 既存のお題の絵は変わらない');
+  // 工場のお題でも純関数が動く（reason null で例外が出ない）
+  var st = TDx.putMark(TDx.pickAsk(TDx.markOpen(TDx.initial(), f.id, 'facts'), f.id, 'self'), f.id, { stance: 'st2', line: 'x', time: 't' });
+  eq([st.think[f.id].ask, st.think[f.id].marks.length, TDx.normalize(JSON.parse(JSON.stringify(st))).think[f.id].marks.length], ['self', 1, 1], 'AF-9 工場のお題で 問い・あしあと・読み込み直し');
+  var mk = K.makeOdaiOf(f);
+  eq([mk.title, mk.makeSteps.length], [f.next.makeTitle, 4], 'AF-9 工場のお題の「作ってみる」の形');
+  // 空の topics-live.js（初期のファイル）と、ファイルが無い時は既存の 9 本だけ
+  eq(loadApp(fs.readFileSync(path.join(__dirname, '../app-v3/js/topics-live.js'), 'utf8').replace(/"topics":\[[\s\S]*\]\}/, '"topics":[]}')).todayData.dialogs.length, 9, 'AF-9 topics が空なら既存の 9 本');
+  eq(loadApp(null).todayData.dialogs.length, 9, 'AF-9 topics-live.js が無くても既存の 9 本');
+});
+t('AF-9 壊れたお題は捨てられて落ちない / 重なる id は捨てる', function () {
+  var good = loadApp(fs.readFileSync(LIVE_OUT, 'utf8')).topicsLive.topics[2];
+  function mut(fn) { var x = JSON.parse(JSON.stringify(good)); fn(x); return x; }
+  var bads = {
+    asks2: mut(function (x) { x.asks.pop(); }),
+    asksLevel: mut(function (x) { x.asks[0].level = 'self'; }),
+    http: mut(function (x) { x.sources[0].url = 'http://example.org/x'; }),
+    js: mut(function (x) { x.sources[0].url = 'javascript:alert(1)'; }),
+    noTitle: mut(function (x) { delete x.title; }),
+    emptyText: mut(function (x) { x.lead[1] = '  '; }),
+    noFacts: mut(function (x) { x.facts = []; }),
+    noNext: mut(function (x) { x.next = null; }),
+    steps2: mut(function (x) { x.next.makeSteps = x.next.makeSteps.slice(0, 2); }),
+    stanceNone: mut(function (x) { x.stances[0].id = 'none'; }),
+    stances1: mut(function (x) { x.stances = x.stances.slice(0, 1); }),
+    srcRef: mut(function (x) { x.facts[1].src = 's9'; }),
+    badId: mut(function (x) { x.id = 'fx-<b>'; }),
+    kindMake: mut(function (x) { x.kind = 'make'; }),
+    newsNoDate: mut(function (x) { x.kind = 'news'; x.date = null; })
+  };
+  Object.keys(bads).forEach(function (k) { eq(TDD.importLive([bads[k]], TDD.dialogs).length, 0, 'AF-9 壊れたお題は捨てる: ' + k); });
+  eq(TDD.importLive([null, 3, 'x', {}, [], { id: 'fx-a' }], TDD.dialogs), [], 'AF-9 形の違う値で落ちない');
+  eq([TDD.importLive('x', []), TDD.importLive(undefined, [])], [[], []], 'AF-9 一覧が配列でなければ空');
+  eq(TDD.importLive([mut(function (x) { x.id = 'od-news-mmx'; x.kind = 'news'; x.date = ['1 月 1 日', '1 月 1 日']; })], TDD.dialogs), [], 'AF-9 DIALOGS と重なる id は捨てる');
+  var two = TDD.importLive([good, mut(function (x) { x.title = ['別', '別']; })], TDD.dialogs);
+  eq([two.length, two[0].title], [1, good.title], 'AF-9 同じ id の 2 本目は捨てる');
+  var ex = TDD.importLive([mut(function (x) { x.source = 'buddy'; x.extra = '<b>'; x.art = 'nope'; x.reason = null; })], TDD.dialogs)[0];
+  eq([ex.source, 'extra' in ex, ex.art, ex.reason], ['factory', false, null, null], 'AF-9 出所は factory に固定・知らない項目と絵は写さない・reason null のまま');
+  // 混ぜても、良いお題だけ残り、既存の 9 本は変わらない
+  var D = loadApp('window.DES = window.DES || {}; window.DES.topicsLive = ' + JSON.stringify({ topics: [bads.asks2, good, bads.http, bads.noTitle] }) + ';');
+  eq([D.todayData.live.map(function (x) { return x.id; }), D.todayData.dialogs.length], [[good.id], 10], 'AF-9 壊れたお題を混ぜても良いものだけ（落ちない）');
+  var Dbad = loadApp('window.DES = window.DES || {}; window.DES.topicsLive = { topics: 5 };');
+  eq(Dbad.todayData.dialogs.length, 9, 'AF-9 topics が配列でなくても落ちない');
+});
+t('AF-9 保存にもう無い id が残っていても落ちない（工場のお題が入れ替わった後）', function () {
+  var raw = { slots: s0.slots, kept: ['fx-gone', SEED], tried: {}, rot: { near: 0, next: 0, new: 0 },
+    dslots: { news: 'fx-gone', talk: 'od-talk-rule', philo: 'od-philo-ai' }, drot: { news: 3, talk: 0, philo: 0 },
+    think: { 'fx-gone': { opened: { facts: true }, ask: 'self', marks: [] } }, circle: [{ id: 'fx-gone', ask: null, time: 't' }] };
+  var n = TD.normalize(raw);
+  eq([n.dslots, n.kept, n.think, n.circle, n.drot.news], [TD.initial().dslots, [SEED], {}, [], 0], 'AF-9 もう無い id は捨てる（dslots は初期値・drot はプールの長さで折り返す）');
+});
+t('AF-9 画面: reason が無い時は「なぜ出したか」を出さない / 出所の印 / https だけリンク', function () {
+  var w = TDSRC.slice(TDSRC.indexOf('function whyEl('), TDSRC.indexOf('function whyEl(') + 300);
+  ok(/return o\.reason \? H\(/.test(w) && /: null; \}/.test(w), 'AF-9 whyEl は reason が無ければ null（空の行を出さない）');
+  var dm = TDSRC.slice(TDSRC.indexOf('function dmarksEl('), TDSRC.indexOf('function dcard('));
+  ok(/o\.source === 'factory'/.test(dm) && /td_src_factory/.test(dm), 'AF-9 工場のお題は「工場で作って確かめたお題」');
+  var se = TDSRC.slice(TDSRC.indexOf('function srcEl('), TDSRC.indexOf('function fmtChecked('));
+  ok(/\^https:\\\/\\\//.test(se) && /td-src-name/.test(se) && /rel: 'noopener noreferrer'/.test(se), 'AF-9 出典は https:// だけリンク（それ以外は名前だけ）');
+  var I = fs.readFileSync(path.join(__dirname, '../app-v3/js/i18n.js'), 'utf8');
+  ok(I.indexOf("td_src_factory: ['工場で作って確かめたお題', 'こうじょうでつくって、たしかめたお題']") > 0, 'AF-9 i18n の [中, 小]');
+  var html = fs.readFileSync(path.join(__dirname, '../app-v3/index.html'), 'utf8');
+  ok(html.indexOf('<script src="js/topics-live.js"></script>') > 0 && html.indexOf('js/topics-live.js') < html.indexOf('js/today-data.js'), 'AF-9 index.html で today-data.js の前に読む');
+});
+try { fs.rmSync(TMPD, { recursive: true, force: true }); } catch (e) { /* 一時ディレクトリ */ }
+
 console.log('today-test: ' + pass + ' passed, ' + fail + ' failed');
 console.log('TODAY_TEST=' + (fail === 0 ? 'PASS' : 'FAIL'));
 process.exitCode = fail === 0 ? 0 : 1;

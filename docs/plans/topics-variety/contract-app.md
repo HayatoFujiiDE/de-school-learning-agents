@@ -409,6 +409,34 @@ circle: [{ id, ask: level|null, time }]
 
 一覧に 2 段（話す・考える 3 枚 / 作る・ためす 3 枚）→ 別のお題を見る（その 1 枚だけ替わる・リロードで残る）→ とっておく → 考えてみる → 詳細（重いお題は印と 1 文）→ 前提を読む（出典のリンク）→ いろいろな考えを見る → 問いを選ぶ → 自分の考えを置く（あしあとに 1 件）→ 立場を変えてもう一度置く（2 件・新しいものが上）→ 外す・元に戻す → バディと話す（話す画面の下書きに入っている）→ 戻ってサークル対話に持っていく（一覧の下段に出る・外す）→ 作ってみる（作業台・2 回目は同じ活動）→ 中・小の切替で問いの文が変わり、状態は残る → 既存の作る・ためすのお題の 4 入口が前と同じに動く。
 
+### AF-9 工場のお題を出す
+
+工場（`factory/`）の公開の読み口のお題を、取り込みスクリプトが JS ファイルに書き出し、アプリはそれを `<script src>` で読む。アプリは通信しない（冒頭の共通の約束はそのまま）。
+
+**1. `tools/pull-topics.mjs`**（node 単体・依存なし）
+
+- 読む: Asia/Tokyo の今日から 6 日前までの 7 日分の `GET /api/library/topics?day=YYYY-MM-DD` + `GET /api/library/topics/stock?kind=news|talk|philo&limit=20`。`--base <url>` で読み口の根を差し替える（既定 `https://de-school-factory.h-fujii.workers.dev`）。`--dry-run` は書かずに件数だけ。`--from-file <path>` は通信せず `{responses: [<応答の JSON>, ...]}` から作る（テスト用）。`--out <path>` は書き出す先（既定 `app-v3/js/topics-live.js`）。
+- 1 回の実行で HTTP は最大 10 回・各 15 秒で打ち切り・再試行しない。200 以外・JSON でない応答はその応答だけ捨てて続ける。全部の応答が失敗したら書かずに終了コード 1（前のファイルを壊さない）。
+- 変換（工場の `body` → AF-3 の形）。`kind` が news / talk / philo のものだけ（make は捨てて件数だけ数える）:
+  - `id` = `'fx-' + topic_id`（`[A-Za-z0-9_-]` 以外は `-`）。同じ `lineage_id` は 1 本だけ（日付の新しい方、同じなら先に来た方。ストックは日付つきより古い扱い）。
+  - `kind` / `heavy: needs_supporter === true` / `source: 'factory'` / `art: null` / `reason: null`。`date`: news は `event_day` から `['M 月 D 日', 'M 月 D 日']`、ほかは `null`。`title` / `lead` = `[s, e]`（s = 中、e = 小）。
+  - `facts`: `premises` を先に `{ text, src: null }`、続けて `facts` を `{ text, src }`。`src` は `source_ids` が 1 つなら文字列・2 つ以上なら配列・0 なら `null`（`views` も同じ）。`views`: `{ who: [name, name], stance, src }`。`asks`: `{ level, text }`。`stances`: `{ id, label }`。`sources`: `{ id, name, url, checked: 取り込んだ日 }`。`next`: `{ talk, makeTitle, makeSteps }`。
+- 検査（変換した後の形。外れたお題は捨て、理由コードと件数だけ出す。本文は出さない）: 必須項目がそろう（`facts` は 1 つ以上）/ 文字列は空でなく 300 字以下 / `asks` はちょうど 3 で level が check・self・open 1 つずつ / `stances` 2〜4（id は重ならず `none` でない）/ `next.makeSteps` 3〜4 / `sources[].url` は `https://` で始まり `new URL()` で読める / `src` が指す id が `sources` にある。
+- 出力 `app-v3/js/topics-live.js` = 頭の 1 行コメント + `window.DES = window.DES || {};` + `window.DES.topicsLive = { pulledAt, base, topics: [...] };`。中身は `JSON.stringify` で作り、`<` と U+2028 / U+2029 を `\u` エスケープにする。書き込みは一時ファイル → rename。
+- 最後に 1 行: `PULL_TOPICS http=<n> ok=<n> topics=<n> kept=<n> dropped=<n> make_skipped=<n> wrote=<yes|no>`。
+
+**2. アプリ側**
+
+- `topics-live.js` は初期の空ファイル（`topics: []`）を置き、`index.html` で `today-data.js` の前に読む（無くても動く）。
+- `today-data.js` は `DES.topicsLive.topics` を軽く検査して（必須項目・`asks` 3・出典の url が `https://`・`src` の参照・`stances` 2〜4・`makeSteps` 3〜4）、外れたもの・`id` が既存のお題と重なるものを黙って捨て、残りを `DIALOGS` の前に足す（`TDD.dialogs` の同じ kind の先頭に来る。`TDD.live` に取り込んだもの）。知っている項目だけを写し、`source` は `'factory'` に固定する。
+- 絵: `art` が null のお題は kind ごとの既定の 2 色線画（`dk_news` 墨 + 橙 / `dk_talk` 墨 + オリーブ / `dk_philo` 墨 + 橙）。
+- 出所の印: `source: 'factory'` は「バディが作ったお題」の位置に「工場で作って確かめたお題」（小「こうじょうでつくって、たしかめたお題」）。
+- 「なぜ出したか」: `reason` が null の時はその行を出さない。「確かめた日」: お題の `sources[0].checked`（工場のお題は取り込んだ日）。
+- 出典は `https://` のものだけ `<a target="_blank" rel="noopener noreferrer">`、それ以外は名前だけ。文字はすべてテキストノードで入れる。
+- 保存（`des3.odai`）にもう無い id が残っていても落ちない（AF-5 の normalize で捨てる）。
+
+**3. 検証**: `node tools/today-test.js`（`TODAY_TEST=PASS`。`--from-file tools/fixtures/topics-live-sample.json` で動かした `PULL_TOPICS` の行と書き出したファイルの中身も見る）/ `node tools/make-test.js`（`MAKE_TEST=PASS`）/ `sh tools/check.sh … today/<工場のお題の id>`（`CHECK_RESULT=PASS`）。
+
 ---
 
 ## §AG 作品展示

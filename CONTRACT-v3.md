@@ -751,6 +751,8 @@ design-v3 の裁定「画面に『版』の語を出さない。時刻で指す�
 
 正本: `docs/plans/topics-variety/contract-app.md` §AF。§X-1 の枚数と §X-3 の本数・名前の条文を置き換える。対話のお題の出典に限り、実在の人・組織を出典つきで書く。
 
+- AF-9 工場のお題を出す: `tools/pull-topics.mjs` が工場の公開の読み口から `app-v3/js/topics-live.js` を書き出し、アプリはそれを読むだけ（通信しない）。工場のお題は同じ種類の先頭に来る。
+
 ## AG. 作品展示（`#gallery` / `#gallery/<itemId>`）（2026-11-06 凍結）
 
 正本: `docs/plans/topics-variety/contract-app.md` §AG。§W-4 の「見せる」は変えない。

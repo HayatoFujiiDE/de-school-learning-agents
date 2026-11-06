@@ -431,7 +431,8 @@
   // ---------- 部品 ----------
   function lineEl(key, pair) { return H('p', { class: 'odai-line' }, [H('span', { class: 'odai-k' }, T(key)), H('span', null, pick(pair))]); }
   // なぜ出したか（琥珀の AI 出所チップ付き 1 行。区分名は出さない）
-  function whyEl(o) { return H('p', { class: 'odai-why' }, [chip('ai', T('who_ai'), T('ai_proposal') + ' ' + T('td_why')), H('span', null, pick(o.reason))]); }
+  // §AF-9: reason が無いお題（工場のお題）はこの行を出さない（空の行・空のチップを出さない）
+  function whyEl(o) { return o.reason ? H('p', { class: 'odai-why' }, [chip('ai', T('who_ai'), T('ai_proposal') + ' ' + T('td_why')), H('span', null, pick(o.reason))]) : null; }
   // 印（あるものだけ）: サポーターと確認 / 出所（外からの依頼 + 締切、それ以外は バディが作ったお題）
   function marksEl(o) {
     var out = [];
@@ -471,11 +472,12 @@
     return H('p', { class: 'odai-kind' }, [H('span', { class: 'chip k-kind k-' + o.kind }, T('td_kind_' + o.kind)),
       o.date ? H('span', { class: 'odai-date' }, T('td_news_date', { date: pick(o.date) })) : null]);
   }
-  // 印: サポーターと読む（heavy の時）+ 出所（バディが作ったお題）
+  // 印: サポーターと読む（heavy の時）+ 出所（バディが作ったお題 / §AF-9 工場で作って確かめたお題）
   function dmarksEl(o) {
     var out = [];
     if (o.heavy) out.push(H('span', { class: 'chip k-safety' }, T('td_heavy')));
-    out.push(chip('ai', T('td_src_buddy'), T('ai_proposal') + ' ' + T('td_src_buddy')));
+    if (o.source === 'factory') out.push(chip('ai', T('td_src_factory')));
+    else out.push(chip('ai', T('td_src_buddy'), T('ai_proposal') + ' ' + T('td_src_buddy')));
     return H('div', { class: 'odai-marks' }, out);
   }
   function dcard(o, kind, fresh) {
@@ -678,26 +680,27 @@
       }))
     ]);
   }
-  // 出典の名前（リンク）。href はデータ内の定数の URL だけ
+  // 出典の名前（リンク）。href はお題の出典の URL で、https:// のものだけリンクにする（それ以外は名前だけ。§AF-9）
   function srcEl(o, s) {
     var links = [];
     TDD.srcIds(s).forEach(function (sid) {
       var x = TDD.sourceOf(o, sid);
       if (!x) return;
       if (links.length) links.push('・');
-      links.push(H('a', { class: 'td-src-link', href: x.url, target: '_blank', rel: 'noopener noreferrer' }, x.name));
+      links.push(/^https:\/\//.test(String(x.url)) ? H('a', { class: 'td-src-link', href: x.url, target: '_blank', rel: 'noopener noreferrer' }, x.name) : H('span', { class: 'td-src-name' }, x.name));
     });
     return links.length ? H('span', { class: 'td-src-of' }, [T('td_src') + ': '].concat(links)) : null;
   }
+  // 確かめた日 = お題の出典の checked（工場のお題は取り込んだ日。§AF-9）。日付の形でなければ出さない
   function fmtChecked(o) {
-    var c = o.sources.length ? String(o.sources[0].checked).split('-') : null;
-    return c ? T('td_checked', { date: T('td_date_full', { y: +c[0], m: +c[1], d: +c[2] }) }) : '';
+    var m = o.sources.length ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(o.sources[0].checked)) : null;
+    return m ? T('td_checked', { date: T('td_date_full', { y: +m[1], m: +m[2], d: +m[3] }) }) : '';
   }
   function factsEl(o) {
-    var hasSrc = o.facts.some(function (f) { return TDD.srcIds(f.src).length > 0; });
+    var hasSrc = o.facts.some(function (f) { return TDD.srcIds(f.src).length > 0; }), ck = hasSrc ? fmtChecked(o) : '';
     return [
       H('ul', { class: 'td-facts' }, o.facts.map(function (f) { return H('li', null, [H('span', null, pick(f.text)), srcEl(o, f.src)]); })),
-      hasSrc ? H('p', { class: 'td-checked' }, fmtChecked(o)) : null
+      ck ? H('p', { class: 'td-checked' }, ck) : null
     ];
   }
   function viewsEl(o) {

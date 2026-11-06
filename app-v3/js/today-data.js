@@ -5,7 +5,8 @@
    文言は [中学生向け, 小学生向け] の組。絵は数値だけから組み立てる 2 色の線画 SVG（1 枚ごとに 墨 + 橙 か 墨 + オリーブ。淡い面は同じ色の透明度）。
    play.result(values) と drawArt(kind, values) は決定論。node からも読める（tools/today-test.js）。
    §AF（contract-app）: 作る・ためすに 3 本（od-ath-winter / od-stop-leaf / od-story-snow。プール 12 本 = fit ごとに 4 本）+ 対話のお題 9 本（TDD.dialogs。
-   news / talk / philo が 3 本ずつ）。対話のお題に限り、実在の人・組織の名前を出典つきで書く。TDD.get は作る・ためすのお題だけ（作るの作業台が読む）。 */
+   news / talk / philo が 3 本ずつ）。対話のお題に限り、実在の人・組織の名前を出典つきで書く。TDD.get は作る・ためすのお題だけ（作るの作業台が読む）。
+   §AF-9: 工場のお題（topics-live.js の DES.topicsLive.topics）を検査して TDD.dialogs の先頭に足す（TDD.live。出所 factory・絵は kind ごとの既定）。 */
 (function (root) {
   'use strict';
   var DES = root.DES = root.DES || {};
@@ -371,6 +372,39 @@
     for (i = 0; i < 3; i++) out += rect(84 + i * 26, 132, 20, 7, WHITE, ' transform="rotate(' + (i - 1) * 8 + ' ' + (94 + i * 26) + ' 135)"');
     return wrap(out);
   };
+  // ---------- §AF-9 工場のお題の既定の絵（art が null のお題。kind ごとに 1 枚・2 色。既存の部品と色だけで描く） ----------
+  // ニュースから（墨 + 橙）: 新聞（見出しの帯・写真の枠・本文の線）
+  ART.dk_news = function () {
+    var out = '', i;
+    out += rect(40, 20, 160, 110, WHITE, ' rx="4"') + line(120, 24, 120, 126, INK, 0.8, so(0.3));
+    out += rect(52, 32, 96, 12, ORANGE, ' rx="2"' + fo(0.35));
+    out += rect(52, 54, 56, 40, WHITE, ' rx="2"') + line(56, 90, 74, 70, INK, 1, so(0.5)) + line(74, 70, 86, 82, INK, 1, so(0.5)) + circle(96, 64, 4, ORANGE, INK, 1, fo(0.5));
+    for (i = 0; i < 4; i++) out += line(128, 60 + i * 10, 188 - (i % 2) * 14, 60 + i * 10, INK, 1.6, so(i === 3 ? 0.35 : 1));
+    for (i = 0; i < 2; i++) out += line(52, 106 + i * 10, 188 - i * 30, 106 + i * 10, INK, 1.6, so(0.5));
+    out += arrow(170, 38, 1, ORANGE);
+    return wrap(out);
+  };
+  // 話し合い（墨 + オリーブ）: 向かい合う 2 つの吹き出し（右はオリーブの淡い面）
+  ART.dk_talk = function () {
+    var out = '';
+    out += '<path d="M22 22 H126 V76 H68 L50 94 V76 H22 Z" fill="' + WHITE + '" stroke="' + INK + '" stroke-width="1.4" stroke-linejoin="round"/>';
+    out += line(36, 40, 110, 40, INK, 2) + line(36, 56, 96, 56, INK, 2, so(0.45));
+    out += '<path d="M114 60 H218 V114 H192 V132 L172 114 H114 Z" fill="' + OLIVE + '"' + fo(0.15) + ' stroke="' + INK + '" stroke-width="1.4" stroke-linejoin="round"/>';
+    out += line(128, 78, 202, 78, OLIVE, 2) + line(128, 94, 184, 94, OLIVE, 2, so(0.6));
+    return wrap(out);
+  };
+  // 答えのない問い（墨 + 橙）: 考えの雲と、その中の問いの印
+  ART.dk_philo = function () {
+    var out = '';
+    out += '<path d="M78 92 Q52 92 54 70 Q50 46 76 44 Q82 22 108 26 Q124 12 146 24 Q172 18 178 42 Q200 50 192 72 Q194 94 168 94 Z" fill="' + WHITE + '" stroke="' + INK + '" stroke-width="1.4" stroke-linejoin="round"/>';
+    out += '<path d="M110 50 Q110 38 122 38 Q134 38 134 50 Q134 58 126 62 Q122 65 122 72" stroke="' + ORANGE + '" stroke-width="4" fill="none" stroke-linecap="round"/>';
+    out += circle(122, 82, 3.2, ORANGE);
+    out += circle(70, 108, 6, WHITE, INK, 1.3) + circle(54, 124, 4, WHITE, INK, 1.2) + circle(42, 136, 2.6, WHITE, INK, 1.1);
+    out += line(150, 128, 214, 128, INK, 1.2, so(0.4)) + line(160, 138, 204, 138, INK, 1.2, so(0.25));
+    return wrap(out);
+  };
+  var KIND_ART = { news: 'dk_news', talk: 'dk_talk', philo: 'dk_philo' };
+  function artOf(o) { return o.art || (o.kind && KIND_ART[o.kind]) || null; }
   TDD.drawArt = function (kind, values) { return ART[kind] ? ART[kind](values || {}) : ''; };
 
   // ---------- スライダーと結果 1 行（決定論。「このモックでの動き」として出す） ----------
@@ -886,9 +920,74 @@
         makeSteps: [['ブロックで船を作る', 'ブロックで船をつくる'], ['1 コマごとに部品を 1 つ取りかえる', '1 コマごとにぶひんを 1 つとりかえる'], ['最初と最後を並べて見る', 'さいしょとさいごをならべて見る']] }
     }
   ];
-  TDD.dialogs = DIALOGS;
-  TDD.getDialog = function (id) { for (var i = 0; i < DIALOGS.length; i++) if (DIALOGS[i].id === id) return DIALOGS[i]; return null; };
-  TDD.kindPool = function (kind) { return DIALOGS.filter(function (t) { return t.kind === kind; }).map(function (t) { return t.id; }); };
+  // ---------- §AF-9 工場のお題（topics-live.js の DES.topicsLive.topics。tools/pull-topics.mjs が書き出す） ----------
+  // 読む前にここでも軽く検査し、外れたものは黙って捨てる（落ちない）。id が DIALOGS（と先に入れた工場のお題）と重なるものも捨てる。
+  // 残ったものは DIALOGS の前に足す（同じ kind の先頭に来る）。中身は知っている項目だけを写し、出所は 'factory' に固定する
+  function lStr(v) { return typeof v === 'string' && /\S/.test(v); }
+  function lPair(p) { return Array.isArray(p) && p.length === 2 && lStr(p[0]) && lStr(p[1]); }
+  function lCopy(p) { return [p[0], p[1]]; }
+  function lObj(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
+  function liveTopic(t) {
+    if (!lObj(t) || typeof t.id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(t.id) || TDD.KINDS.indexOf(t.kind) < 0) return null;
+    if (!lPair(t.title) || !lPair(t.lead) || (t.kind === 'news' ? !lPair(t.date) : t.date != null)) return null;
+    if (!Array.isArray(t.facts) || !t.facts.length || !Array.isArray(t.views) || !Array.isArray(t.asks) || !Array.isArray(t.stances) || !Array.isArray(t.sources) || !lObj(t.next)) return null;
+    var sids = [], bad = false;
+    var sources = t.sources.map(function (s) {
+      // 出典の url は https:// だけ（それ以外のお題は捨てる）・確かめた日は YYYY-MM-DD
+      if (!lObj(s) || !lStr(s.id) || sids.indexOf(s.id) >= 0 || !lStr(s.name) || typeof s.url !== 'string' || !/^https:\/\/[^\s"'<>]+$/.test(s.url) || !/^\d{4}-\d{2}-\d{2}$/.test(s.checked)) { bad = true; return null; }
+      sids.push(s.id);
+      return { id: s.id, name: s.name, url: s.url, checked: s.checked };
+    });
+    if (bad) return null;
+    function ref(src) {
+      var ids = src == null ? [] : (Array.isArray(src) ? src : [src]);
+      if (!ids.every(function (x) { return sids.indexOf(x) >= 0; })) { bad = true; return null; }
+      return src == null ? null : (Array.isArray(src) ? src.slice() : src);
+    }
+    var facts = t.facts.map(function (f) { if (!lObj(f) || !lPair(f.text)) { bad = true; return null; } return { text: lCopy(f.text), src: ref(f.src) }; });
+    var views = t.views.map(function (v) { if (!lObj(v) || !lPair(v.who) || !lPair(v.stance)) { bad = true; return null; } return { who: lCopy(v.who), stance: lCopy(v.stance), src: ref(v.src) }; });
+    // 問いはちょうど 3 つで check・self・open が 1 つずつ
+    var lv = t.asks.map(function (a) { return lObj(a) ? a.level : null; }).sort().join();
+    if (t.asks.length !== 3 || lv !== LEVELS_SORTED || !t.asks.every(function (a) { return lPair(a.text); })) return null;
+    var asks = t.asks.map(function (a) { return { level: a.level, text: lCopy(a.text) }; });
+    var stIds = [];
+    if (t.stances.length < 2 || t.stances.length > 4) return null;
+    var stances = t.stances.map(function (s) {
+      if (!lObj(s) || !lStr(s.id) || s.id === 'none' || stIds.indexOf(s.id) >= 0 || !lPair(s.label)) { bad = true; return null; }
+      stIds.push(s.id);
+      return { id: s.id, label: lCopy(s.label) };
+    });
+    var nx = t.next;
+    if (!lPair(nx.talk) || !lPair(nx.makeTitle) || !Array.isArray(nx.makeSteps) || nx.makeSteps.length < 3 || nx.makeSteps.length > 4 || !nx.makeSteps.every(lPair)) return null;
+    if (bad) return null;
+    return { id: t.id, kind: t.kind, date: t.kind === 'news' ? lCopy(t.date) : null, heavy: t.heavy === true,
+      art: typeof t.art === 'string' && ART[t.art] ? t.art : null, source: 'factory',
+      title: lCopy(t.title), lead: lCopy(t.lead), reason: lPair(t.reason) ? lCopy(t.reason) : null,
+      facts: facts, views: views, asks: asks, stances: stances, sources: sources,
+      next: { talk: lCopy(nx.talk), makeTitle: lCopy(nx.makeTitle), makeSteps: nx.makeSteps.map(lCopy) } };
+  }
+  var LEVELS_SORTED = TDD.LEVELS.slice().sort().join();
+  // list: 工場のお題の配列 / base: 既にあるお題（id が重なるものを捨てる）→ 取り込んだお題の配列（純関数・例外を外へ出さない）
+  TDD.importLive = function (list, base) {
+    var out = [], seen = {};
+    (base || []).forEach(function (d) { if (d && d.id) seen[d.id] = true; });
+    if (!Array.isArray(list)) return out;
+    list.forEach(function (t) {
+      var d = null;
+      try { d = liveTopic(t); } catch (e) { d = null; }
+      if (!d || seen[d.id]) return;
+      seen[d.id] = true;
+      out.push(d);
+    });
+    return out;
+  };
+  var LIVE = [];
+  try { LIVE = TDD.importLive(DES.topicsLive && DES.topicsLive.topics, DIALOGS.concat(TOPICS)); } catch (e) { LIVE = []; }
+  var ALL_DIALOGS = LIVE.concat(DIALOGS);
+  TDD.live = LIVE;
+  TDD.dialogs = ALL_DIALOGS;
+  TDD.getDialog = function (id) { for (var i = 0; i < ALL_DIALOGS.length; i++) if (ALL_DIALOGS[i].id === id) return ALL_DIALOGS[i]; return null; };
+  TDD.kindPool = function (kind) { return ALL_DIALOGS.filter(function (t) { return t.kind === kind; }).map(function (t) { return t.id; }); };
   TDD.kindOf = function (o) { return o && o.kind ? o.kind : 'make'; };
   TDD.srcIds = function (s) { return s == null ? [] : (Array.isArray(s) ? s.slice() : [s]); };
   TDD.sourceOf = function (o, sid) { var l = o && o.sources ? o.sources : []; for (var i = 0; i < l.length; i++) if (l[i].id === sid) return l[i]; return null; };
@@ -902,7 +1001,8 @@
   TDD.defaults = function (odai) { var v = {}; (odai && odai.play ? odai.play.sliders : []).forEach(function (s) { v[s.key] = s.def; }); return v; };
   TDD.valueName = function (slider, v) { return nm(slider, v); };
   // カード・詳細の絵（スライダーの既定値の線画）
-  TDD.cardArt = function (odai) { return odai ? TDD.drawArt(odai.art, TDD.defaults(odai)) : ''; };
+  // art が null のお題（§AF-9 工場のお題）は kind ごとの既定の絵
+  TDD.cardArt = function (odai) { return odai ? TDD.drawArt(artOf(odai), TDD.defaults(odai)) : ''; };
   TDD.photo = function (odai, photoId) {
     var list = odai && odai.find ? odai.find.photos : [];
     for (var i = 0; i < list.length; i++) if (list[i].id === photoId) return list[i];
