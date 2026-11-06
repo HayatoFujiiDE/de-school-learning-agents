@@ -676,6 +676,33 @@ t('AF-9 画面: reason が無い時は「なぜ出したか」を出さない / 
   var html = fs.readFileSync(path.join(__dirname, '../app-v3/index.html'), 'utf8');
   ok(html.indexOf('<script src="js/topics-live.js"></script>') > 0 && html.indexOf('js/topics-live.js') < html.indexOf('js/today-data.js'), 'AF-9 index.html で today-data.js の前に読む');
 });
+t('AF-9 禁止語（check.sh と同じ語）を子どもが読む文に含むお題は捨てる（スクリプトとアプリの両方。理由コード forbidden）', function () {
+  // 語の一覧: スクリプトとアプリで同じ配列・どの語も check.sh の forbidden にある
+  var ms = fs.readFileSync(PULL, 'utf8').match(/export const FORBIDDEN = (\[[^\]]*\]);/);
+  var sw = ms ? JSON.parse(ms[1].replace(/'/g, '"')) : null;
+  eq(sw, TDD.FORBIDDEN, 'AF-9 禁止語の配列はスクリプトとアプリで同じ');
+  var chk = fs.readFileSync(path.join(__dirname, 'check.sh'), 'utf8').match(/grep -oE '([^']+)'/);
+  ok(chk && TDD.FORBIDDEN.length === 6 && TDD.FORBIDDEN.every(function (w) { return chk[1].split('|').indexOf(w) >= 0; }), 'AF-9 禁止語は check.sh の forbidden と同じ語');
+  // アプリ側: 中・小どちらでも、どの文の場所でも捨てる。出典の名前は対象外
+  var good = loadApp(fs.readFileSync(LIVE_OUT, 'utf8')).topicsLive.topics[2];
+  function mut(fn) { var x = JSON.parse(JSON.stringify(good)); fn(x); return x; }
+  var places = {
+    title: function (x) { x.title[0] += '評価'; }, lead: function (x) { x.lead[1] += 'レベル'; }, facts: function (x) { x.facts[1].text[1] += '点数'; },
+    viewsWho: function (x) { x.views[0].who[0] += 'ランキング'; }, viewsStance: function (x) { x.views[1].stance[1] += '順位'; },
+    asks: function (x) { x.asks[2].text[0] += '成績'; }, stances: function (x) { x.stances[0].label[1] += 'レベル'; },
+    nextTalk: function (x) { x.next.talk[0] += '評価'; }, makeTitle: function (x) { x.next.makeTitle[1] += '順位'; }, makeSteps: function (x) { x.next.makeSteps[2][0] += '点数'; }
+  };
+  Object.keys(places).forEach(function (k) { eq(TDD.importLive([mut(places[k])], TDD.dialogs).length, 0, 'AF-9 禁止語入りは捨てる（アプリ）: ' + k); });
+  eq(TDD.importLive([mut(function (x) { x.sources[0].name += '評価'; })], TDD.dialogs).length, 1, 'AF-9 出典の名前は禁止語の対象外');
+  eq(TDD.importLive([good], TDD.dialogs).length, 1, 'AF-9 禁止語の無いお題は残る');
+  // スクリプト側: フィクスチャの話し合いのお題の小の立場に禁止語を入れると forbidden で捨てる
+  var fx = JSON.parse(fs.readFileSync(FIX, 'utf8')), resp = fx.responses[1];
+  resp.topics[1].body.stances[0].label.e += 'レベル';
+  var f2 = path.join(TMPD, 'forbidden.json'), o2 = path.join(TMPD, 'forbidden.js');
+  fs.writeFileSync(f2, JSON.stringify({ responses: [resp] }));
+  var r = runPull(['--from-file', f2, '--out', o2]);
+  eq([r.rc, r.line, /drop forbidden=1/.test(r.out)], [0, 'PULL_TOPICS http=0 ok=1 topics=2 kept=1 dropped=1 make_skipped=0 wrote=yes', true], 'AF-9 禁止語入りは捨てる（スクリプト・理由コード forbidden）');
+});
 try { fs.rmSync(TMPD, { recursive: true, force: true }); } catch (e) { /* 一時ディレクトリ */ }
 
 console.log('today-test: ' + pass + ' passed, ' + fail + ' failed');

@@ -31,6 +31,8 @@ export const STOCK_LIMIT = 20;
 export const KINDS = ['news', 'talk', 'philo'];
 export const LEVELS = ['check', 'self', 'open'];
 export const TEXT_MAX = 300;
+// 禁止語（tools/check.sh の forbidden と同じ語。app-v3/js/today-data.js の TDD.FORBIDDEN と同じ配列。一致は tools/today-test.js が確かめる）
+export const FORBIDDEN = ['点数', 'ランキング', '順位', '評価', '成績', 'レベル'];
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const arr = (v) => (Array.isArray(v) ? v : []);
@@ -132,7 +134,21 @@ export function validateDialog(d) {
   chkPair(d.next.makeTitle);
   if (!Array.isArray(d.next.makeSteps) || d.next.makeSteps.length < 3 || d.next.makeSteps.length > 4) r.add('steps');
   else d.next.makeSteps.forEach(chkPair);
+  // 子どもが読む文（中・小の両方）に禁止語があれば捨てる（tools/check.sh の禁止語と同じ。§AF-9）
+  if (kidTexts(d).some((s) => typeof s === 'string' && FORBIDDEN.some((w) => s.includes(w)))) r.add('forbidden');
   return [...r];
+}
+/** 子どもが読む文: title / lead / facts / views / asks / stances / next の中・小（出典の名前・url は含めない） */
+export function kidTexts(d) {
+  const out = [];
+  const add = (p) => { if (Array.isArray(p)) out.push(p[0], p[1]); };
+  add(d.title); add(d.lead);
+  arr(d.facts).forEach((f) => add(f && f.text));
+  arr(d.views).forEach((v) => { add(v && v.who); add(v && v.stance); });
+  arr(d.asks).forEach((a) => add(a && a.text));
+  arr(d.stances).forEach((s) => add(s && s.label));
+  if (isObj(d.next)) { add(d.next.talk); add(d.next.makeTitle); arr(d.next.makeSteps).forEach(add); }
+  return out;
 }
 
 // ---------- 応答の束 → お題の一覧 ----------
