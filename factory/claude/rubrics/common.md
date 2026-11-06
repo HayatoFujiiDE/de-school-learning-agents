@@ -14,3 +14,5 @@
 12. 詳しい版（elementary-long.md / secondary-long.md）に、関心別の入口の例（マイクラ / プログラミング / ものづくり / デジもの / 画像・動画 / 絵 のうち 2 つ以上）が「〜が好きなら」の形で書かれている
 11. parts[].files のうち `image_id` を持つ項目は、`alt`（絵の内容を日本語 1〜2 文、120 字以内）を持ち、`path` の拡張子が `.png` か `.webp`。画像の中身は採点しない（人が確認画面で見る）
 13. material.json の parts[].videos があれば、各動画に `why`（見どころ）と `rights_note`（本人のアップと言える理由）があり、`source_id` の出典の行の url が `https://www.youtube.com/watch?v={youtube_id}` で対応している（形式だけを見る。動画の中身は採点しない）
+14. 子ども向けの文（parts/ 配下の .md・summary_elementary / summary_secondary・entry_point の text）に、この素材のファイル名（app.html・figure-1.svg など）が書かれていない
+15. parts/ 配下の .md が、見出し・段落・箇条書き・番号つき・太字・コード・リンク以外の記法（表・HTML のタグ・画像の埋め込み・引用の >）を使っていない
