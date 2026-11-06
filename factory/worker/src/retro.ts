@@ -84,6 +84,25 @@ export const KNOWN_JOB_ERRORS: readonly string[] = [
   'too_many_youtube_info',
 ];
 
+// LLM へ渡す時の既知の一覧（§S-3 の正規表現に加えて、外から決められる名前を LLM へ通さない）。一覧に無いものは 'other' にまとめる
+/** 職人の道具（factory/claude/agents/material-maker.md の agent_toolset_20260401 と custom の generate_image / youtube_info） */
+export const LLM_TOOL_NAMES: readonly string[] = ['web_fetch', 'web_search', 'bash', 'read', 'write', 'edit', 'glob', 'grep', 'generate_image', 'youtube_info'];
+/** web_fetch の error_code（Anthropic の web fetch tool の error_code） */
+export const LLM_FETCH_ERROR_CODES: readonly string[] = [
+  'invalid_input',
+  'url_too_long',
+  'url_not_allowed',
+  'url_not_accessible',
+  'too_many_requests',
+  'unsupported_content_type',
+  'max_uses_exceeded',
+  'unavailable',
+];
+/** session の idle の stop_reason（src/jobs.ts の回収が見るもの） */
+export const LLM_STOP_REASONS: readonly string[] = ['end_turn', 'requires_action', 'retries_exhausted', 'refusal', 'budget_reached'];
+/** 採点（outcome evaluation）の result */
+export const LLM_OUTCOME_RESULTS: readonly string[] = ['satisfied', 'needs_revision', 'max_iterations_reached', 'failed', 'interrupted'];
+
 export const safeName = (s: unknown): string => (typeof s === 'string' && NAME_RE.test(s) ? s : 'other');
 
 /** URL からホスト（小文字・`^[a-z0-9.-]{1,60}$`。合わなければ 'other'）。パスは見ない */
@@ -490,6 +509,68 @@ async function qualityFacts(db: D1Database, jobId: string, materialId: string): 
   };
 }
 
+/**
+ * LLM へ渡す形の metrics（純関数）。DB の metrics_json はそのまま（運営画面はそこからホスト名を出す。LLM を通らない）。
+ * - web_fetch.hosts: 本当のホスト名を外し、失敗の多い順に h1〜h10 の番号にする（{id, ok, failed}）
+ * - tools / error_codes / stops / outcome.results / grader_result: 既知の一覧にあるものだけ。他は 'other' にまとめる
+ */
+export function llmMetrics(m: RetroMetrics): Record<string, unknown> {
+  const only = (rec: Record<string, number> | undefined, list: readonly string[]): Record<string, number> => {
+    const out = new Map<string, number>();
+    for (const [k, v] of Object.entries(rec ?? {})) {
+      const key = list.includes(k) ? k : 'other';
+      out.set(key, (out.get(key) ?? 0) + num(v));
+    }
+    return Object.fromEntries([...out.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)));
+  };
+  const tools = new Map<string, { count: number; errors: number }>();
+  for (const [k, v] of Object.entries(m.tools ?? {})) {
+    const key = LLM_TOOL_NAMES.includes(k) ? k : 'other';
+    const c = tools.get(key) ?? { count: 0, errors: 0 };
+    tools.set(key, { count: c.count + num(v?.count), errors: c.errors + num(v?.errors) });
+  }
+  const hosts = [...(m.web_fetch?.hosts ?? [])]
+    .map((h) => ({ ok: num(h?.ok), failed: num(h?.failed) }))
+    .sort((a, b) => b.failed - a.failed || b.ok + b.failed - (a.ok + a.failed))
+    .slice(0, RETRO_LIMITS.topHosts)
+    .map((h, i) => ({ id: `h${i + 1}`, ok: h.ok, failed: h.failed }));
+  const gr = m.quality?.grader_result;
+  return {
+    ...m,
+    tools: Object.fromEntries([...tools.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))),
+    web_fetch: { ...m.web_fetch, error_codes: only(m.web_fetch?.error_codes, LLM_FETCH_ERROR_CODES), hosts },
+    outcome: { count: num(m.outcome?.count), results: only(m.outcome?.results, LLM_OUTCOME_RESULTS) },
+    stops: only(m.stops, LLM_STOP_REASONS),
+    quality: m.quality ? { ...m.quality, grader_result: gr == null ? null : LLM_OUTCOME_RESULTS.includes(gr) ? gr : 'other' } : m.quality,
+  };
+}
+
+/** 質を下げる方向の言い回し（同じ文の中に両方の語） */
+const QUALITY_WORDS = ['出典', '引用', '検証', '確認', '検査', '採点', 'selfcheck', '変奏', '図', '画像', '動画', '動く絵'];
+const REDUCE_WORDS = ['減ら', '省', '省略', 'やめ', 'しない', '不要', '飛ば', 'スキップ', '無視', '後回し'];
+/** 指示の上書きに見える言い回し */
+const RULE_WORDS = ['編集基準', '採点表', '決まり', 'ルール', '指示'];
+const OVERRIDE_WORDS = ['無視', '従わな', '優先しな', '上書き'];
+
+/**
+ * 自動で active にしない文か（§S-5 1 の前の機械的な検査。純関数）。quality_risk が none でも、当たれば proposed にする。
+ * 人が画面で [入れる] を押す時は使わない（人が読んで決める）。画面には auto_blocked として出す
+ */
+export function autoAdoptBlocked(text: string): boolean {
+  const t = String(text ?? '').normalize('NFKC');
+  const lower = t.toLowerCase();
+  const has = (s: string, ws: readonly string[]) => ws.some((w) => s.includes(w.toLowerCase()));
+  // 質を下げる方向: 同じ文（。！？ と改行で区切る）に両方の語がある
+  for (const sentence of lower.split(/[。！？!?\n]/)) if (has(sentence, QUALITY_WORDS) && has(sentence, REDUCE_WORDS)) return true;
+  // 指示の上書き
+  if (has(lower, RULE_WORDS) && has(lower, OVERRIDE_WORDS)) return true;
+  // 英字が 12 文字以上続く・`.` を含む英数字の並び（ドメインのように見えるもの）・記号
+  if (/[a-z]{12,}/i.test(t)) return true;
+  if (/[a-z0-9-]+\.[a-z0-9-]+/i.test(t)) return true;
+  if (/[<>{}[\]`]/.test(t)) return true;
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // LLM（§S-4）
 
@@ -510,6 +591,7 @@ export const RETRO_SYSTEM = [
   'suggestions の text は職人（制作の agent）への 1 文の日本語です（200 文字まで）。URL を書かないでください。target は maker_note（職人への注意書き）/ maker_definition（職人の定義の変更）/ worker_code（工場のプログラムの変更）/ order（注文の出し方）です。',
   'quality_risk は、質に少しでも触れうるなら low 以上にしてください。触れないと言い切れる時だけ none です。',
   'tip_reviews は <tips> の id だけについて、続けるなら keep・やめるなら retire と理由を書きます（8 件まで）。',
+  'web_fetch.hosts の h1 などはサイトの番号で、サイトの名前は渡していません。工夫の文に特定のサイト名を書かないでください（「同じサイトで」のように書きます）。',
   'summary は 300 文字までの日本語です。',
   `次の語は使わないでください: ${FORBIDDEN_WORDS.join('、')}`,
   '出力は指定の schema の JSON のみです。',
@@ -780,8 +862,14 @@ export async function buildRetroInput(db: D1Database, jobId: string, metricsJson
       }),
     });
   }
+  let jobJson = '{}';
+  try {
+    jobJson = JSON.stringify(llmMetrics(JSON.parse(metricsJson) as RetroMetrics));
+  } catch {
+    jobJson = '{}';
+  }
   const render = () =>
-    ['<job>', metricsJson, '</job>', '<recent>', ...recent, '</recent>', '<tips>', ...tipLines.map((t) => t.line), '</tips>', '上の資料で振り返りをしてください。'].join('\n');
+    ['<job>', jobJson, '</job>', '<recent>', ...recent, '</recent>', '<tips>', ...tipLines.map((t) => t.line), '</tips>', '上の資料で振り返りをしてください。'].join('\n');
   let text = render();
   while (text.length > RETRO_LIMITS.inputChars && recent.length) {
     recent.pop(); // 古い方から落とす
@@ -827,7 +915,7 @@ export function planTips(suggestions: readonly RetroSuggestion[], existing: read
     const k = tipKey(s.text);
     if (!k || keys.has(k)) continue;
     keys.add(k);
-    if (s.target === 'maker_note' && s.quality_risk === 'none' && opts.autoAdopt && activeNotes < RETRO_LIMITS.activeMakerNotes) {
+    if (s.target === 'maker_note' && s.quality_risk === 'none' && opts.autoAdopt && activeNotes < RETRO_LIMITS.activeMakerNotes && !autoAdoptBlocked(s.text)) {
       activeNotes++;
       out.push({ suggestion: s, status: 'active' });
     } else {
@@ -1220,7 +1308,9 @@ async function collectOne(env: Env, port: FactoryPort, row: SubmittedRow, deadli
     const s = p.suggestion;
     const id = crypto.randomUUID();
     const key = tipKey(s.text);
-    if (p.status === 'active') {
+    // 反映の SQL の直前でも機械的な検査をもう一度当てる（当たれば proposed だけ入れる）
+    const status = p.status === 'active' && !autoAdoptBlocked(s.text) ? 'active' : 'proposed';
+    if (status === 'active') {
       // 8 件の上限と同じ文は SQL でも確かめる（2 つの回収が重なっても 8 件を超えない）。入らなければ下の proposed（同じ id の OR IGNORE）が入る
       inserts.push(
         stmt(
@@ -1241,7 +1331,7 @@ async function collectOne(env: Env, port: FactoryPort, row: SubmittedRow, deadli
         key,
       ),
     );
-    applied.push({ tip_id: id, status: p.status, target: s.target });
+    applied.push({ tip_id: id, status, target: s.target });
   }
   const updates: Stmt[] = [];
   const retired: string[] = [];

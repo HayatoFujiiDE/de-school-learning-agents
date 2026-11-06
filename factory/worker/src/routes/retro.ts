@@ -5,7 +5,7 @@ import { all, cas, first, getSetting, nowIso, stmt } from '../db';
 import { cfg } from '../env';
 import { json, parseJsonField, readBody, type RouteCtx } from '../http';
 import { monthCostCents } from '../ledger';
-import { compareRecent, jobsFinishedSince, RETRO_LIMITS, type RetroOutput, type TipRow } from '../retro';
+import { autoAdoptBlocked, compareRecent, jobsFinishedSince, RETRO_LIMITS, type RetroOutput, type TipRow } from '../retro';
 
 const TIP_STATUSES = ['active', 'proposed', 'retired', 'rejected'] as const;
 /** 一覧に出す件数 */
@@ -25,7 +25,13 @@ interface RetroListRow {
   job_kind: string | null;
 }
 
-type TipView = TipRow & { material_title: string | null; jobs_since?: number; retire_suggested?: { reason: string; job_id: string; at: string } | null };
+type TipView = TipRow & {
+  material_title: string | null;
+  jobs_since?: number;
+  retire_suggested?: { reason: string; job_id: string; at: string } | null;
+  /** 自動で入れる前の機械的な検査（autoAdoptBlocked）に当たったか。画面に「自動では入れませんでした」と出す */
+  auto_blocked?: boolean;
+};
 
 const resultOf = (s: string | null): (RetroOutput & { applied?: Array<{ tip_id: string; status: string; target: string }>; retired?: string[] }) | null =>
   parseJsonField(s, null);
@@ -85,6 +91,7 @@ export async function getRetro(c: RouteCtx): Promise<Response> {
         LIST_LIMIT.tipsPerStatus,
       ),
     );
+    for (const t of list) t.auto_blocked = autoAdoptBlocked(t.text);
     if (s === 'active') {
       for (const t of list) {
         t.jobs_since = t.activated_at ? await jobsFinishedSince(db, t.activated_at) : 0;
@@ -105,7 +112,7 @@ export async function getRetro(c: RouteCtx): Promise<Response> {
   );
   const events: Array<Record<string, unknown>> = [];
   for (const t of tipLog) {
-    const base = { tip_id: t.id, target: t.target, text: t.text, reason: t.reason, expected_saving_cents: t.expected_saving_cents, quality_risk: t.quality_risk, job_id: t.job_id, material_title: t.material_title, status: t.status, decided_by: t.decided_by };
+    const base = { tip_id: t.id, auto_blocked: autoAdoptBlocked(t.text), target: t.target, text: t.text, reason: t.reason, expected_saving_cents: t.expected_saving_cents, quality_risk: t.quality_risk, job_id: t.job_id, material_title: t.material_title, status: t.status, decided_by: t.decided_by };
     if (t.activated_at) events.push({ type: 'activated', at: t.activated_at, ...base });
     if (t.retired_at) events.push({ type: 'retired', at: t.retired_at, retire_reason: t.retire_reason, ...base });
     if (t.status === 'rejected') events.push({ type: 'rejected', at: t.updated_at, ...base });

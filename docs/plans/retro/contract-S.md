@@ -108,3 +108,5 @@ system（固定文）に入れること: 役割（費用の振り返り）/ 入�
 - cost_ledger の索引は 4 つ（day・vb・image_job・topic）を同じ定義で作り直す。
 - collect_json は submitted 以降 `{submitted_at, tip_ids}` を持ち、ended でも残す（日 20 件の数えと tip_id の照合に使う）。
 - 残した点: failed で終わった後に取り込み直されて done になった job は、failed の時点の 1 回だけ振り返る。
+- LLM へ渡す入力は、数字と決まった言葉だけ（2026-11-06 出荷前の点検）: ホスト名は h1〜h10 の番号に置き換える（本当の名前は DB と運営画面だけ）。道具名・error_code・stop_reason・採点の結果は、コードの中の一覧にあるものだけ、他は other。
+- 自動で入れる前に機械的な検査（autoAdoptBlocked）を通す: 質を下げる言い回し・指示の上書きに見える言い回し・ドメインのような並びや記号を含む文は、quality_risk が none でも自動で入れず proposed にする（画面に「自動では入れませんでした」と出す）。人が [入れる] を押す時は検査しない。

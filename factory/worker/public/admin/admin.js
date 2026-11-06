@@ -2198,6 +2198,9 @@
       '<h3>機械検査の詳細（checks_json）</h3><pre>' + esc(JSON.stringify(checks, null, 2)) + '</pre>';
   }
 
+  // §S-8-2: 作り直しで前の版の取得記録により確かめた出典（この session では開いていない）。ほかの値はそのまま出す
+  function checkDetailText(x) { return x === 'carried' ? '前の版の記録で確認' : x; }
+
   function tablesHtml(d) {
     var claimsHtml = '<div class="table-wrap"><table><thead><tr><th>id</th><th>本文</th><th>職人</th><th>検証係</th><th>理由</th></tr></thead><tbody>' + (d.claims || []).map(function (c) {
       return '<tr><td>' + esc(c.id) + '</td><td>' + esc(c.text) + '</td><td>' + esc(c.status) + '</td><td>' + (c.verdict ? pill(c.verdict, VERDICT_CLASS[c.verdict]) : '—') + '</td><td>' + esc(c.reason || '') + '</td></tr>';
@@ -2208,7 +2211,7 @@
       return '<tr><td>' + esc(s.source_id) + '</td><td class="pre">' + esc(s.url) + '</td><td>' + esc(s.title) + '</td>' +
         '<td>' + (sec ? pill(s.url_was_fetched ? 'はい' : 'いいえ', 'gray') : yn(s.url_was_fetched)) + '</td>' +
         '<td>' + (sec ? pill(s.quote_found ? 'はい' : 'いいえ', 'gray') : yn(s.quote_found)) + '</td>' +
-        '<td>' + (s.license === 'unknown' ? pill('unknown', 'red') : esc(s.license)) + '</td><td>' + (s.is_primary ? 'はい' : 'いいえ') + '</td><td>' + esc(s.check_detail) + '</td></tr>';
+        '<td>' + (s.license === 'unknown' ? pill('unknown', 'red') : esc(s.license)) + '</td><td>' + (s.is_primary ? 'はい' : 'いいえ') + '</td><td>' + esc(checkDetailText(s.check_detail)) + '</td></tr>';
     }).join('') + '</tbody></table></div>';
     return '<h3>主張（claims）</h3>' + claimsHtml + '<h3>出典（sources）</h3>' + sourcesHtml;
   }
@@ -2625,6 +2628,7 @@
       : '';
     return '<li class="retro-ev" data-retro-ev="proposed">' + at + '<p>' + pill('提案', 'yellow') + ' ' + esc(RETRO_TARGET_LABEL[e.target] || e.target) + ' ' + pill(stl[0], stl[1]) +
       (e.quality_risk && e.quality_risk !== 'none' ? ' ' + pill('質に触れうる（' + (e.quality_risk === 'medium' ? '中' : '小') + '）', 'red') : '') + '</p>' + text +
+      (e.auto_blocked ? '<p class="retro-warn" data-retro-blocked="1">自動では入れませんでした（質に触れる言い回し）</p>' : '') +
       '<p class="retro-meta">' + from + ' ' + saving + '</p>' + (e.reason ? '<p class="muted">理由: ' + esc(e.reason) + '</p>' : '') + ops + '</li>';
   }
   function retroRecentHtml(rs) {
