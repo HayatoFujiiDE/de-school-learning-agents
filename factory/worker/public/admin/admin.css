@@ -601,3 +601,27 @@ button.sc-cid { text-decoration: underline; text-underline-offset: 2px; }
 .mp-loading { color: var(--mp-muted); }
 .mp-file a { color: var(--mp-green); }
 .mp-para.is-flag { background: #fff4de; box-shadow: inset 3px 0 0 #e3a94a; border-radius: 6px; padding: 2px 8px; margin-left: -8px; margin-right: -8px; }
+
+/* ---- 確認画面: 2 列（教材プレビュー左・出典と主張右。右は上に貼り付けて独立にスクロール。1024px 以下は縦に積む）---- */
+body.review-wide .view { max-width: 1440px; }
+body.review-wide .rv-foot-row, body.review-wide .rv-reason { max-width: 1440px; }
+.rv-study { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 460px); gap: 16px; align-items: start; margin: 0 0 16px; }
+.rv-study > .card, .rv-src-col > .card { margin: 0; }
+.rv-src-col { position: sticky; top: 76px; max-height: calc(100vh - 76px - 112px); overflow-y: auto; overscroll-behavior: contain; border-radius: var(--radius); }
+.mp-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mp-marks { font: inherit; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--white); cursor: pointer; color: var(--muted); }
+.mp-marks.on { border-color: var(--ai); background: var(--ai-soft); color: #8a5a00; font-weight: 600; }
+.mp-marks-box { width: 16px; height: 16px; border: 1.5px solid currentColor; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; line-height: 1; }
+.mp-marks-state { font-size: 11px; font-weight: 700; padding: 0 6px; border-radius: 999px; background: rgba(255, 255, 255, .7); }
+.mp-marks:focus-visible { outline: 3px solid #a9590b; outline-offset: 2px; }
+.mp-cites { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 6px; vertical-align: 1px; }
+.mp-cite { font: inherit; font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif; font-size: 11px; letter-spacing: 0; line-height: 1.6; padding: 0 7px; border-radius: 999px; border: 1px solid #c9d8cf; background: var(--green-soft); color: var(--green); cursor: pointer; white-space: nowrap; }
+button.mp-cite:hover { filter: brightness(.96); text-decoration: underline; }
+.mp-cite.is-flag { border-color: var(--ai); background: #ffe9bf; color: #8a5a00; font-weight: 700; }
+.mp-cite.is-missing { border-color: var(--red); background: var(--red-soft); color: var(--red); cursor: default; }
+.rv-goto { margin: 6px 0 0 !important; }
+.rv-goto .linkish { color: var(--green); font-weight: 600; }
+@media (max-width: 1024px) {
+  .rv-study { grid-template-columns: minmax(0, 1fr); }
+  .rv-src-col { position: static; max-height: none; overflow: visible; }
+}

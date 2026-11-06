@@ -11,8 +11,10 @@
     setTimeout(function () { when(pred, then, left - 1); }, 100);
   }
   var loaded = function (n) { return function () { return document.querySelectorAll('.mp-md').length >= n; }; };
-  function toStudy() { var el = $('#rv-study'); if (el) window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - 70); }
-  function done() { setTimeout(function () { document.title = 'ready'; }, 300); }
+  // headless の --screenshot はスクロールした位置を撮れないため、上の「要確認」を畳んで教材プレビューを画面に入れる
+  function toStudy() { var g = $('#rv-groups'); if (g) g.open = false; }
+  // フォーカスで動いたスクロールも戻す（撮れるのは先頭の画面だけ）
+  function done() { setTimeout(function () { window.scrollTo(0, 0); document.title = 'ready'; }, 300); }
   function addSticky(para, kind, text, then) {
     if (!click('#mp-body-0-0 [data-stick-open="' + para + '"]')) return then();
     when(function () { return !!$('[data-stick-form]'); }, function () {
@@ -26,16 +28,15 @@
   var steps = {
     top: function () { done(); },
     'default': function () { toStudy(); done(); },
-    'marks-off': function () { click('[data-mp-marks]'); when(loaded(2), function () { toStudy(); done(); }); },
-    compare: function () { click('[data-pv="compare"]'); when(loaded(4), function () { toStudy(); done(); }); },
+    'marks-off': function () { toStudy(); click('[data-mp-marks]'); when(loaded(2), function () { toStudy(); done(); }); },
+    compare: function () { toStudy(); click('[data-pv="compare"]'); when(loaded(4), function () { toStudy(); done(); }); },
     sticky: function () {
       addSticky(2, 'hard', '「いちばん 数が 多い」の根拠が子どもに伝わらない', function () {
         addSticky(3, 'fact', '核と運搬量の関係は食い違いの指摘あり', function () {
           click('#mp-body-0-0 [data-stick-open="1"]');
           when(function () { return !!$('[data-stick-form]'); }, function () {
             click('[data-stick-kind="long"]');
-            var el = $('#mp-body-0-0 [data-para="1"]');
-            if (el) window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - 200);
+            toStudy();
             done();
           });
         });
@@ -44,8 +45,9 @@
     'sticky-list': function () {
       addSticky(2, 'hard', '「いちばん 数が 多い」の根拠が子どもに伝わらない', function () {
         addSticky(3, 'fact', '核と運搬量の関係は食い違いの指摘あり', function () {
-          var el = $('#mp-stickies');
-          if (el) window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - 360);
+          toStudy();
+          var ps = document.querySelectorAll('.mp-part');
+          if (ps[1]) ps[1].style.display = 'none'; // 付箋の一覧を画面に入れるため、撮る時だけ 2 つ目の部品を隠す
           done();
         });
       });
@@ -60,7 +62,7 @@
     },
     goto: function () {
       toStudy();
-      setTimeout(function () { click('#mp-body-0-0 [data-para="3"] .mp-cite'); setTimeout(done, 400); }, 200);
+      setTimeout(function () { click('#mp-body-0-0 [data-para="3"] .mp-cite'); window.scrollTo(0, 0); setTimeout(done, 200); }, 200);
     }
   };
   when(loaded(2), function () { (steps[shot] || done)(); });

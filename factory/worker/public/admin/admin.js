@@ -2099,7 +2099,7 @@
     if (!url) return '<span class="muted">なし</span>';
     return /^https?:\/\//.test(url) ? '<a class="pre" href="' + esc(url) + '" rel="noopener noreferrer" target="_blank">' + esc(url) + '</a>' : '<span class="pre">' + esc(url) + '</span>';
   }
-  function groupHtml(g, i, d) {
+  function groupHtml(g, i, d, cardOf) {
     var claimById = {};
     (d.claims || []).forEach(function (c) { claimById[c.id] = c; });
     var src = (d.sources || []).filter(function (s) { return s.source_id === g.source_id; })[0];
@@ -2114,7 +2114,9 @@
       '<p>出典 <b>' + (g.source_id ? esc(g.source_id) : 'なし') + '</b>' + (src && src.title ? ' <span class="muted">' + esc(src.title) + '</span>' : '') + '</p>' +
       '<p>職人が書いた URL: ' + linkOrText(g.url) + '</p>' +
       '<p>検証係が開いた URL: ' + (sameUrl ? '<span class="muted">同じ URL</span>' : opened.length ? '<span class="rv-urls">' + opened.map(linkOrText).join('<br>') + '</span>' : '<span class="muted">なし</span>') + '</p>' +
-      (claimsHtml ? '<ul class="rv-claims">' + claimsHtml + '</ul>' : '<p class="muted">関係する主張はありません（出典だけの問題）</p>') + '</div>';
+      (claimsHtml ? '<ul class="rv-claims">' + claimsHtml + '</ul>' : '<p class="muted">関係する主張はありません（出典だけの問題）</p>') +
+      (cardOf && g.source_id && g.source_id in cardOf ? '<p class="rv-goto"><button type="button" class="linkish" data-goto="' + cardOf[g.source_id] + '">出典カードで見る →</button></p>'
+        : cardOf && !g.source_id ? '<p class="rv-goto"><button type="button" class="linkish" data-goto="rv-src-orphan">出典のない主張のカードで見る →</button></p>' : '') + '</div>';
   }
 
   function itemHtml(k, i, d, st, tri) {
@@ -2164,6 +2166,14 @@
   var AUD_LABEL = { elementary: '小学生', secondary: '中学生' };
   var LEN_LABEL = { 'short': '短い', 'long': '長い' };
   function kindName(k) { return vhas(KIND_NAME, k) ? KIND_NAME[k] : '型 ' + String(k === undefined || k === null ? '?' : k); }
+  // 確認の印（要確認の段落の黄色・段落末の主張 → 出典の印・付箋のボタン）の ON / OFF。既定 ON。ブラウザに覚える（読めない・書けない時は既定のまま）
+  var MARKS_KEY = 'factory.review.marks';
+  function loadMarks() { try { return window.localStorage.getItem(MARKS_KEY) !== '0'; } catch (e) { return true; } }
+  function saveMarks(on) { try { window.localStorage.setItem(MARKS_KEY, on ? '1' : '0'); } catch (e) { /* 覚えられなくても表示は切り替わる */ } }
+  function marksToggleHtml(on) {
+    return '<button type="button" class="mp-marks' + (on ? ' on' : '') + '" data-mp-marks="1" aria-pressed="' + (on ? 'true' : 'false') + '" title="OFF にすると子どもが見るのと同じ見た目になります">' +
+      '<span class="mp-marks-box" aria-hidden="true">' + (on ? '✓' : '') + '</span>確認の印を見る<span class="mp-marks-state">' + (on ? 'ON' : 'OFF') + '</span></button>';
+  }
   /** 既定は「小学生・短い」1 枠。見比べの右の枠は「中学生・短い」から */
   function defaultPv() { return { aud: 'elementary', len: 'short', game: false, compare: false, cmp: { aud: 'secondary', len: 'short', game: false } }; }
   function pvLabel(sel) { return sel.game ? 'ゲーム版' : (AUD_LABEL[sel.aud] || sel.aud) + '・' + (LEN_LABEL[sel.len] || sel.len); }
@@ -2582,7 +2592,7 @@
 
     var groupsBody;
     if (!tri.present) groupsBody = '<p class="muted">仕分けの結果がありません。下の「出典と主張」のカードと「主張と出典の一覧」も見て、6 項目すべてを見てください。</p>';
-    else if (tri.groups.length) groupsBody = tri.groups.map(function (g, i) { return groupHtml(g, i, d); }).join('');
+    else if (tri.groups.length) { var cardOf = sourceCardsOf(d).cardOf; groupsBody = tri.groups.map(function (g, i) { return groupHtml(g, i, d, cardOf); }).join(''); }
     else groupsBody = '<p class="ok pill" id="rv-none">要確認なし</p><p class="muted">機械と検証係の確認で気になる所はありませんでした。下の項目だけ見てください。</p>';
     if (tri.present && !d.verification_id) groupsBody += '<p class="muted">主張は検証が終わってから仕分けます（いまは出典だけの問題を出しています）。</p>';
     var groups = '<details class="card rv-sec" id="rv-groups" open><summary><h2>要確認' + (tri.present ? '（' + tri.groups.length + '）' : '') + '</h2></summary>' + groupsBody + '</details>';
@@ -2591,7 +2601,8 @@
     var pv = st.pv || defaultPv();
     // 教材プレビュー（左）と出典と主張（右）。本文は DOM 側が md を読んでから入れる（renderPreview）
     var body = '<div class="rv-study" id="rv-study"><section class="card rv-pv" id="rv-body">' +
-      '<div class="rv-pv-head"><h2>教材として見る</h2><div class="mp-bar" id="mp-bar" role="toolbar" aria-label="教材の見え方">' + pvSwitchHtml(pv, 0) + '</div></div>' +
+      '<div class="rv-pv-head"><h2>教材として見る</h2><div class="mp-tools"><div class="mp-bar" id="mp-bar" role="toolbar" aria-label="教材の見え方">' + pvSwitchHtml(pv, 0) + '</div>' +
+        marksToggleHtml(ctx.marks !== false) + '</div></div>' +
       '<p class="muted rv-pv-lead">子どもが見る形で出しています。学年と長さを切り替えて、分かりにくい所・分かりやすい所を見てください。</p>' +
       '<div class="mp-frames" id="mp-frames">' + previewFrameHtml(d, pv, 0) + '</div></section>' +
       '<aside class="rv-src-col" id="rv-src-col">' + sourcesPanelHtml(d, srcModel) + '</aside></div>';
@@ -2648,9 +2659,12 @@
 
   function renderReview() {
     var c = reviewCtx, view = c.view, d = c.d, st = c.st;
+    if (c.marks === undefined) c.marks = loadMarks();
     view.innerHTML = reviewHtml(d, st, c);
     document.body.classList.toggle('has-foot', d.version.status === 'review');
+    document.body.classList.add('review-wide');
     $('#rv-study').addEventListener('click', onStudyClick);
+    $('#rv-groups').addEventListener('click', onStudyClick);
     fillPreview();
     $('#rv-help').addEventListener('click', openKeys);
     var reload = $('#rv-reload');
@@ -2735,7 +2749,7 @@
     var d = c.d, st = c.st, token = c.pvToken = (c.pvToken || 0) + 1;
     var parts = (d.version.material && Array.isArray(d.version.material.parts)) ? d.version.material.parts : [];
     var tri = triageOf(d), model = sourceCardsOf(d);
-    var base = { fileBase: '/api/review/' + encodeURIComponent(c.vid) + '/files/', marks: true, chips: false, stick: false, markIds: markIdsOf(tri), claimIdx: claimIndexOf(d), claimRef: claimRefsOf(d, model) };
+    var base = { fileBase: '/api/review/' + encodeURIComponent(c.vid) + '/files/', marks: c.marks !== false, chips: true, stick: false, markIds: markIdsOf(tri), claimIdx: claimIndexOf(d), claimRef: claimRefsOf(d, model) };
     previewFrames(st).forEach(function (sel, fi) {
       parts.forEach(function (p, pi) {
         var el = document.getElementById('mp-body-' + fi + '-' + pi);
@@ -2780,7 +2794,35 @@
       renderPreview();
       var again = document.querySelector('[data-pv="' + key + '"][data-pvf="' + fi + '"]' + (key === 'game' ? '' : '[data-val="' + val + '"]'));
       if (again) again.focus();
+      return;
     }
+    if (t.closest('[data-mp-marks]')) {
+      c.marks = c.marks === false;
+      saveMarks(c.marks);
+      var mb = t.closest('[data-mp-marks]');
+      mb.outerHTML = marksToggleHtml(c.marks);
+      fillPreview();
+      var nb = document.querySelector('[data-mp-marks]');
+      if (nb) nb.focus();
+      toast(c.marks ? '確認の印を出しました' : '確認の印を消しました（子どもが見る形）');
+      return;
+    }
+    var g = t.closest('[data-goto]');
+    if (g) { gotoTarget(g.getAttribute('data-goto'), '出典カード'); return; }
+    var gc = t.closest('[data-goto-claim]');
+    if (gc) {
+      var n = gc.getAttribute('data-goto-claim');
+      var para = document.querySelector('.mat-preview[data-frame="0"] [data-cl~="' + n.replace(/[^0-9]/g, '') + '"]');
+      if (para) gotoTarget(para.id, '');
+      else toast('いま表示している「' + pvLabel(previewFrames(c.st)[0]) + '」には、この主張の段落がありません。学年・長さを切り替えてください', true);
+    }
+  }
+  /** 行き先へスクロールして点滅（閉じている details の中なら開く。既存の scrollToTarget を使う） */
+  function gotoTarget(id, what) {
+    var el = id ? document.getElementById(id) : null;
+    if (!el) { if (what) toast(what + 'が見つかりません', true); return; }
+    for (var p = el.parentNode; p && p !== document; p = p.parentNode) if (p.tagName === 'DETAILS') p.open = true;
+    scrollToTarget(id);
   }
 
   function openKeys() {
@@ -3130,6 +3172,7 @@
     reviewCtx = null;
     stopFloor(); // 工場のポーリングは他の画面へ移ったら必ず止める（viewFloor が開き直す）
     document.body.classList.remove('has-foot');
+    document.body.classList.remove('review-wide');
     loadStatus();
     if (!p.length) return viewFloor(view);
     if (p[0] === 'materials') return viewMaterials(view, r.q);

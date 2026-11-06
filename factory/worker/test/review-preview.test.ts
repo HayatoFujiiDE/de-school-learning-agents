@@ -290,3 +290,51 @@ describe('教材プレビュー: 枠（型の名前・最初にやること・�
     expect(h).toContain('aria-pressed="true">小学生</button>');
   });
 });
+
+describe('確認の印（ON / OFF）と、段落の印 ⇄ 出典カードの行き来', () => {
+  const d = fixture();
+  const model = R.sourceCardsOf(d);
+  const o = (marks: boolean) => ({
+    fileBase: BASE, marks, chips: true, stick: true, markIds: { c2: true, c5: true },
+    claimIdx: Object.fromEntries(d.claims.map((c: Obj, i: number) => [c.id, i])), claimRef: R.claimRefsOf(d, model), frame: 0, pi: 0,
+  });
+
+  it('既定 ON（localStorage が無い環境でも落ちない）。ctx.marks = false なら OFF の表示', () => {
+    expect(R.reviewHtml(fixture(), R.newReviewState(), {})).toContain('data-mp-marks="1" aria-pressed="true"');
+    const off = R.reviewHtml(fixture(), R.newReviewState(), { marks: false });
+    expect(off).toContain('data-mp-marks="1" aria-pressed="false"');
+    expect(off).toContain('<span class="mp-marks-state">OFF</span>');
+  });
+
+  it('ON: 要確認の段落は黄色・段落末に「c5 → s2」の印（押すと出典カードへ）・付箋のボタン。OFF: 子どもが見るのと同じ（印・黄色・ボタンなし）', () => {
+    const src = md('parts/p1/p1-elementary-short.md');
+    const on = R.previewBodyHtml(src, d.version.material.parts[0], o(true));
+    const s2 = model.cardOf.s2;
+    expect(on).toContain(`<button type="button" class="mp-cite is-flag" data-goto="${s2}" title="c5 の出典カードへ">c5 → s2</button>`);
+    expect(on).toContain('class="mp-para is-flag" id="mp-p-0-0-3"');
+    expect(on).toContain('data-goto="rv-src-orphan" title="c6 の出典カードへ">c6 → 出典なし</button>');
+    expect(n(on, /data-stick-open="/g)).toBe(7);
+    const off = R.previewBodyHtml(src, d.version.material.parts[0], o(false));
+    expect(off).not.toContain('mp-cite');
+    expect(off).not.toContain('is-flag');
+    expect(off).not.toContain('data-stick-open');
+    // 本文の段落は同じ数（data-cl で出典カードから段落へ戻れる）
+    expect(n(off, /data-para="/g)).toBe(7);
+    expect(off).toContain('data-cl="4"');
+  });
+
+  it('一覧に無い主張 id の参照は赤い印（行き先なし）', () => {
+    const h = R.previewBodyHtml('ふしぎ [c99]', d.version.material.parts[0], { ...o(true), claimIdx: {} });
+    expect(h).toContain('<span class="mp-cite is-missing">c99（一覧にない主張）</span>');
+  });
+
+  it('出典カードの主張 id は本文の段落へ（data-goto-claim = 主張の番号）・要確認のカードから出典カードへ', () => {
+    const h = R.reviewHtml(fixture(), R.newReviewState(), {});
+    expect(h).toContain('<button type="button" class="linkish sc-cid" data-goto-claim="4" title="本文のこの主張の段落へ">c5</button>');
+    expect(h).toContain(`data-goto="${model.cardOf.s2}">出典カードで見る →</button>`);
+    expect(h).toContain('data-goto="rv-src-orphan">出典のない主張のカードで見る →</button>');
+    // 出典カードは 2 列の右（教材プレビューと同じ rv-study の中）
+    expect(h.indexOf('id="rv-src-col"')).toBeGreaterThan(h.indexOf('id="mp-frames"'));
+    expect(h.indexOf('id="rv-src-col"')).toBeLessThan(h.indexOf('id="rv-check"'));
+  });
+});
