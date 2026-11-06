@@ -59,12 +59,13 @@ export function sonnetBatchMicroDollars(u: UsageLike | null | undefined): number
 }
 
 /**
- * Sonnet 5.5（同期の定価。お題 contract-T T-6）: 入力 $2 / 5 分の cache write $2.50 / cache read $0.10 / 出力 $10 per 1M。
- * 値は https://platform.claude.com/docs/en/about-claude/pricing（2026-11-06 確認）。cache read は多めに数えて入力と同じ $2 にする
+ * Sonnet 5.5（同期の定価。お題 contract-T T-6）: 入力 $2 / 5 分の cache write $2.50（1.25 倍）/ cache read $0.10（0.05 倍）/ 出力 $10 per 1M。
+ * 値は https://platform.claude.com/docs/en/about-claude/pricing（2026-11-06 確認）。
+ * v2.7: 生成が cache_control を付けて続きの呼び出しでキャッシュを読むようになったので、cache read を定価の 0.05 倍（$0.10 = 2 / 20。浮動小数の誤差を避けて / 10）で数える（以前は多めに入力と同じ $2）
  */
 export function sonnetMicroDollars(u: UsageLike | null | undefined): number {
   if (!u) return 0;
-  return (u.input_tokens ?? 0) * 2 + (u.cache_creation_input_tokens ?? 0) * 2.5 + (u.cache_read_input_tokens ?? 0) * 2 + (u.output_tokens ?? 0) * 10;
+  return (u.input_tokens ?? 0) * 2 + (u.cache_creation_input_tokens ?? 0) * 2.5 + (u.cache_read_input_tokens ?? 0) / 10 + (u.output_tokens ?? 0) * 10;
 }
 
 /** web_search は 1 回 1 セント（$10 / 1,000 回。同じ pricing のページ） */

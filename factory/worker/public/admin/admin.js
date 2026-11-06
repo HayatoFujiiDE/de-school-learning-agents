@@ -1441,7 +1441,7 @@
       var approved = d.versions.filter(function (v) { return v.status === 'approved' && (v.id !== m.current_version_id || m.publish_status === 'stopped'); });
       view.innerHTML = '<h1>' + esc(m.title) + '</h1>' +
         '<div class="card"><div class="row">' + pill('配信: ' + (PUBLISH_LABEL[m.publish_status] || m.publish_status), m.publish_status === 'available' ? 'green' : 'gray') +
-        pill('制作: ' + (WORK_LABEL[m.work_status] || m.work_status)) + (autoReworkJob(d) ? pill('自動で作り直し中', 'yellow') : '') + '<span class="muted">slug ' + esc(m.slug) + ' / 型 ' + esc((m.kinds || []).join(', ')) + '</span></div>' +
+        pill('制作: ' + (WORK_LABEL[m.work_status] || m.work_status)) + (autoReworkJob(d) ? pill('自動で作り直し中', 'yellow') : '') + '<span class="muted">slug ' + esc(m.slug) + ' / 型 ' + esc((m.kinds || []).join(', ')) + '</span>' + machineOrderFactHtml(d.machine_order) + '</div>' +
         '<div class="row" id="pub-actions">' +
         (m.publish_status === 'available' ? '<button type="button" class="btn danger" id="stop-btn">配信を止める</button>' : '') +
         (approved.length ? '<select id="rb-select">' + approved.map(function (v) { return '<option value="' + esc(v.id) + '">v' + esc(v.version) + '（' + esc(fmtTime(v.created_at)) + '）</option>'; }).join('') + '</select><button type="button" class="btn" id="rb-btn">前の版へ戻す</button>' : '') +
@@ -1599,6 +1599,11 @@
     return lines.length ? '<div class="aq-alert" role="alert">' + lines.map(function (l) { return '<p>' + esc(l) + '</p>'; }).join('') + raiseButtonsHtml(j) + '</div>' : '';
   }
 
+  /** §U-4: 機械用の注文の入口から来た時だけ事実の欄に出す（client の文字列は画面に出さない） */
+  function machineOrderFactHtml(mo) {
+    return mo ? '<span class="muted" data-machine-order="1">' + esc('注文した人: Claude（機械の入口）') + '</span>' : '';
+  }
+
   function jobDetailHtml(j, open) {
     var active = ACTIVE_JOB_STATUSES.indexOf(j.status) >= 0;
     var canReingest = j.status === 'failed' && j.error === 'invalid_outputs';
@@ -1615,15 +1620,16 @@
       '<button type="button" class="btn" id="reload-btn">再読み込み</button></div></details>';
   }
 
-  function jobHtml(j, mode, draft) {
+  function jobHtml(j, mode, draft, machineOrder) {
     var qs = j.questions || [];
     var kind = KIND_TEXT[j.kind] || j.kind || '—';
     var state = JOB_LABEL[j.status] || j.status;
+    var who = machineOrderFactHtml(machineOrder);
     var head;
-    if (mode === 'input') head = '<h1>職人からの質問（' + qs.length + ' 問）</h1><p class="aq-lead">答えると、職人が制作を始めます。<span class="muted">注文の種類: ' + esc(kind) + '</span></p>';
-    else if (mode === 'resend') head = '<h1>職人からの質問（' + qs.length + ' 問）</h1><p class="aq-lead"><span class="muted">注文の種類: ' + esc(kind) + '</span></p>';
-    else if (mode === 'readonly') head = '<h1>職人からの質問（' + qs.length + ' 問）</h1><p class="aq-lead">状態: ' + esc(state) + '<span class="muted">注文の種類: ' + esc(kind) + '</span></p>';
-    else head = '<h1>注文の状況</h1><p class="aq-lead">状態: ' + esc(state) + '<span class="muted">注文の種類: ' + esc(kind) + '</span></p>';
+    if (mode === 'input') head = '<h1>職人からの質問（' + qs.length + ' 問）</h1><p class="aq-lead">答えると、職人が制作を始めます。<span class="muted">注文の種類: ' + esc(kind) + '</span>' + who + '</p>';
+    else if (mode === 'resend') head = '<h1>職人からの質問（' + qs.length + ' 問）</h1><p class="aq-lead"><span class="muted">注文の種類: ' + esc(kind) + '</span>' + who + '</p>';
+    else if (mode === 'readonly') head = '<h1>職人からの質問（' + qs.length + ' 問）</h1><p class="aq-lead">状態: ' + esc(state) + '<span class="muted">注文の種類: ' + esc(kind) + '</span>' + who + '</p>';
+    else head = '<h1>注文の状況</h1><p class="aq-lead">状態: ' + esc(state) + '<span class="muted">注文の種類: ' + esc(kind) + '</span>' + who + '</p>';
     var foot = '';
     if (mode === 'input') {
       foot = '<div class="rv-foot" id="aq-foot"><div class="row rv-foot-row"><span id="aq-progress" aria-live="polite"></span>' +
@@ -1785,7 +1791,7 @@
       }, function () { /* 補助の表示 */ });
       var draft = mode === 'input' ? loadAnswerDraft(id, qs) : {};
       if (qs.length && mode !== 'input') clearAnswerDraft(id); // 回答は保存済み（answer_state は none に戻らない）
-      view.innerHTML = jobHtml(j, mode, draft);
+      view.innerHTML = jobHtml(j, mode, draft, d.machine_order);
       document.body.classList.toggle('has-foot', mode === 'input' || mode === 'resend');
       bindJobActions(id, j);
       if (mode === 'input') bindAnswerInputs(view, id, qs, draft);
@@ -3361,6 +3367,7 @@
       if (b) b.addEventListener('click', route);
     });
   }
+  window.FactoryAdminOrders = { machineOrderFactHtml: machineOrderFactHtml, jobHtml: jobHtml };
   window.FactoryAdminRetro = { WASTE_LABEL: RETRO_WASTE_LABEL, retroHtml: retroHtml, retroCompareHtml: retroCompareHtml, retroEventHtml: retroEventHtml };
 
   // ---- 画面: 編集基準 ----

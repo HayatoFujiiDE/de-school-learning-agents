@@ -8,11 +8,21 @@ export interface RouteCtx {
   url: URL;
   /** Access で確かめた運営のメール（Access 不要のルートでは空） */
   email: string;
+  /** service token（common_name）で通った時だけ true（§U-1 の 2）。service の判定はこれで行い、email の文字列で判定しない */
+  service: boolean;
+  /** service token の common_name（人の時は null） */
+  serviceName: string | null;
   exec: ExecutionContext;
   port(): Promise<FactoryPort>;
 }
 
-export function makeCtx(env: Env, request: Request, exec: ExecutionContext, email: string): RouteCtx {
+export function makeCtx(
+  env: Env,
+  request: Request,
+  exec: ExecutionContext,
+  email: string,
+  who: { service: boolean; serviceName: string | null } = { service: false, serviceName: null },
+): RouteCtx {
   const url = new URL(request.url);
   let cached: Promise<FactoryPort> | null = null;
   return {
@@ -20,6 +30,8 @@ export function makeCtx(env: Env, request: Request, exec: ExecutionContext, emai
     request,
     url,
     email,
+    service: who.service === true,
+    serviceName: who.service === true ? who.serviceName : null,
     exec,
     port: () => (cached ??= getPort(env, { hostname: url.hostname })),
   };

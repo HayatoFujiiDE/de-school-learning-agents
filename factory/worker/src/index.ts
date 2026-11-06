@@ -12,6 +12,7 @@ import { getFloor } from './routes/floor';
 import { answerJobRoute, cancelJobRoute, createJob, getJobDetail, raiseBudgetRoute, reconcileJobRoute, reingestJobRoute, startJobRoute } from './routes/jobs';
 import { libraryAvailable, libraryFile, libraryTopicStock, libraryTopics } from './routes/library';
 import { createMaterial, getMaterialDetail, listMaterials, rollbackMaterial, stopMaterial } from './routes/materials';
+import { createOrder } from './routes/orders';
 import {
   adoptProposal,
   createProposal,
@@ -74,6 +75,7 @@ const ROUTES: Array<[string, RegExp, Handler]> = [
   ['POST', new RegExp(`^/api/proposals/${ID}/adopt$`), adoptProposal],
   ['POST', new RegExp(`^/api/proposals/${ID}/dismiss$`), dismissProposal],
   ['POST', /^\/api\/intake$/, intake],
+  ['POST', /^\/api\/orders$/, createOrder], // 機械用の注文の入口（§U。service token だけ）
   ['POST', /^\/api\/scout\/run$/, runScoutRoute],
   ['POST', /^\/api\/meeting\/run$/, runMeetingRoute],
   ['GET', /^\/api\/meeting\/latest$/, latestMeeting],
@@ -134,8 +136,8 @@ export default {
       const isFake = path.startsWith('/__fake/');
       if (!isAdmin && !isApi && !isFake) return jsonError(404, 'not_found');
 
-      // それ以外はすべて Access（/api/intake だけ service token の common_name も受ける。§K-3）
-      const access = await requireAccess(request, env, { allowCommonName: path === '/api/intake' });
+      // それ以外はすべて Access（/api/intake と /api/orders だけ service token の common_name も受ける。§K-3・§U-1）
+      const access = await requireAccess(request, env, { allowCommonName: path === '/api/intake' || path === '/api/orders' });
       if (!access.ok) return access.response;
 
       if (isFake) {
@@ -146,7 +148,7 @@ export default {
         if (request.method !== 'GET' && request.method !== 'HEAD') return jsonError(405, 'method_not_allowed');
         return await serveAdmin(request, env);
       }
-      const ctx = makeCtx(env, request, exec, access.email);
+      const ctx = makeCtx(env, request, exec, access.email, { service: access.service, serviceName: access.commonName });
       for (const [method, re, handler] of ROUTES) {
         const m = re.exec(path);
         if (m && request.method === method) return await handler(ctx, ...m.slice(1));

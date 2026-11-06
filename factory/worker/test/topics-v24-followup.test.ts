@@ -64,7 +64,8 @@ describe('取った後に時間が足りない時は取り消す（枠も巡の�
       }
       return new Response('nf', { status: 404, headers: { 'content-type': 'text/plain' } });
     }) as unknown as typeof fetch;
-    const p = scriptedPort([genMessage(null)]);
+    // save_topics の無い応答 2 回（v2.7: end_turn には催促を 1 回だけ足して続ける）
+    const p = scriptedPort([genMessage(null), genMessage(null)]);
     const req = { purpose: 'gen', kind: 'news', trigger: 'cron', slotDay: tomorrow() } as const;
     const o = await runTopicRun(env, p.port, req, { deadline: clock + 200_000, fetchImpl });
     expect(o).toMatchObject({ status: 'not_taken', reason: 'no_time' });
@@ -72,7 +73,7 @@ describe('取った後に時間が足りない時は取り消す（枠も巡の�
     // 同じ日の同じ種類をまた取れる（exists にならない）
     const o2 = await runTopicRun(env, p.port, req, { deadline: clock + 10 * 60_000, fetchImpl });
     expect(o2.status).toBe('failed');
-    expect(p.calls.length).toBe(1);
+    expect(p.calls.length).toBe(2);
     expect(count(db, "SELECT COUNT(*) AS n FROM topic_runs WHERE status = 'failed' AND error = 'no_output'")).toBe(1);
   });
 
