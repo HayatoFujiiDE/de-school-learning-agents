@@ -4,6 +4,15 @@
 /* ---------- 一緒に入っている間の帯（AD-5）: 通常の流れで .shell の上に 1 行 ---------- */
 .join-band{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;padding:6px 26px;background:var(--sand);color:var(--sand-ink);border-bottom:1px solid var(--line);font-size:12px;line-height:1.6}
 .join-band[hidden]{display:none}
+/* 子どもの画面に入っている間は、画面の外周を枠で囲み帯も同じ色にする（リモート操作中だと一目で分かるように。2026-11-06 ふじさん）。
+   色は既存の意味色（橙=押す・緑=記録・青=本人・黄=バディ・砂=決まった行）と重ならない紫。サポーター画面（is-sup）では出さない */
+:root{--sup-frame:#6a4c93}
+html.is-joined:not(.is-sup) body::after{content:"";position:fixed;inset:0;border:5px solid var(--sup-frame);pointer-events:none;z-index:2147483000}
+html.is-joined:not(.is-sup) .join-band{background:var(--sup-frame);color:#fff;border-bottom-color:var(--sup-frame)}
+html.is-joined:not(.is-sup) .join-band .jb-text strong{color:#fff}
+html.is-joined:not(.is-sup) .join-band .jb-text small{color:#ece6f5}
+html.is-joined:not(.is-sup) .join-band .btn{color:var(--ink);border-color:#fff}
+html.is-joined:not(.is-sup) .join-band .btn:focus-visible{outline:3px solid #fff;outline-offset:2px}
 .join-band .jb-text{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;min-width:0}
 .join-band .jb-text strong{color:var(--ink);font-weight:700}
 .join-band .jb-text small{font-size:11px}
