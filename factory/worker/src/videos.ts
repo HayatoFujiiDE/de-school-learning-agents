@@ -598,7 +598,8 @@ const startsWithCapturePrefix = (reason: string) => {
 
 /**
  * 検証係への入力の sources.json の本文: YouTube の出典（youtubeIds）の quoted_excerpt を SOURCES_YOUTUBE_EXCERPT_MARK に置き換える
- * （職人が watch ページの概要欄から写した文を検証係に渡さない）。置き換える行が無ければ元の本文のまま。読めなければ元の本文のまま
+ * （職人が watch ページの概要欄から写した文を検証係に渡さない）。置き換える行が無ければ元の本文のまま。読めなければ元の本文のまま。
+ * 置き換えた時は必ず整形した JSON（URL の後ろが改行）で返す
  */
 export function maskYoutubeExcerpts(sourcesText: string, youtubeIds: ReadonlySet<string>): string {
   if (youtubeIds.size === 0) return sourcesText;
@@ -615,7 +616,22 @@ export function maskYoutubeExcerpts(sourcesText: string, youtubeIds: ReadonlySet
     changed = true;
     return { ...s, quoted_excerpt: SOURCES_YOUTUBE_EXCERPT_MARK };
   });
-  return changed ? JSON.stringify({ ...o, sources }) : sourcesText;
+  // 整形して返す（1 行に詰めた JSON だと、web_fetch が会話の中の URL を見つけられず、全部の出典が url_not_in_prior_context になる。
+  // 2026-11-06 に本番の動画つきの版 4 件と、詰めた形・整形した形の比較で確かめた）
+  return changed ? JSON.stringify({ ...o, sources }, null, 2) : sourcesText;
+}
+
+/**
+ * 検証係への入力の sources.json を、web_fetch が URL を見つけられる形にする: 改行の無い（1 行に詰めた）JSON なら整形し直す。
+ * それ以外（もう改行がある・JSON として読めない）は元の本文のまま
+ */
+export function readableSourcesText(sourcesText: string): string {
+  if (sourcesText.trim().includes('\n')) return sourcesText;
+  try {
+    return JSON.stringify(JSON.parse(sourcesText), null, 2);
+  } catch {
+    return sourcesText;
+  }
 }
 
 /**

@@ -21,6 +21,7 @@ import {
   enforceVideoConfirmations,
   isYoutubeHost,
   maskYoutubeExcerpts,
+  readableSourcesText,
   neutralizeInputText,
   readVersionVideoNotes,
   videoCallDecision,
@@ -1091,7 +1092,7 @@ export async function buildVerifyInput(
   const sourcesText = sourcesObj ? await sourcesObj.text() : '{"sources":[]}';
   // §Q-9.10: YouTube の出典（url が YouTube・版の動画が指す出典）。取得記録も、<sources_json> の quoted_excerpt も検証係に渡さない
   const ytIds = youtubeSourceIdsOf(sourcesText, o.videos ?? []);
-  const inputSourcesText = maskYoutubeExcerpts(sourcesText, ytIds);
+  const inputSourcesText = readableSourcesText(maskYoutubeExcerpts(sourcesText, ytIds));
   const all = await listPartKeys(env.R2, v.r2_prefix);
   if (all === null) return null;
   const paths = all.filter((p) => TEXT_PART_RE.test(p));

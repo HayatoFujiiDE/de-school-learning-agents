@@ -55,6 +55,7 @@ import {
   videoNotesSection,
   videoReserveStmt,
   maskYoutubeExcerpts,
+  readableSourcesText,
   videosMetaBlocks,
   versionVideosOf,
   youtubeSourceIdsOf,
@@ -1419,6 +1420,18 @@ describe('<sources_json> の YouTube の出典の quoted_excerpt は検証係に
     const plain = JSON.stringify({ sources: [{ id: 's1', url: URL_A, quoted_excerpt: 'x' }] });
     expect(maskYoutubeExcerpts(plain, youtubeSourceIdsOf(plain, []))).toBe(plain);
     expect(maskYoutubeExcerpts('not json', new Set(['s9']))).toBe('not json');
+  });
+
+  it('検証係へ渡す sources.json は URL の後ろが改行になる形（1 行に詰めた JSON だと web_fetch が URL を見つけられず url_not_in_prior_context になる）', () => {
+    const compact = JSON.stringify({ sources: [{ id: 's1', url: 'https://minecraft.wiki/w/Wooden_Button', title: 't', quoted_excerpt: 'q' }, { id: 's2', url: 'https://www.youtube.com/watch?v=jQFCgKLAhvw', title: 'v', quoted_excerpt: 'y' }] });
+    const masked = maskYoutubeExcerpts(compact, new Set(['s2']));
+    expect(masked).toMatch(/"url": "https:\/\/minecraft\.wiki\/w\/Wooden_Button",?\n/);
+    expect(JSON.parse(masked).sources[1].quoted_excerpt).not.toBe('y');
+    // 動画が無くて置き換えが起きない時も、詰めた JSON は整形する。もう改行がある本文・読めない本文はそのまま
+    expect(readableSourcesText(compact)).toMatch(/"url": "https:\/\/minecraft\.wiki\/w\/Wooden_Button",?\n/);
+    const pretty = JSON.stringify(JSON.parse(compact), null, 1);
+    expect(readableSourcesText(pretty)).toBe(pretty);
+    expect(readableSourcesText('not json')).toBe('not json');
   });
 
   it('同期: 入力の <sources_json> では YouTube の行の引用が置き換わり、R2 の sources.json と <source_captures> の数・検査は元のまま', async () => {
