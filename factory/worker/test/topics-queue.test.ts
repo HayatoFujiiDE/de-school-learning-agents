@@ -3,7 +3,7 @@
 // (c) 応答の後の例外 → failed: save_failed・台帳は実額・calling が残らない / (d) send が投げる → 503・run と台帳の行が消える
 // (e) token 不一致・calling でない message → 何もせず ack / (f) disabled・cap は今までどおり / (g) 画像の message は今までどおり
 import type { DatabaseSync } from 'node:sqlite';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FactoryPort } from '../src/anthropic';
 import type { Env, FactoryQueueMessage, TopicRunQueueMessage } from '../src/env';
 import worker from '../src/index';
@@ -98,7 +98,7 @@ describe('(c) 応答の後の例外でも calling を残さない', () => {
     const db2 = { prepare: (s: string) => inner.prepare(s), batch: async (b: D1PreparedStatement[]) => (++n === 1 ? Promise.reject(new Error('D1_ERROR: boom')) : inner.batch(b)) } as unknown as D1Database;
     const msg = genMessage([talkBody()]);
     const p = scriptedPort([msg]);
-    const o = await executeTopicRun({ ...env, DB: db2 }, p.port, m.run_id, m.token, m.req, { deadline: far(), fetchImpl });
+    const o = await executeTopicRun({ ...env, DB: db2 }, p.port, m.run_id, m.token, m.req, { deadline: far(), loadFetch: async () => fetchImpl });
     expect(o.status).toBe('failed');
     const actual = genActualCents(msg);
     expect(actual).toBeLessThan(60);
@@ -156,7 +156,7 @@ describe('(e) 行と合わない message は何もせず ack', () => {
     const { env, m } = await queued();
     expect(await deliver(env, m)).toEqual({ acked: 1, retried: 0 });
     expect(runRow()!.token).not.toBe(m.token);
-    expect(await executeTopicRun(env, scriptedPort([]).port, m.run_id, m.token, m.req, { deadline: far(), fetchImpl })).toEqual({ status: 'stale' });
+    expect(await executeTopicRun(env, scriptedPort([]).port, m.run_id, m.token, m.req, { deadline: far(), loadFetch: async () => fetchImpl })).toEqual({ status: 'stale' });
     expect(await deliver(env, m)).toEqual({ acked: 1, retried: 0 });
     expect(fakeGenCalls()).toBe(1);
   });
@@ -176,7 +176,7 @@ describe('(e) 行と合わない message は何もせず ack', () => {
         return genMessage([talkBody()]);
       },
     } as unknown as FactoryPort;
-    const o = await executeTopicRun(env, port, m.run_id, m.token, m.req, { deadline: far(), fetchImpl });
+    const o = await executeTopicRun(env, port, m.run_id, m.token, m.req, { deadline: far(), loadFetch: async () => fetchImpl });
     expect(mid).toEqual({ acked: 1, retried: 0 });
     expect(midRow).toMatchObject({ status: 'calling' });
     expect(midRow!.token).not.toBe(m.token);
@@ -190,7 +190,7 @@ describe('(e) 行と合わない message は何もせず ack', () => {
     const { m } = await queued();
     const p = scriptedPort([genMessage([talkBody()])]);
     const req = { ...m.req, kind: 'philo' } as RunRequest;
-    expect(await executeTopicRun(envWith(), p.port, m.run_id, m.token, req, { deadline: far(), fetchImpl })).toEqual({ status: 'stale' });
+    expect(await executeTopicRun(envWith(), p.port, m.run_id, m.token, req, { deadline: far(), loadFetch: async () => fetchImpl })).toEqual({ status: 'stale' });
     expect(p.calls).toHaveLength(0);
   });
 
@@ -203,6 +203,70 @@ describe('(e) 行と合わない message は何もせず ack', () => {
     expect(await deliver(env, mut(m))).toEqual({ acked: 1, retried: 0 });
     expect(fakeGenCalls()).toBe(0);
     expect(runRow()).toMatchObject({ status: 'calling' });
+  });
+});
+
+describe('(h) モデルを呼ぶ前の失敗は台帳 0 で閉じる', () => {
+  it('回し替えの前の readRun が投げる → failed: input_failed・台帳 0・呼び出し 0 回', async () => {
+    const env = envWith();
+    expect((await runTopicsRoute(routeCtx(env, 'POST', '/api/topics/runs', { kind: 'talk' }))).status).toBe(202);
+    const m = sent[0] as TopicRunQueueMessage;
+    const inner = env.DB;
+    let thrown = 0;
+    const db2 = {
+      prepare: (s: string) => {
+        if (s.startsWith('SELECT * FROM topic_runs WHERE id = ?') && thrown === 0) {
+          thrown++;
+          throw new Error('D1_ERROR: read');
+        }
+        return inner.prepare(s);
+      },
+      batch: (b: D1PreparedStatement[]) => inner.batch(b),
+    } as unknown as D1Database;
+    const p = scriptedPort([genMessage([talkBody()])]);
+    const o = await executeTopicRun({ ...env, DB: db2 }, p.port, m.run_id, m.token, m.req, { deadline: far(), loadFetch: async () => fetchImpl });
+    expect(thrown).toBe(1);
+    expect(o.status).toBe('failed');
+    expect(runRow()).toMatchObject({ status: 'failed', error: 'input_failed', cents: 0 });
+    expect(topicLedger().map((r) => r.cents)).toEqual([0]);
+    expect(p.calls).toHaveLength(0);
+  });
+  it('回し替えの後で fetch が読めない → 新しい token の述語で input_failed・台帳 0', async () => {
+    const env = envWith();
+    expect((await runTopicsRoute(routeCtx(env, 'POST', '/api/topics/runs', { kind: 'talk' }))).status).toBe(202);
+    const m = sent[0] as TopicRunQueueMessage;
+    const p = scriptedPort([]);
+    const o = await executeTopicRun(env, p.port, m.run_id, m.token, m.req, { deadline: far(), loadFetch: async () => Promise.reject(new Error('no fetch')) });
+    expect(o.status).toBe('failed');
+    expect(runRow()).toMatchObject({ status: 'failed', error: 'input_failed', cents: 0 });
+    expect(runRow()!.token).not.toBe(m.token);
+    expect(topicLedger().map((r) => r.cents)).toEqual([0]);
+  });
+});
+
+describe('(i) queue の遅れ: 回し替えで lease を延ばす', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  it('lease の残り 1 分で届いた message → 延びた lease の中で保存され done（呼び出し中に 2 分たっても）', async () => {
+    const env = envWith();
+    expect((await runTopicsRoute(routeCtx(env, 'POST', '/api/topics/runs', { kind: 'talk' }))).status).toBe(202);
+    const m = sent[0] as TopicRunQueueMessage;
+    db.prepare('UPDATE topic_runs SET lease_until = ? WHERE id = ?').run(new Date(Date.now() + 60_000).toISOString(), m.run_id);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    let leaseAtCall = '';
+    const port = {
+      ...scriptedPort([]).port,
+      async createMessage() {
+        leaseAtCall = String(runRow()!.lease_until);
+        vi.setSystemTime(Date.now() + 2 * 60_000); // 呼び出しに 2 分かかった（元の lease は過ぎた）
+        return genMessage([talkBody()]);
+      },
+    } as unknown as FactoryPort;
+    const o = await executeTopicRun(env, port, m.run_id, m.token, m.req, { deadline: Date.now() + 5 * 60_000, loadFetch: async () => fetchImpl });
+    expect(Date.parse(leaseAtCall)).toBeGreaterThan(Date.now() + 10 * 60_000);
+    expect(o.status).toBe('done');
+    expect(runRow()).toMatchObject({ status: 'done' });
   });
 });
 

@@ -368,3 +368,23 @@ describe('派生の POST が失敗した時、開いていて詳細が無けれ�
     expect(card.querySelectorAll('div').some((d) => d.className === 'tp-detail')).toBe(true);
   });
 });
+
+describe('今すぐ作る: 202 queued を「作り始めました」と出し、送った時点でボタンを戻す（v2.6）', () => {
+  it('結果行に「作り始めました（1〜3 分）…下の記録に出ます」・ボタンは「今すぐ作る」に戻り押せる', async () => {
+    route = (m, p) => {
+      if (p === '/api/topics/meta') return meta;
+      if (p === '/api/status') return { topics: { enabled: true, month_cents: 0, month_cap_cents: 10000 } };
+      if (m === 'GET' && p === '/api/topics/runs?limit=50') return { runs: [] };
+      if (m === 'POST' && p === '/api/topics/runs') return { status: 'queued', run: { id: 'r9', status: 'calling', kind: 'philo', purpose: 'gen' } };
+      throw new Error(`unexpected ${m} ${p}`);
+    };
+    await mountAt('#/topics/runs');
+    const go = button(view, '今すぐ作る')!;
+    go.click();
+    await flush();
+    expect(calls.filter((c) => c.method === 'POST' && c.path === '/api/topics/runs')).toHaveLength(1);
+    expect(view.textContent).toContain('を作り始めました（1〜3 分）。画面を閉じても作り続けます。できたら下の記録に出ます');
+    expect(go.textContent).toBe('今すぐ作る');
+    expect(go.disabled).toBe(false);
+  });
+});

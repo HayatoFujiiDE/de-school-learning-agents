@@ -177,8 +177,7 @@ export default {
         const m = parseTopicRunMessage(msg.body);
         if (m) {
           try {
-            const fetchImpl = await getTopicFetch(env, portCtx);
-            const o = await executeTopicRun(env, port, m.runId, m.token, m.req, { deadline: Date.now() + 5 * 60_000, fetchImpl });
+            const o = await executeTopicRun(env, port, m.runId, m.token, m.req, { deadline: Date.now() + 5 * 60_000, loadFetch: () => getTopicFetch(env, portCtx) });
             if (o.status === 'stale') console.log(JSON.stringify({ at: 'topic_queue', run_id: m.runId, status: 'stale' }));
           } catch (e) {
             console.log(JSON.stringify({ at: 'topic_queue', run_id: m.runId, error: e instanceof Error ? e.name : 'error' }));

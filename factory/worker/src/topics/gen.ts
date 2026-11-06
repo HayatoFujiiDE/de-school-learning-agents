@@ -288,9 +288,17 @@ export async function runTopicRun(env: Env, port: FactoryPort, req: RunRequest, 
   return runTaken(env, port, req, r.taken, opts);
 }
 
+/** 受け手の「走る」の選択肢。fetch は入力づくりの前に読む（読めない時も input_failed で閉じるため） */
+export interface ExecuteOptions {
+  deadline: number;
+  loadFetch: () => Promise<typeof fetch>;
+  now?: Date;
+}
+
 /**
  * 走る（queue の受け手の入口。v2.6）。最初に run の行を読み、calling・token 一致・lease 内・要求の中身と一致の時だけ走る。
- * そうでなければ何もしない（重複配送・掃除済み・取り消し済み）→ { status: 'stale' }
+ * そうでなければ何もしない（重複配送・掃除済み・取り消し済み）→ { status: 'stale' }。
+ * モデルを呼ぶ前の例外（行の読み取り・回し替え・fetch・親の読み取り）は failed: input_failed・台帳 0 で閉じる（呼んでいないので 0。司令塔の裁定）
  */
 export async function executeTopicRun(
   env: Env,
@@ -298,31 +306,83 @@ export async function executeTopicRun(
   runId: string,
   token: string,
   req: RunRequest,
-  opts: RunOptions,
+  opts: ExecuteOptions,
 ): Promise<RunOutcome | { status: 'stale' }> {
   const db = env.DB;
-  const row = await readRun(db, runId);
   const nowMs = (opts.now ?? new Date()).getTime();
-  if (!row || row.status !== 'calling' || row.token !== token || !(Date.parse(row.lease_until) > nowMs)) return { status: 'stale' };
-  const same =
-    row.purpose === req.purpose &&
-    row.kind === req.kind &&
-    row.trigger === req.trigger &&
-    (req.purpose === 'gen' ? row.slot_day === req.slotDay : row.parent_topic_id === req.parentId);
-  if (!same) return { status: 'stale' };
-  // token の回し替え（司令塔の裁定。モデルを呼ぶ前に 1 文の CAS）: 通った 1 回だけが新しい token で走る。
-  // 再配送（ack の前に呼び出しが落ちた・走っている途中に届いた）は古い token なので、ここか上の照合で stale になり、モデルを 2 回呼ばない。
-  // 以後の runPred / runFinishStmt / finishFailed はすべて新しい token（述語の意味は変えない）
-  const fresh = crypto.randomUUID();
-  const rotated = await cas(
-    db,
-    stmt("UPDATE topic_runs SET token = ? WHERE id = ? AND token = ? AND status = 'calling' AND lease_until > ?", fresh, runId, token, nowIso(new Date(nowMs))),
-  );
-  if (!rotated) return { status: 'stale' };
-  // 派生の親が読めなければ parent = null のまま走り、入力づくりで input_failed になる（calling を残さない）
-  const parent = req.purpose === 'derive' ? await readTopic(db, req.parentId) : null;
-  // 派生の slot_day は取った日（runTopicRun の today と同じ値）
-  return runTaken(env, port, req, { runId, token: fresh, slotDay: row.slot_day, today: row.slot_day, parent }, opts);
+  // 今の行の token（回し替えの前は message の token・後は新しい token）。閉じる文の述語に使う
+  let current = token;
+  let taken: TakenRun;
+  let fetchImpl: typeof fetch;
+  try {
+    const row = await readRun(db, runId);
+    if (!row || row.status !== 'calling' || row.token !== token || !(Date.parse(row.lease_until) > nowMs)) return { status: 'stale' };
+    const same =
+      row.purpose === req.purpose &&
+      row.kind === req.kind &&
+      row.trigger === req.trigger &&
+      (req.purpose === 'gen' ? row.slot_day === req.slotDay : row.parent_topic_id === req.parentId);
+    if (!same) return { status: 'stale' };
+    // token の回し替え（司令塔の裁定。モデルを呼ぶ前に 1 文の CAS）: 通った 1 回だけが新しい token で走る。
+    // 再配送（ack の前に呼び出しが落ちた・走っている途中に届いた）は古い token なので、ここか上の照合で stale になり、モデルを 2 回呼ばない。
+    // 同じ文で lease を今 + 15 分に延ばす（queue の遅れで保存の述語が lease 切れになる経路を消す。届いた時に切れていれば上で stale）。
+    // 以後の runPred / runFinishStmt / finishFailed はすべて新しい token（述語の意味は変えない）
+    const fresh = crypto.randomUUID();
+    const rotated = await cas(
+      db,
+      stmt(
+        "UPDATE topic_runs SET token = ?, lease_until = ? WHERE id = ? AND token = ? AND status = 'calling' AND lease_until > ?",
+        fresh,
+        new Date(nowMs + RUN_LEASE_MS).toISOString(),
+        runId,
+        token,
+        nowIso(new Date(nowMs)),
+      ),
+    );
+    if (!rotated) return { status: 'stale' };
+    current = fresh;
+    fetchImpl = await opts.loadFetch();
+    // 派生の親が読めなければ parent = null のまま走り、入力づくりで input_failed になる（calling を残さない）
+    const parent = req.purpose === 'derive' ? await readTopic(db, req.parentId) : null;
+    // 派生の slot_day は取った日（runTopicRun の today と同じ値）
+    taken = { runId, token: fresh, slotDay: row.slot_day, today: row.slot_day, parent };
+  } catch (e) {
+    console.log(JSON.stringify({ at: 'topic_run', run_id: runId, input_error: e instanceof Error ? e.name : 'error' }));
+    const run = await closeFailed(db, runId, current, 'input_failed', { noCharge: true });
+    return run ? { status: 'failed', run } : { status: 'stale' };
+  }
+  return runTaken(env, port, req, taken, { deadline: opts.deadline, fetchImpl, now: opts.now });
+}
+
+/**
+ * run を failed で閉じる（述語は run の calling・token・lease）。台帳: noCharge なら 0・actualCents があれば実額（応答の後の失敗。v2.6）・どちらでもなければ取り置き額のまま。
+ * この batch 自身が投げた時は run_id とコードだけをログに出して投げ直す（calling は lease 切れの掃除が閉じる）。行が無ければ null
+ */
+async function closeFailed(
+  db: D1Database,
+  runId: string,
+  token: string,
+  code: string,
+  charge: { noCharge: boolean; actualCents?: number },
+  made = 0,
+  dropped = 0,
+): Promise<RunDbRow | null> {
+  const ref = genLedgerRef(runId);
+  const t = nowIso();
+  const P = runPred(runId, token, t);
+  const stmts: Stmt[] = [];
+  if (charge.noCharge) stmts.push(ledgerSettleStmt(ref, 0, P));
+  else if (charge.actualCents !== undefined) stmts.push(overReserveStmt(ref, charge.actualCents, t, P), ledgerSettleStmt(ref, charge.actualCents, P));
+  stmts.push(runFinishStmt({ runId, token, now: t, status: 'failed', error: code, made, dropped }));
+  try {
+    await conditionalBatch(db, stmts);
+  } catch (e) {
+    console.log(JSON.stringify({ at: 'topic_run', run_id: runId, finish_failed: code }));
+    throw e;
+  }
+  const run = await readRun(db, runId);
+  console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: run?.status ?? null, error: run?.error ?? null }));
+  return run;
 }
 
 const RUN_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -437,25 +497,9 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
   const { runId, token, slotDay, today, parent } = taken;
   const ref = genLedgerRef(runId);
 
-  /**
-   * failed で閉じる。台帳: noCharge なら 0・actualCents があれば実額（応答の後の失敗。v2.6）・どちらでもなければ取り置き額のまま。
-   * この batch 自身が投げた時は run_id とコードだけをログに出して投げ直す（calling は lease 切れの掃除が閉じる）
-   */
+  /** failed で閉じる（closeFailed）。台帳: noCharge なら 0・actualCents があれば実額・どちらでもなければ取り置き額のまま */
   const finishFailed = async (code: string, noCharge: boolean, made = 0, dropped = 0, actualCents?: number): Promise<RunOutcome> => {
-    const t = nowIso();
-    const P = runPred(runId, token, t);
-    const stmts: Stmt[] = [];
-    if (noCharge) stmts.push(ledgerSettleStmt(ref, 0, P));
-    else if (actualCents !== undefined) stmts.push(overReserveStmt(ref, actualCents, t, P), ledgerSettleStmt(ref, actualCents, P));
-    stmts.push(runFinishStmt({ runId, token, now: t, status: 'failed', error: code, made, dropped }));
-    try {
-      await conditionalBatch(db, stmts);
-    } catch (e) {
-      console.log(JSON.stringify({ at: 'topic_run', run_id: runId, finish_failed: code }));
-      throw e;
-    }
-    const run = (await readRun(db, runId))!;
-    console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: run.status, error: run.error }));
+    const run = (await closeFailed(db, runId, token, code, { noCharge, actualCents }, made, dropped))!;
     return { status: 'failed', run };
   };
 
@@ -525,7 +569,8 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
       tool_choice: { type: 'auto' },
     };
   } catch {
-    return finishFailed('input_failed', false);
+    // モデルを呼ぶ前の失敗は台帳 0（司令塔の裁定。cron も同じ）
+    return finishFailed('input_failed', true);
   }
 
   // 呼び出し（1 回・再送なし・絶対の締め切り）。入力（RSS）の後で残りが 5 秒未満なら呼ばない。

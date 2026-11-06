@@ -42,7 +42,10 @@
     paused: '工場が一時停止中のため実行できません',
     not_found: '見つかりません（消えたか、id が違います）',
     access_denied: 'ログインが必要です',
-    bad_origin: '送信元が正しくありません'
+    bad_origin: '送信元が正しくありません',
+    queue_unavailable: '作る係に送れませんでした。少し後でもう一度押してください',
+    save_failed: 'できたお題を保存できませんでした（費用は実際の額だけ）',
+    abandoned: '途中で止まりました'
   };
 
   // ---- 純関数 ----
@@ -167,6 +170,7 @@
       var pre = c.slice(0, i), post = c.slice(i + 1);
       if (has(r, pre)) return r[pre] + '（' + (has(r, post) ? r[post] : post) + '）';
     }
+    if (c === 'save_failed' || c === 'abandoned') return ERR_TEXT[c]; // run の失敗の理由（表示名が無い時。v2.6）
     return c;
   }
 
@@ -333,7 +337,7 @@
   /** 送った run の読み直し（v2.6）: 15 秒ごと・calling でなくなるか 6 分たつか画面を離れたら止める */
   var RUN_POLL_MS = 15000;
   var RUN_WATCH_MS = 6 * 60 * 1000;
-  /** onRows(rows) は読めるたび・onEnd(run) は終わった時に 1 回（6 分たった時は null）。画面を離れたら（alive でない）どちらも呼ばない */
+  /** onRows(rows) は読めるたび・onEnd(run) は終わった時に 1 回（6 分たった時・記録に行が見つからない時は null）。画面を離れたら（alive でない）どちらも呼ばない */
   function watchRun(g, runId, onRows, onEnd) {
     var later = typeof setTimeout === 'function' ? setTimeout : null;
     if (!later || !runId) return;
@@ -347,7 +351,8 @@
         if (onRows) onRows(rows);
         var r = null;
         rows.forEach(function (x) { if (x && x.id === runId) r = x; });
-        if (r && r.status !== 'calling') onEnd(r);
+        if (!r) onEnd(null);
+        else if (r.status !== 'calling') onEnd(r);
         else next();
       }, function () { if (alive(g)) next(); });
     }
@@ -607,7 +612,7 @@
         var out = runOutcome(res, label, meta, '記録のタブ');
         if (out.queued && res.run && res.run.id) {
           watchRun(cfg.g, res.run.id, null, function (r) {
-            if (!r) return; // 6 分たっても calling（記録のタブで見られる）
+            if (!r) { setResult(result, 'まだ終わっていません。少し後で記録のタブを見てください', false); return; }
             var fin = runOutcome({ run: r }, label, meta);
             if (fin.ok && kind === 'refresh' && r.status === 'done') { st.topic = mergeTopic(st.topic, { refresh_child: { id: '', status: 'draft' } }); if (!st.busy) paint(); }
             setResult(result, fin.text, !fin.ok); toast(fin.text, !fin.ok);
@@ -1008,7 +1013,7 @@
           loadRuns();
           if (out.queued && res.run && res.run.id) {
             watchRun(g, res.run.id, renderRunRows, function (r) {
-              if (!r) return; // 6 分たっても calling（記録の行は作成中のまま。もう一度読み込めば見られる）
+              if (!r) { setResult(runResult, 'まだ終わっていません。少し後で下の記録を見てください', false); return; }
               var fin = runOutcome({ run: r }, label, meta);
               setResult(runResult, fin.text, !fin.ok); toast(fin.text, !fin.ok);
             });
