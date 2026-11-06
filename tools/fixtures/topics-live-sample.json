@@ -1,0 +1,185 @@
+{
+  "_note": "tools/pull-topics.mjs --from-file のテスト用（contract-app §AF-9）。架空のお題。期待: topics=8 kept=3 dropped=4 make_skipped=1 ok=3（4 つ目の応答は形が違うので捨てる）",
+  "responses": [
+    {
+      "day": "2026-11-05",
+      "topics": [
+        {
+          "topic_id": "tp_fixture-news-old_1", "kind": "news", "pos": 1, "needs_supporter": false, "lineage_id": "ln-news-a",
+          "body": {
+            "schema_version": 1, "kind": "news", "locale": "ja-JP",
+            "title": { "s": "古い見出し（中）", "e": "ふるい見出し（小）" },
+            "lead": { "s": "古いリード（中）", "e": "ふるいリード（小）" },
+            "event_day": "2026-11-03", "premises": [],
+            "facts": [{ "id": "f1", "text": { "s": "古い事実（中）", "e": "ふるい事実（小）" }, "source_ids": ["s1"] }],
+            "views": [],
+            "asks": [
+              { "level": "check", "text": { "s": "確かめる問い（中）", "e": "たしかめる問い（小）" } },
+              { "level": "self", "text": { "s": "自分の問い（中）", "e": "じぶんの問い（小）" } },
+              { "level": "open", "text": { "s": "ひらいた問い（中）", "e": "ひらいた問い（小）" } }
+            ],
+            "stances": [{ "id": "st1", "label": { "s": "そう思う", "e": "そうおもう" } }, { "id": "st2", "label": { "s": "思わない", "e": "おもわない" } }],
+            "next": { "talk": { "s": "話したい（中）", "e": "話したい（小）" }, "make_title": { "s": "作る題（中）", "e": "つくる題（小）" },
+              "make_steps": [{ "s": "一歩目", "e": "いっぽめ" }, { "s": "二歩目", "e": "にほめ" }, { "s": "三歩目", "e": "さんぽめ" }] },
+            "make": null,
+            "sources": [{ "id": "s1", "url": "https://example.org/old", "name": "例の出典（古い）", "quote": "この引用はテストのための架空の文で、二十字をこえています。" }],
+            "tags": { "interests": [], "concept_codes": [] }
+          }
+        },
+        {
+          "topic_id": "tp_fixture-make_1", "kind": "make", "pos": 1, "needs_supporter": false, "lineage_id": "ln-make-a",
+          "body": { "schema_version": 1, "kind": "make" }
+        },
+        {
+          "topic_id": "tp_fixture-talk-bad-asks_1", "kind": "talk", "pos": 1, "needs_supporter": false, "lineage_id": "ln-talk-bad",
+          "body": {
+            "schema_version": 1, "kind": "talk", "locale": "ja-JP",
+            "title": { "s": "問いが 2 つしかないお題", "e": "問いが 2 つしかないお題" },
+            "lead": { "s": "リード", "e": "リード" },
+            "event_day": null, "premises": [{ "text": { "s": "前提", "e": "ぜんてい" } }], "facts": [],
+            "views": [
+              { "id": "v1", "who": { "name": "A という考え", "type": "position" }, "side": "a", "stance": { "s": "A", "e": "A" }, "source_ids": [] },
+              { "id": "v2", "who": { "name": "B という考え", "type": "position" }, "side": "b", "stance": { "s": "B", "e": "B" }, "source_ids": [] }
+            ],
+            "asks": [
+              { "level": "check", "text": { "s": "問い 1", "e": "とい 1" } },
+              { "level": "self", "text": { "s": "問い 2", "e": "とい 2" } }
+            ],
+            "stances": [{ "id": "st1", "label": { "s": "A", "e": "A" } }, { "id": "st2", "label": { "s": "B", "e": "B" } }],
+            "next": { "talk": { "s": "話す", "e": "はなす" }, "make_title": { "s": "作る", "e": "つくる" },
+              "make_steps": [{ "s": "1", "e": "1" }, { "s": "2", "e": "2" }, { "s": "3", "e": "3" }] },
+            "make": null, "sources": [], "tags": { "interests": [], "concept_codes": [] }
+          }
+        },
+        {
+          "topic_id": "tp_fixture-philo-http_1", "kind": "philo", "pos": 1, "needs_supporter": false, "lineage_id": "ln-philo-http",
+          "body": {
+            "schema_version": 1, "kind": "philo", "locale": "ja-JP",
+            "title": { "s": "出典が http のお題", "e": "出典が http のお題" },
+            "lead": { "s": "リード", "e": "リード" },
+            "event_day": null, "premises": [],
+            "facts": [{ "id": "f1", "text": { "s": "事実", "e": "じじつ" }, "source_ids": ["s1"] }],
+            "views": [
+              { "id": "v1", "who": { "name": "ある人", "type": "person" }, "side": "a", "stance": { "s": "A", "e": "A" }, "source_ids": ["s1"] },
+              { "id": "v2", "who": { "name": "ある会", "type": "org" }, "side": "b", "stance": { "s": "B", "e": "B" }, "source_ids": ["s1"] }
+            ],
+            "asks": [
+              { "level": "check", "text": { "s": "問い 1", "e": "とい 1" } },
+              { "level": "self", "text": { "s": "問い 2", "e": "とい 2" } },
+              { "level": "open", "text": { "s": "問い 3", "e": "とい 3" } }
+            ],
+            "stances": [{ "id": "st1", "label": { "s": "A", "e": "A" } }, { "id": "st2", "label": { "s": "B", "e": "B" } }],
+            "next": { "talk": { "s": "話す", "e": "はなす" }, "make_title": { "s": "作る", "e": "つくる" },
+              "make_steps": [{ "s": "1", "e": "1" }, { "s": "2", "e": "2" }, { "s": "3", "e": "3" }] },
+            "make": null,
+            "sources": [{ "id": "s1", "url": "http://example.org/plain", "name": "http の出典", "quote": "この引用はテストのための架空の文で、二十字をこえています。" }],
+            "tags": { "interests": [], "concept_codes": [] }
+          }
+        }
+      ]
+    },
+    {
+      "day": "2026-11-06",
+      "topics": [
+        {
+          "topic_id": "tp_fixture-news-new_1", "kind": "news", "pos": 1, "needs_supporter": true, "lineage_id": "ln-news-a",
+          "body": {
+            "schema_version": 1, "kind": "news", "locale": "ja-JP",
+            "title": { "s": "新しい見出し </script> を含む（中）", "e": "あたらしい見出し（小）" },
+            "lead": { "s": "リードに行区切り をふくむ（中）", "e": "リード（小）" },
+            "event_day": "2026-11-04", "premises": [],
+            "facts": [
+              { "id": "f1", "text": { "s": "事実 1（中）", "e": "じじつ 1（小）" }, "source_ids": ["s1"] },
+              { "id": "f2", "text": { "s": "事実 2（中）", "e": "じじつ 2（小）" }, "source_ids": ["s1", "s2"] }
+            ],
+            "views": [],
+            "asks": [
+              { "level": "open", "text": { "s": "ひらいた問い（中）", "e": "ひらいた問い（小）" } },
+              { "level": "check", "text": { "s": "確かめる問い（中）", "e": "たしかめる問い（小）" } },
+              { "level": "self", "text": { "s": "自分の問い（中）", "e": "じぶんの問い（小）" } }
+            ],
+            "stances": [{ "id": "st1", "label": { "s": "そう思う", "e": "そうおもう" } }, { "id": "st2", "label": { "s": "場合による", "e": "ばあいによる" } }, { "id": "st3", "label": { "s": "思わない", "e": "おもわない" } }],
+            "next": { "talk": { "s": "話したい（中）", "e": "話したい（小）" }, "make_title": { "s": "作る題（中）", "e": "つくる題（小）" },
+              "make_steps": [{ "s": "一歩目", "e": "いっぽめ" }, { "s": "二歩目", "e": "にほめ" }, { "s": "三歩目", "e": "さんぽめ" }, { "s": "四歩目", "e": "よんほめ" }] },
+            "make": null,
+            "sources": [
+              { "id": "s1", "url": "https://example.org/news-1", "name": "例の出典 1", "quote": "この引用はテストのための架空の文で、二十字をこえています。" },
+              { "id": "s2", "url": "https://example.org/news-2", "name": "例の出典 2", "quote": "この引用はテストのための架空の文で、二十字をこえています。" }
+            ],
+            "tags": { "interests": [], "concept_codes": [] }
+          }
+        },
+        {
+          "topic_id": "tp_fixture-talk/ok:1", "kind": "talk", "pos": 1, "needs_supporter": false, "lineage_id": "ln-talk-ok",
+          "body": {
+            "schema_version": 1, "kind": "talk", "locale": "ja-JP",
+            "title": { "s": "話し合いのお題（中）", "e": "話し合いのお題（小）" },
+            "lead": { "s": "話し合いのリード（中）", "e": "話し合いのリード（小）" },
+            "event_day": null,
+            "premises": [{ "text": { "s": "前提の 1 文（中）", "e": "ぜんていの 1 文（小）" } }],
+            "facts": [],
+            "views": [
+              { "id": "v1", "who": { "name": "A という考え", "type": "position" }, "side": "a", "stance": { "s": "A の考え（中）", "e": "A の考え（小）" }, "source_ids": [] },
+              { "id": "v2", "who": { "name": "B という考え", "type": "position" }, "side": "b", "stance": { "s": "B の考え（中）", "e": "B の考え（小）" }, "source_ids": [] }
+            ],
+            "asks": [
+              { "level": "check", "text": { "s": "確かめる問い（中）", "e": "たしかめる問い（小）" } },
+              { "level": "self", "text": { "s": "自分の問い（中）", "e": "じぶんの問い（小）" } },
+              { "level": "open", "text": { "s": "ひらいた問い（中）", "e": "ひらいた問い（小）" } }
+            ],
+            "stances": [{ "id": "st1", "label": { "s": "A", "e": "A" } }, { "id": "st2", "label": { "s": "B", "e": "B" } }],
+            "next": { "talk": { "s": "話したい（中）", "e": "話したい（小）" }, "make_title": { "s": "作る題（中）", "e": "つくる題（小）" },
+              "make_steps": [{ "s": "一歩目", "e": "いっぽめ" }, { "s": "二歩目", "e": "にほめ" }, { "s": "三歩目", "e": "さんぽめ" }] },
+            "make": null, "sources": [], "tags": { "interests": [], "concept_codes": [] }
+          }
+        }
+      ]
+    },
+    {
+      "kind": "philo",
+      "topics": [
+        {
+          "topic_id": "tp_fixture-philo-ok_1", "kind": "philo", "needs_supporter": false, "lineage_id": "ln-philo-ok",
+          "body": {
+            "schema_version": 1, "kind": "philo", "locale": "ja-JP",
+            "title": { "s": "答えのない問い（中）", "e": "答えのない問い（小）" },
+            "lead": { "s": "問いのリード（中）", "e": "問いのリード（小）" },
+            "event_day": null,
+            "premises": [{ "text": { "s": "前提（中）", "e": "ぜんてい（小）" } }],
+            "facts": [{ "id": "f1", "text": { "s": "事実（中）", "e": "じじつ（小）" }, "source_ids": ["s2"] }],
+            "views": [
+              { "id": "v1", "who": { "name": "ある研究者", "type": "person" }, "side": "a", "stance": { "s": "A（中）", "e": "A（小）" }, "source_ids": ["s1", "s2"] },
+              { "id": "v2", "who": { "name": "ある団体", "type": "org" }, "side": "b", "stance": { "s": "B（中）", "e": "B（小）" }, "source_ids": ["s1"] }
+            ],
+            "asks": [
+              { "level": "check", "text": { "s": "確かめる問い（中）", "e": "たしかめる問い（小）" } },
+              { "level": "self", "text": { "s": "自分の問い（中）", "e": "じぶんの問い（小）" } },
+              { "level": "open", "text": { "s": "ひらいた問い（中）", "e": "ひらいた問い（小）" } }
+            ],
+            "stances": [{ "id": "st1", "label": { "s": "A", "e": "A" } }, { "id": "st2", "label": { "s": "B", "e": "B" } }, { "id": "st3", "label": { "s": "C", "e": "C" } }],
+            "next": { "talk": { "s": "話したい（中）", "e": "話したい（小）" }, "make_title": { "s": "作る題（中）", "e": "つくる題（小）" },
+              "make_steps": [{ "s": "一歩目", "e": "いっぽめ" }, { "s": "二歩目", "e": "にほめ" }, { "s": "三歩目", "e": "さんぽめ" }] },
+            "make": null,
+            "sources": [
+              { "id": "s1", "url": "https://example.org/philo-1", "name": "例の出典 A", "quote": "この引用はテストのための架空の文で、二十字をこえています。" },
+              { "id": "s2", "url": "https://example.org/philo-2", "name": "例の出典 B", "quote": "この引用はテストのための架空の文で、二十字をこえています。" }
+            ],
+            "tags": { "interests": [], "concept_codes": [] }
+          }
+        },
+        {
+          "topic_id": "tp_fixture-philo-notitle_1", "kind": "philo", "needs_supporter": false, "lineage_id": "ln-philo-notitle",
+          "body": {
+            "schema_version": 1, "kind": "philo", "locale": "ja-JP",
+            "lead": { "s": "題が無い", "e": "題が無い" },
+            "event_day": null, "premises": [],
+            "facts": [{ "id": "f1", "text": { "s": "事実", "e": "じじつ" }, "source_ids": [] }],
+            "views": [], "asks": [], "stances": [], "next": null, "make": null, "sources": [],
+            "tags": { "interests": [], "concept_codes": [] }
+          }
+        }
+      ]
+    },
+    "形の違う応答（文字列）"
+  ]
+}

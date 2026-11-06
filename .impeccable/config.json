@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cream-palette",
+        "value": "*",
+        "files": [
+          "app-v3/index.html"
+        ],
+        "createdAt": "2026-11-06T11:36:39.361Z",
+        "reason": "owner's standing design rule: DE-SCHOOL UI uses the de.school warm-light palette by default (memory user-tone-de-school / design handoff 2026-11-03); not introduced this session"
+      }
+    ]
+  }
+}
