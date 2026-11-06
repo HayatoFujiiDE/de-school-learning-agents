@@ -412,11 +412,11 @@ export async function runTopicRun(env: Env, port: FactoryPort, req: RunRequest, 
           description:
             'できあがったお題を保存します。最後に 1 回だけ呼びます。topics は本文の配列で、形は schema のとおりです。出典（sources）は web_fetch で開けたページだけで、quote はそのページの文を一字も変えずに写します。',
           input_schema: { type: 'object', additionalProperties: false, required: ['topics'], properties: { topics: { type: 'array', items: TOPIC_BODY_JSON_SCHEMA } } } as unknown as Tool['input_schema'],
-          // 呼んだ時の入力の形を保証させる（v2.4 の裁定 5。schema は公式の strict の制限の中: CONTRACT-factory §T 末尾）。呼ぶことは保証しないので無ければ no_output
-          strict: true,
+          // strict は付けない: 本番で 400「The compiled grammar is too large」（v2.5 の裁定。CONTRACT-factory §T 末尾）。
+          // 形は保証されないので、Worker の validateTopicBody が 1 本ずつ確かめ、合わない本は捨てる（dropped）
         },
       ],
-      // 強制呼び出しはしない（Sonnet 5.5 は tool_choice any / tool が 400。CONTRACT-factory §T 末尾）。auto + strict。無ければ no_output
+      // 強制呼び出しはしない（Sonnet 5.5 は tool_choice any / tool が 400。CONTRACT-factory §T 末尾）。auto。無ければ no_output
       tool_choice: { type: 'auto' },
     };
   } catch {

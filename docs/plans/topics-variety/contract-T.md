@@ -518,3 +518,7 @@ d. 本物の呼び出しは、deploy 後にふじさんが入にしてから、�
 
 今回は直さない（前からある・別の変更で扱う）: 管理 API の本文の大きさの制限が読み終わった後の検査になっている（`src/http.ts`）/ `src/anthropic.ts` の締め切りの下限 1 秒（お題の側は上の 7 で避ける）/ 使わなくなった fake のルート `/__fake/topics-replan` は、この修正で消す（`src/fake/anthropic.ts` の呼び出しも）。
 
+
+## v2.5 の裁定（2026-11-06、本番の実測）
+
+生成の `save_topics` から `strict` を外す。本番で Messages API が 400「The compiled grammar is too large」を返したため（v2.4 の裁定 5 の「直せない時」に当たる。記録は `CONTRACT-factory.md` §T の末尾）。schema は渡し続け、形は Worker の `validateTopicBody` が確かめる。検査の `save_check` は `strict: true` のまま。

@@ -192,12 +192,19 @@ describe('禁止語と flags の両方がある held の承認は 400（T-14 b6�
   });
 });
 
-describe('生成の save_topics に strict: true（裁定 5）と、strict で使える schema の形', () => {
-  it('生成の呼び出しの save_topics は strict: true', async () => {
+describe('生成の save_topics は strict なし（v2.5 の裁定: 文法が大きすぎて 400）と、strict で使える schema の形', () => {
+  it('生成の呼び出しの save_topics に strict を付けない（schema は渡す）', async () => {
     const p = scriptedPort([genMessage([talkBody()])]);
     await runTopicRun(env, p.port, { purpose: 'gen', kind: 'talk', trigger: 'manual', slotDay: tomorrow() }, { deadline: far(), fetchImpl });
-    const t = (p.calls[0].params.tools ?? []).find((x) => (x as { name?: string }).name === 'save_topics') as { strict?: boolean };
-    expect(t.strict).toBe(true);
+    const t = (p.calls[0].params.tools ?? []).find((x) => (x as { name?: string }).name === 'save_topics') as { strict?: boolean; input_schema?: unknown };
+    expect('strict' in t).toBe(false);
+    expect(t.input_schema).toBeTruthy();
+  });
+  it('形が合わない本は捨てる（strict なしの受け皿）: 余分な項目のある本 1 + 正しい本 1 → 1 本だけ入る', async () => {
+    const p = scriptedPort([genMessage([{ ...talkBody('給食の残りをどう減らすか'), extra: 1 }, talkBody()])]);
+    const r = await runTopicRun(env, p.port, { purpose: 'gen', kind: 'talk', trigger: 'manual', slotDay: tomorrow() }, { deadline: far(), fetchImpl });
+    expect(r.status).toBe('done');
+    expect(count(db, 'SELECT COUNT(*) AS n FROM topics')).toBe(1);
   });
   it('save_topics と save_check の schema は公式の strict の制限の中（object は additionalProperties: false・数と長さの制約なし・union 16 以下・任意の項目 24 以下）', () => {
     let unions = 0;
