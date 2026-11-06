@@ -4,6 +4,7 @@
 // (e) token 不一致・calling でない message → 何もせず ack / (f) disabled・cap は今までどおり / (g) 画像の message は今までどおり
 import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
+import type { FactoryPort } from '../src/anthropic';
 import type { Env, FactoryQueueMessage, TopicRunQueueMessage } from '../src/env';
 import worker from '../src/index';
 import { deriveTopicRoute, runTopicsRoute } from '../src/routes/topics';
@@ -149,6 +150,40 @@ describe('(e) 行と合わない message は何もせず ack', () => {
     expect(await deliver(env, m)).toEqual({ acked: 1, retried: 0 });
     expect(fakeGenCalls()).toBe(1);
     expect(runRow()).toEqual(after);
+  });
+
+  it('token の回し替え: 同じ message を 2 回 worker.queue に流すとモデルは 1 回だけ・2 回目は stale・行の token は message の token と違う', async () => {
+    const { env, m } = await queued();
+    expect(await deliver(env, m)).toEqual({ acked: 1, retried: 0 });
+    expect(runRow()!.token).not.toBe(m.token);
+    expect(await executeTopicRun(env, scriptedPort([]).port, m.run_id, m.token, m.req, { deadline: far(), fetchImpl })).toEqual({ status: 'stale' });
+    expect(await deliver(env, m)).toEqual({ acked: 1, retried: 0 });
+    expect(fakeGenCalls()).toBe(1);
+  });
+
+  it('1 回目が走っている途中（回し替え済み・calling のまま）に再配送が来ても呼ばない', async () => {
+    const { env, m } = await queued();
+    let mid: { acked: number; retried: number } | null = null;
+    let midRow: Record<string, unknown> | undefined;
+    let calls = 0;
+    const port = {
+      ...scriptedPort([]).port,
+      async createMessage() {
+        calls++;
+        // モデルの応答を待っている間に、同じ message が再配送される
+        mid = await deliver(env, m);
+        midRow = runRow();
+        return genMessage([talkBody()]);
+      },
+    } as unknown as FactoryPort;
+    const o = await executeTopicRun(env, port, m.run_id, m.token, m.req, { deadline: far(), fetchImpl });
+    expect(mid).toEqual({ acked: 1, retried: 0 });
+    expect(midRow).toMatchObject({ status: 'calling' });
+    expect(midRow!.token).not.toBe(m.token);
+    expect(fakeGenCalls()).toBe(0); // 再配送の受け手はモデルを呼んでいない
+    expect(calls).toBe(1);
+    expect(o.status).toBe('done');
+    expect(runRow()).toMatchObject({ status: 'done' });
   });
 
   it('要求の中身が行と違う（種類を書き換えた）→ 走らない', async () => {

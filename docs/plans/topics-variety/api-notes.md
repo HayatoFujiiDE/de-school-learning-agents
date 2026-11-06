@@ -143,9 +143,9 @@
 
 リクエスト: `{ "kind": "refresh" | "extend", "note": "一言（200 字まで・省略可）" }`
 
-成功 200: `{ "run": { /* RunRow */ } }`（呼び出しが終わるまで待つ。最大 2〜3 分。`run.status` が `failed` でも 200）
+成功 202: `{ "status": "queued", "run": { /* RunRow（status は calling） */ } }`（contract-T v2.6。取り置きと run の行を取った時点で返り、生成と保存は queue の受け手が行う。結果は `GET /api/topics/runs` の同じ run の行で見る）
 
-失敗: 400 `bad_request` / 404 `not_found` / 409 `run_in_progress`（同じ種類の run が動いている）/ 409 `parent_not_eligible`（深さ 5・状態が合わない・発展の子が 2 つある・終わっていない見直しの子（held を含む）がある）/ 409 `cap`（費用の上限）/ 409 `disabled`（入・切が切、または一時停止）
+失敗: 400 `bad_request` / 404 `not_found` / 503 `queue_unavailable`（queue に送れなかった。run の行と取り置きは取り消し済み）/ 409 `run_in_progress`（同じ種類の run が動いている）/ 409 `parent_not_eligible`（深さ 5・状態が合わない・発展の子が 2 つある・終わっていない見直しの子（held を含む）がある）/ 409 `cap`（費用の上限）/ 409 `disabled`（入・切が切、または一時停止）
 
 ### `POST /api/topics`
 
@@ -157,7 +157,7 @@
 ### `POST /api/topics/runs`
 
 リクエスト: `{ "kind": "news" | "talk" | "philo" | "make" }`
-成功 200: `{ "run": { /* RunRow */ } }`（呼び出しが終わるまで待つ）。失敗は derive と同じ（`parent_not_eligible` を除く）。
+成功 202: `{ "status": "queued", "run": { /* RunRow（status は calling） */ } }`（contract-T v2.6。derive と同じく queue の受け手が作る）。失敗は derive と同じ（`not_found`・`parent_not_eligible` を除く。503 `queue_unavailable` を含む）。
 
 ### `GET /api/topics/runs?limit=`
 

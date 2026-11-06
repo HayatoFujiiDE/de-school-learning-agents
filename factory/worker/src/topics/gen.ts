@@ -6,7 +6,7 @@
 
 import type { Message, MessageCreateParamsNonStreaming, Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { PortError, type CallOpts, type FactoryPort } from '../anthropic';
-import { all, conditionalBatch, isUniqueViolation, nowIso, prepare, stmt, tokyoDay, type Stmt } from '../db';
+import { all, cas, conditionalBatch, isUniqueViolation, nowIso, prepare, stmt, tokyoDay, type Stmt } from '../db';
 import { cfg, type Env } from '../env';
 import { TOPIC_FEEDS } from '../generated/topic-sources';
 import { microToCents, sonnetMicroDollars, WEB_SEARCH_CENTS } from '../ledger';
@@ -310,10 +310,19 @@ export async function executeTopicRun(
     row.trigger === req.trigger &&
     (req.purpose === 'gen' ? row.slot_day === req.slotDay : row.parent_topic_id === req.parentId);
   if (!same) return { status: 'stale' };
+  // token の回し替え（司令塔の裁定。モデルを呼ぶ前に 1 文の CAS）: 通った 1 回だけが新しい token で走る。
+  // 再配送（ack の前に呼び出しが落ちた・走っている途中に届いた）は古い token なので、ここか上の照合で stale になり、モデルを 2 回呼ばない。
+  // 以後の runPred / runFinishStmt / finishFailed はすべて新しい token（述語の意味は変えない）
+  const fresh = crypto.randomUUID();
+  const rotated = await cas(
+    db,
+    stmt("UPDATE topic_runs SET token = ? WHERE id = ? AND token = ? AND status = 'calling' AND lease_until > ?", fresh, runId, token, nowIso(new Date(nowMs))),
+  );
+  if (!rotated) return { status: 'stale' };
   // 派生の親が読めなければ parent = null のまま走り、入力づくりで input_failed になる（calling を残さない）
   const parent = req.purpose === 'derive' ? await readTopic(db, req.parentId) : null;
   // 派生の slot_day は取った日（runTopicRun の today と同じ値）
-  return runTaken(env, port, req, { runId, token, slotDay: row.slot_day, today: row.slot_day, parent }, opts);
+  return runTaken(env, port, req, { runId, token: fresh, slotDay: row.slot_day, today: row.slot_day, parent }, opts);
 }
 
 const RUN_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
