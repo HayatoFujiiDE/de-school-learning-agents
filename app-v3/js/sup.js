@@ -37,8 +37,8 @@
   SUP.supName = function () { return SD.supporter.name; };
   // by（サポーターの id）→ 名前。このモックのサポーターは 1 人
   SUP.nameOf = function () { return SD.supporter.name; };
-  // 「11/2（月）」: 予定の日付の文言（plan_date）から曜日グループの手前だけを使う
-  SUP.dateLabel = function () { var p = DES.data.today.split('-'); return DES.t('plan_date', { m: +p[1], d: +p[2], w: DES.data.weekday, g: '' }).split(' · ')[0]; };
+  // 「11/2（月）」: サポーター画面の書式（date_fmt）で作る
+  SUP.dateLabel = function () { var p = DES.data.today.split('-'); return SUP.t('date_fmt', { m: +p[1], d: +p[2], w: DES.data.weekday }); };
   SUP.today = todayStr;
 
   // ---------- 入っているか ----------
@@ -197,12 +197,12 @@
     var prev = x.state;
     DES.app.change(function () {
       x.state = 'withdrawn';
-      SUP.addLog('talk', 'idea', SUP.t('log_idea_withdraw', { text: x.text }), { msg: x.msgId, idea: id });
+      SUP.addLog('talk', 'desk', SUP.t('log_idea_withdraw', { text: x.text }), { msg: x.msgId, idea: id });
     }, { focus: 'idea:' + id });
     DES.app.toast(SUP.t('withdrawn_toast'), { label: SUP.t('undo'), fn: function () {
       DES.app.change(function () {
         x.state = prev;
-        SUP.addLog('talk', 'idea', SUP.t('log_idea_back', { text: x.text }), { msg: x.msgId, idea: id });
+        SUP.addLog('talk', 'desk', SUP.t('log_idea_back', { text: x.text }), { msg: x.msgId, idea: id });
       }, { focus: 'idea:' + id });
     } });
   };
