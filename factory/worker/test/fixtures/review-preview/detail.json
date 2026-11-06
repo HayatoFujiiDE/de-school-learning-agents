@@ -1,0 +1,501 @@
+{
+  "_comment": "確認画面の見た目の確認と単体テスト用の作り物のデータ（GET /api/review/:id の応答の形 = src/routes/review.ts）。実在の組織・人・ページではない。triage は test/review-preview.test.ts が triageVersion の結果と一致することを確かめる",
+  "version": {
+    "id": "vfix-0001",
+    "material_id": "mfix-0001",
+    "version": 3,
+    "job_id": "jfix-0001",
+    "session_id": "sesn_fixture",
+    "status": "review",
+    "verification_status": "done",
+    "verification_attempts": 1,
+    "verify_phase": null,
+    "verify_wait_reason": null,
+    "content_sha256": "0000",
+    "grader_result": "satisfied",
+    "grader_explanation": "作り物の採点メモ",
+    "list_cost_cents": 412,
+    "created_at": "2026-11-06T09:00:00.000Z",
+    "material": {
+      "schema_version": 1,
+      "slug": "fixture-red-blood-cell",
+      "title": "赤血球のしごと",
+      "kinds": [
+        3,
+        4
+      ],
+      "catalog_item_id": "fixture",
+      "concept_codes": [],
+      "summary_elementary": "赤血球が からだじゅうに 酸素を はこぶ しくみを、図と うごく もので 見てみよう",
+      "summary_secondary": "赤血球が酸素を全身へ運ぶ仕組みを、図とシミュレーションで確かめる",
+      "license_summary": "出典ごとの利用条件に従う（作り物）",
+      "parts": [
+        {
+          "id": "p1",
+          "kind": 3,
+          "title": "赤血球のしごと",
+          "entry_point": {
+            "type": "look",
+            "text": "図の 赤い 丸を 数えてみよう"
+          },
+          "variants": [
+            {
+              "audience": "elementary",
+              "length": "short",
+              "interest": null,
+              "game": false,
+              "path": "parts/p1/p1-elementary-short.md"
+            },
+            {
+              "audience": "elementary",
+              "length": "long",
+              "interest": null,
+              "game": false,
+              "path": "parts/p1/p1-elementary-long.md"
+            },
+            {
+              "audience": "secondary",
+              "length": "short",
+              "interest": null,
+              "game": false,
+              "path": "parts/p1/p1-secondary-short.md"
+            },
+            {
+              "audience": "secondary",
+              "length": "long",
+              "interest": null,
+              "game": false,
+              "path": "parts/p1/p1-secondary-long.md"
+            },
+            {
+              "audience": "elementary",
+              "length": "short",
+              "interest": null,
+              "game": true,
+              "path": "parts/p1/p1-game.md"
+            }
+          ],
+          "files": [
+            {
+              "path": "parts/p1/p1-figure-1.svg",
+              "role": "figure"
+            }
+          ],
+          "videos": [
+            {
+              "id": "v1",
+              "youtube_id": "abcdefghijk",
+              "title": "赤血球が流れる様子（作り物）",
+              "channel": "作り物の科学チャンネル",
+              "start_sec": 30,
+              "end_sec": 95,
+              "why": "細い血管の中を 赤血球が 1 列に ならんで 進む 様子が 見える",
+              "rights_note": "チャンネルの概要欄に本人の制作とある（作り物）",
+              "source_id": "s5"
+            }
+          ],
+          "adjustable": [
+            "例に出す生き物",
+            "説明の長さ"
+          ],
+          "tech_dependencies": [
+            "svg"
+          ],
+          "needs_supporter_check": false
+        },
+        {
+          "id": "p2",
+          "kind": 4,
+          "title": "血の流れを動かしてみよう",
+          "entry_point": {
+            "type": "touch",
+            "text": "スライダーを 動かして、速さを かえてみよう"
+          },
+          "variants": [
+            {
+              "audience": "elementary",
+              "length": "short",
+              "interest": null,
+              "game": false,
+              "path": "parts/p2/p2-elementary-short.md"
+            },
+            {
+              "audience": "elementary",
+              "length": "long",
+              "interest": null,
+              "game": false,
+              "path": "parts/p2/p2-elementary-long.md"
+            },
+            {
+              "audience": "secondary",
+              "length": "short",
+              "interest": null,
+              "game": false,
+              "path": "parts/p2/p2-secondary-short.md"
+            },
+            {
+              "audience": "secondary",
+              "length": "long",
+              "interest": null,
+              "game": false,
+              "path": "parts/p2/p2-secondary-long.md"
+            }
+          ],
+          "files": [
+            {
+              "path": "parts/p2/p2-app.html",
+              "role": "app"
+            }
+          ],
+          "adjustable": [
+            "速さの範囲"
+          ],
+          "tech_dependencies": [
+            "canvas"
+          ],
+          "runtime_check": {
+            "how": "スライダーを動かす",
+            "expected": "赤い粒の速さが変わる"
+          },
+          "needs_supporter_check": false
+        }
+      ]
+    },
+    "checks": {
+      "forbidden": [],
+      "app_html": [],
+      "kakunin_zumi": [],
+      "missing_source_refs": [],
+      "missing_claim_refs": [],
+      "unreferenced_files": []
+    },
+    "public_paths": [],
+    "tech_dependencies": [
+      "svg",
+      "canvas"
+    ],
+    "adapt_rules_md": "# 変えてよいこと\n- 例に出す生き物\n# 変えてはいけないこと\n- 赤血球が酸素を運ぶこと\n",
+    "selfcheck_md": "# 自己点検\n- 図の最初の段落は「数える」で始めた\n"
+  },
+  "material": {
+    "id": "mfix-0001",
+    "slug": "fixture-red-blood-cell",
+    "title": "赤血球のしごと",
+    "kinds": [
+      3,
+      4
+    ],
+    "work_status": "review",
+    "publish_status": "none",
+    "current_version_id": null
+  },
+  "job": {
+    "id": "jfix-0001",
+    "kind": "make",
+    "model": "fixture",
+    "list_cost_cents": 412,
+    "console_url": null
+  },
+  "sources": [
+    {
+      "source_id": "s1",
+      "url": "https://example.org/body/blood/red-cells",
+      "title": "からだの図鑑「血液のはたらき」（作り物）",
+      "accessed_at": "2026-11-04",
+      "quoted_excerpt": "赤血球は肺で受け取った酸素を全身へ運ぶ。",
+      "license": "CC BY 4.0",
+      "is_primary": 1,
+      "url_was_fetched": 1,
+      "quote_found": 1,
+      "check_detail": "ok"
+    },
+    {
+      "source_id": "s2",
+      "url": "https://example.org/cells/nucleus-and-oxygen-capacity-of-mammalian-erythrocytes",
+      "title": "細胞のつくり事典「核のない細胞」（作り物）",
+      "accessed_at": "2026-11-04",
+      "quoted_excerpt": "哺乳類の赤血球は核を持たないため、酸素の運搬量が増える。",
+      "license": "CC BY-SA 4.0",
+      "is_primary": 1,
+      "url_was_fetched": 1,
+      "quote_found": 0,
+      "check_detail": "quote_not_found"
+    },
+    {
+      "source_id": "s3",
+      "url": "https://example.com/blog/blood-basics",
+      "title": "理科の先生のブログ（作り物）",
+      "accessed_at": "2026-11-03",
+      "quoted_excerpt": "赤血球は酸素を運ぶ。",
+      "license": "引用の範囲で利用",
+      "is_primary": 0,
+      "url_was_fetched": 1,
+      "quote_found": 1,
+      "check_detail": "secondary"
+    },
+    {
+      "source_id": "s4",
+      "url": "https://example.net/encyclopedia/erythrocyte-lifespan",
+      "title": "生き物百科「赤血球の寿命」（作り物）",
+      "accessed_at": "2026-11-04",
+      "quoted_excerpt": "赤血球の寿命はおよそ120日である。",
+      "license": "unknown",
+      "is_primary": 1,
+      "url_was_fetched": 1,
+      "quote_found": 1,
+      "check_detail": "ok"
+    },
+    {
+      "source_id": "s5",
+      "url": "https://www.youtube.com/watch?v=abcdefghijk",
+      "title": "赤血球が流れる様子（作り物）",
+      "accessed_at": "2026-11-04",
+      "quoted_excerpt": null,
+      "license": "YouTube の標準ライセンス",
+      "is_primary": 1,
+      "url_was_fetched": 0,
+      "quote_found": 0,
+      "check_detail": "no_excerpt"
+    },
+    {
+      "source_id": "s6",
+      "url": "https://example.org/stats/blood-cell-counts",
+      "title": "血液の数の統計（作り物）",
+      "accessed_at": "2026-11-04",
+      "quoted_excerpt": "血液中の細胞で最も多いのは赤血球である。",
+      "license": "CC BY 4.0",
+      "is_primary": 1,
+      "url_was_fetched": 0,
+      "quote_found": 0,
+      "check_detail": "not_fetched"
+    }
+  ],
+  "claims": [
+    {
+      "id": "c1",
+      "text": "赤血球は肺で受け取った酸素を全身へ運ぶ",
+      "status": "confirmed",
+      "source_ids": [
+        "s1"
+      ],
+      "used_in": [
+        "p1",
+        "p2"
+      ],
+      "verdict": "confirmed",
+      "reason": "s1 の本文に同じ内容がある",
+      "opened_urls": [
+        "https://example.org/body/blood/red-cells"
+      ]
+    },
+    {
+      "id": "c2",
+      "text": "血液中の細胞で最も数が多いのは赤血球である",
+      "status": "confirmed",
+      "source_ids": [
+        "s6"
+      ],
+      "used_in": [
+        "p1",
+        "p2"
+      ],
+      "verdict": "hypothesis",
+      "reason": "出典のページを開けず、ほかの資料でも数の比較を確かめきれない",
+      "opened_urls": []
+    },
+    {
+      "id": "c3",
+      "text": "酸素はヘモグロビンと結びついて運ばれる",
+      "status": "confirmed",
+      "source_ids": [
+        "s1",
+        "s3"
+      ],
+      "used_in": [
+        "p1"
+      ],
+      "verdict": "confirmed",
+      "reason": "s1 と s3 に記述がある",
+      "opened_urls": [
+        "https://example.org/body/blood/red-cells"
+      ]
+    },
+    {
+      "id": "c4",
+      "text": "赤血球の寿命は約120日である",
+      "status": "confirmed",
+      "source_ids": [
+        "s4"
+      ],
+      "used_in": [
+        "p1"
+      ],
+      "verdict": "confirmed",
+      "reason": "s4 の本文に同じ数字がある",
+      "opened_urls": [
+        "https://example.net/encyclopedia/erythrocyte-lifespan"
+      ]
+    },
+    {
+      "id": "c5",
+      "text": "核が無いぶん赤血球は多くの酸素を運べる",
+      "status": "hypothesis",
+      "source_ids": [
+        "s2"
+      ],
+      "used_in": [
+        "p1"
+      ],
+      "verdict": "contradicted",
+      "reason": "検証係が開いたページには「核が無いことと運搬量の関係ははっきりしない」とある",
+      "opened_urls": [
+        "https://example.org/cells/nucleus-overview"
+      ]
+    },
+    {
+      "id": "c6",
+      "text": "手首で脈を感じられる",
+      "status": "confirmed",
+      "source_ids": [],
+      "used_in": [
+        "p1"
+      ],
+      "verdict": "confirmed",
+      "reason": "一般的な事実",
+      "opened_urls": []
+    },
+    {
+      "id": "c7",
+      "text": "新しい赤血球は骨髄で作られる",
+      "status": "confirmed",
+      "source_ids": [
+        "s9"
+      ],
+      "used_in": [
+        "p1"
+      ],
+      "verdict": "confirmed",
+      "reason": "一般的な事実",
+      "opened_urls": []
+    }
+  ],
+  "verification": {
+    "id": "verfix-0001",
+    "attempt": 1,
+    "model": "fixture",
+    "claims_total": 7,
+    "confirmed": 5,
+    "hypothesis": 1,
+    "unverified": 0,
+    "contradicted": 1,
+    "overall_note": "作り物の検証メモ",
+    "figures": [
+      {
+        "path": "parts/p1/p1-figure-1.svg",
+        "verdict": "ok",
+        "reason": "赤い丸が 6 個あり、本文の問いと合う"
+      }
+    ],
+    "analogy_gaps": [],
+    "videos": [
+      {
+        "id": "v1",
+        "verdict": "ok",
+        "reason": "区間で赤血球が 1 列に進む"
+      }
+    ]
+  },
+  "verification_id": "verfix-0001",
+  "verification_history": [
+    {
+      "id": "verfix-0001",
+      "attempt": 1,
+      "contradicted": 1,
+      "created_at": "2026-11-06T09:30:00.000Z"
+    }
+  ],
+  "verify_cost_cents": 38,
+  "generated_images": [],
+  "video_notes": null,
+  "video_meta": [],
+  "triage": {
+    "verification_id": "verfix-0001",
+    "auto": {
+      "content_and_evidence": "review",
+      "terms_of_use": "review",
+      "artifact_behavior": "review"
+    },
+    "groups": [
+      {
+        "cause": "maker_url_not_fetched",
+        "source_id": "s6",
+        "url": "https://example.org/stats/blood-cell-counts",
+        "verifier_opened_urls": [],
+        "claim_ids": [
+          "c2"
+        ]
+      },
+      {
+        "cause": "contradicted",
+        "source_id": "s2",
+        "url": "https://example.org/cells/nucleus-and-oxygen-capacity-of-mammalian-erythrocytes",
+        "verifier_opened_urls": [
+          "https://example.org/cells/nucleus-overview"
+        ],
+        "claim_ids": [
+          "c5"
+        ]
+      },
+      {
+        "cause": "no_source",
+        "source_id": null,
+        "url": null,
+        "verifier_opened_urls": [],
+        "claim_ids": [
+          "c6"
+        ]
+      },
+      {
+        "cause": "source_not_listed",
+        "source_id": "s9",
+        "url": null,
+        "verifier_opened_urls": [],
+        "claim_ids": [
+          "c7"
+        ]
+      },
+      {
+        "cause": "quote_mismatch",
+        "source_id": "s2",
+        "url": "https://example.org/cells/nucleus-and-oxygen-capacity-of-mammalian-erythrocytes",
+        "verifier_opened_urls": [],
+        "claim_ids": []
+      },
+      {
+        "cause": "license_unknown",
+        "source_id": "s4",
+        "url": "https://example.net/encyclopedia/erythrocyte-lifespan",
+        "verifier_opened_urls": [],
+        "claim_ids": []
+      },
+      {
+        "cause": "quote_mismatch",
+        "source_id": "s6",
+        "url": "https://example.org/stats/blood-cell-counts",
+        "verifier_opened_urls": [],
+        "claim_ids": []
+      }
+    ],
+    "ok_counts": {
+      "claims": 3,
+      "sources": 3
+    },
+    "needs_review": 10,
+    "bad": true,
+    "reasons": [
+      "contradicted"
+    ],
+    "action": "none",
+    "return_note": null
+  }
+}

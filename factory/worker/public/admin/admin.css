@@ -500,3 +500,47 @@ body.floor-wide .view { max-width: 1600px; padding-left: 12px; padding-right: 12
 .retro-floor h2 { margin: 0 0 8px; font-size: 18px; }
 .retro-facts { margin: 0 0 12px; }
 .retro-facts li { margin: 2px 0; }
+
+/* ---- 確認画面: 出典カード（「出典と主張」。問題のある順。状態の一言を先頭に）---- */
+.sc-panel h2 { margin: 0 0 4px; }
+.sc-sum { margin: 0 0 12px; color: var(--muted); }
+.sc { border: 1px solid var(--line); border-left: 5px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 0 0 12px; background: var(--white); min-width: 0; overflow-wrap: anywhere; }
+.sc.sc-red { border-left-color: var(--red); }
+.sc.sc-yellow { border-left-color: var(--ai); }
+.sc.sc-green { border-left-color: var(--green); }
+.sc.sc-gray { border-left-color: #c9c9c0; }
+.sc-state { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-weight: 700; font-size: 15px; }
+.sc-dot { flex: none; width: 10px; height: 10px; border-radius: 999px; background: var(--muted); }
+.sc-red .sc-state { color: var(--red); } .sc-red .sc-dot { background: var(--red); }
+.sc-yellow .sc-state { color: #8a5a00; } .sc-yellow .sc-dot { background: var(--ai); }
+.sc-green .sc-state { color: var(--green); } .sc-green .sc-dot { background: var(--green); }
+.sc-gray .sc-state { color: var(--muted); } .sc-gray .sc-dot { background: #b5b5ab; }
+.sc-more-issues { margin: -2px 0 6px; padding-left: 18px; font-size: 13px; color: #8a5a00; }
+.sc-title { margin: 6px 0 2px; font-size: 15px; line-height: 1.5; }
+.sc-tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); vertical-align: 2px; }
+.sc-meta { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+.sc-meta a { color: var(--green); }
+.sc-sid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.sc-sec { margin: 8px 0 0; }
+.sc-label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 0 2px; }
+.sc-lic .sc-label { display: inline; }
+.sc-claims { list-style: none; margin: 0; padding: 0; }
+.sc-claims li { padding: 6px 0; border-top: 1px dashed var(--line); line-height: 1.6; }
+.sc-claims li:first-child { border-top: 0; padding-top: 2px; }
+.sc-cid { font-weight: 700; color: var(--green); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+button.sc-cid { text-decoration: underline; text-underline-offset: 2px; }
+.sc-reason { font-size: 13px; color: var(--muted); margin: 2px 0 0; }
+.sc-why { color: var(--red); }
+.sc-empty, .sc-quote-none { margin: 0; font-size: 13px; color: var(--muted); }
+.sc-quote { margin: 2px 0 0; padding: 8px 12px; border-left: 3px solid var(--orange); background: var(--paper); border-radius: 0 8px 8px 0; line-height: 1.7; white-space: pre-wrap; }
+.sc-quote.is-bad { border: 2px solid var(--red); border-left-width: 4px; background: var(--red-soft); }
+.sc-quote-note { margin: 4px 0 0; font-size: 13px; color: var(--red); font-weight: 600; }
+.sc-opened { margin: 8px 0 0; font-size: 13px; }
+.sc-lic { margin: 8px 0 0; }
+.sc-lic-bad { color: var(--red); font-weight: 700; }
+.sc-log { margin: 8px 0 0; font-size: 13px; }
+.sc-log summary { cursor: pointer; color: var(--muted); }
+.sc-log p { margin: 4px 0 0; }
+.sc-okbox { margin: 4px 0 0; }
+.sc-okbox > summary { cursor: pointer; font-weight: 600; color: var(--green); padding: 6px 0; }
+.sc-okbox[open] > summary { margin: 0 0 8px; }

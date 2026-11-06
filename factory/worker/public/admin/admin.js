@@ -2201,6 +2201,183 @@
   // §S-8-2: 作り直しで前の版の取得記録により確かめた出典（この session では開いていない）。ほかの値はそのまま出す
   function checkDetailText(x) { return x === 'carried' ? '前の版の記録で確認' : x; }
 
+  // ---- 出典カード（確認画面の「出典と主張」。表をやめ、どの主張を支えているか・何が問題かを日本語で先頭に出す）----
+  // 状態の順（小さいほど上）: 食い違い → 引用不一致 → 開けていない → 確かめきれない → 利用条件不明 → 問題なし → 補助の出典（二次）
+  var SRC_ISSUE = {
+    contradicted: { rank: 0, cls: 'red', text: '出典と食い違う主張があります' },
+    quote_mismatch: { rank: 1, cls: 'red', text: '引用が本文と一致しません' },
+    maker_url_not_fetched: { rank: 2, cls: 'red', text: '職人がこのページを開けていません' },
+    verifier_limit: { rank: 3, cls: 'yellow', text: '検証係が開ききれませんでした（取得の上限）' },
+    not_confirmed: { rank: 3, cls: 'yellow', text: 'この出典で主張を確かめられませんでした' },
+    license_unknown: { rank: 4, cls: 'yellow', text: '利用条件が分かりません' }
+  };
+  var SRC_OK = { rank: 5, cls: 'green', text: '問題なし' };
+  var SRC_SECONDARY = { rank: 6, cls: 'gray', text: '補助の出典（一次ではない）' };
+  /** 引用の照合（check_detail）の日本語。§F-1 の値。知らない値はそのまま */
+  var CHECK_DETAIL_TEXT = {
+    ok: '職人が開いたページの本文に引用がありました',
+    not_fetched: '職人がこのページを開けていません',
+    quote_not_found: '職人が開いたページの本文に、この引用が見つかりませんでした',
+    no_excerpt: '引用が書かれていません（動画の出典はこの値です）',
+    result_unavailable: 'ページは開けましたが、本文を照らし合わせられませんでした（PDF など）',
+    secondary: '補助の出典のため、照合の結果は参考です',
+    carried: '前の版の記録で確認'
+  };
+  var VERDICT_JA = { confirmed: '確か', hypothesis: '仮説', unverified: '未確認', contradicted: '食い違い' };
+  var hasOwn = vhas;
+  var strArr = function (v) { return Array.isArray(v) ? v.filter(function (x) { return typeof x === 'string'; }) : []; };
+
+  /** 主張の逆引き: 出典 id → その出典を参照している主張（claims の source_ids から。出現順・重複なし） */
+  function claimsBySource(claims) {
+    var out = Object.create(null);
+    (Array.isArray(claims) ? claims : []).forEach(function (c) {
+      if (!c || typeof c !== 'object') return;
+      strArr(c.source_ids).forEach(function (sid) {
+        var list = out[sid] || (out[sid] = []);
+        if (list.indexOf(c) < 0) list.push(c);
+      });
+    });
+    return out;
+  }
+  /** 動画の出典（版の動画の source_id が指す行で、url がその動画の watch URL と一致するもの。§Q-11 9 と同じ規則） */
+  function videoSourceIdsOf(d) {
+    var ids = {}, srcs = Array.isArray(d && d.sources) ? d.sources : [];
+    videosOf(d && d.version && d.version.material).forEach(function (v) {
+      if (typeof v.source_id !== 'string' || typeof v.youtube_id !== 'string') return;
+      var watch = 'https://www.youtube.com/watch?v=' + v.youtube_id;
+      if (srcs.some(function (s) { return s && s.source_id === v.source_id && s.url === watch; })) ids[v.source_id] = true;
+    });
+    return ids;
+  }
+  /** 出典 1 件の問題（SRC_ISSUE のキー）。仕分けがある時は triage の group（要確認と同じ判定）、無い時は出典の列と主張の判定から */
+  function sourceIssueKeys(s, tri, citing, isVideo) {
+    var keys = [];
+    var add = function (k) { if (hasOwn(SRC_ISSUE, k) && keys.indexOf(k) < 0) keys.push(k); };
+    if (tri.present) {
+      tri.groups.forEach(function (g) { if (g && g.source_id === s.source_id) add(g.cause); });
+    } else {
+      if ((citing || []).some(function (c) { return c.verdict === 'contradicted'; })) add('contradicted');
+      if (!isVideo && Number(s.url_was_fetched) === 0) add('maker_url_not_fetched');
+      if (!isVideo && Number(s.quote_found) === 0) add('quote_mismatch');
+    }
+    if (s.license === 'unknown') add('license_unknown');
+    // 開けていないページは引用も照らし合わせられない。見出しは根の原因（開けていない）にする
+    if (keys.indexOf('maker_url_not_fetched') >= 0 && keys.indexOf('quote_mismatch') >= 0) keys.splice(keys.indexOf('quote_mismatch'), 1);
+    keys.sort(function (a, b) { return SRC_ISSUE[a].rank - SRC_ISSUE[b].rank; });
+    return keys;
+  }
+  /**
+   * 出典カードの材料（純関数）: cards は問題のある順（同じ順位は出典一覧の順）。
+   * orphans = 出典の無い主張（source_ids が空）と、一覧に無い出典 id を参照する主張
+   */
+  function sourceCardsOf(d) {
+    var tri = triageOf(d);
+    var srcs = (Array.isArray(d && d.sources) ? d.sources : []).filter(function (s) { return s && typeof s === 'object'; });
+    var by = claimsBySource(d && d.claims);
+    var vids = videoSourceIdsOf(d);
+    var known = {};
+    srcs.forEach(function (s) { known[s.source_id] = true; });
+    var cards = srcs.map(function (s, i) {
+      var citing = hasOwn(by, s.source_id) ? by[s.source_id] : [];
+      var isVideo = hasOwn(vids, s.source_id);
+      var issues = sourceIssueKeys(s, tri, citing, isVideo);
+      var head = issues.length ? SRC_ISSUE[issues[0]] : (s.is_primary ? SRC_OK : SRC_SECONDARY);
+      var opened = [];
+      tri.groups.forEach(function (g) { if (g && g.source_id === s.source_id) strArr(g.verifier_opened_urls).forEach(function (u) { if (opened.indexOf(u) < 0) opened.push(u); }); });
+      if (!tri.present) citing.forEach(function (c) { strArr(c.opened_urls).forEach(function (u) { if (opened.indexOf(u) < 0) opened.push(u); }); });
+      return { source: s, order: i, cardId: 'rv-src-' + i, issues: issues, rank: head.rank, head: head, claims: citing, opened: opened, video: isVideo, problem: issues.length > 0 };
+    });
+    cards.sort(function (a, b) { return a.rank - b.rank || a.order - b.order; });
+    var orphans = [];
+    (Array.isArray(d && d.claims) ? d.claims : []).forEach(function (c) {
+      if (!c || typeof c !== 'object') return;
+      var ids = strArr(c.source_ids);
+      var missing = ids.filter(function (sid) { return !hasOwn(known, sid); });
+      if (!ids.length) orphans.push({ claim: c, why: 'no_source', missing: [] });
+      else if (missing.length) orphans.push({ claim: c, why: 'source_not_listed', missing: missing });
+    });
+    var cardOf = Object.create(null);
+    cards.forEach(function (c) { if (!(c.source.source_id in cardOf)) cardOf[c.source.source_id] = c.cardId; });
+    return { cards: cards, orphans: orphans, total: cards.length, problems: cards.filter(function (c) { return c.problem; }).length, cardOf: cardOf };
+  }
+  /** 取得日: "2026-11-04…" → "11/4 に取得"（形が違えばそのまま） */
+  function accessedText(x) {
+    if (typeof x !== 'string' || !x) return '';
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(x);
+    return (m ? Number(m[2]) + '/' + Number(m[3]) : x) + ' に取得';
+  }
+  /** 短い URL: host（www. を除く）+ パスの先頭 40 字 */
+  function shortUrl(url) {
+    var s = String(url || '');
+    var m = /^https?:\/\/([^\/?#]+)([^#]*)/i.exec(s);
+    if (!m) return s.length > 50 ? s.slice(0, 50) + '…' : s;
+    var rest = m[2] === '/' ? '' : m[2];
+    return m[1].replace(/^www\./i, '') + (rest.length > 40 ? rest.slice(0, 40) + '…' : rest);
+  }
+  function verdictPill(v) {
+    return v && hasOwn(VERDICT_JA, v) ? pill(VERDICT_JA[v], VERDICT_CLASS[v]) : pill('検証なし', 'gray');
+  }
+  function srcClaimHtml(c, claimIdx, extra) {
+    var n = hasOwn(claimIdx, c.id) ? claimIdx[c.id] : -1;
+    var idHtml = n >= 0 ? '<button type="button" class="linkish sc-cid" data-goto-claim="' + n + '" title="本文のこの主張の段落へ">' + esc(c.id) + '</button>' : '<b class="sc-cid">' + esc(c.id) + '</b>';
+    return '<li>' + idHtml + ' ' + verdictPill(c.verdict) + ' <span class="sc-ctext">' + esc(c.text || '') + '</span>' +
+      (c.reason ? '<div class="sc-reason">検証係: ' + esc(c.reason) + '</div>' : '') + (extra || '') + '</li>';
+  }
+  function sourceCardHtml(card, claimIdx) {
+    var s = card.source, url = typeof s.url === 'string' ? s.url : '';
+    var http = /^https?:\/\//i.test(url);
+    var more = card.issues.slice(1).map(function (k) { return '<li>' + esc(SRC_ISSUE[k].text) + '</li>'; }).join('');
+    var quoteBad = !card.video && Number(s.quote_found) === 0;
+    var ex = typeof s.quoted_excerpt === 'string' ? s.quoted_excerpt : '';
+    var quote = ex
+      ? '<blockquote class="sc-quote' + (quoteBad ? ' is-bad' : '') + '">' + esc(ex) + '</blockquote>' +
+        (quoteBad ? '<p class="sc-quote-note">' + esc(s.check_detail === 'result_unavailable' ? CHECK_DETAIL_TEXT.result_unavailable : Number(s.url_was_fetched) === 0 ? '職人がこのページを開けていないため、引用を照らし合わせられていません' : '職人が開いたページの本文に、この引用は見つかりませんでした') + '</p>' : '')
+      : '<p class="sc-quote-none">' + (card.video ? '動画の出典のため、引用はありません' : '引用が書かれていません') + '</p>';
+    var opened = card.opened.length && !(card.opened.length === 1 && card.opened[0] === url)
+      ? '<div class="sc-opened"><span class="sc-label">検証係が開いた URL（職人の URL と違います）</span>' + card.opened.map(linkOrText).join('<br>') + '</div>' : '';
+    var license = s.license === 'unknown' || !s.license ? '<span class="sc-lic-bad">分からない</span>' : esc(s.license);
+    var detail = typeof s.check_detail === 'string' ? s.check_detail : '';
+    return '<article class="sc sc-' + card.head.cls + '" id="' + card.cardId + '" data-src-card="' + card.order + '">' +
+      '<p class="sc-state"><span class="sc-dot" aria-hidden="true"></span>' + esc(card.head.text) + '</p>' +
+      (more ? '<ul class="sc-more-issues">' + more + '</ul>' : '') +
+      '<h4 class="sc-title">' + esc(s.title || '（題名なし）') + ' <span class="sc-tag">' + (s.is_primary ? '一次' : '二次') + '</span></h4>' +
+      '<p class="sc-meta">' + (http ? '<a href="' + esc(url) + '" title="' + esc(url) + '" rel="noopener noreferrer" target="_blank">' + esc(shortUrl(url)) + '</a>' : '<span class="pre" title="' + esc(url) + '">' + esc(shortUrl(url)) + '</span>') +
+        (s.accessed_at ? ' ・ <span title="' + esc(s.accessed_at) + '">' + esc(accessedText(s.accessed_at)) + '</span>' : '') + ' ・ <span class="sc-sid">' + esc(s.source_id) + '</span></p>' +
+      '<div class="sc-sec"><span class="sc-label">支えている主張</span>' + (card.claims.length ? '<ul class="sc-claims">' + card.claims.map(function (c) { return srcClaimHtml(c, claimIdx); }).join('') + '</ul>' : '<p class="sc-empty">この出典を参照している主張はありません</p>') + '</div>' +
+      '<div class="sc-sec"><span class="sc-label">引用</span>' + quote + '</div>' + opened +
+      '<p class="sc-lic"><span class="sc-label">利用条件</span> ' + license + '</p>' +
+      '<details class="sc-log"><summary>照合の記録</summary><p>' + esc(hasOwn(CHECK_DETAIL_TEXT, detail) ? CHECK_DETAIL_TEXT[detail] : detail || '記録なし') + (detail ? ' <code>' + esc(detail) + '</code>' : '') + '</p>' +
+        '<p class="muted">職人が開いた: ' + (Number(s.url_was_fetched) === 1 ? 'はい' : 'いいえ') + ' ・ 引用が本文にあった: ' + (Number(s.quote_found) === 1 ? 'はい' : 'いいえ') + (card.video ? ' ・ 動画の出典（開けたか・引用は検査しません）' : '') + '</p></details>' +
+      '</article>';
+  }
+  function orphanCardHtml(orphans, claimIdx) {
+    if (!orphans.length) return '';
+    return '<article class="sc sc-red" id="rv-src-orphan" data-src-orphan="' + orphans.length + '"><p class="sc-state"><span class="sc-dot" aria-hidden="true"></span>出典のない主張が ' + orphans.length + ' 件あります</p>' +
+      '<ul class="sc-claims">' + orphans.map(function (o) {
+        return srcClaimHtml(o.claim, claimIdx, '<div class="sc-reason sc-why">' + (o.why === 'no_source' ? '出典が付いていません' : '出典一覧にない出典: ' + esc(o.missing.join('、'))) + '</div>');
+      }).join('') + '</ul></article>';
+  }
+  /** 主張 id → d.claims の中の位置（段落の印と行き来するための番号。id は信頼できない文字列なので要素 id には番号を使う） */
+  function claimIndexOf(d) {
+    var idx = Object.create(null);
+    (Array.isArray(d && d.claims) ? d.claims : []).forEach(function (c, i) { if (c && typeof c.id === 'string' && !(c.id in idx)) idx[c.id] = i; });
+    return idx;
+  }
+  /** 「出典と主張」の欄（問題のある出典を上に。問題の無い出典だけを「問題なし」の中に畳む） */
+  function sourcesPanelHtml(d, model) {
+    var claimIdx = claimIndexOf(d);
+    var bad = model.cards.filter(function (c) { return c.problem; }), good = model.cards.filter(function (c) { return !c.problem; });
+    var secondary = good.filter(function (c) { return !c.source.is_primary; }).length;
+    var sum = model.total ? '出典 ' + model.total + ' 件のうち 問題 ' + model.problems + ' 件' : '出典はありません';
+    return '<div class="card sc-panel" id="rv-sources"><h2>出典と主張</h2>' +
+      '<p class="sc-sum">' + esc(sum) + (model.orphans.length ? ' ・ <span class="err">出典のない主張 ' + model.orphans.length + ' 件</span>' : '') + '</p>' +
+      orphanCardHtml(model.orphans, claimIdx) + bad.map(function (c) { return sourceCardHtml(c, claimIdx); }).join('') +
+      (good.length ? '<details class="sc-okbox" id="rv-src-ok"' + (bad.length || model.orphans.length ? '' : ' open') + '><summary>問題なし（出典 ' + good.length + ' 件' + (secondary ? '。うち補助の出典 ' + secondary + ' 件' : '') + '）</summary>' +
+        good.map(function (c) { return sourceCardHtml(c, claimIdx); }).join('') + '</details>' : '') +
+      (!model.total && !model.orphans.length ? '<p class="muted">この版には出典も主張もありません。</p>' : '') +
+      '</div>';
+  }
+
   function tablesHtml(d) {
     var claimsHtml = '<div class="table-wrap"><table><thead><tr><th>id</th><th>本文</th><th>職人</th><th>検証係</th><th>理由</th></tr></thead><tbody>' + (d.claims || []).map(function (c) {
       return '<tr><td>' + esc(c.id) + '</td><td>' + esc(c.text) + '</td><td>' + esc(c.status) + '</td><td>' + (c.verdict ? pill(c.verdict, VERDICT_CLASS[c.verdict]) : '—') + '</td><td>' + esc(c.reason || '') + '</td></tr>';
@@ -2245,17 +2422,18 @@
       '<button type="button" class="btn small" id="rv-help" title="キーの一覧（?）">キー ?</button></div></div>';
 
     var groupsBody;
-    if (!tri.present) groupsBody = '<p class="muted">仕分けの結果がありません。下の「問題なし」の表も開いて、6 項目すべてを見てください。</p>';
+    if (!tri.present) groupsBody = '<p class="muted">仕分けの結果がありません。下の「出典と主張」のカードと「主張と出典の一覧」も見て、6 項目すべてを見てください。</p>';
     else if (tri.groups.length) groupsBody = tri.groups.map(function (g, i) { return groupHtml(g, i, d); }).join('');
     else groupsBody = '<p class="ok pill" id="rv-none">要確認なし</p><p class="muted">機械と検証係の確認で気になる所はありませんでした。下の項目だけ見てください。</p>';
     if (tri.present && !d.verification_id) groupsBody += '<p class="muted">主張は検証が終わってから仕分けます（いまは出典だけの問題を出しています）。</p>';
     var groups = '<details class="card rv-sec" id="rv-groups" open><summary><h2>要確認' + (tri.present ? '（' + tri.groups.length + '）' : '') + '</h2></summary>' + groupsBody + '</details>';
 
-    var body = '<div class="card" id="rv-body"><h2>本文</h2>' + partsHtml(d) + '</div>';
+    var srcModel = sourceCardsOf(d);
+    var body = '<div class="card" id="rv-body"><h2>本文</h2>' + partsHtml(d) + '</div>' + sourcesPanelHtml(d, srcModel);
     var items = reviewItems(tri);
     var check = isReview ? '<div class="card" id="rv-check"><h2>あなたが見る項目</h2>' + items.map(function (k, i) { return itemHtml(k, i, d, st, tri); }).join('') + '</div>' : '';
-    var okc = tri.ok_counts || {};
-    var folded = '<details class="card rv-sec" id="rv-ok"><summary><h2>問題なし（主張 ' + esc(okc.claims || 0) + ' 件・出典 ' + esc(okc.sources || 0) + ' 件）</h2></summary>' + tablesHtml(d) + '</details>' +
+    // 主張と出典の全件の表（問題のある行も含む。照合の生の値はここに残す）。「問題なし」は出典カードの側で問題の無いものだけを畳む
+    var folded = '<details class="card rv-sec" id="rv-ok"><summary><h2>主張と出典の一覧（全件・照合の記録。主張 ' + esc((d.claims || []).length) + ' 件・出典 ' + esc((d.sources || []).length) + ' 件）</h2></summary>' + tablesHtml(d) + '</details>' +
       '<details class="card rv-sec" id="rv-detail"><summary><h2>詳細（機械検査・自己点検・変えてよい範囲・費用）</h2></summary>' + detailsHtml(d) + '</details>';
 
     var foot = '';
@@ -2532,7 +2710,9 @@
   window.FactoryAdminReview = {
     CAUSE_TEXT: CAUSE_TEXT, HUMAN_KEYS: HUMAN_KEYS, triageOf: triageOf, reviewItems: reviewItems, verifyState: verifyState,
     approveState: approveState, checklistPayload: checklistPayload, keyCommand: keyCommand, applyCommand: applyCommand,
-    newReviewState: newReviewState, reviewHtml: reviewHtml, renderMd: renderMd
+    newReviewState: newReviewState, reviewHtml: reviewHtml, renderMd: renderMd,
+    // 出典カード（確認画面の「出典と主張」）
+    sourceCardsOf: sourceCardsOf, claimsBySource: claimsBySource, accessedText: accessedText, shortUrl: shortUrl
   };
 
   // ---- 画面: 改善係の記録（振り返り係 §S-5 5。画面での名前は「改善係」）----
