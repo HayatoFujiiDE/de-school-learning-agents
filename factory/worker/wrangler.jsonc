@@ -34,8 +34,10 @@
     "ACCESS_TEAM_DOMAIN": "https://de-school.cloudflareaccess.com",
     "ACCESS_AUD": "9ada8dbb88287b598ba54ea6c89c4b3e452975cf55ff4112a7653c70b313ee02",
     // 2026-11-04〜11-11 の開発週だけ引き上げ中（ふじさん指示）。11-11 に戻す: MAX_CONCURRENT_JOBS 2 / DAILY_CAP_CENTS 1500 / VERIFY_INFLIGHT 2。下書き 800 は実測 $6.17 に合わせた値で残す
-    "MAX_CONCURRENT_JOBS": "3",
-    "DAILY_CAP_CENTS": "6000",
+    // 2026-11-06 ハッカソン（11-07 まで）でさらに引き上げ（ふじさん指示「制限は一旦解除」。上限そのものは止め栓として残す）。
+    // 11-11 に戻す値: SCOUT_MONTHLY 500 / MEETING_MONTHLY 200 / IMAGE_MONTHLY 3000 / TOPIC_MONTHLY 2000 / TOPIC_DAILY 200
+    "MAX_CONCURRENT_JOBS": "5",
+    "DAILY_CAP_CENTS": "20000",
     "SESSION_BUDGET_DRAFT_CENTS": "800",
     "SESSION_BUDGET_REWORK_CENTS": "1000",
     "VERIFY_MAX_FETCHES": "25",
@@ -43,14 +45,14 @@
     // 検証係の Batch 化（契約 §L-2）
     "VERIFY_MODE": "batch",
     "VERIFY_MAX_CONTENT_TOKENS": "20000",
-    "VERIFY_INFLIGHT": "4",
+    "VERIFY_INFLIGHT": "6",
     "VERIFY_TURN_RESERVE_CENTS": "150",
     "VERIFY_ATTEMPT_CAP_CENTS": "400",
     // 入口（契約 §K-0）。XAI_API_KEY は secret（wrangler secret put。ここには書かない）
     "SCOUT_XAI_MODEL": "grok-4.3",
     "SCOUT_MAX_TURNS": "2",
-    "SCOUT_MONTHLY_CAP_CENTS": "500",
-    "MEETING_MONTHLY_CAP_CENTS": "200",
+    "SCOUT_MONTHLY_CAP_CENTS": "2000",
+    "MEETING_MONTHLY_CAP_CENTS": "1000",
     "SCOUT_DAY": "1",
     "MEETING_DAYS": "1,15",
     // 結果不明の外部呼び出し 1 回を cost_ledger に載せる保守的見積り（セント。月次上限をすり抜けないため）
@@ -59,7 +61,7 @@
     // 画像生成（契約 §O-4 a）。OPENAI_API_KEY は secret（wrangler secret put。ここには書かない）
     "IMAGE_MODEL_STANDARD": "gpt-image-2.5-flare",
     "IMAGE_MODEL_SCIENTIFIC": "gpt-image-2.5-sunburst",
-    "IMAGE_MONTHLY_CAP_CENTS": "3000",
+    "IMAGE_MONTHLY_CAP_CENTS": "10000",
     // 動画の確認（契約 §Q-4）。GEMINI_API_KEY は secret（ふじさんがセッションの外で wrangler secret put。ここには書かない）
     "GEMINI_VIDEO_MODEL": "gemini-3.6-flash",
     "VIDEO_U_CENTS": "10",
@@ -67,8 +69,8 @@
     // 予備のモデル（契約 §Q-10 10）。settings video_fallback_enabled が '1' の時だけ、2 回目以降の呼び出しに使う
     "GEMINI_VIDEO_FALLBACK_MODEL": "gemini-3.8-flash",
     // お題のストック（contract-T T-6）。入・切は settings.topics_enabled（既定は切）。お題の記帳の月・日の上限と 1 回の取り置き額（セント）
-    "TOPIC_MONTHLY_CAP_CENTS": "2000",
-    "TOPIC_DAILY_CAP_CENTS": "200",
+    "TOPIC_MONTHLY_CAP_CENTS": "10000",
+    "TOPIC_DAILY_CAP_CENTS": "3000",
     "TOPIC_GEN_RESERVE_CENTS": "60",
     "TOPIC_CHECK_RESERVE_CENTS": "15",
     "TOPIC_CHECK_MAX_ATTEMPTS": "2",
