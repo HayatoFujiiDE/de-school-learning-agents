@@ -2,6 +2,7 @@
 // 外から来た文（RSS・既存の題・親の本文・運営の一言・出典の抜き書き）は system 文に連結しない。user 文の中に、見出しを付けた別のブロックとして入れる。
 
 import { TOPIC_COUNTRY_LABEL, TOPIC_KIND_LABELS, TOPIC_LANGUAGE_LABEL, type TopicKind } from './locale';
+import { COUNTS, TEXT_LIMITS, TOPIC_INTERESTS } from './schema';
 
 /** 生成の system 文（T-4 verbatim） */
 export const GEN_SYSTEM_TEMPLATE = `あなたは、子ども（小学生と中学生）が考え、話し合い、作るための「お題」を作る係です。{language} で書きます。対象の国は {country} です。
@@ -52,20 +53,63 @@ export const CHECK_SYSTEM_TEMPLATE = `あなたは、子ども向けの「お題
 
 const fill = (tpl: string, vars: Record<string, string>): string => tpl.replace(/\{(language|country|kind_label|count|kind_rules)\}/g, (m, k: string) => vars[k] ?? m);
 
+const range = ([a, b]: readonly [number, number]): string => (a === b ? `${a} 個` : `${a}〜${b} 個`);
+
+/**
+ * 形の決まり（v2.5 の裁定）。Worker の validateTopicBody が見る個数・字数を、同じ定数（COUNTS・TEXT_LIMITS）から文にして system 文の末尾に足す。
+ * save_topics に strict を付けられず、schema には個数・字数を書いていないので、ここで伝えないとモデルは知る手段がない。
+ */
+export function shapeRules(kinds: readonly TopicKind[]): string {
+  const L = TEXT_LIMITS;
+  const lines = [
+    '形の決まり（1 つでも外れたお題は保存されません）:',
+    '- schema にある項目を全部書き、schema にない項目を足しません。schema_version は 1。s は中学生向け、e は小学生向けの文で、どちらも空にしません。',
+    `- 字数の上限（s と e のそれぞれ）: title ${L.title} / lead ${L.lead} / premises の text ${L.premise} / facts の text ${L.fact} / views の stance ${L.stance} / asks の text ${L.ask} / who.name ${L.whoName} / stances の label ${L.label} / next.talk ${L.nextTalk} / next.make_title ${L.makeTitle} / 手順（make_steps・steps）の 1 つ ${L.step} / make の line ${L.line}・first_step ${L.firstStep}・need ${L.need} / thumb_prompt ${L.thumbPrompt} / sources の name ${L.sourceName}。`,
+    `- id（facts・views・stances・sources）は半角の英数字と _ と - だけで ${L.id} 字まで（例: f1・v1・st1・s1）。同じ種類の中で重ねません。`,
+    '- sources の quote は 20〜200 字で、< > & を入れません。どこからも指されていない sources は入れません。source_ids には sources にある id だけを書き、同じ id を重ねません。',
+    '- facts と、who.type が person か org の views は、source_ids が 1 つ以上。who.type が position の views は source_ids を空にしてかまいません。views の side は a・b・c・d のどれか。',
+    `- tags.interests は ${TOPIC_INTERESTS.join('・')} から選び、重ねません。tags.concept_codes は空の配列にします。`,
+  ];
+  for (const k of kinds) {
+    const c = COUNTS[k];
+    if (k === 'make') {
+      lines.push(
+        `- ${TOPIC_KIND_LABELS[k]}（kind: make）: event_day は null。premises・facts・views・asks・stances・sources は空の配列。next は null。make は必ず書き、steps は 3〜4 個、minutes は 10〜120 の整数、category は tags.interests に入れた値の 1 つ。`,
+      );
+      continue;
+    }
+    const extra =
+      k === 'news'
+        ? 'event_day は YYYY-MM-DD で、「お題を出す日」の 14 日前から当日まで。'
+        : k === 'talk'
+          ? 'event_day は null。views の side は 2 種類以上。'
+          : 'event_day は null。views の side は 2 種類以上で、who.type が person か org の views が 1 つ以上。';
+    lines.push(
+      `- ${TOPIC_KIND_LABELS[k]}（kind: ${k}）: ${extra} premises ${range(c.premises)}・facts ${range(c.facts)}・views ${range(c.views)}・stances ${range(c.stances)}・sources ${range(c.sources)}。asks はちょうど 3 個（level が check・self・open を 1 つずつ。s と e を同じ文にしません）。next は必ず書き、make_steps は 3〜4 個。make は null。`,
+    );
+  }
+  return lines.join('\n');
+}
+
 /** 生成・派生の system 文。外から来た文は入れない（定数と種類と本数だけ） */
 export function genSystem(p: { kind: TopicKind } | { derive: 'refresh'; parentKind: TopicKind } | { derive: 'extend' }, count: number): string {
   let kindLabel: string;
   let rules: string;
+  let kinds: readonly TopicKind[];
   if ('kind' in p) {
     kindLabel = TOPIC_KIND_LABELS[p.kind];
     rules = KIND_RULES[p.kind];
+    kinds = [p.kind];
   } else if (p.derive === 'refresh') {
     kindLabel = TOPIC_KIND_LABELS[p.parentKind];
     rules = DERIVE_RULES.refresh;
+    kinds = [p.parentKind];
   } else {
     kindLabel = EXTEND_KIND_LABEL;
     rules = DERIVE_RULES.extend;
+    kinds = ['talk', 'philo', 'make'];
   }
+  rules = `${rules}\n\n${shapeRules(kinds)}`;
   return fill(GEN_SYSTEM_TEMPLATE, { language: TOPIC_LANGUAGE_LABEL, country: TOPIC_COUNTRY_LABEL, kind_label: kindLabel, count: String(count), kind_rules: rules });
 }
 
@@ -96,8 +140,12 @@ export function genUserBlocks(p: {
   note?: string | null;
   kindLabel: string;
   count: number;
+  /** お題を出す日（YYYY-MM-DD。Worker が決めた値。news の event_day の範囲の基準） */
+  slotDay?: string;
 }): TextBlock[] {
-  const blocks: TextBlock[] = [{ type: 'text', text: `${p.kindLabel}のお題を、最大 ${p.count} 本作ってください。最後に save_topics を 1 回だけ呼んでください。` }];
+  const blocks: TextBlock[] = [
+    { type: 'text', text: `${p.kindLabel}のお題を、最大 ${p.count} 本作ってください。${p.slotDay ? `お題を出す日は ${p.slotDay} です。` : ''}最後に save_topics を 1 回だけ呼んでください。` },
+  ];
   if (p.headlines) {
     const lines = p.headlines.map((h) => `- ${neutralize(h.title)}${h.link ? ` | ${neutralize(h.link)}` : ''}${h.date ? ` | ${h.date.slice(0, 10)}` : ''}`);
     blocks.push(block('資料（ニュースの見出し）', lines.length ? lines.join('\n') : '（なし）'));

@@ -63,7 +63,7 @@ export const TEXT_LIMITS = {
 } as const;
 
 /** 種類ごとの数の範囲（T-1 の表） */
-const COUNTS: Record<TopicKind, Record<'premises' | 'facts' | 'views' | 'stances' | 'sources', [number, number]>> = {
+export const COUNTS: Record<TopicKind, Record<'premises' | 'facts' | 'views' | 'stances' | 'sources', [number, number]>> = {
   news: { premises: [0, 0], facts: [2, 4], views: [0, 3], stances: [2, 4], sources: [1, 6] },
   talk: { premises: [0, 3], facts: [0, 3], views: [2, 4], stances: [2, 4], sources: [0, 6] },
   philo: { premises: [0, 2], facts: [1, 4], views: [2, 4], stances: [2, 4], sources: [1, 6] },

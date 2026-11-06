@@ -1,7 +1,7 @@
 // contract-T T-14 b1: validateTopicBody（T-1 の表の各行に通る例と落ちる例）と、system 文が契約の verbatim であること
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { CHECK_SYSTEM_TEMPLATE, DERIVE_RULES, GEN_SYSTEM_TEMPLATE, genSystem, KIND_RULES } from '../src/topics/prompts';
+import { CHECK_SYSTEM_TEMPLATE, DERIVE_RULES, GEN_SYSTEM_TEMPLATE, genSystem, genUserBlocks, KIND_RULES } from '../src/topics/prompts';
 import { addDays, isRealDate, normalizeTitle, requiredSourceIds, titleJaccard, validateTopicBody } from '../src/topics/schema';
 import { loc, makeBody, newsBody, philoBody, talkBody } from './topics-helpers';
 
@@ -214,5 +214,17 @@ describe('system 文は契約 contract-T の verbatim', () => {
     expect(s).toContain('日本語 で書きます。対象の国は 日本 です。');
     expect(s).toContain('作る種類: ニュースから。本数: 最大 2 本。');
     expect(s).not.toMatch(/\{(language|country|kind_label|count|kind_rules)\}/);
+  });
+  it('形の決まり（v2.5）: 個数・字数は検査と同じ定数から system 文に入る。お題を出す日は user 文に入る', () => {
+    const news = genSystem({ kind: 'news' }, 2);
+    expect(news).toContain('形の決まり');
+    expect(news).toContain('title 80 / lead 120');
+    expect(news).toContain('stances の label 20');
+    expect(news).toContain('premises 0 個・facts 2〜4 個・views 0〜3 個・stances 2〜4 個・sources 1〜6 個');
+    expect(news).not.toContain('kind: talk');
+    const ext = genSystem({ derive: 'extend' }, 1);
+    for (const k of ['kind: talk', 'kind: philo', 'kind: make']) expect(ext).toContain(k);
+    const blocks = genUserBlocks({ existingTitles: [], kindLabel: 'ニュースから', count: 2, slotDay: '2026-11-07' });
+    expect(blocks[0].text).toContain('お題を出す日は 2026-11-07 です。');
   });
 });

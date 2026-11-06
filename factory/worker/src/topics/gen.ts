@@ -401,6 +401,7 @@ export async function runTopicRun(env: Env, port: FactoryPort, req: RunRequest, 
             note: req.purpose === 'derive' ? (req.note ?? null) : null,
             kindLabel,
             count,
+            slotDay: req.purpose === 'gen' ? slotDay : addDays(today, 1),
           }),
         },
       ],
@@ -465,7 +466,10 @@ export async function runTopicRun(env: Env, port: FactoryPort, req: RunRequest, 
       req.purpose === 'gen' ? k === req.kind : req.kind === 'refresh' ? k === parent!.kind : (DERIVE_CHILD_KINDS as readonly unknown[]).includes(k);
     const sd = req.purpose === 'gen' ? slotDay : childSlot;
     const k = (raw as { kind?: unknown } | null)?.kind;
-    if (accepted.length >= max || !kindOk(k) || validateTopicBody(raw, { slotDay: sd }).length > 0) {
+    // 捨てた理由は理由コードだけをログに出す（本文は出さない）。原因の切り分け用
+    const why = accepted.length >= max ? ['over_max'] : !kindOk(k) ? ['kind_mismatch'] : validateTopicBody(raw, { slotDay: sd });
+    if (why.length > 0) {
+      console.log(JSON.stringify({ at: 'topic_run', run_id: runId, dropped_index: i + 1, reasons: why.slice(0, 20) }));
       dropped++;
       return;
     }

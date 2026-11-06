@@ -522,3 +522,9 @@ d. 本物の呼び出しは、deploy 後にふじさんが入にしてから、�
 ## v2.5 の裁定（2026-11-06、本番の実測）
 
 生成の `save_topics` から `strict` を外す。本番で Messages API が 400「The compiled grammar is too large」を返したため（v2.4 の裁定 5 の「直せない時」に当たる。記録は `CONTRACT-factory.md` §T の末尾）。schema は渡し続け、形は Worker の `validateTopicBody` が確かめる。検査の `save_check` は `strict: true` のまま。
+
+strict を外した後の本番の 1 回目（run `114fae42`）は、API は通ったが 2 本とも形の検査で捨てられた（`no_valid_topic`）。個数・字数・id の形・`next` の要否などは schema に書いておらず（strict の制限で書けなかった）、system 文にも無かったので、モデルが知る手段が無かった。次を足す:
+
+- system 文の `{kind_rules}` の後ろに「形の決まり」を足す。文は `src/topics/prompts.ts` の `shapeRules` が、検査と同じ定数（`COUNTS`・`TEXT_LIMITS`・`TOPIC_INTERESTS`）から作る（verbatim の対象外。定数と種類だけで、外から来た文は入らない）。`tags.concept_codes` は空の配列にさせる（使える符号の一覧を渡していないため）。
+- user 文の最初の文に「お題を出す日は YYYY-MM-DD です。」を足す（Worker が決めた日。news の `event_day` の範囲の基準）。
+- 捨てた本ごとに、理由コードだけをログに出す（`{at:'topic_run', run_id, dropped_index, reasons}`。本文は出さない）。
