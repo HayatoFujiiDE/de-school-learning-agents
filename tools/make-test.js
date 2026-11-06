@@ -841,9 +841,9 @@ t('Y-3 pickTheme: 論点 / 道具 / 整理 / 合図 は既存の判定より前�
   var c = M.fromText('論点を整理する道具', { id: 'yt1', now: '10:20', mode: 'js' });
   eq([c.theme, c.title, c.shelf.map(function (k) { return k.theme + '.' + k.variant; })], ['tool', '自分を助ける道具', ['tool.nudge', 'tool.oneby', 'tool.board']], 'Y-3 思いつきから tool の仮の案 3 つ');
 });
-t('Y-0 入口の見本・写真は 3 つのまま（tool を出さない）', function () {
-  eq(MD.THEMES, ['mc', 'py', 'circuit', 'tool'], 'Y-1 MD.THEMES に tool');
-  eq(MD.samples.map(function (x) { return x.theme; }), ['mc', 'py', 'circuit'], 'Y-0 見本は 3 枚のまま');
+t('Y-0 入口の見本・写真に tool を出さない（枚数は §AE-3 で 6 枚に置き換え）', function () {
+  eq(MD.THEMES, ['mc', 'py', 'circuit', 'tool', 'stop', 'ath', 'story'], 'Y-1 / AE-1 MD.THEMES に tool と 3 題材');
+  eq(MD.samples.map(function (x) { return x.theme; }), ['stop', 'ath', 'story', 'mc', 'py', 'circuit'], 'AE-3 見本は 6 枚（tool は入れない）');
   eq(MD.captures.map(function (x) { return x.theme; }), ['mc', 'py', 'circuit'], 'Y-0 作品の写真は 3 つのまま');
 });
 function tst(va, count, every) { return { kind: 'sample', theme: 'tool', variant: va, values: { count: count, every: every } }; }
@@ -1015,6 +1015,354 @@ t('Y-9 tool の「どこが違う？」: 選択肢の key と任せる操作の�
   eq(M.leave(sample('mc'), 'aspect', { aspect: 0 }).opt, 'redo', 'Y-9 マイクラの aspect は ASPECT_OPT のまま（形 → redo）');
   eq(M.leave(sample('mc'), 'aspect', { aspect: 3 }).opt, 'one', 'Y-9 マイクラの aspect は ASPECT_OPT のまま（動き → one）');
   eq(M.leave(a, 'aspect', { aspect: 99 }).opt, 'redo', 'Y-9 範囲外は 4（それ以外）に丸める（境界）');
+});
+
+// ======================================================================
+// contract-app §AE: 作るを広げる（コマ撮り / アスレチック / 物語・入口の組・こんなのも作れる・作品の見本）
+// ======================================================================
+var fs = require('fs'), vm = require('vm'), ORANGE_HEX = '#ed922c';
+function adSt(theme, variant, values) { return { kind: 'sample', theme: theme, variant: variant, values: values }; }
+t('AE-2 pickTheme の新しい期待値', function () {
+  eq(M.pickTheme('マイクラのアスレチック作りたい'), 'ath', 'AE-2 マイクラのアスレチック → ath（マイクラより前）');
+  eq(M.pickTheme('パルクールのコース'), 'ath', 'AE-2 パルクール → ath');
+  eq(M.pickTheme('ギミックを足したい'), 'ath', 'AE-2 ギミック → ath');
+  eq(M.pickTheme('コマ撮りやってみたい'), 'stop', 'AE-2 コマ撮り → stop');
+  eq(M.pickTheme('コマどり'), 'stop', 'AE-2 コマどり → stop');
+  eq(M.pickTheme('コマドリ'), 'stop', 'AE-2 コマドリ → stop');
+  eq(M.pickTheme('ストップモーション'), 'stop', 'AE-2 ストップモーション → stop');
+  eq(M.pickTheme('マイクラの動画'), 'stop', 'AE-2 動画 → stop（マイクラより前）');
+  eq(M.pickTheme('小説を書く'), 'story', 'AE-2 小説 → story');
+  eq(M.pickTheme('お話を作る'), 'story', 'AE-2 お話 → story');
+  eq(M.pickTheme('ものがたり'), 'story', 'AE-2 ものがたり → story');
+  eq(M.pickTheme('アスレチックの動画'), 'ath', 'AE-2 上から順（アスレチック → 動画）');
+  eq(M.pickTheme('物語の動画'), 'stop', 'AE-2 上から順（動画 → 物語）');
+  eq(M.pickTheme('道具の動画'), 'tool', 'AE-2 tool が最初（既存）');
+  eq(M.pickTheme('Python のゲーム'), 'py', 'AE-2 既存の順はそのまま');
+  eq(M.pickTheme('絵を描きたい'), 'mc', 'AE-2 どれも無ければマイクラ');
+  var c = M.fromText('マイクラのアスレチック作りたい', { id: 'ad1', now: '10:20', mode: 'js' });
+  eq([c.theme, c.title, c.shelf.map(function (k) { return k.theme + '.' + k.variant; })], ['ath', 'マイクラのアスレチック', ['ath.slime', 'ath.piston', 'ath.ice']], 'AE-8 思いつきから アスレチックの案 3 つ');
+});
+t('AE-1 結果・コード・説明（verbatim）', function () {
+  eq(MD.result(adSt('stop', 'walk', { frames: 2, fps: 1 }), 'js'), '人形が歩く動画 · 12 コマ ÷ 1 秒に 6 コマ = 2 秒', 'AE-1 stop result');
+  eq(MD.result(adSt('stop', 'brick', { frames: 3, fps: 2 }), 'js'), 'ブロックの車が走る動画 · 18 コマ ÷ 1 秒に 8 コマ = 2.3 秒', 'AE-1 stop result（小数 1 けた）');
+  eq(MD.result(adSt('stop', 'walk', { frames: 2, fps: 1 }), 'es'), '人形があるく動画 · 12 コマ ÷ 1 びょうに 6 コマ = 2 びょう', 'AE-1 stop result 小');
+  eq(MD.code(adSt('stop', 'clay', { frames: 0, fps: 3 })), '6 コマ ÷ 12 コマ/秒 = 0.5 秒', 'AE-1 stop code');
+  eq(MD.desc(adSt('stop', 'draw', { frames: 1, fps: 1 }), 'js'), '8 コマ · 1 秒に 6 コマ', 'AE-1 stop desc');
+  eq(MD.result(adSt('ath', 'jump', { gap: 2, count: 5 }), 'js'), '足場 5 個 · あいだ 2 ブロック · ふつう', 'AE-1 ath result jump');
+  eq(MD.result(adSt('ath', 'slime', { gap: 3, count: 5 }), 'js'), '足場 5 個（跳ねる足場 2 個）· あいだ 3 ブロック · むずかしい', 'AE-1 ath result slime');
+  eq(MD.result(adSt('ath', 'ice', { gap: 1, count: 7 }), 'js'), '足場 7 個（すべる足場 3 個）· あいだ 1 ブロック · かんたん', 'AE-1 ath result ice');
+  eq(MD.result(adSt('ath', 'piston', { gap: 4, count: 8 }), 'es'), '足場 8 こ（うごく足場 4 こ）· あいだ 4 ブロック · とてもむずかしい', 'AE-1 ath result 小');
+  eq(MD.code(adSt('ath', 'slime', { gap: 3, count: 5 })), '/setblock ~0 ~ ~ minecraft:stone\n/setblock ~4 ~ ~ minecraft:slime_block\n/setblock ~8 ~ ~ minecraft:stone\n…', 'AE-1 ath code（先頭 3 行 + …）');
+  eq(MD.code(adSt('ath', 'jump', { gap: 1, count: 3 })), '/setblock ~0 ~ ~ minecraft:stone\n/setblock ~2 ~ ~ minecraft:stone\n/setblock ~4 ~ ~ minecraft:stone', 'AE-1 ath code 3 個なら … なし');
+  eq(MD.desc(adSt('ath', 'piston', { gap: 2, count: 6 }), 'js'), '足場 6 · あいだ 2', 'AE-1 ath desc');
+  eq(MD.result(adSt('story', 'short', { scenes: 4, voice: 0 }), 'js'), '4 場面の物語 · 「わたし」が語る · 山場は 3 場面目', 'AE-1 story result');
+  eq(MD.code(adSt('story', 'letter', { scenes: 3, voice: 2 })), 'はじまり → できごと × 1 → おわり（手紙で語る）', 'AE-1 story code');
+  eq(MD.desc(adSt('story', 'mystery', { scenes: 5, voice: 1 }), 'js'), '5 場面 · 外から語る', 'AE-1 story desc');
+  eq(MD.result(adSt('story', 'future', { scenes: 7, voice: 1 }), 'es'), '7 場めんのものがたり · 外からかたる · 山場は 6 場めん目', 'AE-1 story result 小');
+  eq(JSON.parse(MD.artMarks(adSt('stop', 'walk', { frames: 4, fps: 0 }))), { frames: 24, secs: 6 }, 'AE-1 artMarks stop');
+  eq(JSON.parse(MD.artMarks(adSt('ath', 'slime', { gap: 3, count: 7 }))), { count: 7, gap: 3, gimmick: 3 }, 'AE-1 artMarks ath');
+  eq(JSON.parse(MD.artMarks(adSt('ath', 'jump', { gap: 3, count: 7 }))), { count: 7, gap: 3, gimmick: 0 }, 'AE-1 artMarks ath jump はギミック 0');
+  eq(JSON.parse(MD.artMarks(adSt('story', 'short', { scenes: 6, voice: 2 }))), { scenes: 6, voice: 2, peak: 5 }, 'AE-1 artMarks story');
+});
+t('AE-1 3 題材の全案 × 全値で NaN・undefined・別題材の語が出ない', function () {
+  var bad = [], WRONG = {
+    stop: /NaN|undefined|null|Infinity|足場|場面|場めん|ブロック 1|Ω|mA|星|論点|minecraft/,
+    ath: /NaN|undefined|null|Infinity|コマ|秒|びょう|場面|場めん|Ω|mA|星|論点/,
+    story: /NaN|undefined|null|Infinity|コマ|秒|びょう|足場|ブロック|Ω|mA|星|論点|minecraft/
+  };
+  ['stop', 'ath', 'story'].forEach(function (th) {
+    var T0 = MD.theme(th), p = T0.params[0], q = T0.params[1];
+    T0.variants.forEach(function (va) {
+      for (var a = p.min; a <= p.max; a++) for (var b = q.min; b <= q.max; b++) {
+        var v = {}; v[p.key] = a; v[q.key] = b;
+        var st = adSt(th, va, v), svg = MD.art(st);
+        var txt = [MD.result(st, 'js'), MD.result(st, 'es'), MD.code(st), MD.desc(st, 'js'), MD.desc(st, 'es'), svg.replace(/<[^>]*>/g, ' ')].join(' | ');
+        if (WRONG[th].test(txt)) bad.push(th + '.' + va + ' ' + JSON.stringify(v) + ': ' + txt.slice(0, 100));
+        if (/NaN|undefined|Infinity/.test(svg)) bad.push(th + '.' + va + ' ' + JSON.stringify(v) + ' svg');
+        if (!/^<svg/.test(svg)) bad.push(th + '.' + va + ' 線画が無い');
+        [p.key, q.key].forEach(function (k) {
+          var from = v[k] > MD.param(th, k).min ? v[k] - 1 : v[k] + 1, r = [MD.testReply(st, k, from, 'js'), MD.testReply(st, k, from, 'es')].join(' | ');
+          if (/NaN|undefined|\{|\}|電球|星の|ブロックが/.test(r)) bad.push(th + ' reply ' + k + ': ' + r);
+        });
+      }
+    });
+  });
+  eq(bad, [], 'AE-1 別の題材の語・NaN が 0 件');
+  ok(MD.art(adSt('stop', 'walk', { frames: 2, fps: 1 })) !== MD.art({ kind: 'sample', theme: 'mc', variant: 'cube', values: { size: 4, block: 0 } }), 'AE-1 stop はマイクラの図に落ちない');
+});
+t('AE-1 試した時の返事（verbatim の語だけ差し替え）', function () {
+  eq(MD.testReply(adSt('stop', 'walk', { frames: 3, fps: 1 }), 'frames', 2, 'es'), 'コマの数をかえたら、さっきより動画が長くなったね。変えたところが長さに出たね', 'AE-1 stop frames 増');
+  eq(MD.testReply(adSt('stop', 'walk', { frames: 1, fps: 1 }), 'frames', 2, 'js'), '選んだコマの数に変えて、動画の長さに違いが出たね。狙っていた長さに近い？', 'AE-1 stop frames js');
+  eq(MD.testReply(adSt('stop', 'walk', { frames: 2, fps: 0 }), 'fps', 1, 'es'), '1 びょうのコマ数をかえたら、さっきよりカクカク動いたね。変えたところがなめらかさに出たね', 'AE-1 stop fps 減');
+  eq(MD.testReply(adSt('stop', 'walk', { frames: 2, fps: 2 }), 'fps', 1, 'es'), '1 びょうのコマ数をかえたら、さっきよりなめらかに動いたね。変えたところがなめらかさに出たね', 'AE-1 stop fps 増');
+  eq(MD.testReply(adSt('ath', 'jump', { gap: 3, count: 5 }), 'gap', 2, 'es'), '足場のあいだをかえたら、さっきより足場がはなれたね。変えたところが距離に出たね', 'AE-1 ath gap 増');
+  eq(MD.testReply(adSt('ath', 'jump', { gap: 2, count: 4 }), 'count', 5, 'es'), '足場の数をかえたら、さっきよりコースがみじかくなったね。変えたところが長さに出たね', 'AE-1 ath count 減');
+  eq(MD.testReply(adSt('ath', 'jump', { gap: 1, count: 5 }), 'gap', 2, 'js'), '選んだ足場のあいだに変えて、とぶ距離に違いが出たね。狙っていた距離に近い？', 'AE-1 ath gap js');
+  eq(MD.testReply(adSt('story', 'short', { scenes: 5, voice: 0 }), 'scenes', 4, 'es'), '場めんの数をかえたら、さっきより場面がふえたね。変えたところが長さに出たね', 'AE-1 story scenes 増');
+  eq(MD.testReply(adSt('story', 'short', { scenes: 4, voice: 1 }), 'voice', 0, 'es'), 'かたり手をかえたら、さっきより外から見わたせるようになったね。変えたところが語り方に出たね', 'AE-1 story voice → 外から');
+  eq(MD.testReply(adSt('story', 'short', { scenes: 4, voice: 0 }), 'voice', 2, 'es'), 'かたり手をかえたら、さっきより「わたし」の気持ちが近くなったね。変えたところが語り方に出たね', 'AE-1 story voice → わたし');
+  eq(MD.testReply(adSt('story', 'short', { scenes: 4, voice: 2 }), 'voice', 0, 'es'), 'かたり手をかえたら、さっきより手紙を読んでいる感じになったね。変えたところが語り方に出たね', 'AE-1 story voice → 手紙');
+});
+t('AE-1 3 題材の作業台の操作（見本から・試す・任せる・外の記録・写真）', function () {
+  ['stop', 'ath', 'story'].forEach(function (th) {
+    var a = M.fromSample(th, { id: 'ads-' + th, now: '10:20', mode: 'js' }), T0 = MD.theme(th);
+    eq([a.theme, a.stage.variant, a.title], [th, T0.sample, MD.pick(MD.variant(th, T0.sample).title, 'js')], 'AE-1 ' + th + ' 見本から');
+    eq(a.steps, MD.stepsFor(th, T0.sample), 'AE-1 ' + th + ' 手順は stepBase');
+    var p = T0.params[0], to = a.stage.values[p.key] + 1 > p.max ? p.min : a.stage.values[p.key] + 1;
+    var r = M.test(M.setParam(a, p.key, to));
+    eq(r.change.what.v.value, [MD.valueLabel(th, p.key, to, 'js'), MD.valueLabel(th, p.key, to, 'es')], 'AE-1 ' + th + ' 試すの記録は値の名前');
+    var l = settled(r.act, 'find');
+    eq([l.act.shelf[0].kind, l.act.shelf[0].theme], ['value', th], 'AE-1 ' + th + ' 任せる（find）');
+    var x = M.fromSample(th, { id: 'adx-' + th, now: '10:20' }); x.stage = null; x.ext = { link: null, photos: [], visible: [] };
+    eq(M.leaveOptions(x), ['calc', 'steps', 'cmd'], 'AE-1 ' + th + ' 外の記録の候補');
+    var c = settled(x, 'calc').act.shelf[0], s2 = settled(x, 'steps').act.shelf[0], cm = settled(x, 'cmd').act.shelf[0];
+    eq([c.kind, c.lines.length, s2.lines.length, cm.theme, cm.variant], ['note', 3, 3, th, MD.extCards[th].cmd.variant], 'AE-1 ' + th + ' extCards');
+    eq(MD.pick(M.remake(settled(x, 'calc').act, c.id, 'calc').act.shelf[0].title, 'js'), MD.pick(MD.extCards[th].calc.alt.title, 'js'), 'AE-1 ' + th + ' calc の作り直しは alt');
+    var ph = MD.photoArt({ theme: th, n: 1 });
+    ok(ph.indexOf('is-photo') >= 0 && ph !== MD.photoArt({ theme: 'mc', n: 1 }), 'AE-1 ' + th + ' photoArt はマイクラの写真に落ちない');
+  });
+  eq(MD.extCards.stop.calc.lines[0][0], '12 コマ ÷ 1 秒に 6 コマ = 2 秒', 'AE-1 extCards.stop verbatim');
+  eq(MD.extCards.ath.steps.alt.lines[1][0], '2. 2 個目ごとにスライムブロックを置く', 'AE-1 extCards.ath verbatim');
+  eq(MD.extCards.story.calc.alt.lines[1][0], '1 場面 200 字なら、全部で 1200 字', 'AE-1 extCards.story verbatim');
+});
+t('AE-3 M.samplePage（3 枚ずつ・一巡で最初・予定表の題材を先頭に）', function () {
+  function ids(list) { return list.map(function (s) { return s.id; }); }
+  eq(ids(M.samplePage(MD.samples, 0, null)), ['stop', 'ath', 'story'], 'AE-3 1 組目');
+  eq(ids(M.samplePage(MD.samples, 1, null)), ['mc', 'py', 'circuit'], 'AE-3 2 組目');
+  eq(ids(M.samplePage(MD.samples, 2, null)), ['stop', 'ath', 'story'], 'AE-3 最後の次は最初');
+  eq(ids(M.samplePage(MD.samples, -1, null)), ['mc', 'py', 'circuit'], 'AE-3 負の位置も組に収める（境界）');
+  eq(ids(M.samplePage(MD.samples, 'x', null)), ['stop', 'ath', 'story'], 'AE-3 形の違う位置は 1 組目（境界）');
+  eq(ids(M.samplePage(MD.samples, 0, 'py')), ['py', 'mc', 'circuit'], 'AE-3 予定表の題材（py）の組・先頭');
+  eq(ids(M.samplePage(MD.samples, 1, 'stop')), ['stop', 'ath', 'story'], 'AE-3 予定表の題材（stop）の組');
+  eq(ids(M.samplePage(MD.samples, 0, 'circuit')), ['circuit', 'mc', 'py'], 'AE-3 予定表の題材（circuit）が先頭');
+  eq(ids(M.samplePage(MD.samples, 1, 'tool')), ['mc', 'py', 'circuit'], 'AE-3 見本に無い題材なら今の組（境界）');
+  eq(M.samplePage([], 0, null), [], 'AE-3 見本 0 件（境界）');
+});
+t('AE-4 M.projectPage / 提案 12 件の必須項目', function () {
+  eq(MD.projects.length, 12, 'AE-4 提案 12 件');
+  eq(M.projectPage(MD.projects, 0).map(function (p) { return p.id; }), ['pj-stop-moon', 'pj-mc-ath', 'pj-novel-3', 'pj-trailer'], 'AE-4 1 組目');
+  eq(M.projectPage(MD.projects, 2).map(function (p) { return p.id; }), ['pj-stamp', 'pj-manga', 'pj-sugoroku', 'pj-tokusatsu'], 'AE-4 3 組目');
+  eq(M.projectPage(MD.projects, 3), M.projectPage(MD.projects, 0), 'AE-4 一巡で最初へ');
+  var ctx = { window: {} }; vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../app-v3/js/data.js'), 'utf8').replace(/^window\.DES = /m, 'var DES = window.DES = '), ctx);
+  var cats = {}, items = {};
+  ctx.window.DES.data.catalog.forEach(function (c) { cats[c.id] = true; c.items.forEach(function (it) { items[it.id] = c.id; }); });
+  var bad = [], seen = {};
+  function pair(v) { return Array.isArray(v) && v.length === 2 && typeof v[0] === 'string' && v[0] && typeof v[1] === 'string' && v[1]; }
+  MD.projects.forEach(function (p) {
+    var e = [];
+    if (!/^pj-[a-z0-9-]+$/.test(p.id) || seen[p.id]) e.push('id'); seen[p.id] = true;
+    if (!(cats[p.cat] || p.cat === 'writing') || MD.CATS.indexOf(p.cat) < 0) e.push('cat');
+    if (['line', 'photo', 'illust'].indexOf(p.style) < 0) e.push('style');
+    if (typeof p.safety !== 'boolean') e.push('safety');
+    ['title', 'what', 'first', 'need'].forEach(function (k) { if (!pair(p[k])) e.push(k); });
+    if (typeof p.min !== 'number' || p.min <= 0) e.push('min');
+    if (!Array.isArray(p.steps) || p.steps.length !== 4 || !p.steps.every(pair)) e.push('steps');
+    if (p.catalogId !== null && items[p.catalogId] !== p.cat) e.push('catalogId');
+    if (e.length) bad.push(p.id + ': ' + e.join(','));
+  });
+  eq(bad, [], 'AE-4 必須項目がそろっている（catalogId は同じカテゴリの catalog の項目か null）');
+  eq(MD.projects.filter(function (p) { return p.style !== 'line'; }).length, 10, 'AE-5 photo・illust は 10 枚');
+  eq(MD.projects.filter(function (p) { return p.safety; }).map(function (p) { return p.id; }), ['pj-stop-moon', 'pj-marble'], 'AE-4 safety は 2 件');
+  eq(MD.pick(MD.projects[0].title, 'js'), '月の満ち欠けをコマ撮りで 10 秒に', 'AE-4 題 verbatim');
+  eq(MD.pick(MD.projects[6].need, 'js'), 'ダンボール · テープ · ビー玉 · カッター', 'AE-4 必要な物 verbatim');
+  var txt = JSON.stringify(MD.projects);
+  ok(!/版|点数|ランキング|順位|評価|成績|レベル|成長|頑張|すごい/.test(txt), 'AE-4 評価語・「版」が無い');
+  MD.CATS.forEach(function (c) { ok(/^<svg/.test(MD.catArt(c)) && MD.catArt(c).indexOf(ORANGE_HEX) >= 0, 'AE-5 カテゴリの線画 ' + c + '（強調の橙あり）'); });
+  eq(new Set(MD.CATS.map(MD.catArt)).size, 7, 'AE-5 7 種は別々の絵');
+});
+t('AE-4 M.fromProject（外で作る活動・2 回目は同じ id・任せる・写真）', function () {
+  var p = MD.project('pj-marble'), r = M.fromProject(p, { id: 'pj1', mode: 'js', now: '10:20', acts: [] }), a = r.act;
+  eq([r.created, a.id, a.origin, a.projectId, a.theme, a.stepsKind, a.title, a.catalogId], [true, 'pj1', 'project', 'pj-marble', 'project', 'ext', 'ダンボールのビー玉コースター', 'craft-cardboard'], 'AE-4 活動の形');
+  eq(a.steps, p.steps, 'AE-4 手順は提案の steps');
+  eq(a.stage, null, 'AE-4 作業対象は外の記録（見本を出さない）');
+  var r2 = M.fromProject(p, { id: 'pj2', mode: 'js', now: '10:20', acts: [{ id: 'x' }, a] });
+  eq([r2.created, r2.id], [false, 'pj1'], 'AE-4 同じ提案の 2 回目は同じ活動');
+  eq(M.fromProject(MD.project('pj-manga'), { id: 'pj3', acts: [a] }).created, true, 'AE-4 別の提案は別の活動');
+  eq(M.fromProject(null, {}), null, 'AE-4 提案が無ければ null（境界）');
+  eq(M.fromProject(p, { id: 'pj4', mode: 'es', acts: [] }).act.title, 'ダンボールのビーだまコースター', 'AE-4 題 小');
+  eq(M.leaveOptions(a), ['osteps', 'oneed'], 'AE-4 任せる候補（手順 / 必要な物）');
+  var n1 = settled(a, 'osteps').act.shelf[0], n2 = settled(a, 'oneed').act.shelf[0];
+  eq([n1.kind, n1.theme, n1.lines.map(function (l) { return l[0]; })], ['note', 'project', ['1. 坂を 1 本作る', '2. 曲がり角を足す', '3. 落ちないようにへりを付ける', '4. 最後まで転がるか試す']], 'AE-4 手順のメモは提案の手順');
+  eq(n2.lines.map(function (l) { return l[0]; }), ['ダンボール', 'テープ', 'ビー玉', 'カッター', '目安 60 分くらい'], 'AE-4 必要な物のメモ');
+  eq(MD.pick(M.remake(settled(a, 'osteps').act, n1.id, 'osteps').act.shelf[0].title, 'js'), '作り方の手順（最初の一歩から）', 'AE-4 作り直しはもう一方の形');
+  eq(M.requestOpt(a), 'osteps', 'AE-4 言葉で頼む → 手順');
+  var ph = M.addPhoto(a, 'photo');
+  eq([ph.photo.theme, ph.photo.cat], ['project', 'craft'], 'AE-4 写真はカテゴリを持つ');
+  var art = MD.photoArt(ph.photo);
+  ok(art.indexOf('is-photo') >= 0 && art !== MD.photoArt({ theme: 'mc', n: 0 }) && art.indexOf(MD.catArt('craft').replace(/<\/svg>$/, '').slice(-40)) >= 0, 'AE-4 写真のダミーは提案のカテゴリの線画（マイクラに落とさない）');
+  var sw = M.saveWork([], ph.act, { id: 'wpj' });
+  eq([sw.work.theme, sw.work.art.photo.cat], ['project', 'craft'], 'AE-4 作品に残すと写真の絵');
+  eq(M.migrate(a, function () { return ''; }) === a, true, 'AE-4 提案の活動は移行で変わらない');
+});
+t('AE-6 作品の見本 7 件（完成 4 + 試作 3）と、古い保存データへの 1 回だけの追加', function () {
+  var acts = MD.seedActivities(), works = MD.seedWorks(acts);
+  eq(acts.length, 3, 'AE-6 回 1 の見本の活動は変えない');
+  eq(works.length, 4, 'AE-6 回 1 の見本の作品は変えない');
+  var r = MD.addSeeds(acts, works, 0), W2 = W.group(r.works);
+  eq([r.changed, r.works.length, W2.done.length, W2.trial.length], [true, 7, 4, 3], 'AE-6 見本の作品 7 件（完成 4 + 試作 3）');
+  eq(r.activities.map(function (a) { return a.id; }), ['act-build', 'act-py', 'act-cap', 'act-stop', 'act-story', 'act-ath'], 'AE-6 活動は末尾に 3 件');
+  eq(r.works.map(function (w) { return w.id; }), ['w-seed-ath', 'w-seed-stop', 'w-seed-story', 'w-seed-build', 'w-seed-circuit', 'w-seed-py', 'w-seed-py-trial'], 'AE-6 作品は回 1 の見本の前（日付の新しい順）');
+  eq([acts.length, works.length], [3, 4], 'AE-6 元の配列は変えない');
+  function byId(list, id) { return list.filter(function (x) { return x.id === id; })[0]; }
+  var ws = byId(r.works, 'w-seed-stop'), wt = byId(r.works, 'w-seed-story'), wa = byId(r.works, 'w-seed-ath');
+  eq([ws.title, ws.status, ws.date, ws.like, ws.craft], ['人形が歩く 18 コマの動画', 'done', '11/4', 'コマを 18 にしたら、歩き方がなめらかになったところ', '1 秒に 8 コマだと速すぎたので、6 コマに戻した'], 'AE-6 w-seed-stop');
+  eq([wt.title, wt.status, wt.date, wt.like, wt.craft], ['雨の日の図書室（4 場面）', 'done', '11/3', '3 場面目で、なくした本が見つかるところ', '「わたし」が語る形にしたら、気持ちを書きやすくなった'], 'AE-6 w-seed-story');
+  eq([wa.title, wa.status, wa.date, wa.like, wa.craft], ['スライムで跳ねるコース（足場 6 個）', 'trial', '11/5', null, null], 'AE-6 w-seed-ath');
+  var as = byId(r.activities, 'act-stop'), at = byId(r.activities, 'act-story'), aa = byId(r.activities, 'act-ath');
+  eq(as.changes.map(function (c) { return c.what.v.value[0]; }), ['18 コマ', '1 秒に 8 コマ', '1 秒に 6 コマ'], 'AE-6 act-stop 変化 3 つ（12→18 / 6→8 / 6 に戻す）');
+  eq(at.changes.map(function (c) { return c.what.v.value[0]; }), ['外から語る', '「わたし」が語る'], 'AE-6 act-story 変化 2 つ');
+  eq([aa.changes.length, aa.base.variant, aa.changes[0].what.v.value[0]], [1, 'slime', '6'], 'AE-6 act-ath（ath.slime。足場の数 5→6）');
+  eq(r.activities.slice(3).map(function (a) { return [a.origin, a.state, a.sampleId]; }), [['sample', 'closed', 'stop'], ['sample', 'closed', 'story'], ['sample', 'closed', 'ath']], 'AE-6 見本から始めた活動・ここで一区切り');
+  var people = {};
+  r.activities.forEach(function (a) { a.changes.forEach(function (c) { if (c.with) people[c.with] = true; }); });
+  eq(Object.keys(people), ['田中さん'], 'AE-6 人名は既存の田中さんだけ');
+  r.works.slice(0, 3).forEach(function (w) {
+    var a = byId(r.activities, w.actId), ch = a.changes.filter(function (c) { return c.id === w.at; })[0];
+    eq(w.roles, M.roles(a, w.at), 'AE-6 ' + w.id + ' の関わりは roles と同じ');
+    eq(w.snap, M.chState(a, ch), 'AE-6 ' + w.id + ' の状態は chState と同じ');
+    eq(w.art, M.saveWork([], a, { id: 'x', at: w.at }).work.art, 'AE-6 ' + w.id + ' の絵は saveWork と同じ');
+    eq(M.migrateWork(w, r.activities), w, 'AE-6 ' + w.id + ' は移行で変わらない');
+  });
+  eq(r.activities.map(function (a) { return M.migrate(a, function () { return ''; }) === a; }).every(Boolean), true, 'AE-6 見本の活動は v:3 のまま');
+  eq(W.normalize(r.works), r.works, 'AE-6 見本は補う欄が無い');
+  ok(W.storyFrames(as, ws).length - 1 === 3, 'AE-6 act-stop の作品は変化 3 つが見える');
+  // 1 回だけ: 番号が新しければ足さない / 本人が外した見本はまた足さない / 既にある見本は二重に足さない
+  var again = MD.addSeeds(r.activities, r.works, MD.SEED_V);
+  eq([again.changed, again.works.length], [false, 7], 'AE-6 番号が新しければ足さない');
+  var removed = r.works.filter(function (w) { return w.id !== 'w-seed-stop'; });
+  eq(MD.addSeeds(r.activities, removed, MD.SEED_V).works.map(function (w) { return w.id; }).indexOf('w-seed-stop'), -1, 'AE-6 外した見本はまた足さない');
+  var dup = MD.addSeeds(r.activities, r.works, 1);
+  eq([dup.changed, dup.activities.length, dup.works.length], [false, 6, 7], 'AE-6 古い番号でも、ある見本は二重に足さない（境界）');
+  var mine = [{ id: 'w-own', title: '自分の作品' }];
+  eq(MD.addSeeds(acts, mine, 0).works.map(function (w) { return w.id; }), ['w-own', 'w-seed-ath', 'w-seed-stop', 'w-seed-story'], 'AE-6 回 1 の見本が無ければ末尾に足す（既存の作品はそのまま）');
+  var t2 = JSON.stringify(r.activities.slice(3)) + JSON.stringify(r.works.slice(0, 3));
+  ok(!/版|点数|ランキング|順位|評価|成績|レベル|集中力|得意|苦手|上手|成長|頑張|すごい/.test(t2), 'AE-6 見本に「版」と評価の語が無い');
+});
+t('AE-3 i18n: only_samples は消して参照も残さない / §AE の文言は [中, 小]', function () {
+  var i18n = fs.readFileSync(path.join(__dirname, '../app-v3/js/i18n.js'), 'utf8'), src = fs.readFileSync(path.join(__dirname, '../app-v3/js/make.js'), 'utf8');
+  ok(i18n.indexOf('only_samples') < 0 && src.indexOf('only_samples') < 0, 'AE-3 only_samples が無い');
+  ok(/\/\/ ---- §AE ----/.test(i18n), 'AE i18n は §AE の塊');
+  var need = ['origin_project', 'samples_swapped', 'pj_h', 'pj_sub', 'pj_more', 'pj_swapped', 'pj_first', 'pj_need', 'pj_safety', 'pj_start', 'pj_placed', 'pj_ai_image']
+    .concat(MD.CATS.map(function (c) { return 'pj_cat_' + c; }));
+  var miss = need.filter(function (k) { return !new RegExp('\\n\\s*' + k + ": \\['[^']+', '[^']+'\\]").test(i18n); });
+  eq(miss, [], 'AE i18n の key がそろっている（[中, 小]）');
+  ok(/pj_h: \['こんなのも作れる'/.test(i18n) && /pj_sub: \['いろいろな作り方の例。気になったら始めてみよう'/.test(i18n) && /pj_cat_writing: \['文章'/.test(i18n), 'AE-4 見出し・1 文・文章のチップは verbatim');
+  ok(/pj_safety: \['サポーターと確認'/.test(i18n) && /pj_placed: \['作業台に置いたよ'/.test(i18n) && /samples_swapped: \['見本を入れ替えたよ'/.test(i18n), 'AE-3 / AE-4 文言 verbatim');
+});
+
+// ---------- レビューへの裁定（contract-app 末尾「直す（実装）」）----------
+// 偽物の保存: failKey のキーだけ偽を返す。log に呼ばれた順、disk に保存できた値（JSON）を残す
+function fakeStore(st, failKey) {
+  var s = { log: [], disk: {} };
+  s.save = function (k) { s.log.push(k); if (k === failKey || failKey === '*') return false; s.disk[k] = JSON.stringify(st[k]); return true; };
+  return s;
+}
+function freeze(v) { return JSON.stringify(v); }
+var MKSRC = fs.readFileSync(path.join(__dirname, '../app-v3/js/make.js'), 'utf8');
+function handlerSrc(src, name) { var i = src.indexOf("A['" + name + "'] = function"); if (i < 0) return ''; var j = src.indexOf("\n  A['", i + 10); return src.slice(i, j < 0 ? i + 3000 : j); }
+t('裁定 1 共通 M.trySave: 1 つでも保存できなければ全部のキーを前に戻し、保存できたキーは前の値で保存し直す', function () {
+  var st = { activities: [{ id: 'x' }], works: [{ id: 'w' }], saveFailed: false }, fs1 = fakeStore(st, 'works');
+  var r = M.trySave(st, ['activities', 'works'], function (s) { s.activities = [{ id: 'y' }].concat(s.activities); s.works = []; }, fs1.save);
+  eq([r, st.activities.map(function (a) { return a.id; }), st.works.length, st.saveFailed], [false, ['x'], 1, true], '裁定 1 失敗したら前の状態・saveFailed');
+  eq([fs1.log, JSON.parse(fs1.disk.activities).map(function (a) { return a.id; })], [['activities', 'works', 'activities'], ['x']], '裁定 1 先に保存できたキーは前の値で保存し直す');
+  var st2 = { makeSide: { samplePage: 0 }, saveFailed: true }, fs2 = fakeStore(st2, null);
+  eq([M.trySave(st2, ['makeSide'], function (s) { s.makeSide.samplePage = 1; }, fs2.save), st2.makeSide.samplePage, st2.saveFailed], [true, 1, true], '裁定 1 全部保存できたら書き換えたまま（saveFailed は呼ぶ側が決める）');
+});
+t('裁定 1 提案の「これで始める」: 保存できなければ活動を足さず、移動・トーストより前に止まる', function () {
+  var p = MD.project('pj-marble'), st = { activities: MD.seedActivities(), saveFailed: false }, before = freeze(st.activities);
+  var r = M.fromProject(p, { id: 'a-pj1', mode: 'js', now: '10:20', acts: st.activities });
+  eq([M.addAct(st, r.act, fakeStore(st, 'activities').save), freeze(st.activities) === before, st.saveFailed], [false, true, true], '裁定 1 保存の失敗 → 活動は足さない');
+  ok(M.addAct(st, r.act, fakeStore(st, null).save) && st.activities[0].id === 'a-pj1', '裁定 1 保存できたら先頭に足す');
+  var h = handlerSrc(MKSRC, 'mk-project'), ia = h.indexOf('if (!addAct('), ig = h.indexOf("go('#make/"), it = h.indexOf("T('pj_placed')"), ifl = h.indexOf('saveFailUi(');
+  ok(ia > 0 && ia < ifl && ifl < ig && ifl < it && h.indexOf('S().activities = [r.act]') < 0, '裁定 1 mk-project は保存の結果を見てから移動・トースト');
+});
+t('裁定 1 見本・提案の入れ替え: 保存できなければ組の位置を変えない（入れ替えない）', function () {
+  var st = { makeSide: { samplePage: 1, projectPage: 2 }, saveFailed: false };
+  eq([M.swapPage(st, 'samples', 1, fakeStore(st, 'makeSide').save), st.makeSide.samplePage, st.saveFailed], [false, 1, true], '裁定 1 見本: 失敗 → 前の組');
+  eq([M.swapPage(st, 'projects', 2, fakeStore(st, 'makeSide').save), st.makeSide.projectPage], [false, 2], '裁定 1 提案: 失敗 → 前の組');
+  eq([M.swapPage(st, 'samples', 1, fakeStore(st, null).save), st.makeSide.samplePage], [true, 0], '裁定 1 見本: 最後の組の次は最初');
+  eq([M.swapPage(st, 'projects', 2, fakeStore(st, null).save), st.makeSide.projectPage], [true, 0], '裁定 1 提案: 12 件 = 3 組の次は最初');
+  var src = MKSRC.slice(MKSRC.indexOf('function swapGroup'), MKSRC.indexOf("A['mk-more-samples']"));
+  ok(src.indexOf('swapPage(') > 0 && src.indexOf('swapPage(') < src.indexOf("classList.add('is-fading')") && src.indexOf("DES.store.save('makeSide')") < 0, '裁定 1 swapGroup は先に保存し、失敗なら消える前に止まる');
+});
+t('裁定 2 見本の作品の追加（AE-6）: 活動・作品・番号の保存が全部できた時だけ番号を進める', function () {
+  function old() { var acts = MD.seedActivities(); return { activities: acts, works: MD.seedWorks(acts), makeSide: { seedV: 0 }, saveFailed: false }; }
+  var s1 = old(), f1 = fakeStore(s1, 'works');
+  eq([M.applySeeds(s1, f1.save), s1.makeSide.seedV, s1.works.length, s1.activities.length, s1.saveFailed], [false, 0, 4, 3, true], '裁定 2 作品の保存の失敗 → 番号は 0 のまま・足した見本も戻す');
+  ok(f1.log.indexOf('makeSide') < 0 && JSON.parse(f1.disk.activities).length === 3, '裁定 2 番号は保存しない・先に保存した活動は前の値で保存し直す');
+  var s2 = old(), f2 = fakeStore(s2, 'makeSide');
+  eq([M.applySeeds(s2, f2.save), s2.makeSide.seedV, s2.works.length, JSON.parse(f2.disk.works).length], [false, 0, 4, 4], '裁定 2 番号の保存の失敗 → 活動・作品も前の値に');
+  var s3 = old(), f3 = fakeStore(s3, null);
+  eq([M.applySeeds(s3, f3.save), s3.makeSide.seedV, s3.works.length, f3.log], [true, MD.SEED_V, 7, ['activities', 'works', 'makeSide']], '裁定 2 全部できたら番号を進める（番号は最後に保存）');
+  var s4 = { activities: s3.activities, works: s3.works, makeSide: { seedV: 1 }, saveFailed: false }, f4 = fakeStore(s4, null);
+  eq([M.applySeeds(s4, f4.save), s4.makeSide.seedV, f4.log], [true, MD.SEED_V, ['makeSide']], '裁定 2 足す物が無い時は番号だけ');
+  ok(/applySeeds\(s,/.test(MKSRC) && !/s\.makeSide\.seedV = MD\.SEED_V;\s*\n\s*\(add\.changed/.test(MKSRC), '裁定 2 読み込みは applySeeds を使う');
+});
+t('裁定 3 あしあとの「もう一度試す」: 提案から作った活動の projectId と写真のカテゴリを引き継ぐ', function () {
+  var p = MD.project('pj-marble'), a = M.fromProject(p, { id: 'a-pjt', mode: 'js', now: '10:20', acts: [] }).act;
+  a = M.addPhoto(a, 'photo').act;
+  var n = M.fromTrail(a, { id: 'a-pjt2', now: '10:40', mode: 'js', works: [] });
+  eq([n.projectId, n.theme, n.origin, n.fromActId], ['pj-marble', 'project', 'trail', 'a-pjt'], '裁定 3 projectId・題材を引き継ぐ（新しい活動）');
+  eq(M.addPhoto(n, 'photo').photo.cat, 'craft', '裁定 3 やり直した活動の写真は提案のカテゴリ');
+  var lv = M.leave(n, 'oneed');
+  eq(lv.ids.length, 1, '裁定 3 やり直した活動でも「必要な物をまとめて」が 1 枚作る');
+});
+t('裁定 10 3 題材の計算: 値が欠けている・範囲の外の時は題材の既定値（NaN・undefined・{F} を出さない）', function () {
+  var bad = [{}, { frames: 99, fps: -1, gap: 0, count: 99, scenes: 1, voice: 9 }, { frames: 'x', fps: null, gap: 2.5, count: NaN, scenes: '4', voice: {} }];
+  ['stop', 'ath', 'story'].forEach(function (th) {
+    MD.theme(th).variants.forEach(function (vk) {
+      var def = {}; MD.theme(th).params.forEach(function (p) { def[p.key] = p.def; });
+      var good = { kind: 'sample', theme: th, variant: vk, values: def };
+      bad.forEach(function (b, bi) {
+        var st = { kind: 'sample', theme: th, variant: vk, values: b };
+        var out = [MD.result(st, 'js'), MD.result(st, 'es'), MD.code(st), MD.desc(st, 'js'), MD.desc(st, 'es'), MD.art(st), MD.artMarks(st)];
+        ok(!out.some(function (s) { return /NaN|undefined|\{[A-Za-z]+\}|Infinity/.test(String(s)); }), '裁定 10 ' + th + '.' + vk + ' 壊れた値 ' + bi + ' で NaN・undefined・{…} が出ない');
+        eq([MD.result(st, 'js'), MD.code(st), MD.desc(st, 'js'), MD.artMarks(st)], [MD.result(good, 'js'), MD.code(good), MD.desc(good, 'js'), MD.artMarks(good)], '裁定 10 ' + th + '.' + vk + ' 壊れた値 ' + bi + ' は既定値で計算');
+      });
+    });
+  });
+});
+t('裁定 11 gen-thumbs.mjs: エラーの時に出すのは決まった分類の文だけ', function () {
+  var g = fs.readFileSync(path.join(__dirname, 'gen-thumbs.mjs'), 'utf8');
+  var whys = g.match(/why:\s*[^,}]+/g) || [];
+  ok(whys.length >= 3 && whys.every(function (w) { return /^why:\s*(WHY\.[a-z_]+|whyOf\(res\.status|timedOut \? WHY\.[a-z_]+ : WHY\.[a-z_]+)\s*$/.test(w); }), '裁定 11 why は決まった分類だけ（' + whys.join(' / ') + '）');
+  var code = g.replace(/\/\/.*$/gm, '');
+  ok(!/\+\s*\(?\s*e\s*&&\s*e\.name|\+\s*e\.name|\.message/.test(code) && /\(\) => \{ console\.error\('止まった: ' \+ WHY\.crashed\)/.test(code), '裁定 11 例外の名前・本文を出さない');
+  ok(/const WHY = \{[^}]*\}/.test(code) && !/WHY = \{[^}]*\+/.test(code), '裁定 11 分類の文は定数だけ');
+  ok(!/'status ' \+ res\.status \+ \(code/.test(g) && !/\+ code\b/.test(g), '裁定 11 API が返した code の文字列をそのまま出さない');
+});
+// 偽物の保存（巻き戻しも失敗）: failKey の保存が偽を返した後は、どのキーの保存も偽（巻き戻しのための保存し直しも失敗する）
+function brokenStore(st, failKey) {
+  var s = { log: [], disk: {}, broken: false };
+  s.save = function (k) { s.log.push(k); if (s.broken || k === failKey) { s.broken = true; return false; } s.disk[k] = JSON.stringify(st[k]); return true; };
+  return s;
+}
+t('確認レビュー 1 M.trySave: 巻き戻しの保存し直しも失敗したら、そのキーのメモリは保存側と同じ新しい値のまま', function () {
+  var st = { activities: [{ id: 'x' }], works: [{ id: 'w' }], saveFailed: false }, b = brokenStore(st, 'works');
+  var r = M.trySave(st, ['activities', 'works'], function (s) { s.activities = [{ id: 'y' }].concat(s.activities); s.works = []; }, b.save);
+  eq([r, st.saveFailed, st.activities.map(function (a) { return a.id; }), st.works.map(function (w) { return w.id; })], [false, true, ['y', 'x'], ['w']], '確認 1 失敗のまま・保存し直せなかったキーは新しい値・保存していないキーは前の値');
+  eq([b.log, freeze(st.activities) === b.disk.activities], [['activities', 'works', 'activities'], true], '確認 1 メモリの値 = 保存されている値');
+});
+t('確認レビュー 1 見本の作品の追加: 巻き戻しも失敗した時、メモリ = 保存・番号は進めない', function () {
+  var acts = MD.seedActivities(), s = { activities: acts, works: MD.seedWorks(acts), makeSide: { seedV: 0 }, saveFailed: false }, b = brokenStore(s, 'works');
+  var r = M.applySeeds(s, b.save);
+  eq([r, s.saveFailed, s.makeSide.seedV, s.works.length], [false, true, 0, 4], '確認 1 失敗・番号は 0・作品は前の値');
+  ok(freeze(s.activities) === b.disk.activities && s.activities.length > 3 && !('makeSide' in b.disk), '確認 1 保存できた活動はメモリも同じ（' + s.activities.length + ' 件）');
+});
+t('確認レビュー 4 3 題材: stage.values そのものが無い時も、図は結果文と同じ題材の既定値', function () {
+  ['stop', 'ath', 'story'].forEach(function (th) {
+    var def = {}; MD.theme(th).params.forEach(function (p) { def[p.key] = p.def; });
+    MD.theme(th).variants.forEach(function (vk) {
+      var none = { kind: 'sample', theme: th, variant: vk }, good = { kind: 'sample', theme: th, variant: vk, values: def };
+      eq([MD.result(none, 'js'), MD.artMarks(none), MD.art(none) === MD.art(good)], [MD.result(good, 'js'), MD.artMarks(good), true], '確認 4 ' + th + '.' + vk + ' values 無し → 題材の既定値');
+    });
+  });
+  ['mc', 'py', 'circuit', 'tool'].forEach(function (th) {
+    MD.theme(th).variants.forEach(function (vk) {
+      var none = { kind: 'sample', theme: th, variant: vk }, vv = { kind: 'sample', theme: th, variant: vk, values: MD.variantValues(th, vk) };
+      eq([MD.artMarks(none), MD.art(none) === MD.art(vv)], [MD.artMarks(vv), true], '確認 4 既存 ' + th + '.' + vk + ' は案の既定値のまま');
+    });
+  });
 });
 
 console.log('make-test: ' + pass + ' passed, ' + fail + ' failed');

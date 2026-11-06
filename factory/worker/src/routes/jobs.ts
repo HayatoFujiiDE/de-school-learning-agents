@@ -1,4 +1,5 @@
 // /api/jobs（契約 §B-3, §B-4）
+import { getOEmbedPort } from '../anthropic';
 import { first, stmt } from '../db';
 import { consoleUrl } from '../env';
 import { fromResult, isNonEmptyString, json, parseJsonField, readBody, type RouteCtx } from '../http';
@@ -58,7 +59,9 @@ export const cancelJobRoute = async (c: RouteCtx, id: string) => fromResult(awai
 
 /** POST /api/jobs/:id/reconcile と reingest の続きで共通（同じ deadline・同じ応答の形） */
 async function reconcileAndReport(c: RouteCtx, id: string): Promise<Response> {
-  const result = await reconcileJob(c.env, await c.port(), id, { deadline: Date.now() + 25_000 });
+  // §Q-13: 職人の道具 youtube_info の oEmbed の port（port と同じ hostname で fake を判定する）
+  const oembed = await getOEmbedPort(c.env, { hostname: c.url.hostname });
+  const result = await reconcileJob(c.env, await c.port(), id, { deadline: Date.now() + 25_000, oembed });
   const after = await getJob(c.env.DB, id);
   return json(200, { job_id: id, result, status: after?.status, phase: after?.phase, reconcile_stage: after?.reconcile_stage });
 }
