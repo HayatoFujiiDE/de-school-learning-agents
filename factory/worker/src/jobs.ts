@@ -49,6 +49,7 @@ import {
   keptImageInput,
   registerImage,
 } from './images';
+import { activeMakerNotes, makerNoteLines } from './retro';
 import { OutOfTime, SAVE_FAILURES_MAX, ScanLimit, ScanStalled, runScan, stateJsonForSave, type ScanIO, type ScanState } from './scan';
 import { isActiveJob, isReingestable, isTerminalJob } from './state';
 import {
@@ -207,6 +208,14 @@ export async function buildPhase1Message(db: D1Database, briefMd: string, kinds:
   );
   const kindLines = kinds.map((k) => `- 型 ${k}（${KIND_LABEL[k] ?? '不明'}）`);
   const kindRubrics = kinds.map((k) => RUBRIC_KINDS[k]).filter(Boolean);
+  // §S-5 2: 振り返り係の active の maker_note（古い順 8 件まで）。1 件も無ければ見出しごと出さない（従来の文と 1 文字も変わらない）。
+  // 作り直し（rework）の job も startJob からこの文で始まる。読めない時（migration 0006 の前など）は入れずに進める
+  let notes: string[] = [];
+  try {
+    notes = await activeMakerNotes(db);
+  } catch (e) {
+    console.log(JSON.stringify({ at: 'phase1', retro_notes: 'unavailable', kind: errorKind(e) }));
+  }
   return [
     '# 注文票',
     briefMd,
@@ -216,6 +225,7 @@ export async function buildPhase1Message(db: D1Database, briefMd: string, kinds:
     '## これまでの回答と差し戻し理由（全素材・新しい順・最大 40 件）',
     ...(lines.length ? lines : ['- （まだありません）']),
     '',
+    ...makerNoteLines(notes),
     '# 今回の型',
     ...kindLines,
     '',

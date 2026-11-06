@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" fill="none" stroke-linejoin="round" stroke-linecap="round">
+<ellipse cx="100" cy="185" rx="58" ry="9" fill="#8f89b3" opacity="0.28"/>
+<g class="ch-prop"><g transform="rotate(8 160 138)">
+<rect x="136" y="102" width="48" height="64" rx="6" fill="#f6efe2" stroke="#1c1c22" stroke-width="5"/>
+<rect x="149" y="95" width="22" height="12" rx="3" fill="#a3a9b8" stroke="#1c1c22" stroke-width="4"/>
+<path d="M144 122 L149 127 L157 117" stroke="#3a9a5b" stroke-width="4"/>
+<path d="M163 122 L176 122" stroke="#1c1c22" stroke-width="3.5"/>
+<path d="M144 139 L149 144 L157 134" stroke="#3a9a5b" stroke-width="4"/>
+<path d="M163 139 L176 139" stroke="#1c1c22" stroke-width="3.5"/>
+<path d="M145 155 L156 155 M163 155 L176 155" stroke="#1c1c22" stroke-width="3.5"/>
+</g></g>
+<g class="ch-body">
+<path d="M48 150 C44 126 50 106 62 96 L58 78 Q58 71 64 74 L79 85 C87 82 101 82 109 85 L124 74 Q130 71 130 78 L126 96 C138 106 143 126 139 150 C137 168 123 180 94 180 C65 180 50 168 48 150 Z" fill="#ffffff" stroke="#1c1c22" stroke-width="6"/>
+<path d="M56 152 C58 164 66 172 78 174 C70 164 64 154 62 140 Z" fill="#eeedf4"/>
+<path d="M72 152 Q78 147 84 152 M88 160 Q94 155 100 160 M104 152 Q110 147 116 152" stroke="#c9c7d4" stroke-width="3"/>
+<path d="M128 132 C140 128 146 138 139 148 C134 152 128 150 126 146" fill="#ffffff" stroke="#1c1c22" stroke-width="4.5"/>
+<g class="ch-eyes">
+<circle cx="78" cy="115" r="14" fill="#fff" stroke="#1c1c22" stroke-width="5"/>
+<circle cx="110" cy="115" r="14" fill="#fff" stroke="#1c1c22" stroke-width="5"/>
+<circle cx="80" cy="117" r="5.5" fill="#1c1c22"/><circle cx="112" cy="117" r="5.5" fill="#1c1c22"/>
+<circle cx="78.4" cy="114.6" r="1.8" fill="#fff"/><circle cx="110.4" cy="114.6" r="1.8" fill="#fff"/>
+</g>
+<path d="M89 127 L99 127 L94 136 Z" fill="#f2b640" stroke="#1c1c22" stroke-width="4"/>
+<ellipse cx="82" cy="182" rx="7" ry="3.5" fill="#f2b640" stroke="#1c1c22" stroke-width="3.5"/>
+<ellipse cx="106" cy="182" rx="7" ry="3.5" fill="#f2b640" stroke="#1c1c22" stroke-width="3.5"/>
+</g>
+</svg>

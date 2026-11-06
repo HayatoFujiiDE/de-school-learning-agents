@@ -482,3 +482,21 @@ body.floor-wide .view { max-width: 1600px; padding-left: 12px; padding-right: 12
   .fq-table tr.fq-detail.att td { border-radius: 0 0 12px 12px; }
   .fq-detail-in { grid-template-columns: 1fr; }
 }
+
+/* 改善係の記録（振り返り係 §S-5 5）と工場の改善係の入口。幅 390px でもはみ出さない（長い文は折り返す・表は枠の中で横に送る） */
+.retro-list, .retro-events, .retro-wastes, .retro-facts { list-style: none; margin: 0; padding: 0; }
+.retro-item, .retro-ev { border-top: 1px solid var(--line); padding: 10px 0; min-width: 0; }
+.retro-item:first-child, .retro-ev:first-child { border-top: 0; }
+.retro-ev p { margin: 4px 0; }
+.retro-text { margin: 4px 0; overflow-wrap: anywhere; word-break: break-word; }
+.retro-meta { margin: 2px 0; font-size: 13px; overflow-wrap: anywhere; }
+.retro-at { display: block; font-size: 12px; }
+.retro-warn { margin: 4px 0; color: #8a5a00; background: var(--ai-soft); border-radius: 8px; padding: 4px 8px; overflow-wrap: anywhere; }
+.retro-wastes li { margin: 4px 0; overflow-wrap: anywhere; }
+.retro-cmp { border-collapse: collapse; width: 100%; }
+.retro-cmp th, .retro-cmp td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.retro-cmp td:last-child { white-space: normal; }
+.retro-recent summary { cursor: pointer; font-weight: 600; }
+.retro-floor h2 { margin: 0 0 8px; font-size: 18px; }
+.retro-facts { margin: 0 0 12px; }
+.retro-facts li { margin: 2px 0; }

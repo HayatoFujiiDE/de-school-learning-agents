@@ -68,7 +68,10 @@
     not_halted: '画像の生成は止まっていません',
     not_configured: 'Gemini の鍵が設定されていません（鍵の投入はセッションの外で行います）',
     already_probed: '同じ動画・区間の probe は実行済みです',
-    cap_reached: '動画の記帳が月または日の上限に届いています'
+    cap_reached: '動画の記帳が月または日の上限に届いています',
+    too_many_active: '職人に渡している工夫が 8 件あります。先にどれかをやめてから入れてください',
+    state_conflict: '他の操作で状態が変わりました。読み込み直してください',
+    bad_request: '送った内容が正しくありません'
   };
 
   var $ = function (sel, root) { return (root || document).querySelector(sel); };
@@ -1000,8 +1003,9 @@
     if (!b) return;
     if (!floor.filter) { b.classList.add('hidden'); b.textContent = ''; return; }
     b.classList.remove('hidden');
-    b.innerHTML = esc(stationName(floor.filter) + 'にいる素材だけ表示中') + ' <span class="scene-filter-x" aria-hidden="true">✕</span>';
-    b.setAttribute('aria-label', stationName(floor.filter) + 'にいる素材だけ表示中。押すと絞り込みを解除します');
+    var chip = floor.filter === 'retro' ? stationName(floor.filter) + 'を選んでいます' : stationName(floor.filter) + 'にいる素材だけ表示中';
+    b.innerHTML = esc(chip) + ' <span class="scene-filter-x" aria-hidden="true">✕</span>';
+    b.setAttribute('aria-label', chip + (floor.filter === 'retro' ? '。押すと選択を解除します' : '。押すと絞り込みを解除します'));
   }
   function setFloorFilter(id) {
     floor.filter = id && floor.filter !== id ? id : null;
@@ -1094,11 +1098,25 @@
       '<div class="fq-more"><button type="button" class="fq-more-btn" data-fq-menu="1" aria-expanded="' + (menuOpen ? 'true' : 'false') + '" aria-controls="fq-more-pop" aria-label="表の並び順の説明">' +
       '<span aria-hidden="true">…</span></button><div id="fq-more-pop" class="fq-pop" role="note"' + (menuOpen ? '' : ' hidden') + '>' + esc(FQ_ORDER_NOTE) + '</div></div></div>';
   }
-  /** 制作キュー（見出し + 表）。opts = { filter: 持ち場 id | null, open: { 素材 id: true }, menuOpen }。0 件なら案内 */
+  /** 工場で改善係を選んだ時の入口（GET /api/floor の stations.retro から描く純関数） */
+  function retroFloorPanelHtml(rt) {
+    rt = rt || {};
+    var notes = Number(rt.active_maker_notes || 0), pending = Number(rt.pending || 0);
+    return '<div class="fq-empty retro-floor" data-retro-floor="1"><h2 id="fq-h">改善係</h2>' +
+      '<p>終わった注文ごとに費用を振り返り、質を下げずに費用を下げる「工夫」を職人に渡します。</p>' +
+      '<ul class="retro-facts"><li>いま職人に渡している工夫 <b>' + esc(notes) + ' 件</b></li>' +
+      '<li>振り返り中 <b>' + esc(pending) + ' 件</b></li>' +
+      '<li>最後の振り返り <b>' + esc(rt.last_retro_at ? fmtTime(rt.last_retro_at) : 'まだありません') + '</b></li></ul>' +
+      '<div class="row"><a class="btn primary" href="#/retro">改善係の記録を開く</a><button type="button" class="btn" data-fq-clear="1">選択を解除</button></div></div>';
+  }
+
+  /** 制作キュー（見出し + 表）。opts = { filter: 持ち場 id | null, open: { 素材 id: true }, menuOpen, retro: stations.retro }。0 件なら案内 */
   function floorQueueHtml(queue, opts) {
     opts = opts || {};
     queue = queue || [];
     var S = floorScene();
+    // 改善係（§S）は素材を持たない見回り役。選んだ時は表の代わりに「改善係の記録」への入口を出す
+    if (opts.filter === 'retro') return retroFloorPanelHtml(opts.retro);
     var rows = opts.filter && S ? queue.filter(function (r) { return S.rowStations(r).indexOf(opts.filter) >= 0; }) : queue;
     var head = fqHeadHtml(rows.length, !!opts.menuOpen);
     if (!queue.length) {
@@ -1165,7 +1183,7 @@
     var q = $('#floor-queue');
     if (!q) return;
     q.classList.remove('loading');
-    q.innerHTML = floorQueueHtml(d.queue, { filter: floor.filter, open: floor.open, menuOpen: floor.menuOpen });
+    q.innerHTML = floorQueueHtml(d.queue, { filter: floor.filter, open: floor.open, menuOpen: floor.menuOpen, retro: d.stations && d.stations.retro });
     if (!flashChanged) return;
     var prev = floor.prev;
     var next = {};
@@ -1291,7 +1309,7 @@
   }
 
   // smoke（§N-5 (n3)）から描画の純関数を呼べるようにする。画面の動作には使わない
-  window.FactoryAdminFloor = { floorBandHtml: floorBandHtml, floorQueueHtml: floorQueueHtml, floorChipsHtml: floorChipsHtml, sanitizeCharSvg: sanitizeCharSvg };
+  window.FactoryAdminFloor = { floorBandHtml: floorBandHtml, floorQueueHtml: floorQueueHtml, floorChipsHtml: floorChipsHtml, sanitizeCharSvg: sanitizeCharSvg, retroFloorPanelHtml: retroFloorPanelHtml };
 
   // ---- 画面: 素材一覧 ----
   function viewMaterials(view, q) {
@@ -2514,6 +2532,161 @@
     newReviewState: newReviewState, reviewHtml: reviewHtml, renderMd: renderMd
   };
 
+  // ---- 画面: 改善係の記録（振り返り係 §S-5 5。画面での名前は「改善係」）----
+  // LLM が書いた文（summary・evidence・text・reason）は必ず esc() して出す
+  var RETRO_WASTE_LABEL = {
+    failed_fetch: '開けないページの試し直し', repeated_fetch: '同じページの取り直し', long_context: '長い文脈', many_requests: 'やり取りの回数が多い',
+    outcome_retry: '採点のやり直し', image_redo: '画像の描き直し', rework_refetch: '作り直しでの取り直し', other: 'その他'
+  };
+  var RETRO_TARGET_LABEL = { maker_note: '職人への注意書き', maker_definition: '職人の定義', worker_code: 'Worker（工場のプログラム）', order: '注文の出し方' };
+  var RETRO_STATUS_LABEL = { collecting: '集計中', ready: '送信待ち', submitted: '結果待ち', ended: '完了', failed: '失敗', skipped: '上限で飛ばした' };
+  var RETRO_TIP_STATUS = { active: ['入っている', 'green'], proposed: ['提案中', 'yellow'], retired: ['やめた', 'gray'], rejected: ['見送った', 'gray'] };
+  function retroCents(c) { return c === null || c === undefined ? '—' : '$' + (Number(c) / 100).toFixed(2); }
+  function retroPct(r) { return r === null || r === undefined ? '—' : (Math.round(Number(r) * 1000) / 10) + '%'; }
+  function retroWho(t) { return t && t.decided_by === 'human' ? '人' : '自動'; }
+
+  /** 数字の比較（直近 10 件とその前 10 件）。足りない時は「まだ比べられません（あと n 件）」 */
+  function retroCompareHtml(cmp) {
+    cmp = cmp || {};
+    var w = Number(cmp.window || 10), a = cmp.recent || {}, b = cmp.previous || {};
+    var na = Number(a.n || 0), nb = Number(b.n || 0);
+    var head = '<h2>数字の比較</h2><p class="muted">1 注文あたりの費用と、検証で「未確認 + 食い違い」になった主張の割合を並べます（費用が下がっても、割合が上がっていれば質が落ちています）。</p>';
+    if (na < w || nb < w) {
+      return '<div class="card" data-retro-compare="short">' + head + '<p><b>まだ比べられません（あと ' + esc(Math.max(1, 2 * w - na - nb)) + ' 件）</b></p>' +
+        (na ? '<p class="muted">直近 ' + esc(na) + ' 件: 費用 ' + esc(retroCents(a.avg_cost_cents)) + '・未確認 + 食い違い ' + esc(retroPct(a.avg_bad_ratio)) + '</p>' : '') + '</div>';
+    }
+    function costDiff() {
+      if (a.avg_cost_cents === null || b.avg_cost_cents === null || !Number(b.avg_cost_cents)) return '—';
+      var p = Math.round((Number(a.avg_cost_cents) / Number(b.avg_cost_cents) - 1) * 100);
+      return p < 0 ? pill(Math.abs(p) + '% 下がった', 'green') : p > 0 ? pill(p + '% 上がった', 'orange') : pill('変わらない', 'gray');
+    }
+    function ratioDiff() {
+      if (a.avg_bad_ratio === null || b.avg_bad_ratio === null) return '—';
+      var d = Math.round((Number(a.avg_bad_ratio) - Number(b.avg_bad_ratio)) * 1000) / 10;
+      return d > 0 ? pill(d + ' ポイント増えた（質に注意）', 'red') : d < 0 ? pill(Math.abs(d) + ' ポイント減った', 'green') : pill('変わらない', 'gray');
+    }
+    return '<div class="card" data-retro-compare="ok">' + head + '<div class="table-wrap"><table class="retro-cmp"><thead><tr><th scope="col"></th><th scope="col">その前 ' + esc(w) + ' 件</th><th scope="col">直近 ' + esc(w) + ' 件</th><th scope="col">変化</th></tr></thead><tbody>' +
+      '<tr><th scope="row">1 注文の費用</th><td>' + esc(retroCents(b.avg_cost_cents)) + '</td><td>' + esc(retroCents(a.avg_cost_cents)) + '</td><td>' + costDiff() + '</td></tr>' +
+      '<tr><th scope="row">未確認 + 食い違い</th><td>' + esc(retroPct(b.avg_bad_ratio)) + '</td><td>' + esc(retroPct(a.avg_bad_ratio)) + '</td><td>' + ratioDiff() + '</td></tr>' +
+      '</tbody></table></div></div>';
+  }
+
+  function retroActiveItemHtml(t) {
+    return '<li class="retro-item" data-retro-tip="' + esc(t.id) + '"><p class="retro-text">' + esc(t.text) + '</p>' +
+      '<p class="muted retro-meta">' + esc(fmtTime(t.activated_at)) + ' に入れた・' + esc(retroWho(t)) + '・入れてから終わった注文 ' + esc(Number(t.jobs_since || 0)) + ' 件' +
+      (t.target !== 'maker_note' ? '・' + esc(RETRO_TARGET_LABEL[t.target] || t.target) : '') + '</p>' +
+      (t.retire_suggested ? '<p class="retro-warn" data-retro-suggest="1">改善係から「やめる提案」: ' + esc(t.retire_suggested.reason) + '</p>' : '') +
+      '<div class="row end"><button type="button" class="btn small" data-retro-act="retire" data-retro-id="' + esc(t.id) + '">やめる</button></div></li>';
+  }
+  /** いま職人に渡している工夫（active の maker_note）と、人が対応した印（maker_note 以外の active） */
+  function retroActiveHtml(tips, limit) {
+    var list = (tips && tips.active) || [];
+    var notes = list.filter(function (t) { return t.target === 'maker_note'; });
+    var others = list.filter(function (t) { return t.target !== 'maker_note'; });
+    return '<div class="card" data-retro-active="' + notes.length + '"><h2>いま職人に渡している工夫 <span class="muted">' + esc(notes.length) + ' / ' + esc(limit || 8) + ' 件</span></h2>' +
+      (notes.length ? '<ul class="retro-list">' + notes.map(retroActiveItemHtml).join('') + '</ul>' : '<p class="muted">いまは渡している工夫はありません</p>') +
+      (others.length ? '<h3>人が対応した提案（職人へは渡りません）</h3><ul class="retro-list">' + others.map(retroActiveItemHtml).join('') + '</ul>' : '') + '</div>';
+  }
+
+  function retroWastesHtml(ws) {
+    ws = Array.isArray(ws) ? ws : [];
+    if (!ws.length) return '';
+    return '<ul class="retro-wastes">' + ws.map(function (w) {
+      return '<li>' + pill(RETRO_WASTE_LABEL[w.kind] || 'その他', 'orange') + ' ' + esc(w.evidence) + (Number(w.est_cents) > 0 ? ' <span class="muted">（見込み ' + esc(retroCents(w.est_cents)) + '）</span>' : '') + '</li>';
+    }).join('') + '</ul>';
+  }
+  /** できごとの記録の 1 件 */
+  function retroEventHtml(e) {
+    var at = '<time class="muted retro-at">' + esc(fmtTime(e.at)) + '</time>';
+    var from = e.material_title ? '<span class="muted">「' + esc(e.material_title) + '」の振り返りから</span>' : '';
+    var saving = Number(e.expected_saving_cents) > 0 ? '<span class="muted">見込みの節約 ' + esc(retroCents(e.expected_saving_cents)) + ' / 注文</span>' : '';
+    if (e.type === 'retro') {
+      return '<li class="retro-ev" data-retro-ev="retro">' + at + '<p><b>振り返り</b> ' + esc(e.material_title || '（題なし）') +
+        ' <span class="muted">注文の費用 ' + esc(retroCents(e.list_cost_cents)) + '・振り返りの費用 ' + esc(retroCents(e.cents)) + (Number(e.tips_added) > 0 ? '・工夫 ' + esc(e.tips_added) + ' 件' : '') + '</span></p>' +
+        (e.summary ? '<p class="retro-text">' + esc(e.summary) + '</p>' : '') + retroWastesHtml(e.wastes) + '</li>';
+    }
+    var text = '<p class="retro-text">' + esc(e.text) + '</p>';
+    if (e.type === 'activated') {
+      return '<li class="retro-ev" data-retro-ev="activated">' + at + '<p>' + pill('工夫を入れた', 'green') + ' ' + esc(retroWho(e)) + (e.target !== 'maker_note' ? '・' + esc(RETRO_TARGET_LABEL[e.target] || e.target) : '') + '</p>' + text +
+        '<p class="retro-meta">' + from + ' ' + saving + '</p>' + (e.reason ? '<p class="muted">理由: ' + esc(e.reason) + '</p>' : '') + '</li>';
+    }
+    if (e.type === 'retired') {
+      return '<li class="retro-ev" data-retro-ev="retired">' + at + '<p>' + pill('工夫をやめた', 'gray') + '</p>' + text +
+        '<p class="muted">理由: ' + esc(e.retire_reason === 'human' ? '人がやめました' : e.retire_reason || '—') + '</p></li>';
+    }
+    if (e.type === 'rejected') {
+      return '<li class="retro-ev" data-retro-ev="rejected">' + at + '<p>' + pill('提案を見送った', 'gray') + ' ' + esc(RETRO_TARGET_LABEL[e.target] || e.target) + '</p>' + text + '</li>';
+    }
+    // proposed: 人が対応するもの（職人の定義・Worker・注文の出し方）と、自動では入れなかった注意書き
+    var stl = RETRO_TIP_STATUS[e.status] || [e.status, 'gray'];
+    var ops = e.status === 'proposed'
+      ? '<div class="row end"><button type="button" class="btn small primary" data-retro-act="activate" data-retro-id="' + esc(e.tip_id) + '">入れる</button>' +
+        '<button type="button" class="btn small" data-retro-act="reject" data-retro-id="' + esc(e.tip_id) + '">見送る</button></div>'
+      : '';
+    return '<li class="retro-ev" data-retro-ev="proposed">' + at + '<p>' + pill('提案', 'yellow') + ' ' + esc(RETRO_TARGET_LABEL[e.target] || e.target) + ' ' + pill(stl[0], stl[1]) +
+      (e.quality_risk && e.quality_risk !== 'none' ? ' ' + pill('質に触れうる（' + (e.quality_risk === 'medium' ? '中' : '小') + '）', 'red') : '') + '</p>' + text +
+      '<p class="retro-meta">' + from + ' ' + saving + '</p>' + (e.reason ? '<p class="muted">理由: ' + esc(e.reason) + '</p>' : '') + ops + '</li>';
+  }
+  function retroRecentHtml(rs) {
+    rs = Array.isArray(rs) ? rs : [];
+    if (!rs.length) return '';
+    return '<details class="card retro-recent"><summary>直近の振り返り（' + esc(rs.length) + ' 件の状態）</summary><ul class="retro-list">' + rs.map(function (r) {
+      var cls = r.status === 'ended' ? 'green' : r.status === 'failed' ? 'red' : r.status === 'skipped' ? 'gray' : 'yellow';
+      return '<li>' + '<time class="muted">' + esc(fmtTime(r.updated_at)) + '</time> ' + esc(r.material_title || '（題なし）') + ' ' + pill(RETRO_STATUS_LABEL[r.status] || r.status, cls) +
+        (r.last_error ? ' <span class="muted">' + esc(r.last_error) + '</span>' : '') + '</li>';
+    }).join('') + '</ul></details>';
+  }
+  /** #/retro の本体（GET /api/retro の応答から描く純関数） */
+  function retroHtml(d) {
+    d = d || {};
+    var st = d.settings || {};
+    var tips = d.tips || {};
+    var events = Array.isArray(d.events) ? d.events : [];
+    var nTips = ['active', 'proposed', 'retired', 'rejected'].reduce(function (n, k) { return n + ((tips[k] || []).length); }, 0);
+    var intro = '<p class="muted">終わった注文ごとに費用を振り返り、質を下げずに費用を下げる「工夫」を職人に渡します。今月の振り返りの費用 ' + esc(retroCents(st.month_cents)) + ' / ' + esc(retroCents(st.month_cap_cents)) +
+      '・' + (st.auto_adopt === false ? '工夫は自動では入れません（提案だけ）' : '質に触れない注意書きは自動で入れます') + (st.enabled === false ? '・' + '<b>いまは止めています</b>' : '') + '</p>';
+    if (!(d.retros || []).length && !nTips) {
+      return '<h1>改善係の記録</h1>' + intro + '<div class="card" data-retro-empty="1"><p>まだ振り返りはありません。注文が終わると、ここに記録が出ます</p></div>';
+    }
+    return '<h1>改善係の記録</h1>' + intro + retroCompareHtml(d.compare) + retroActiveHtml(tips, st.active_maker_note_limit) +
+      '<div class="card"><h2>できごとの記録</h2>' + (events.length ? '<ul class="retro-events">' + events.map(retroEventHtml).join('') + '</ul>' : '<p class="muted">まだありません</p>') + '</div>' +
+      retroRecentHtml(d.retros);
+  }
+  function viewRetro(view) {
+    view.innerHTML = '<h1>改善係の記録</h1><p class="loading" data-retro-loading="1">読み込み中…</p>';
+    var here = location.hash;
+    api('GET', '/api/retro').then(function (d) {
+      if (location.hash !== here) return; // 読み込み中に別の画面へ移った
+      view.innerHTML = retroHtml(d);
+      var texts = {};
+      ['active', 'proposed', 'retired', 'rejected'].forEach(function (k) { ((d.tips || {})[k] || []).forEach(function (t) { texts[t.id] = t; }); });
+      (d.events || []).forEach(function (e) { if (e.tip_id && !texts[e.tip_id]) texts[e.tip_id] = { id: e.tip_id, text: e.text, target: e.target }; });
+      Array.prototype.forEach.call(view.querySelectorAll('[data-retro-act]'), function (btn) {
+        btn.addEventListener('click', function () {
+          if (btn.disabled) return; // 二重押し（action が実行中は disabled にする）
+          var act = btn.getAttribute('data-retro-act'), id = btn.getAttribute('data-retro-id');
+          var t = texts[id] || { text: '' };
+          var o = act === 'activate'
+            ? { title: '工夫を入れます', okText: '入れる', success: '入れました',
+                body: (t.target === 'maker_note' ? '次の注文から、職人への最初の文に入ります。' : '「人が対応した」の印を付けます（職人へは渡りません）。') + '\n\n' + t.text }
+            : act === 'reject'
+              ? { title: '提案を見送ります', okText: '見送る', success: '見送りました', body: t.text }
+              : { title: '工夫をやめます', okText: 'やめる', success: 'やめました', body: '次の注文から、職人へは渡しません。\n\n' + t.text };
+          o.busyText = '処理中…';
+          o.run = function () { return api('POST', '/api/retro/tips/' + encodeURIComponent(id), { action: act }); };
+          o.fail = function () { route(); };
+          action(btn, o);
+        });
+      });
+    }, function (e) {
+      if (location.hash !== here) return;
+      view.innerHTML = '<h1>改善係の記録</h1><div class="card" data-retro-error="1"><p class="err">読み込めませんでした: ' + esc(e.message) + '</p><p><button type="button" class="btn" id="retro-retry">もう一度読み込む</button></p></div>';
+      var b = $('#retro-retry');
+      if (b) b.addEventListener('click', route);
+    });
+  }
+  window.FactoryAdminRetro = { WASTE_LABEL: RETRO_WASTE_LABEL, retroHtml: retroHtml, retroCompareHtml: retroCompareHtml, retroEventHtml: retroEventHtml };
+
   // ---- 画面: 編集基準 ----
   function viewStandards(view) {
     view.innerHTML = '<p class="loading">読み込み中…</p>';
@@ -2560,6 +2733,7 @@
     if (p[0] === 'proposals') return viewProposals(view, r.q);
     if (p[0] === 'images') return viewImages(view);
     if (p[0] === 'videos') return viewVideos(view);
+    if (p[0] === 'retro') return viewRetro(view);
     // §T-11 お題の棚（topics.js。タブの解釈・描画・遅れた応答の破棄は topics.js 側）
     if (p[0] === 'topics' && window.FactoryTopics) return window.FactoryTopics.mount(view, { api: api, toast: toast, confirm: confirmDialog });
     view.innerHTML = '<p class="muted">ページが見つかりません。<a href="#/materials">素材へ</a></p>';

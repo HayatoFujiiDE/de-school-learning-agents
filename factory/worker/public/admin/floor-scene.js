@@ -49,7 +49,12 @@
       { id: 'questions', name: '質問', icon: null, pill: [948, 502], hit: [200, 150], branch: true,
         chars: [{ id: 'sprout-b', anchor: [882, 482], size: 130 }] },
       { id: 'autofix', name: '自動の作り直し', icon: null, pill: [1245, 504], hit: [200, 150], branch: true, back: true,
-        chars: [{ id: 'ghost', anchor: [1172, 488], size: 130 }] }
+        chars: [{ id: 'ghost', anchor: [1172, 488], size: 130 }] },
+      // 改善係（振り返り係 §S）: 自動の作り直しと倉庫の間の、机の無い床。見回り役なので机は無い。矢印は無い。押すと「改善係の記録」への入口を出す。
+      // 札は指定の [1445, 530] から少し右下へ（自動の作り直しが「作り直し中 N・↩ 職人へ」の時の札と重ならないように）
+      // 改善係は机の無い見回り役。確認する人の札（確認待ち n・要確認 n は横に長い）に頭が隠れない高さに立たせ、札は右横（倉庫の机の下の床）に出す
+      { id: 'retro', name: '改善係', icon: null, pill: [1478, 513], hit: [200, 150], branch: true,
+        chars: [{ id: 'owl', anchor: [1368, 506], size: 124 }] }
     ],
     // 矢印（すべて 3 次ベジェ。c1 / c2 は参考画像の曲がり方に合わせた制御点）。to = 流れ先の持ち場（そこが動いている・人の番なら流れる）
     arrows: [
@@ -125,6 +130,7 @@
     var s = d.stations || {};
     var q = Array.isArray(d.queue) ? d.queue : [];
     var it = s.intake || {}, mk = s.maker || {}, ck = s.clerk || {}, vf = s.verifier || {}, rv = s.reviewer || {}, lb = s.library || {}, rw = s.rework || {};
+    var rt = s.retro || {};
     var nowMs = Date.parse(d.now);
     if (!isFinite(nowMs)) nowMs = Date.now();
     var out = {};
@@ -186,6 +192,14 @@
     // library
     if (num(lb.available) > 0) out.library = st('done', '利用できる ' + num(lb.available));
     else out.library = idle();
+
+    // retro（改善係 §S）: 進行中（collecting / ready / submitted）→ 直近 24 時間の ended（その回で工夫が入ったか）→ 待機
+    var lastRetro = rt.last_retro_at ? Date.parse(rt.last_retro_at) : NaN;
+    var recentRetro = isFinite(lastRetro) && nowMs - lastRetro <= DAY_MS;
+    if (num(rt.pending) > 0) out.retro = st('moving', '振り返り中');
+    else if (recentRetro && num(rt.last_tips_activated) > 0) out.retro = st('done', '工夫を入れた');
+    else if (recentRetro) out.retro = st('done', '振り返り 完了');
+    else out.retro = idle();
 
     return out;
   }

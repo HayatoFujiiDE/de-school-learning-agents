@@ -43,6 +43,7 @@ const base = (): Stations => ({
   reviewer: { waiting: 0, needs_review_total: 0 },
   library: { available: 0, stopped: 0 },
   rework: { auto_active: 0, manual_active: 0 },
+  retro: { pending: 0, last_retro_at: null, last_tips_activated: 0, active_maker_notes: 0 },
 });
 /** stations の一部を上書きした /api/floor 応答 */
 const floor = (patch: Record<string, Record<string, unknown>> = {}, queue: Row[] = []) => {
@@ -108,15 +109,21 @@ describe('(n6a) stationStates: §N-6-2 の判定表（上から最初に当た�
     // library
     ['library / available > 0', 'library', floor({ library: { available: 3, stopped: 1 } }), { kind: 'done', text: '利用できる 3' }],
     ['library / それ以外', 'library', floor({ library: { stopped: 1 } }), IDLE],
+    // retro（改善係 §S）
+    ['retro / pending > 0（直近の回で工夫が入っていても進行中が先）', 'retro', floor({ retro: { pending: 2, last_retro_at: ago(HOUR), last_tips_activated: 1 } }), { kind: 'moving', text: '振り返り中' }],
+    ['retro / 24 時間以内の ended で工夫が入った', 'retro', floor({ retro: { last_retro_at: ago(23 * HOUR), last_tips_activated: 2 } }), { kind: 'done', text: '工夫を入れた' }],
+    ['retro / 24 時間以内の ended（工夫なし）', 'retro', floor({ retro: { last_retro_at: ago(HOUR), active_maker_notes: 3 } }), { kind: 'done', text: '振り返り 完了' }],
+    ['retro / それ以外（25 時間前に工夫が入った回）', 'retro', floor({ retro: { last_retro_at: ago(25 * HOUR), last_tips_activated: 1 } }), IDLE],
+    ['retro / stations.retro が無い（古い Worker）', 'retro', { now: NOW, stations: {}, queue: [] }, IDLE],
   ];
 
   it.each(cases)('%s', (_name, id, f, want) => {
     expect(of(f, id)).toEqual(want);
   });
 
-  it('10 個の持ち場すべてに札があり、何も無ければ全部「待機」', () => {
+  it('11 個の持ち場すべてに札があり、何も無ければ全部「待機」', () => {
     const all = S.stationStates(floor());
-    expect(Object.keys(all).sort()).toEqual(['autofix', 'clerk', 'intake', 'library', 'maker', 'meeting', 'questions', 'reviewer', 'rework', 'verifier']);
+    expect(Object.keys(all).sort()).toEqual(['autofix', 'clerk', 'intake', 'library', 'maker', 'meeting', 'questions', 'retro', 'reviewer', 'rework', 'verifier']);
     for (const k of Object.keys(all)) expect(all[k]).toEqual(IDLE);
   });
 
@@ -170,10 +177,11 @@ describe('(n6b) rowStations: §N-6-4 の行の所属', () => {
 });
 
 describe('SCENE（§N-6-8）', () => {
-  it('背景と同じ 1706 × 600、持ち場 10 個・矢印 10 本。矢印の流れ先は持ち場の id', () => {
+  it('背景と同じ 1706 × 600、持ち場 11 個・矢印 10 本。矢印の流れ先は持ち場の id（改善係には矢印が無い）', () => {
     expect([S.SCENE.width, S.SCENE.height]).toEqual([1706, 600]);
     const ids = S.SCENE.stations.map((s) => s.id);
-    expect(ids).toEqual(['intake', 'maker', 'clerk', 'verifier', 'reviewer', 'rework', 'library', 'meeting', 'questions', 'autofix']);
+    expect(ids).toEqual(['intake', 'maker', 'clerk', 'verifier', 'reviewer', 'rework', 'library', 'meeting', 'questions', 'autofix', 'retro']);
+    expect(S.SCENE.arrows.some((a) => a.to === 'retro')).toBe(false);
     expect(S.SCENE.arrows.map((a) => a.id)).toEqual([
       'intake-maker', 'intake-meeting', 'maker-clerk', 'maker-questions', 'questions-maker',
       'clerk-verifier', 'verifier-autofix', 'verifier-reviewer', 'reviewer-rework', 'reviewer-library',
