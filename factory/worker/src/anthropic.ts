@@ -112,15 +112,24 @@ export class PortError extends Error {
     public readonly responded: boolean,
     public readonly status: number | undefined,
     public readonly kind: string,
+    /** API が返した error.message の先頭 200 字（4xx の原因の切り分け用。request 本文・鍵は含めない）。無ければ undefined */
+    public readonly detail?: string,
   ) {
     super(`anthropic_${kind}${status ? `_${status}` : ''}`);
     this.name = 'PortError';
   }
 }
 
+/** APIError の error.message だけを 200 字で切り出す（本文・ヘッダは入れない） */
+function apiErrorDetail(e: InstanceType<typeof Anthropic.APIError>): string | undefined {
+  const err = (e.error as { error?: { message?: unknown } } | undefined)?.error;
+  const m = typeof err?.message === 'string' ? err.message : typeof e.message === 'string' ? e.message : undefined;
+  return m ? m.slice(0, 200) : undefined;
+}
+
 function toPortError(e: unknown): PortError {
   if (e instanceof PortError) return e;
-  if (e instanceof Anthropic.APIError && typeof e.status === 'number') return new PortError(true, e.status, 'api_error');
+  if (e instanceof Anthropic.APIError && typeof e.status === 'number') return new PortError(true, e.status, 'api_error', apiErrorDetail(e));
   if (e instanceof Anthropic.APIConnectionTimeoutError) return new PortError(false, undefined, 'timeout');
   if (e instanceof Anthropic.APIConnectionError) return new PortError(false, undefined, 'connection');
   return new PortError(false, undefined, 'unknown');

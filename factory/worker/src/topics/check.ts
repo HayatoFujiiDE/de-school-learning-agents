@@ -235,6 +235,7 @@ export async function checkTopic(env: Env, port: FactoryPort, topicId: string, o
     msg = await port.createMessage(params, callOpts);
   } catch (e) {
     const k = classifyCallError(e);
+    if (k.detail) log('call_error', { error: k.code, status: k.status, detail: k.detail });
     if (!k.responded) {
       // 時間切れ・接続断: 結果が分からないので何も書かない。lease 切れ（10 分）で T-3 の 1 文（台帳は取り置き額のまま。T-7）
       log('left', { error: k.code });

@@ -202,12 +202,12 @@ export function genActualCents(msg: Pick<Message, 'usage'>): number {
 }
 
 /** 失敗の理由コードと、課金なしと分かる失敗か（T-6: 429・quota・認証・その他の 4xx は 0。5xx・応答不明は取り置き額のまま） */
-export function classifyCallError(e: unknown): { code: string; noCharge: boolean; responded: boolean; status?: number } {
+export function classifyCallError(e: unknown): { code: string; noCharge: boolean; responded: boolean; status?: number; detail?: string } {
   if (e instanceof PortError) {
     if (e.responded && typeof e.status === 'number') {
       const s = e.status;
       const code = s === 429 ? 'rate_limited' : s === 401 || s === 403 ? 'auth' : s === 400 ? 'bad_request' : s === 402 ? 'quota' : s === 529 ? 'overloaded' : s >= 500 ? 'server' : `http_${s}`;
-      return { code, noCharge: s >= 400 && s < 500, responded: true, status: s };
+      return { code, noCharge: s >= 400 && s < 500, responded: true, status: s, detail: e.detail };
     }
     return { code: e.kind === 'timeout' ? 'timeout' : e.kind === 'connection' ? 'connection' : 'unknown', noCharge: false, responded: false };
   }
@@ -437,6 +437,8 @@ export async function runTopicRun(env: Env, port: FactoryPort, req: RunRequest, 
     msg = await port.createMessage(params, callOpts);
   } catch (e) {
     const k = classifyCallError(e);
+    // 4xx の原因の切り分け: API の error.message（200 字）だけをログに出す（request 本文・鍵は出さない）
+    if (k.detail) console.log(JSON.stringify({ at: 'topic_run', run_id: runId, call_error: k.code, status: k.status, detail: k.detail }));
     return finishFailed(k.code, k.noCharge);
   }
 

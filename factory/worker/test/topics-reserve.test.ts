@@ -116,7 +116,8 @@ describe('再送なしと締め切り（T-4・T-5 の 3）', () => {
     expect(c.opts?.maxTimeoutMs).toBe(TOPIC_CHECK_TIMEOUT_MS);
     // cron の締め切りが早ければそちら
     const p2 = scriptedPort([genMessage([talkBody('班の係をどう決めるか')])]);
-    const early = Date.now() + 5_000;
+    // 5 秒ちょうどだと「残り 5 秒未満なら呼ばない」（v2.4 裁定 7）の境界に当たって揺れる。150 秒より早く、5 秒より十分に長い値にする
+    const early = Date.now() + 30_000;
     await runTopicRun(env, p2.port, { ...genReq(), kind: 'talk' }, { deadline: early, fetchImpl });
     expect(p2.calls[0].opts!.deadline!).toBeLessThanOrEqual(early);
   });
