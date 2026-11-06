@@ -1,14 +1,12 @@
 // お題の管理 API（契約 contract-T T-10。Access の保護と Origin の検査は既存の admin API と同じ = src/index.ts）。
 // 項目名は docs/plans/topics-variety/api-notes.md。SQL は全部 bind。お題のコードは materials・material_versions・factory_jobs に書かない。
 
-import { getTopicFetch } from '../anthropic';
 import { all, conditionalBatch, first, getSetting, nowIso, setSetting, stmt, tokyoDay, type SqlValue, type Stmt } from '../db';
 import { cfg } from '../env';
 import { json, readBody, type RouteCtx } from '../http';
 import { monthCostCents } from '../ledger';
-import { runDerive } from '../topics/derive';
 import { approvePred, retireParentOnApproveStmts, retireStmt, topicGate } from '../topics/gate';
-import { runTopicRun, type RunOutcome } from '../topics/gen';
+import { reserveTopicRun, type ReserveOutcome, type RunRequest } from '../topics/gen';
 import {
   TOPIC_DECISION_LABELS,
   TOPIC_FETCH_RESULT_LABELS,
@@ -26,9 +24,10 @@ import { addDays, isRealDate, validateTopicBody, type TopicBody } from '../topic
 import {
   insertTopicStmts,
   isTopicKind,
+  readRun,
+  runCancelStmts,
   toRunRow,
   toTopicRow,
-  TOPIC_GEN_TIMEOUT_MS,
   TOPIC_ROW_EXTRA_COLS,
   TOPIC_SLOTS,
   topicsSwitch,
@@ -39,8 +38,8 @@ import {
 
 const STATUSES = ['draft', 'checking', 'held', 'ready', 'rejected', 'retired'] as const;
 const DECISIONS = ['approve', 'reject', 'retire', 'star', 'unstar', 'recheck'] as const;
-/** 手動の run の上限: 呼び出しの締め切り（150 秒）+ RSS（8 本 × 5 秒まで） */
-const MANUAL_RUN_MS = TOPIC_GEN_TIMEOUT_MS + 45_000;
+/** 手動の run の締め切り（queue の受け手が走らせる時と同じ。取る時の「残り時間」の判定にも使う。v2.6） */
+const MANUAL_RUN_MS = 5 * 60_000;
 
 const bad = (error: string, extra: Record<string, unknown> = {}) => json(400, { error, ...extra });
 
@@ -269,12 +268,38 @@ export async function decideTopic(c: RouteCtx, id: string): Promise<Response> {
 // ---------------------------------------------------------------------------------------------
 // run（手動の生成・派生）
 
-function runResponse(o: RunOutcome): Response {
-  if (o.status === 'not_taken') {
-    const map: Record<string, string> = { disabled: 'disabled', run_in_progress: 'run_in_progress', exists: 'run_in_progress', parent_not_eligible: 'parent_not_eligible', week_cap: 'cap', cap: 'cap' };
-    return json(409, { error: map[o.reason] ?? o.reason });
+function notTakenResponse(o: Extract<ReserveOutcome, { status: 'not_taken' }>): Response {
+  const map: Record<string, string> = { disabled: 'disabled', run_in_progress: 'run_in_progress', exists: 'run_in_progress', parent_not_eligible: 'parent_not_eligible', week_cap: 'cap', cap: 'cap' };
+  return json(409, { error: map[o.reason] ?? o.reason });
+}
+
+/**
+ * 手動の run（v2.6）: 同じ要求の中で取り（取れない時は今までどおり 409）、queue へ送って 202 { status: 'queued', run }。
+ * 生成と保存は queue の受け手（src/index.ts）が走らせる（ブラウザの接続の寿命に縛られない）。
+ * 送れない時（IMAGE_GEN が無い・send が投げる）は run の行と取り置きを取り消して 503 queue_unavailable
+ */
+async function queueManualRun(c: RouteCtx, req: RunRequest): Promise<Response> {
+  const db = c.env.DB;
+  const r = await reserveTopicRun(c.env, req, { deadline: Date.now() + MANUAL_RUN_MS });
+  if (r.status === 'not_taken') return notTakenResponse(r);
+  const { runId, token } = r.taken;
+  let sent = false;
+  if (c.env.IMAGE_GEN) {
+    try {
+      await c.env.IMAGE_GEN.send({ t: 'topic_run', run_id: runId, token, req });
+      sent = true;
+    } catch {
+      sent = false;
+    }
   }
-  return json(200, { run: toRunRow(o.run) });
+  if (!sent) {
+    const x = await conditionalBatch(db, runCancelStmts(runId, token));
+    console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: x.ok ? 'cancelled' : 'lost', reason: 'queue_unavailable' }));
+    return json(503, { error: 'queue_unavailable' });
+  }
+  console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: 'queued' }));
+  const run = await readRun(db, runId);
+  return json(202, { status: 'queued', run: run ? toRunRow(run) : null });
 }
 
 export async function deriveTopicRoute(c: RouteCtx, id: string): Promise<Response> {
@@ -283,18 +308,14 @@ export async function deriveTopicRoute(c: RouteCtx, id: string): Promise<Respons
   if (b.note !== undefined && b.note !== null && (typeof b.note !== 'string' || Array.from(b.note).length > 200)) return bad('bad_request', { message: 'note は 200 字まで' });
   const exists = await first(c.env.DB, stmt('SELECT 1 AS x FROM topics WHERE id = ?', id));
   if (!exists) return json(404, { error: 'not_found' });
-  const fetchImpl = await getTopicFetch(c.env, { hostname: c.url.hostname });
   const note = typeof b.note === 'string' && b.note.trim() ? b.note : null;
-  const o = await runDerive(c.env, await c.port(), { parentId: id, kind: b.kind, trigger: 'manual', note }, { deadline: Date.now() + MANUAL_RUN_MS, fetchImpl });
-  return runResponse(o);
+  return queueManualRun(c, { purpose: 'derive', kind: b.kind, trigger: 'manual', parentId: id, note });
 }
 
 export async function runTopicsRoute(c: RouteCtx): Promise<Response> {
   const b = await readBody(c.request);
   if (!b || !isTopicKind(b.kind)) return bad('bad_request');
-  const fetchImpl = await getTopicFetch(c.env, { hostname: c.url.hostname });
-  const o = await runTopicRun(c.env, await c.port(), { purpose: 'gen', kind: b.kind, trigger: 'manual', slotDay: addDays(tokyoDay(), 1) }, { deadline: Date.now() + MANUAL_RUN_MS, fetchImpl });
-  return runResponse(o);
+  return queueManualRun(c, { purpose: 'gen', kind: b.kind, trigger: 'manual', slotDay: addDays(tokyoDay(), 1) });
 }
 
 export async function listTopicRuns(c: RouteCtx): Promise<Response> {

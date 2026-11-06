@@ -266,10 +266,12 @@
   function decisionText(code, meta) { var c = String(code || ''); return meta && has(meta.decisions, c) ? meta.decisions[c] : (DECISION_LABEL[c] || c); }
 
   /**
-   * 生成・派生の応答 { run: RunRow }（呼び出しが終わってから返る。failed でも 200）→ 画面の文。
-   * label = 「作る」「見直しの子」「発展の子」などの主語
+   * 生成・派生の応答 → 画面の文。label = 「作る」「見直しの子」「発展の子」などの主語。
+   * v2.6: 手動は 202 { status: 'queued', run }（queue の受け手が作る）→ queued: true と「作り始めました」の文（place = できた時に出る場所。既定「下の記録」）。
+   * 記録の行（{ run: RunRow }。読み直しで終わった run）も同じ関数で文にする
    */
-  function runOutcome(res, label, meta) {
+  function runOutcome(res, label, meta, place) {
+    if (res && res.status === 'queued') return { ok: true, queued: true, text: label + 'を作り始めました（1〜3 分）。画面を閉じても作り続けます。できたら' + (place || '下の記録') + 'に出ます' };
     var r = res && res.run && typeof res.run === 'object' ? res.run : null;
     if (!r) return { ok: true, text: label + 'を受け付けました。記録のタブで結果を見られます' };
     var id = r.id ? '（run ' + r.id + '）' : '';
@@ -328,6 +330,29 @@
 
   var S = { gen: 0, ctx: null, meta: null, metaOk: false };
   function alive(g) { return g === S.gen && isTopicsHash(location.hash); }
+  /** 送った run の読み直し（v2.6）: 15 秒ごと・calling でなくなるか 6 分たつか画面を離れたら止める */
+  var RUN_POLL_MS = 15000;
+  var RUN_WATCH_MS = 6 * 60 * 1000;
+  /** onRows(rows) は読めるたび・onEnd(run) は終わった時に 1 回（6 分たった時は null）。画面を離れたら（alive でない）どちらも呼ばない */
+  function watchRun(g, runId, onRows, onEnd) {
+    var later = typeof setTimeout === 'function' ? setTimeout : null;
+    if (!later || !runId) return;
+    var until = Date.now() + RUN_WATCH_MS;
+    function next() { if (Date.now() >= until) onEnd(null); else later(tick, RUN_POLL_MS); }
+    function tick() {
+      if (!alive(g)) return;
+      api('GET', '/api/topics/runs?limit=50').then(function (res) {
+        if (!alive(g)) return;
+        var rows = res && Array.isArray(res.runs) ? res.runs : [];
+        if (onRows) onRows(rows);
+        var r = null;
+        rows.forEach(function (x) { if (x && x.id === runId) r = x; });
+        if (r && r.status !== 'calling') onEnd(r);
+        else next();
+      }, function () { if (alive(g)) next(); });
+    }
+    later(tick, RUN_POLL_MS);
+  }
   function api(method, path, body) { return S.ctx.api(method, path, body); }
   function toast(msg, isErr) { if (S.ctx && typeof S.ctx.toast === 'function') S.ctx.toast(msg, isErr); }
   /** 予告。admin.js の確認ダイアログ（Enter / Esc）があればそれを使う */
@@ -575,10 +600,19 @@
       setResult(result, '');
       var body = { kind: kind };
       if (noteValue(note)) body.note = noteValue(note);
-      // 応答は呼び出しが終わってから返る（最大 2〜3 分。api-notes）
-      return runBusy(buttons, btn, '作成中…（2〜3 分かかることがあります）', api('POST', '/api/topics/' + encodeURIComponent(st.topic.id) + '/derive', body), endOp).then(function (res) {
+      var label = kind === 'refresh' ? '見直しの子' : '発展の子';
+      // v2.6: 応答は送った時点で返る（202 queued）。ボタンはそこで戻し、作った記録を読み直して結果を出す
+      return runBusy(buttons, btn, '送信中…', api('POST', '/api/topics/' + encodeURIComponent(st.topic.id) + '/derive', body), endOp).then(function (res) {
         if (!alive(cfg.g)) return false;
-        var out = runOutcome(res, kind === 'refresh' ? '見直しの子' : '発展の子', meta);
+        var out = runOutcome(res, label, meta, '記録のタブ');
+        if (out.queued && res.run && res.run.id) {
+          watchRun(cfg.g, res.run.id, null, function (r) {
+            if (!r) return; // 6 分たっても calling（記録のタブで見られる）
+            var fin = runOutcome({ run: r }, label, meta);
+            if (fin.ok && kind === 'refresh' && r.status === 'done') { st.topic = mergeTopic(st.topic, { refresh_child: { id: '', status: 'draft' } }); if (!st.busy) paint(); }
+            setResult(result, fin.text, !fin.ok); toast(fin.text, !fin.ok);
+          });
+        }
         // 見直しの子ができたので、この行からは次の見直しを出さない（子の id は応答に無い。開き直すと一覧の refresh_child で出る）
         if (out.ok && kind === 'refresh' && res.run && res.run.status === 'done') st.topic = mergeTopic(st.topic, { refresh_child: { id: '', status: 'draft' } });
         if (out.ok) { st.extendOpen = false; paint(); }
@@ -965,11 +999,20 @@
       confirmFirst({ title: kindText(k, meta) + 'のお題を今すぐ作ります', body: '生成を 1 回呼びます（費用がかかります。上限を超える時は始まりません）。できたお題は検査を通ってから出ます。', okText: '作る' }).then(function (d) {
         if (!d || !d.ok) return;
         setResult(runResult, '');
-        runBusy([go, sel], go, '作成中…（2〜3 分かかることがあります）', api('POST', '/api/topics/runs', { kind: k })).then(function (res) {
+        var label = kindText(k, meta) + 'のお題';
+        // v2.6: 送った時点で 202 queued が返る。ボタンはそこで戻し（同じ種類の 2 回目は run_in_progress で断られる）、作った記録を読み直す
+        runBusy([go, sel], go, '送信中…', api('POST', '/api/topics/runs', { kind: k })).then(function (res) {
           if (!alive(g)) return;
-          var out = runOutcome(res, kindText(k, meta) + 'のお題', meta);
+          var out = runOutcome(res, label, meta);
           setResult(runResult, out.text, !out.ok); runResult.focus(); toast(out.text, !out.ok);
           loadRuns();
+          if (out.queued && res.run && res.run.id) {
+            watchRun(g, res.run.id, renderRunRows, function (r) {
+              if (!r) return; // 6 分たっても calling（記録の行は作成中のまま。もう一度読み込めば見られる）
+              var fin = runOutcome({ run: r }, label, meta);
+              setResult(runResult, fin.text, !fin.ok); toast(fin.text, !fin.ok);
+            });
+          }
         }, function (e) {
           if (!alive(g)) return;
           var msg = errorText(e, meta); setResult(runResult, msg, true); runResult.focus(); toast(msg, true);
@@ -987,32 +1030,35 @@
       clear(list); list.appendChild(loadingEl());
       api('GET', '/api/topics/runs?limit=50').then(function (res) {
         if (!alive(g)) return;
-        clear(list);
-        var rows = res && Array.isArray(res.runs) ? res.runs : [];
-        if (!rows.length) { list.appendChild(h('p', { class: 'muted', 'data-tp-empty': '1', text: 'まだありません' })); return; }
-        list.appendChild(h('div', { class: 'table-wrap' }, h('table', { class: 'tp-runs' }, [
-          h('thead', null, h('tr', null, ['時刻', '目的', '種類', '何日用', '起動', '状態', '保存', '落とした', '額', '理由'].map(function (x) { return h('th', { text: x }); }))),
-          h('tbody', null, rows.map(function (r) {
-            return h('tr', { 'data-tp-run': String(r.status || '') }, [
-              h('td', { text: fmtTime(r.created_at) }),
-              h('td', { text: PURPOSE_LABEL[r.purpose] || String(r.purpose || '') }),
-              h('td', { text: r.purpose === 'derive' ? (DERIVE_LABEL[r.kind] || String(r.kind || '')) : kindText(r.kind, meta) }),
-              h('td', { text: String(r.slot_day || '—') }),
-              h('td', { text: TRIGGER_LABEL[r.trigger] || String(r.trigger || '') }),
-              h('td', null, labelPill(RUN_STATUS, r.status)),
-              h('td', { text: String(typeof r.made === 'number' ? r.made : '—') }),
-              h('td', { text: String(typeof r.dropped === 'number' ? r.dropped : '—') }),
-              h('td', { text: typeof r.cents === 'number' ? r.cents + '¢' : '—' }),
-              h('td', null, r.error ? [h('span', { text: reasonText(r.error, meta) }), ' ', h('code', { class: 'muted', text: String(r.error) })] : '—')
-            ]);
-          }))
-        ])));
+        renderRunRows(res && Array.isArray(res.runs) ? res.runs : []);
       }, function (e) {
         if (!alive(g)) return;
         clear(list);
         list.appendChild(h('p', { class: 'err', role: 'alert', 'data-tp-error': '1', text: '読み込めませんでした: ' + errorText(e, meta) }));
         list.appendChild(h('button', { type: 'button', class: 'btn', text: 'もう一度読み込む', onclick: loadRuns }));
       });
+    }
+    /** 記録の表を描く（読み込み・読み直しの両方。読み直しでは「読み込み中…」を挟まない） */
+    function renderRunRows(rows) {
+      clear(list);
+      if (!rows.length) { list.appendChild(h('p', { class: 'muted', 'data-tp-empty': '1', text: 'まだありません' })); return; }
+      list.appendChild(h('div', { class: 'table-wrap' }, h('table', { class: 'tp-runs' }, [
+        h('thead', null, h('tr', null, ['時刻', '目的', '種類', '何日用', '起動', '状態', '保存', '落とした', '額', '理由'].map(function (x) { return h('th', { text: x }); }))),
+        h('tbody', null, rows.map(function (r) {
+          return h('tr', { 'data-tp-run': String(r.status || '') }, [
+            h('td', { text: fmtTime(r.created_at) }),
+            h('td', { text: PURPOSE_LABEL[r.purpose] || String(r.purpose || '') }),
+            h('td', { text: r.purpose === 'derive' ? (DERIVE_LABEL[r.kind] || String(r.kind || '')) : kindText(r.kind, meta) }),
+            h('td', { text: String(r.slot_day || '—') }),
+            h('td', { text: TRIGGER_LABEL[r.trigger] || String(r.trigger || '') }),
+            h('td', null, labelPill(RUN_STATUS, r.status)),
+            h('td', { text: String(typeof r.made === 'number' ? r.made : '—') }),
+            h('td', { text: String(typeof r.dropped === 'number' ? r.dropped : '—') }),
+            h('td', { text: typeof r.cents === 'number' ? r.cents + '¢' : '—' }),
+            h('td', null, r.error ? [h('span', { text: reasonText(r.error, meta) }), ' ', h('code', { class: 'muted', text: String(r.error) })] : '—')
+          ]);
+        }))
+      ])));
     }
     loadRuns();
   }

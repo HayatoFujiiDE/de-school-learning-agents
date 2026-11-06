@@ -530,6 +530,15 @@ strict を外した後の本番の 1 回目（run `114fae42`）は、API は通�
 - 捨てた本ごとに、理由コードだけをログに出す（`{at:'topic_run', run_id, dropped_index, reasons}`。本文は出さない）。
 - 検査の判定（`judgeCheck`）に理由コード `latin_mix` を足す: 子どもが読む文（`topicTexts`）のどれかが日本語の文字を含み、かつ ASCII の小文字が 3 文字以上続く所がある時（例「両方を use わける」。「JAXA の MMX」「AI」「H3 ロケット」「Ver.2.0」は当たらない）。捨てずに held（`flagged` = 気になる点）にし、`flags` と同じく人が読んで承認できる（司令塔の裁定 2026-11-06。本番の news の小の文に「use」が混ざった実例から）。
 
+## v2.6 の裁定（2026-11-06、本番の abandoned 2 件から）
+
+本番で philo / make の手動 run が 2 件、`calling` のまま lease（15 分）が切れ、掃除で `failed: abandoned`・取り置き 60 セントが計上された。手動の生成がブラウザの HTTP 接続の中で同期に走っており（離脱・中継の打ち切りで Worker が取り消されうる）、しかも応答の後の処理（形の検査・照合・INSERT・batch）に catch が無かったため（原因の仮説 H1〜H3 は未弁別。どれでも同じ「calling のまま 15 分」になる）。
+
+- **手動は「取る」+ queue**: `POST /api/topics/runs` と `POST /api/topics/:id/derive` は、取り置きと `calling` の行を同じ要求の中で取り（取れない時は今までどおり 409 `disabled` / `cap` / `run_in_progress` / `parent_not_eligible`）、既存の queue `factory-image-gen`（binding `IMAGE_GEN`）へ `{ t: 'topic_run', run_id, token, req }` を送って **202** `{ status: 'queued', run }` を返す。新しい queue は作らない（作成の手作業を要らなくする）。送れない時（binding が無い・send が投げる）は `runCancelStmts` で run の行と取り置きを取り消し、503 `queue_unavailable`。
+- **受け手は「走る」だけ**: message の中身は信用しない（`run_id`・`token` の形・`req` の形を確かめ、run の行の `calling`・`token`・lease・要求の中身と照合）。合わなければ何もしない。締め切りは今 + 5 分。**成功・失敗にかかわらず ack**（再配送で二重に呼ばない。閉じ損ねは lease 切れの掃除が閉じる）。画像の message（`request_id`）の扱いは変えない。
+- **`save_failed` は実額で精算**: 応答の後の処理（`genActualCents` 以降〜最後の batch）の例外は `failed: save_failed` で閉じ、台帳は応答の usage の実額（取り置き額を残さない。無駄な 60 セントの計上を無くす）。閉じる batch 自身が投げた時は run id とコードだけをログに出して投げ直す（掃除が閉じる）。
+- cron の生成（`runTopicRun` = 取る → 走るを続けて呼ぶ）・検査・掃除・上限・台帳の述語は変えない。画面は 202 を「作り始めました（1〜3 分）」と出し、作った記録を 15 秒ごとに読み直す（calling でなくなるか 6 分・画面を離れたら止める）。
+
 ## T-14 d の記録（2026-11-06、本番の実測。D1 の集計）
 
 - 生成（news・手動）: 成功 1 回 = 13 セント・47 秒・2 本（捨てた本 0）。形で全部捨てた 1 回 = 18 セント・58 秒。400 で失敗した 7 回 = 0 セント（1 回は cron）。

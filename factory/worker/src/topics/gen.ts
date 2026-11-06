@@ -2,6 +2,7 @@
 // 順序: 入・切 → run を取る（取り置き + run の行を 1 つの条件付き batch）→ 入力（RSS・既存の題・親）→ Messages API 1 回（再送なし・絶対の締め切り）
 //       → 応答の保存（全部の文が run の述語を持つ 1 つの batch。最後の文が run を done / failed にする）。
 // ログは run id と状態名・件数だけ。RSS の本文・モデルの出力は log に入れない。
+// v2.6: 取る（reserveTopicRun）と走る（runTaken）を分けた。cron は続けて呼ぶ（runTopicRun）。手動は route が取り、queue の受け手が走る（executeTopicRun）。
 
 import type { Message, MessageCreateParamsNonStreaming, Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { PortError, type CallOpts, type FactoryPort } from '../anthropic';
@@ -13,13 +14,14 @@ import { acceptableFeedType, parseFeed } from '../scout';
 import { checkSourceUrl, quoteOutcome } from './fetch-source';
 import { TOPIC_KIND_LABELS, type TopicKind } from './locale';
 import { EXTEND_KIND_LABEL, genSystem, genUserBlocks, SAVE_TOPICS_TOOL_NAME, type FeedHeadline } from './prompts';
-import { addDays, TOPIC_BODY_JSON_SCHEMA, validateTopicBody, type TopicBody } from './schema';
+import { addDays, isRealDate, TOPIC_BODY_JSON_SCHEMA, validateTopicBody, type TopicBody } from './schema';
 import {
   deriveReserveStmt,
   existingTitles,
   genLedgerRef,
   genReserveStmt,
   insertTopicStmts,
+  isTopicKind,
   ledgerSettleStmt,
   mondayOf,
   overReserveStmt,
@@ -268,8 +270,81 @@ export async function parentEligible(db: D1Database, p: Pick<TopicDbRow, 'id' | 
   return Number(n[0]?.n ?? 0) < 2;
 }
 
-/** 生成・派生の run を 1 つ走らせる（cron と手動が呼ぶ） */
+/** 取った run（取る → 走るへ渡すもの）。slotDay は run の行の slot_day・today は取った日（Asia/Tokyo） */
+export interface TakenRun {
+  runId: string;
+  token: string;
+  slotDay: string;
+  today: string;
+  parent: TopicDbRow | null;
+}
+
+export type ReserveOutcome = { status: 'taken'; taken: TakenRun } | { status: 'not_taken'; reason: NotTakenReason; run?: RunDbRow };
+
+/** 生成・派生の run を 1 つ走らせる（cron が呼ぶ。取る → 走るを続けて行う。手動は取る + queue = v2.6） */
 export async function runTopicRun(env: Env, port: FactoryPort, req: RunRequest, opts: RunOptions): Promise<RunOutcome> {
+  const r = await reserveTopicRun(env, req, opts);
+  if (r.status === 'not_taken') return r;
+  return runTaken(env, port, req, r.taken, opts);
+}
+
+/**
+ * 走る（queue の受け手の入口。v2.6）。最初に run の行を読み、calling・token 一致・lease 内・要求の中身と一致の時だけ走る。
+ * そうでなければ何もしない（重複配送・掃除済み・取り消し済み）→ { status: 'stale' }
+ */
+export async function executeTopicRun(
+  env: Env,
+  port: FactoryPort,
+  runId: string,
+  token: string,
+  req: RunRequest,
+  opts: RunOptions,
+): Promise<RunOutcome | { status: 'stale' }> {
+  const db = env.DB;
+  const row = await readRun(db, runId);
+  const nowMs = (opts.now ?? new Date()).getTime();
+  if (!row || row.status !== 'calling' || row.token !== token || !(Date.parse(row.lease_until) > nowMs)) return { status: 'stale' };
+  const same =
+    row.purpose === req.purpose &&
+    row.kind === req.kind &&
+    row.trigger === req.trigger &&
+    (req.purpose === 'gen' ? row.slot_day === req.slotDay : row.parent_topic_id === req.parentId);
+  if (!same) return { status: 'stale' };
+  // 派生の親が読めなければ parent = null のまま走り、入力づくりで input_failed になる（calling を残さない）
+  const parent = req.purpose === 'derive' ? await readTopic(db, req.parentId) : null;
+  // 派生の slot_day は取った日（runTopicRun の today と同じ値）
+  return runTaken(env, port, req, { runId, token, slotDay: row.slot_day, today: row.slot_day, parent }, opts);
+}
+
+const RUN_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const PARENT_ID_RE = /^tp_[A-Za-z0-9_-]{1,100}$/;
+
+/**
+ * queue の message（{ t: 'topic_run', run_id, token, req }）を確かめて読む（v2.6。中身は信用しない）。
+ * 形が違えば null（受け手は ack して捨てる）。行との照合は executeTopicRun が行う
+ */
+export function parseTopicRunMessage(body: unknown): { runId: string; token: string; req: RunRequest } | null {
+  if (!body || typeof body !== 'object') return null;
+  const b = body as { t?: unknown; run_id?: unknown; token?: unknown; req?: unknown };
+  if (b.t !== 'topic_run' || typeof b.run_id !== 'string' || !RUN_ID_RE.test(b.run_id)) return null;
+  if (typeof b.token !== 'string' || !RUN_ID_RE.test(b.token)) return null;
+  const r = b.req as { purpose?: unknown; kind?: unknown; trigger?: unknown; slotDay?: unknown; parentId?: unknown; note?: unknown } | null;
+  if (!r || typeof r !== 'object' || (r.trigger !== 'manual' && r.trigger !== 'cron')) return null;
+  if (r.purpose === 'gen') {
+    if (!isTopicKind(r.kind) || !isRealDate(r.slotDay)) return null;
+    return { runId: b.run_id, token: b.token, req: { purpose: 'gen', kind: r.kind, trigger: r.trigger, slotDay: r.slotDay } };
+  }
+  if (r.purpose === 'derive') {
+    if ((r.kind !== 'refresh' && r.kind !== 'extend') || typeof r.parentId !== 'string' || !PARENT_ID_RE.test(r.parentId)) return null;
+    if (r.note !== undefined && r.note !== null && (typeof r.note !== 'string' || Array.from(r.note).length > 200)) return null;
+    const note = typeof r.note === 'string' ? r.note : null;
+    return { runId: b.run_id, token: b.token, req: { purpose: 'derive', kind: r.kind, trigger: r.trigger, parentId: r.parentId, note } };
+  }
+  return null;
+}
+
+/** 取る（v2.6）: 有効か・時間・親・台帳の取り置き + 'calling' の行の INSERT（1 つの条件付き batch）。取れない時は理由（cron の cap は skipped の行） */
+export async function reserveTopicRun(env: Env, req: RunRequest, opts: Pick<RunOptions, 'deadline' | 'now'>): Promise<ReserveOutcome> {
   const db = env.DB;
   const c = cfg(env);
   const now = opts.now ?? new Date();
@@ -342,14 +417,34 @@ export async function runTopicRun(env: Env, port: FactoryPort, req: RunRequest, 
     }
     return { status: 'not_taken', reason };
   }
+  return { status: 'taken', taken: { runId, token, slotDay, today, parent } };
+}
 
-  const finishFailed = async (code: string, noCharge: boolean, made = 0, dropped = 0): Promise<RunOutcome> => {
+/** 走る（入力づくり → 呼び出し → 保存）。取った run を必ず done / failed で閉じる（保存中の例外は save_failed。v2.6） */
+async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: TakenRun, opts: RunOptions): Promise<RunOutcome> {
+  const db = env.DB;
+  const c = cfg(env);
+  const now = opts.now ?? new Date();
+  const { runId, token, slotDay, today, parent } = taken;
+  const ref = genLedgerRef(runId);
+
+  /**
+   * failed で閉じる。台帳: noCharge なら 0・actualCents があれば実額（応答の後の失敗。v2.6）・どちらでもなければ取り置き額のまま。
+   * この batch 自身が投げた時は run_id とコードだけをログに出して投げ直す（calling は lease 切れの掃除が閉じる）
+   */
+  const finishFailed = async (code: string, noCharge: boolean, made = 0, dropped = 0, actualCents?: number): Promise<RunOutcome> => {
     const t = nowIso();
     const P = runPred(runId, token, t);
     const stmts: Stmt[] = [];
     if (noCharge) stmts.push(ledgerSettleStmt(ref, 0, P));
+    else if (actualCents !== undefined) stmts.push(overReserveStmt(ref, actualCents, t, P), ledgerSettleStmt(ref, actualCents, P));
     stmts.push(runFinishStmt({ runId, token, now: t, status: 'failed', error: code, made, dropped }));
-    await conditionalBatch(db, stmts);
+    try {
+      await conditionalBatch(db, stmts);
+    } catch (e) {
+      console.log(JSON.stringify({ at: 'topic_run', run_id: runId, finish_failed: code }));
+      throw e;
+    }
     const run = (await readRun(db, runId))!;
     console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: run.status, error: run.error }));
     return { status: 'failed', run };
@@ -443,57 +538,69 @@ export async function runTopicRun(env: Env, port: FactoryPort, req: RunRequest, 
     return finishFailed(k.code, k.noCharge);
   }
 
-  // 応答の保存
-  const actual = genActualCents(msg);
-  const call = msg.content.find((b) => b.type === 'tool_use' && b.name === SAVE_TOPICS_TOOL_NAME) as { input?: unknown } | undefined;
-  const t = nowIso();
-  const P = runPred(runId, token, t);
-  const settle = [overReserveStmt(ref, actual, t, P), ledgerSettleStmt(ref, actual, P)];
-  if (!call) {
-    await conditionalBatch(db, [...settle, runFinishStmt({ runId, token, now: t, status: 'failed', error: 'no_output', made: 0, dropped: 0 })]);
-    const run = (await readRun(db, runId))!;
+  // 応答の保存。ここで例外が出たら save_failed で閉じ、台帳は実額で精算する（calling を残さない・取り置き額を残さない。v2.6）
+  let actual: number | undefined;
+  let saved: { noOutput: true } | { noOutput: false; ok: boolean; made: number; dropped: number };
+  try {
+    actual = genActualCents(msg);
+    const call = msg.content.find((b) => b.type === 'tool_use' && b.name === SAVE_TOPICS_TOOL_NAME) as { input?: unknown } | undefined;
+    const t = nowIso();
+    const P = runPred(runId, token, t);
+    const settle = [overReserveStmt(ref, actual, t, P), ledgerSettleStmt(ref, actual, P)];
+    if (!call) {
+      await conditionalBatch(db, [...settle, runFinishStmt({ runId, token, now: t, status: 'failed', error: 'no_output', made: 0, dropped: 0 })]);
+      saved = { noOutput: true };
+    } else {
+      const items = Array.isArray((call.input as { topics?: unknown } | undefined)?.topics) ? ((call.input as { topics: unknown[] }).topics as unknown[]) : [];
+      const fetched = genFetchTexts(msg.content as unknown[]);
+      const max = runMaxCount(req);
+      const childSlot = addDays(today, 1);
+      const accepted: NewTopic[] = [];
+      let dropped = 0;
+      items.forEach((raw, i) => {
+        const kindOk = (k: unknown): boolean =>
+          req.purpose === 'gen' ? k === req.kind : req.kind === 'refresh' ? k === parent!.kind : (DERIVE_CHILD_KINDS as readonly unknown[]).includes(k);
+        const sd = req.purpose === 'gen' ? slotDay : childSlot;
+        const k = (raw as { kind?: unknown } | null)?.kind;
+        // 捨てた理由は理由コードだけをログに出す（本文は出さない）。原因の切り分け用
+        const why = accepted.length >= max ? ['over_max'] : !kindOk(k) ? ['kind_mismatch'] : validateTopicBody(raw, { slotDay: sd });
+        if (why.length > 0) {
+          console.log(JSON.stringify({ at: 'topic_run', run_id: runId, dropped_index: i + 1, reasons: why.slice(0, 20) }));
+          dropped++;
+          return;
+        }
+        const body = raw as TopicBody;
+        const id = `tp_${runId}_${i + 1}`;
+        accepted.push({
+          id,
+          body,
+          origin: req.purpose === 'gen' ? 'gen' : 'derive',
+          runId,
+          slotDay: sd,
+          lineageId: req.purpose === 'gen' ? id : parent!.lineage_id,
+          parentId: req.purpose === 'gen' ? null : parent!.id,
+          deriveKind: req.purpose === 'gen' ? null : req.kind,
+          depth: req.purpose === 'gen' ? 0 : Number(parent!.depth) + 1,
+          genFound: matchGenFetch(body, fetched),
+        });
+      });
+      const inserts: Stmt[] = [];
+      for (const a of accepted) inserts.push(...(await insertTopicStmts(a, t, P)));
+      const made = accepted.length;
+      const status = made > 0 ? 'done' : 'failed';
+      const r = await conditionalBatch(db, [...inserts, ...settle, runFinishStmt({ runId, token, now: t, status, error: made > 0 ? null : 'no_valid_topic', made, dropped })]);
+      saved = { noOutput: false, ok: r.ok, made, dropped };
+    }
+  } catch (e) {
+    // 例外の名前だけ（本文・鍵は出さない）
+    console.log(JSON.stringify({ at: 'topic_run', run_id: runId, save_error: e instanceof Error ? e.name : 'error' }));
+    return finishFailed('save_failed', false, 0, 0, actual);
+  }
+  const run = (await readRun(db, runId))!;
+  if (saved.noOutput) {
     console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: run.status, error: run.error }));
     return { status: 'failed', run };
   }
-  const items = Array.isArray((call.input as { topics?: unknown } | undefined)?.topics) ? ((call.input as { topics: unknown[] }).topics as unknown[]) : [];
-  const fetched = genFetchTexts(msg.content as unknown[]);
-  const max = runMaxCount(req);
-  const childSlot = addDays(today, 1);
-  const accepted: NewTopic[] = [];
-  let dropped = 0;
-  items.forEach((raw, i) => {
-    const kindOk = (k: unknown): boolean =>
-      req.purpose === 'gen' ? k === req.kind : req.kind === 'refresh' ? k === parent!.kind : (DERIVE_CHILD_KINDS as readonly unknown[]).includes(k);
-    const sd = req.purpose === 'gen' ? slotDay : childSlot;
-    const k = (raw as { kind?: unknown } | null)?.kind;
-    // 捨てた理由は理由コードだけをログに出す（本文は出さない）。原因の切り分け用
-    const why = accepted.length >= max ? ['over_max'] : !kindOk(k) ? ['kind_mismatch'] : validateTopicBody(raw, { slotDay: sd });
-    if (why.length > 0) {
-      console.log(JSON.stringify({ at: 'topic_run', run_id: runId, dropped_index: i + 1, reasons: why.slice(0, 20) }));
-      dropped++;
-      return;
-    }
-    const body = raw as TopicBody;
-    const id = `tp_${runId}_${i + 1}`;
-    accepted.push({
-      id,
-      body,
-      origin: req.purpose === 'gen' ? 'gen' : 'derive',
-      runId,
-      slotDay: sd,
-      lineageId: req.purpose === 'gen' ? id : parent!.lineage_id,
-      parentId: req.purpose === 'gen' ? null : parent!.id,
-      deriveKind: req.purpose === 'gen' ? null : req.kind,
-      depth: req.purpose === 'gen' ? 0 : Number(parent!.depth) + 1,
-      genFound: matchGenFetch(body, fetched),
-    });
-  });
-  const inserts: Stmt[] = [];
-  for (const a of accepted) inserts.push(...(await insertTopicStmts(a, t, P)));
-  const made = accepted.length;
-  const status = made > 0 ? 'done' : 'failed';
-  const r = await conditionalBatch(db, [...inserts, ...settle, runFinishStmt({ runId, token, now: t, status, error: made > 0 ? null : 'no_valid_topic', made, dropped })]);
-  const run = (await readRun(db, runId))!;
-  console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: run.status, error: run.error, made: r.ok ? made : 0, dropped }));
+  console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: run.status, error: run.error, made: saved.ok ? saved.made : 0, dropped: saved.dropped }));
   return { status: run.status === 'done' ? 'done' : 'failed', run };
 }

@@ -1,11 +1,27 @@
 // Env 型（契約 §B-0）。vars は文字列で受け取り、数値は intVar で読む。
+import type { RunRequest } from './topics/gen';
+
+/** 画像の依頼（§O-4 a） */
+export interface ImageQueueMessage {
+  request_id: string;
+  t?: undefined;
+}
+/** お題の手動の run（contract-T v2.6。取った run を受け手が走らせる） */
+export interface TopicRunQueueMessage {
+  t: 'topic_run';
+  run_id: string;
+  token: string;
+  req: RunRequest;
+}
+/** factory-image-gen の message（判別は t。t が無いものは画像） */
+export type FactoryQueueMessage = ImageQueueMessage | TopicRunQueueMessage;
 
 export interface Env {
   DB: D1Database;
   R2: R2Bucket;
   ASSETS: Fetcher;
-  /** 画像生成の queue（§O-4 a）。consumer は src/index.ts の queue handler */
-  IMAGE_GEN?: Queue<{ request_id: string }>;
+  /** 画像生成の queue（§O-4 a）。お題の手動の run も同じ queue で送る（contract-T v2.6）。consumer は src/index.ts の queue handler */
+  IMAGE_GEN?: Queue<FactoryQueueMessage>;
 
   FACTORY_AGENT_ID: string;
   FACTORY_ENV_ID: string;

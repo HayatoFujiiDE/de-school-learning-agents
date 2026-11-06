@@ -1,12 +1,13 @@
 // fetch / scheduled の入口とルーティング（契約 §B-1, §B-3）。フレームワークは使わない。
 // run_worker_first: true なので静的ファイルを含む全リクエストがここを通る。
-import { getImagePort, getOEmbedPort, getPort, handleFakeControl } from './anthropic';
+import { getImagePort, getOEmbedPort, getPort, getTopicFetch, handleFakeControl } from './anthropic';
 import { jsonError, requireAccess } from './access';
 import { runCron } from './cron';
-import type { Env } from './env';
+import type { Env, FactoryQueueMessage } from './env';
 import { getSetting } from './db';
 import { json, makeCtx, type RouteCtx } from './http';
 import { runImage } from './images';
+import { executeTopicRun, parseTopicRunMessage } from './topics/gen';
 import { getFloor } from './routes/floor';
 import { answerJobRoute, cancelJobRoute, createJob, getJobDetail, raiseBudgetRoute, reconcileJobRoute, reingestJobRoute, startJobRoute } from './routes/jobs';
 import { libraryAvailable, libraryFile, libraryTopicStock, libraryTopics } from './routes/library';
@@ -162,13 +163,30 @@ export default {
   },
 
   // 画像生成の consumer（契約 §O-4 b verbatim）。max_batch_size 1・max_retries 2・max_concurrency 2（wrangler.jsonc）
-  async queue(batch: MessageBatch<{ request_id: string }>, env: Env, ctx: ExecutionContext): Promise<void> {
+  // お題の手動の run（t: 'topic_run'。contract-T v2.6）も同じ queue で受ける
+  async queue(batch: MessageBatch<FactoryQueueMessage>, env: Env, ctx: ExecutionContext): Promise<void> {
     const portCtx = { hostname: null, fakeEnabledSetting: await getSetting(env.DB, 'fake_enabled') };
     const port = await getPort(env, portCtx);
     const images = await getImagePort(env, portCtx);
     // §Q-13: consumer の後の reconcile が職人の道具 youtube_info を処理する時の oEmbed の port
     const oembed = await getOEmbedPort(env, portCtx);
     for (const msg of batch.messages) {
+      if ((msg.body as { t?: unknown } | null)?.t === 'topic_run') {
+        // 中身は信用しない（run_id・token の形を確かめ、走るの中で行の token と照合）。形が違えば捨てる。
+        // 成功・失敗にかかわらず ack（再配送で二重に呼ばない。閉じ損ねは lease 切れの掃除が閉じる）
+        const m = parseTopicRunMessage(msg.body);
+        if (m) {
+          try {
+            const fetchImpl = await getTopicFetch(env, portCtx);
+            const o = await executeTopicRun(env, port, m.runId, m.token, m.req, { deadline: Date.now() + 5 * 60_000, fetchImpl });
+            if (o.status === 'stale') console.log(JSON.stringify({ at: 'topic_queue', run_id: m.runId, status: 'stale' }));
+          } catch (e) {
+            console.log(JSON.stringify({ at: 'topic_queue', run_id: m.runId, error: e instanceof Error ? e.name : 'error' }));
+          }
+        }
+        msg.ack();
+        continue;
+      }
       const id = String((msg.body as { request_id?: unknown })?.request_id ?? '');
       if (!/^img_[0-9a-f]{32}$/.test(id)) { msg.ack(); continue; }
       try {
@@ -180,4 +198,4 @@ export default {
       }
     }
   },
-} satisfies ExportedHandler<Env, { request_id: string }>;
+} satisfies ExportedHandler<Env, FactoryQueueMessage>;
