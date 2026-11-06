@@ -664,3 +664,4 @@ button.mp-cite:hover { filter: brightness(.96); text-decoration: underline; }
 @media (max-width: 800px) {
   .mp-frames.is-compare { grid-template-columns: minmax(0, 1fr); }
 }
+li.mp-para.is-flag { margin-left: 0; margin-right: 0; }
