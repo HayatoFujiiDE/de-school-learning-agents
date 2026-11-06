@@ -91,6 +91,13 @@ export function shapeRules(kinds: readonly TopicKind[]): string {
   return lines.join('\n');
 }
 
+/**
+ * 保存の決まり（v2.7。system 文の最後）。save_topics を呼ばずに終わる（no_output）のを減らす。
+ * 守ること 3 の「出典で確かめられない時は、そのお題を作りません」と同じく、作れない本は入れないで、0 本でも呼ぶ
+ */
+export const SAVE_RULE =
+  '保存の決まり: 最後に必ず save_topics を 1 回呼びます。守ることや形の決まりに合わない本・出典で確かめられない本は入れません。1 本も作れない時も、topics を空の配列（topics: []）にして save_topics を呼びます。';
+
 /** 生成・派生の system 文。外から来た文は入れない（定数と種類と本数だけ） */
 export function genSystem(p: { kind: TopicKind } | { derive: 'refresh'; parentKind: TopicKind } | { derive: 'extend' }, count: number): string {
   let kindLabel: string;
@@ -109,7 +116,7 @@ export function genSystem(p: { kind: TopicKind } | { derive: 'refresh'; parentKi
     rules = DERIVE_RULES.extend;
     kinds = ['talk', 'philo', 'make'];
   }
-  rules = `${rules}\n\n${shapeRules(kinds)}`;
+  rules = `${rules}\n\n${shapeRules(kinds)}\n\n${SAVE_RULE}`;
   return fill(GEN_SYSTEM_TEMPLATE, { language: TOPIC_LANGUAGE_LABEL, country: TOPIC_COUNTRY_LABEL, kind_label: kindLabel, count: String(count), kind_rules: rules });
 }
 

@@ -139,31 +139,31 @@ describe('T-7 生成・派生 run', () => {
     expect(p.calls.length).toBe(1);
   });
 
-  it('保存の batch: 台帳は確定額 = min(実額, 取り置き額)、超えた時は topic_over_reserve + 1。2 回流しても増えない', async () => {
+  it('保存の batch: 台帳は実額（v2.7。取り置き額で丸めない）、超えた時は topic_over_reserve + 1。2 回流しても増えない', async () => {
     const p = scriptedPort([genMessage([talkBody(), philoBody()], { output: 100_000, searches: 2 })]);
     const o = await runTopicRun(env, p.port, genReq(), { deadline: far(), fetchImpl });
     expect(o.status).toBe('done');
     // 実額 = (20000×2 + 100000×10)/10000 = 104 + 検索 2 = 106 > 60
-    expect(run()).toMatchObject({ status: 'done', made: 1, dropped: 1, cents: 60 });
-    expect(topicLedger().map((r) => r.cents)).toEqual([60]);
+    expect(run()).toMatchObject({ status: 'done', made: 1, dropped: 1, cents: 106 });
+    expect(topicLedger().map((r) => r.cents)).toEqual([106]);
     expect(setting('topic_over_reserve')).toBe('1');
     const saved = batches[batches.length - 1];
     await (env.DB.batch(saved as D1PreparedStatement[]) as Promise<unknown>);
     expect(count(db, 'SELECT COUNT(*) AS n FROM topics')).toBe(1);
-    expect(topicLedger().map((r) => r.cents)).toEqual([60]);
+    expect(topicLedger().map((r) => r.cents)).toEqual([106]);
     expect(setting('topic_over_reserve')).toBe('1');
     expect(run()).toMatchObject({ status: 'done', made: 1 });
   });
 
-  it('通るお題が 0 本: failed: no_valid_topic（台帳は確定額）/ save_topics が無い: failed: no_output（確定額）', async () => {
+  it('通るお題が 0 本: failed: no_valid_topic（台帳は確定額）/ save_topics が無い（催促の後も無い）: failed: no_output（2 回の実額の合計）', async () => {
     const bad = { ...talkBody(), kind: 'quiz' };
-    const p = scriptedPort([genMessage([bad]), genMessage(null)]);
+    const p = scriptedPort([genMessage([bad]), genMessage(null), genMessage(null)]);
     await runTopicRun(env, p.port, genReq(), { deadline: far(), fetchImpl });
     expect(run()).toMatchObject({ status: 'failed', error: 'no_valid_topic', dropped: 1, made: 0, cents: 7 });
     await runTopicRun(env, p.port, genReq('philo'), { deadline: far(), fetchImpl });
-    expect(run()).toMatchObject({ status: 'failed', error: 'no_output', cents: 7 });
-    expect(topicLedger().map((r) => r.cents)).toEqual([7, 7]);
-    expect(p.calls.length).toBe(2);
+    expect(run()).toMatchObject({ status: 'failed', error: 'no_output', cents: 14 });
+    expect(topicLedger().map((r) => r.cents)).toEqual([7, 14]);
+    expect(p.calls.length).toBe(3);
   });
 });
 

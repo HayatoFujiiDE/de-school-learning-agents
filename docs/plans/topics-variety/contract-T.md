@@ -540,6 +540,25 @@ strict を外した後の本番の 1 回目（run `114fae42`）は、API は通�
 - **モデルを呼ぶ前の失敗は台帳 0**（司令塔の裁定）: 入力づくりの失敗（`input_failed`）は cron・手動とも台帳 0 で閉じる（呼んでいないので 0。取り置き額を残さない）。受け手の照合・回し替え・fetch・親の読み取りの例外も `input_failed`・台帳 0（回し替えの前は message の token・後は新しい token の述語で閉じる）。回し替えの文は lease も今 + 15 分に延ばす（queue の遅れで保存が lease 切れにならない。届いた時に切れていれば stale で掃除に任せる）。
 - cron の生成（`runTopicRun` = 取る → 走るを続けて呼ぶ）・検査・掃除・上限・台帳の述語は変えない。画面は 202 を「作り始めました（1〜3 分）」と出し、作った記録を 15 秒ごとに読み直す（calling でなくなるか 6 分・画面を離れたら止める）。
 
+## v2.7 の裁定（2026-11-07、本番の philo の `failed: no_output` 51 セントから）
+
+本番で philo の生成が `failed: no_output`・51 セントで終わった（talk 8・make 7・news 13〜30 セントは成功）。生成は 1 回だけ呼び、`stop_reason` を見ずに「`save_topics` が無い = no_output」としていた。原因の候補（`pause_turn` / `end_turn` / `max_tokens`）は未弁別（`stop_reason` をログに出していなかった）。T-4 の「呼び出し: 1 回」を次で置き換える。
+
+1. **観測**: 呼び出しごとに `{at:'topic_call', run_id, turn, stop_reason, in, out, cache_w, cache_r, searches, fetches, fetch_errors:{code:n}, blocks:{type:n}, pending_server_tool, ms}` を 1 行（数と種類だけ。本文・URL は出さない）。run の終わりのログに `turns`・`cents`。
+2. **続き（有限）**: 応答の content を手を加えずに assistant として積み、同じ tools・同じ params で呼び直す。
+   - `pause_turn`、または `stop_reason: tool_use` で結果の付いていない web_fetch / web_search が残っている（client tool の tool_use が無い。`verify.ts` の `isPendingWebFetch` と同じ判定）→ 続ける。
+   - `end_turn` で `save_topics` が無い → user に「ここまでに開けたページだけで、作れる本数だけ save_topics を呼んでください。1 本も作れない時は topics: [] で呼んでください。」を 1 回だけ足して続ける（tools は変えない）。
+   - 上限: 続きは合計 3 回（最初を入れて 4 回）。締め切りの残りが `TOPIC_CALL_MIN_LEFT_MS` + 25 秒（30 秒）未満なら続けない（`no_output`）。続ける前に「これまでの実額の合計 + 直前の 1 回の実額」が取り置き額（`TOPIC_GEN_RESERVE_CENTS`）を超えるなら続けず、`failed: cost_cap`。
+   - `max_tokens` / `refusal` / 催促の後の `end_turn` / その他 → 続けず `failed: no_output`（どれで止まったかはログの `no_output` に `stop_<stop_reason>` / `turn_limit` / `no_time` / `cost_cap`）。
+   - `save_topics` は全部の応答から探す（最後に出てきたもの）。出典の照合（`genFetchTexts` / `matchGenFetch`）も全部の応答の content を合わせる。1 回ごとの締め切りは min(残り, 150 秒)・再送なし。続きの途中で呼び出しが失敗した時は今までの分類のコードで閉じ、台帳はそれまでの実額の合計。
+3. **キャッシュ**: tools の最後（`save_topics`）に `cache_control: {type:'ephemeral'}`。1 つでもあると API がサーバーツールの結果ごとにキャッシュの区切りを自動で置き、ループの後半・続きは伸びた前半をキャッシュから読む。実額は cache write を入力の 1.25 倍・cache read を 0.05 倍で数える（`ledger.ts` の `sonnetMicroDollars`。検査も同じ式。検証係（Opus・`verify.ts`）の式は変えない）。0 回目の params は `cache_control` のほかは変えない。
+4. **台帳**: 生成・派生の確定は `min(実額, 取り置き額)` でなく実額（続きで取り置きを超えうるため。超えた時の `topic_over_reserve` は今のまま）。T-6 の上限の判定（台帳の合計）は実額で数える。検査の確定は変えない。
+5. **プロンプト**: system 文の最後（形の決まりの後ろ）に「保存の決まり: 最後に必ず save_topics を 1 回呼びます。守ることや形の決まりに合わない本・出典で確かめられない本は入れません。1 本も作れない時も、topics を空の配列（topics: []）にして save_topics を呼びます。」（`prompts.ts` の `SAVE_RULE`。上の verbatim の本文は変えない）。`topics: []` は `failed: no_valid_topic`（made 0）。
+6. **費用を減らす設定**: philo の 1 run の本数 3 → 2（`TOPIC_PHILO_PER_RUN`）。web_fetch の `max_content_tokens` 6000 → 4000。news / talk / make の本数は変えない。
+7. 検査・cron の枠・queue の受け手・CAS の振る舞いは変えない。
+
+公式資料: https://platform.claude.com/docs/en/agents-and-tools/tool-use/server-tools#the-server-side-loop-and-pause-turn （pause_turn は server tool のループの回数の上限。content をそのまま足して続ける・止まった応答は順番どおり残す・上限を決めて繰り返す）・ https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons ・ https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-use-with-prompt-caching （cache_control が 1 つでもあれば server tool の結果ごとに自動の区切り）・ https://platform.claude.com/docs/en/about-claude/pricing （Sonnet 5.5: 入力 $2・5 分の cache write $2.50・cache read $0.10・出力 $10 per 1M・web_search 1 回 1 セント）。`max_uses` は 1 ターンで数え、pause_turn の続きでは新しくならない。
+
 ## T-14 d の記録（2026-11-06、本番の実測。D1 の集計）
 
 - 生成（news・手動）: 成功 1 回 = 13 セント・47 秒・2 本（捨てた本 0）。形で全部捨てた 1 回 = 18 セント・58 秒。400 で失敗した 7 回 = 0 セント（1 回は cron）。
