@@ -1,5 +1,5 @@
 // 確認画面の見た目を手元で確かめるための小さなサーバー（本番・wrangler を使わない。作り物のデータだけを返す）。
-// 使い方: node test/fixtures/review-preview/serve.mjs [port]  →  http://127.0.0.1:<port>/admin/#/review/vfix-0001
+// 使い方: node test/review-preview/serve.mjs [port]  →  http://127.0.0.1:<port>/admin/#/review/vfix-0001
 // ?shot=<名前> を付けると driver.js が画面を操作してから document.title を "ready" にする（headless Chrome で撮るため）。
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
@@ -7,7 +7,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ADMIN = join(HERE, '../../../public/admin');
+const ADMIN = join(HERE, '../../public/admin');
 const FILES = join(HERE, 'files');
 const PORT = Number(process.argv[2] || 8791);
 const detail = JSON.parse(readFileSync(join(HERE, 'detail.json'), 'utf8'));

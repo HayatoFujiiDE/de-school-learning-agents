@@ -1,5 +1,5 @@
 // 確認画面を「教材として見る」形にする・出典カード・付箋（§L-8）。admin.js の純関数を vm で読む（DOM は使わない）。
-// 作り物のデータ test/fixtures/review-preview/detail.json は、見た目の確認（serve.mjs + headless Chrome）と共通。
+// 作り物のデータ test/review-preview/detail.json は、見た目の確認（serve.mjs + headless Chrome）と共通。
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
@@ -10,7 +10,7 @@ const code = readFileSync(new URL('../public/admin/admin.js', import.meta.url), 
 const win: Obj = { __FACTORY_ADMIN_NO_BOOT__: true };
 vm.runInNewContext(code, { window: win, console }, { timeout: 2000 });
 const R = win.FactoryAdminReview as Obj;
-const FIX = JSON.parse(readFileSync(new URL('./fixtures/review-preview/detail.json', import.meta.url), 'utf8')) as Obj;
+const FIX = JSON.parse(readFileSync(new URL('./review-preview/detail.json', import.meta.url), 'utf8')) as Obj;
 const fixture = (): Obj => JSON.parse(JSON.stringify(FIX));
 const n = (h: string, re: RegExp) => (h.match(re) || []).length;
 
@@ -155,7 +155,7 @@ describe('出典カードの HTML（reviewHtml の中）', () => {
   });
 });
 
-const md = (p: string) => readFileSync(new URL(`./fixtures/review-preview/files/${p}`, import.meta.url), 'utf8');
+const md = (p: string) => readFileSync(new URL(`./review-preview/files/${p}`, import.meta.url), 'utf8');
 const BASE = '/api/review/vfix-0001/files/';
 
 describe('教材プレビュー: [cN] は教材として見る時は出さない（inlineMd の中で外す）', () => {
