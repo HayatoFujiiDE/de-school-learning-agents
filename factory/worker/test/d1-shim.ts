@@ -7,7 +7,7 @@ type V = string | number | null;
 
 export function migratedDb(): DatabaseSync {
   const db = new DatabaseSync(':memory:');
-  for (const f of ['0001_init.sql', '0002_intake.sql', '0003_review_triage.sql', '0004_image_gen.sql', '0005_topics.sql', '0006_retro.sql', '0007_machine_orders.sql']) db.exec(readFileSync(new URL(`../migrations/${f}`, import.meta.url), 'utf8'));
+  for (const f of ['0001_init.sql', '0002_intake.sql', '0003_review_triage.sql', '0004_image_gen.sql', '0005_topics.sql', '0006_retro.sql', '0007_machine_orders.sql', '0008_topic_run_diag.sql']) db.exec(readFileSync(new URL(`../migrations/${f}`, import.meta.url), 'utf8'));
   return db;
 }
 
