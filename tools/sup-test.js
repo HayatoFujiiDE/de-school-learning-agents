@@ -390,6 +390,155 @@ blocks.forEach(function (b) { while ((pm = PRE.exec(b))) picked.push(pm[1]); });
 var pickMissing = picked.filter(function (k) { return SD.text[k] == null; });
 ok(picked.length >= 18 && !pickMissing.length, 'W2 三項演算子・対応表・凡例で選ぶ key が在る（' + picked.length + ' 件）' + (pickMissing.length ? ' 無い: ' + pickMissing.join(',') : ''));
 
+// ---------- 実装レビュー（Astra）MAJOR 1・2・4: ブラウザ側のコードを VM で読み、DOM は最小のスタブで代える ----------
+// 読む順は index.html と同じ（data → i18n → make-data → make → talk → sup-data → sup-core → sup → sup-view → app）。
+// app.js は最後の init();（シェルの描画）だけ外して読む（APP.change / commit / flushPending を使う。描画は DES.app.render を空にして代える）
+function browser(o) {
+  o = o || {};
+  var timers = [], tid = 0, listeners = {}, byFk = {}, focused = { el: null };
+  function el(attrs) {
+    var e = { attrs: attrs || {}, style: {}, offsetHeight: 20, sel: null,
+      classList: { add: function () {}, remove: function () {}, toggle: function () {}, contains: function () { return false; } },
+      getAttribute: function (k) { return this.attrs[k] == null ? null : this.attrs[k]; }, setAttribute: function (k, v) { this.attrs[k] = String(v); },
+      removeAttribute: function (k) { delete this.attrs[k]; }, appendChild: function () {}, focus: function () { focused.el = this; },
+      setSelectionRange: function (a, b) { this.sel = [a, b]; }, getClientRects: function () { return [1]; }, closest: function () { return null; } };
+    return e;
+  }
+  var doc = {
+    rows: [], documentElement: el(), activeElement: null, body: el(),
+    addEventListener: function (t, f) { (listeners[t] = listeners[t] || []).push(f); },
+    querySelectorAll: function (s) { return /^\.row\[data-id=/.test(s) ? doc.rows : []; },
+    querySelector: function (s) { var m = /^\[data-fk="([^"]+)"\]$/.exec(s); return m && byFk[m[1]] ? byFk[m[1]] : null; },
+    createElement: function () { return el(); }, createTextNode: function () { return el(); }, contains: function () { return false; }
+  };
+  var ls = o.storage || {};
+  var ctx = {
+    document: doc, console: console, JSON: JSON, Math: Math, Date: Date,
+    location: { hash: o.hash || '#plan', replace: function (h) { ctx.location.hash = h; } },
+    localStorage: { getItem: function (k) { return ls[k] == null ? null : ls[k]; }, setItem: function (k, v) { ls[k] = String(v); }, removeItem: function (k) { delete ls[k]; } },
+    matchMedia: function () { return { matches: false }; }, innerWidth: 1440, scrollY: 0, scrollTo: function () {},
+    setTimeout: function (f, ms) { tid += 1; timers.push({ id: tid, f: f, ms: ms }); return tid; },
+    clearTimeout: function (id) { timers = timers.filter(function (x) { return x.id !== id; }); }
+  };
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  function run(f, src) { vm.runInContext(src || fs.readFileSync(path.join(JS, f), 'utf8'), ctx, { filename: f }); }
+  ['data.js', 'i18n.js', 'make-data.js'].forEach(function (f) { run(f); });
+  var DES = ctx.DES, seq2 = 0;
+  // 保存の元（store.js の代わり）: 読むと o.state を返し、保存は成功
+  DES.store = { _make: true, saves: [], load: function () { DES.state = o.state; return o.state; }, save: function (only) { DES.store.saves.push(only || '*'); return true; } };
+  DES.plan = { newId: function (p) { seq2 += 1; return p + '-v' + seq2; } };
+  ['make.js', 'talk.js', 'sup-data.js', 'sup-core.js', 'sup.js', 'sup-view.js'].forEach(function (f) { run(f); });
+  var appSrc = fs.readFileSync(path.join(JS, 'app.js'), 'utf8'), noInit = appSrc.replace(/\n {2}init\(\);\n/, '\n');
+  ok(noInit !== appSrc, 'VM: app.js の init(); を外して読めた');
+  run('app.js', noInit);
+  DES.ui = { built: null, bp: 'xl', menu: null, edit: null, goalEdit: null, noSlot: {}, seen: {}, sending: false, planOpen: false, lastRoute: null, actor: null, leaving: false };
+  DES.app.render = function () {};
+  DES.app.toast = function () {};
+  DES.app.renderSaveState = function () {};
+  DES.store.load();
+  return {
+    ctx: ctx, DES: DES, doc: doc, byFk: byFk, focused: focused, el: el,
+    fire: function (type, ev) { (listeners[type] || []).forEach(function (f) { f(ev); }); },
+    pendingTimers: function () { return timers.length; },
+    flushTimers: function () { var n = 0; while (timers.length && n < 50) { var x = timers.shift(); x.f(); n += 1; } }
+  };
+}
+function vmState() {
+  return { mode: 'js', talk: [], plan: [{ id: 'r1', kind: 'mine', title: 'R1', start: '9:00', end: '9:30', activity: 'mc-build' }], activities: [], works: [], odai: { tried: {} }, draft: { text: '', scroll: 0 } };
+}
+
+// MAJOR 1: 遅れて走る変更（予定の行の退場 200ms）の間に「出る」を押しても、その変更は 入っている間の操作として 印と記録が付く（順序: 操作の記録 → 出た）
+(function () {
+  var st = vmState();
+  var B = browser({ state: st, storage: { 'des3.sup': JSON.stringify({ join: { child: 'haruto', stance: 'proxy', since: '10:20' } }) } });
+  var DES = B.DES;
+  B.doc.rows = [B.el()];
+  ok(DES.sup.isJoined(), 'MAJOR1 前提: 入っている');
+  DES.app.change(function () {
+    st.plan[0].gone = 'finished';
+    DES.talk.record('「R1」が終わった（9:00〜9:30）');
+  }, { leave: 'r1', focus: 'plan-head' });
+  eq([st.plan[0].gone, B.pendingTimers() > 0, DES.ui.leaving], [undefined, true, true], 'MAJOR1 行の退場の間は変更がまだ走らない（アニメーションは今までどおり）');
+  DES.sup.leave();
+  B.flushTimers();
+  var rec = (st.talk || []).filter(function (m) { return m.who === 'record'; });
+  eq([rec.length, rec.length && rec[0].by], [1, 'tanaka'], 'MAJOR1 退場中に出ても、終わったの記録行に by が付く');
+  eq(DES.state.sup.log.map(function (l) { return [l.scene, l.how]; }), [['plan', 'hands'], ['join', 'out']], 'MAJOR1 支援の記録は 操作の記録 → 出た の順');
+  eq([DES.sup.isJoined(), st.plan[0].gone], [false, 'finished'], 'MAJOR1 出たあと・変更は 1 回だけ走る');
+})();
+// MAJOR 1（変わらないこと）: 出なければ、遅れた変更は 200ms のあとに 1 回だけ走る
+(function () {
+  var st = vmState();
+  var B = browser({ state: st, storage: { 'des3.sup': JSON.stringify({ join: { child: 'haruto', stance: 'proxy', since: '10:20' } }) } });
+  var DES = B.DES, n = 0;
+  B.doc.rows = [B.el()];
+  DES.app.change(function () { n += 1; st.plan[0].gone = 'finished'; DES.talk.record('「R1」が終わった（9:00〜9:30）'); }, { leave: 'r1' });
+  eq(n, 0, 'MAJOR1 遅れた変更は押した直後には走らない');
+  B.flushTimers();
+  eq([n, DES.ui.leaving, st.talk[0].by, DES.sup.isJoined()], [1, false, 'tanaka', true], 'MAJOR1 200ms のあとに 1 回だけ走り、入っている間の印が付く');
+  if (DES.app.flushPending) DES.app.flushPending();
+  eq(n, 1, 'MAJOR1 走り終えた変更は二度走らない');
+})();
+
+// MAJOR 2: 子どもに見える「関わり」（作品に残すのダイアログ・作品の詳細）は サポーターの名前だけ・回数なし。ほかの人（友だち等）は今までどおり回数つき
+(function () {
+  var B = browser({ state: vmState() });
+  var DM = B.DES.make;
+  DM.setWith('田中さん');
+  var a = DM.commitChange(DM.fromSample('mc', { id: 'a-r', now: '10:20', mode: 'js' }), { who: 'own', kind: 'test', what: { text: 'x' } }).act;
+  a = DM.commitChange(a, { who: 'own', kind: 'test', what: { text: 'y' } }).act;
+  DM.setWith(null);
+  a = DM.commitChange(a, { who: 'own', kind: 'test', what: { text: 'z' }, with: 'ゆうと' }).act;
+  a = DM.commitChange(a, { who: 'ai', kind: 'adopt', what: { text: 'w' } }).act;
+  var r = DM.roles(a);
+  eq(r.people, [{ name: '田中さん', n: 2 }, { name: 'ゆうと', n: 1 }], 'MAJOR2 前提: サポーター側の数え方（roles）は変えない');
+  var txt = DM.rolesText(r);
+  ok(txt.indexOf('田中さん 2 回') < 0 && txt.indexOf('田中さん') >= 0, 'MAJOR2 子どもに見える関わりに サポーターの回数を出さない（got ' + txt + '）');
+  eq(txt, '本人 3 回 · バディ 1 回 · 田中さんと一緒に · ゆうと 1 回', 'MAJOR2 本人・バディ・友だちの回数は今までどおり・サポーターは名前だけ');
+  B.DES.state.mode = 'es';
+  eq(DM.rolesText(r), '自分 3 回 · バディ 1 回 · 田中さんといっしょに · ゆうと 1 回', 'MAJOR2 小学生向けの表示');
+  // 保存済みの作品（w.roles）・見本の作品（seed の c.with = 田中さん）も同じ（名前で見分ける）
+  eq(DM.rolesText({ own: 4, ai: 0, people: [{ name: '田中さん', n: 1 }] }), '自分 4 回 · 田中さんといっしょに', 'MAJOR2 保存済み・見本の作品の関わりも名前だけ');
+  // 純関数（DES.t に触れない）
+  eq(M.rolesParts && M.rolesParts({ own: 1, ai: 2, people: [{ name: '田中さん', n: 3 }, { name: 'ゆうと', n: 1 }] }, ['田中さん']),
+    [{ who: 'own', n: 1 }, { who: 'ai', n: 2 }, { who: 'sup', name: '田中さん' }, { who: 'with', name: 'ゆうと', n: 1 }], 'MAJOR2 rolesParts（純関数）: サポーターは回数を持たない');
+  ok(I18N.indexOf("    roles_with_sup: ['{sup}と一緒に', '{sup}といっしょに']") > I18N.indexOf('// ---- §AD サポーター'), 'MAJOR2 roles_with_sup が §AD の塊に [中, 小] で在る');
+})();
+
+// MAJOR 4: 確かめた の間に 項目の編集欄へ入力したら、補足欄と同じく下書きに戻る（IME 変換中は戻さない・フォーカスと入力位置を保つ）
+(function () {
+  var st = vmState();
+  var B = browser({ state: st, hash: '#sup/haruto/report' });
+  var DES = B.DES, rp = DES.state.sup.report;
+  DES.app.change(function () { rp.state = 'checked'; rp.body = C.reportFreeze(DES.sup.reportDraft(), rp.extra); });
+  eq(rp.state, 'checked', 'MAJOR4 前提: 確かめた');
+  // 編集欄を開いただけ・入力せずに取り消し → checked のまま
+  var edBtn = B.el({ 'data-id': 'r-t1' });
+  DES.actions['sup-rp-edit'](edBtn);
+  DES.actions['sup-rp-ecancel'](edBtn);
+  eq([rp.state, !!rp.body], ['checked', true], 'MAJOR4 編集欄を開いて取り消しただけなら checked のまま');
+  DES.actions['sup-rp-edit'](edBtn);
+  var ta = B.el({ 'data-ui': 'sv-rp-edit', 'data-id': 'r-t1', 'data-fk': 'rp-ed:r-t1' });
+  B.byFk['rp-ed:r-t1'] = B.el({ 'data-fk': 'rp-ed:r-t1' });
+  ta.value = '直しかけ'; ta.selectionStart = 2; ta.selectionEnd = 3;
+  B.fire('input', { target: ta, isComposing: true });
+  eq([rp.state, DES.ui.supv.rpEdit['r-t1']], ['checked', '直しかけ'], 'MAJOR4 IME 変換中は下書きに戻さない（入力は持つ）');
+  B.fire('compositionend', { target: ta, isComposing: false });
+  eq([rp.state, rp.body], ['draft', null], 'MAJOR4 変換が終わったら 下書きに戻る（body = null）');
+  eq([B.focused.el === B.byFk['rp-ed:r-t1'], B.byFk['rp-ed:r-t1'].sel, DES.ui.supv.rpEdit['r-t1']], [true, [2, 3], '直しかけ'], 'MAJOR4 フォーカスと入力位置を編集欄に保つ・書きかけは残る');
+  // 下書きの間の入力は 状態を変えない（今までどおり一時値だけ）
+  var nSave = DES.store.saves.length;
+  ta.value = '直しかけ2';
+  B.fire('input', { target: ta, isComposing: false });
+  eq([rp.state, DES.ui.supv.rpEdit['r-t1'], DES.store.saves.length], ['draft', '直しかけ2', nSave], 'MAJOR4 下書きの間の入力は保存しない（一時値だけ）');
+  // checked の間に IME を使わない入力 → すぐ下書きに戻る
+  DES.app.change(function () { rp.state = 'checked'; rp.body = C.reportFreeze(DES.sup.reportDraft(), rp.extra); });
+  ta.value = 'x';
+  B.fire('input', { target: ta, isComposing: false });
+  eq([rp.state, rp.body], ['draft', null], 'MAJOR4 確かめたの間の入力で下書きに戻る（旧本文のまま 送る を押せない）');
+})();
+
 console.log('sup-test: ' + pass + ' pass, ' + fail + ' fail');
 console.log('SUP_TEST=' + (fail ? 'FAIL' : 'PASS'));
 process.exitCode = fail ? 1 : 0;

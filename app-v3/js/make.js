@@ -682,6 +682,18 @@
     }
     return out;
   }
+  // 子どもに見える「関わり」の並び（contract-AD AD-0 / AD-10: 子どもには手伝いの量を出さない）。roles の数え方は変えない（サポーター画面はそのまま数える）。
+  // supNames の人 = サポーター → 名前だけ（回数なし）。ほかの人（友だち等）・本人・バディは今までどおり回数つき。
+  // サポーターかどうかは名前で見分ける: 変化の出所の印は AD-2 の既存の欄 c.with = {sup}（表示名だけを持つ）で、見本（make-data.js）も
+  // 保存済みの作品（w.roles）も同じ名前で入っている。別の印を足すと、印の無い見本・保存済みの作品と食い違う。このモックのサポーターは 1 人
+  function rolesParts(r, supNames) {
+    var sup = supNames || [], out = [{ who: 'own', n: r.own || 0 }];
+    if (r.ai) out.push({ who: 'ai', n: r.ai });
+    (r.people || []).forEach(function (p) {
+      out.push(sup.indexOf(p.name) >= 0 ? { who: 'sup', name: p.name } : { who: 'with', name: p.name, n: p.n });
+    });
+    return out;
+  }
   // 作品に残す（活動は閉じない）。o: { id, at, title, like, date }
   // 「今」で残す時、まだ試していない値があれば、保存の前に変化として積む（本人・結果はまだ確かめていない。§U-12 補足 4）
   function withPending(a) {
@@ -963,7 +975,9 @@
     // レビューへの裁定（保存の失敗を戻す）
     trySave: trySave, addAct: addAct, swapPage: swapPage, applySeeds: applySeeds,
     // contract-AD §18-1
-    setWith: setWith
+    setWith: setWith,
+    // 子どもに見える関わり（contract-AD AD-0 / AD-10）
+    rolesParts: rolesParts
   };
   Object.keys(pure).forEach(function (k) { M[k] = pure[k]; });
   // ---------- あしあと（CONTRACT-v3 §Z-5 / Z-14）: 「もう一度試す」= 同じ始まりから新しい活動。元の活動 a は変えない（既存の活動を再利用しない） ----------
@@ -2271,11 +2285,13 @@
   // ---------- ダイアログ: 作品に残す / 今日はここまで ----------
   function dlgEl() { return document.getElementById('make-dialog'); }
   function field(label, forId, control) { return H('div', { class: 'field' }, [H('label', { for: forId }, label), control]); }
+  // サポーターは名前だけ（回数なし）。並びは rolesParts（純関数）
   function rolesText(r) {
-    var parts = [T('roles_count', { who: T('who_own'), n: r.own })];
-    if (r.ai) parts.push(T('roles_count', { who: T('who_ai'), n: r.ai }));
-    r.people.forEach(function (p) { parts.push(T('roles_count', { who: p.name, n: p.n })); });
-    return parts.join(' · ');
+    var sd = DES.supData, sup = sd && sd.supporter && sd.supporter.name ? [sd.supporter.name] : [];
+    return rolesParts(r, sup).map(function (p) {
+      if (p.who === 'sup') return T('roles_with_sup', { sup: p.name });
+      return T('roles_count', { who: p.who === 'own' ? T('who_own') : (p.who === 'ai' ? T('who_ai') : p.name), n: p.n });
+    }).join(' · ');
   }
   M.rolesText = rolesText;
   function rolesBox(r) {

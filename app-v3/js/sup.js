@@ -109,6 +109,9 @@
   };
   SUP.leave = function (dest) {
     dest = dest || '#sup/' + childId() + '/log';
+    // 遅れて走る変更（予定の行の退場 200ms）が残っていれば、入っている間に先に済ませる。
+    // 誰の操作かは押した時点で決まる（印と記録を付ける）。記録の順は 操作 → 出た
+    if (DES.app.flushPending) DES.app.flushPending();
     if (SUP.isJoined()) {
       DES.app.change(function () {
         SUP.addLog('join', 'out', SUP.t('log_out'));
