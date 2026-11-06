@@ -22,6 +22,7 @@ import {
   runScoutRoute,
 } from './routes/proposals';
 import { decide, listReview, reverify, reviewDetail, reviewFile } from './routes/review';
+import { decideRetroTip, getRetro } from './routes/retro';
 import { addStandard, getStandards } from './routes/standards';
 import { getStatus, setPause } from './routes/status';
 import { handleWebhook } from './routes/webhook';
@@ -75,6 +76,9 @@ const ROUTES: Array<[string, RegExp, Handler]> = [
   ['POST', /^\/api\/scout\/run$/, runScoutRoute],
   ['POST', /^\/api\/meeting\/run$/, runMeetingRoute],
   ['GET', /^\/api\/meeting\/latest$/, latestMeeting],
+  // 振り返り係（改善係。§S-5 4・5）
+  ['GET', /^\/api\/retro$/, getRetro],
+  ['POST', new RegExp(`^/api/retro/tips/${ID}$`), decideRetroTip],
   // お題のストック（contract-T T-10）
   ['GET', /^\/api\/topics\/meta$/, topicsMeta],
   ['GET', /^\/api\/topics\/runs$/, listTopicRuns],

@@ -1,10 +1,10 @@
-// 入口（収集部隊・会議）の費用の記録と上限判定（契約 §K-0）。
+// 入口（収集部隊・会議）と振り返り係（§S-0）の費用の記録と上限判定（契約 §K-0）。
 // 費用はすべて cost_ledger に追記する（日次上限 DAILY_CAP_CENTS の合計にも入る）。月は Asia/Tokyo の暦月（cost_ledger.day の先頭 7 文字）。
 
 import { first, stmt, tokyoDay, type Stmt } from './db';
 import { cfg, type Env } from './env';
 
-export type IntakeKind = 'scout' | 'meeting' | 'topic';
+export type IntakeKind = 'scout' | 'meeting' | 'topic' | 'retro';
 
 /** Asia/Tokyo の YYYY-MM */
 export const tokyoMonth = (d: Date = new Date()): string => tokyoDay(d).slice(0, 7);
@@ -22,7 +22,8 @@ export async function dayCostCents(db: D1Database, d: Date = new Date()): Promis
 /** 起動してよいか（月次の上限と日次の上限。§R-24 のとおり「起動を止める目安」） */
 export async function capCheck(env: Env, kind: IntakeKind, d: Date = new Date()): Promise<{ ok: true } | { ok: false; reason: 'monthly_cap' | 'daily_cap' }> {
   const c = cfg(env);
-  const cap = kind === 'scout' ? c.scoutMonthlyCapCents : kind === 'topic' ? c.topicMonthlyCapCents : c.meetingMonthlyCapCents;
+  const cap =
+    kind === 'scout' ? c.scoutMonthlyCapCents : kind === 'topic' ? c.topicMonthlyCapCents : kind === 'retro' ? c.retroMonthlyCents : c.meetingMonthlyCapCents;
   if ((await monthCostCents(env.DB, kind, d)) >= cap) return { ok: false, reason: 'monthly_cap' };
   if ((await dayCostCents(env.DB, d)) >= c.dailyCapCents) return { ok: false, reason: 'daily_cap' };
   return { ok: true };

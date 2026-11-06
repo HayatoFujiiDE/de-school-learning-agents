@@ -59,6 +59,8 @@ export interface Env {
   /** 生成のモデル（T-4。既定は会議と同じ Sonnet 5.5）。検査のモデル（T-5 の 3。既定は生成と同じ） */
   TOPIC_GEN_MODEL?: string;
   TOPIC_CHECK_MODEL?: string;
+  /** 振り返り係（§S-0）の月の上限（セント）。wrangler.jsonc には置かない（無い時は cfg() の既定 300） */
+  RETRO_MONTHLY_CENTS?: string;
 
   // secrets
   ANTHROPIC_API_KEY?: string;
@@ -128,6 +130,8 @@ export const cfg = (env: Env) => ({
   topicDerivePerWeek: intVar(env.TOPIC_DERIVE_PER_WEEK, 3),
   topicGenModel: (env.TOPIC_GEN_MODEL || TOPIC_DEFAULT_MODEL).trim(),
   topicCheckModel: (env.TOPIC_CHECK_MODEL || env.TOPIC_GEN_MODEL || TOPIC_DEFAULT_MODEL).trim(),
+  // §S-0
+  retroMonthlyCents: intVar(env.RETRO_MONTHLY_CENTS, 300),
 });
 
 /** お題の生成・検査の既定のモデル（contract-T T-4: 会議 MEETING_MODEL と同じ Sonnet 5.5 の id） */

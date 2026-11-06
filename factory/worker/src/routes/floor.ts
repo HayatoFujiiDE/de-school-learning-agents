@@ -1,6 +1,6 @@
 // GET /api/floor（契約 §N-1）。工場ビューの集約。読み取り専用・副作用なし。
 // SQL: 制作キュー 1 文（素材 LEFT JOIN active / 最後の job、review / current の版）+ 持ち場の集計 1 文（stations.rework を含む）
-// + 収集の lock（scoutRunning）+ 今日の費用。
+// + 収集の lock（scoutRunning）+ 今日の費用。持ち場の集計には改善係（job_retros / retro_tips。§S）を含む。
 // review の版だけ computeTriage（listReview と同じ: 版ごとに最新 verification・sources を読む）、queue の rework job だけ isAutoDerived を呼ぶ。
 // 応答に brief_md・questions 本文・answers・token 類は含めない。
 import { all, first, isoPlus, nowIso, stmt } from '../db';
@@ -70,6 +70,10 @@ interface StationRow {
   lib_stopped: number;
   rw_auto_active: number;
   rw_manual_active: number;
+  rt_pending: number;
+  rt_last_at: string | null;
+  rt_last_tips: number;
+  rt_active_notes: number;
 }
 
 export async function getFloor(c: RouteCtx): Promise<Response> {
@@ -246,7 +250,13 @@ export async function getFloor(c: RouteCtx): Promise<Response> {
                                AND d.decision = 'return' AND d.reviewer_email = ?)) AS rw_auto_active,
               (SELECT COUNT(*) FROM factory_jobs r WHERE r.kind = 'rework' AND r.status IN ${ACTIVE}
                  AND NOT EXISTS (SELECT 1 FROM review_decisions d WHERE d.material_version_id = r.parent_version_id
-                                   AND d.decision = 'return' AND d.reviewer_email = ?)) AS rw_manual_active`,
+                                   AND d.decision = 'return' AND d.reviewer_email = ?)) AS rw_manual_active,
+              -- 改善係（振り返り係 §S）: 進行中の件数・最後に終わった回の時刻・その回で自動で入った工夫の数・いま職人に渡している maker_note の数
+              (SELECT COUNT(*) FROM job_retros WHERE status IN ('collecting','ready','submitted')) AS rt_pending,
+              (SELECT updated_at FROM job_retros WHERE status = 'ended' ORDER BY updated_at DESC LIMIT 1) AS rt_last_at,
+              (SELECT COUNT(*) FROM retro_tips t WHERE t.decided_by = 'auto' AND t.activated_at IS NOT NULL
+                 AND t.job_id = (SELECT job_id FROM job_retros WHERE status = 'ended' ORDER BY updated_at DESC LIMIT 1)) AS rt_last_tips,
+              (SELECT COUNT(*) FROM retro_tips WHERE status = 'active' AND target = 'maker_note') AS rt_active_notes`,
       AUTO_TRIAGE_EMAIL,
       AUTO_TRIAGE_EMAIL,
     ),
@@ -280,6 +290,12 @@ export async function getFloor(c: RouteCtx): Promise<Response> {
       reviewer: { waiting: n(s?.v_done), needs_review_total: needsReviewTotal },
       library: { available: n(s?.lib_available), stopped: n(s?.lib_stopped) },
       rework: { auto_active: n(s?.rw_auto_active), manual_active: n(s?.rw_manual_active) },
+      retro: {
+        pending: n(s?.rt_pending),
+        last_retro_at: s?.rt_last_at ?? null,
+        last_tips_activated: n(s?.rt_last_tips),
+        active_maker_notes: n(s?.rt_active_notes),
+      },
     },
     queue: built.map((b) => b.row),
   });
