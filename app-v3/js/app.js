@@ -38,6 +38,10 @@ window.DES = window.DES || {};
     expand: 'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
     shrink: 'M9 4v5H4 M15 4v5h5 M9 20v-5H4 M15 20v-5h5',
     sidebar: 'M4 4h16v16H4z M9 4v16 M14 10l-2 2 2 2',
+    // §AH-2: 全体で見る・全体の中で見る（格子）
+    grid: 'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z',
+    // contract-AD §AD-4: サポーター画面の「教室」
+    people: 'M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M2 20a6 6 0 0 1 12 0 M17 11a2.5 2.5 0 1 0 0-5 M16 14a5 5 0 0 1 6 5',
     // 作品展示（contract-app §AG-1）: 額縁と山
     gallery: 'M3 4h18v16H3z M6 7h12v10H6z M6 17l4-5 3 3 2-2 3 4'
   };
@@ -75,11 +79,11 @@ window.DES = window.DES || {};
   function icon(n) { return DES.raw(DES.icon(n)); }
   function $(s) { return document.querySelector(s); }
   function esc(v) { return window.CSS && CSS.escape ? CSS.escape(v) : String(v).replace(/"/g, '\\"'); }
-  var ROUTES = ['talk', 'plan', 'make', 'works', 'gallery', 'today', 'self', 'map', 'trail', 'paused'];
+  var ROUTES = ['talk', 'plan', 'make', 'works', 'gallery', 'today', 'self', 'map', 'trail', 'paused', 'sup'];
   var NAV = ['talk', 'make', 'works', 'gallery', 'today', 'self', 'map', 'trail'];
 
-  // #make/<id>（作業台）・#works/<id>・#gallery/<id>・#today/<id>・#map/<arg> は前方一致（CONTRACT-v3 §U-3 / §W / §AG / §X / §Y）。他は完全一致
-  var PREFIX = ['make', 'works', 'gallery', 'today', 'map'];
+  // #make/<id>（作業台）・#works/<id>・#gallery/<id>・#today/<id>・#map/<arg>・#sup/<arg> は前方一致（CONTRACT-v3 §U-3 / §W / §AG / §X / §Y / contract-AD §AD-4）。他は完全一致
+  var PREFIX = ['make', 'works', 'gallery', 'today', 'map', 'sup'];
   function route() {
     var h = window.location.hash.replace(/^#/, ''), base = h.split('/')[0];
     if (PREFIX.indexOf(base) >= 0) return base;
@@ -164,7 +168,7 @@ window.DES = window.DES || {};
   var toastTimer = null, toastFn = null, toastGone = null;
   function placeToast() {
     var el = $('#toast'), host = document.body;
-    ['#plan-dialog', '#make-dialog', '#works-dialog', '#today-dialog', '#gallery-dialog'].forEach(function (s) { var d = $(s); if (d && d.open) host = d; });
+    ['#plan-dialog', '#make-dialog', '#works-dialog', '#today-dialog', '#gallery-dialog', '#sup-dialog'].forEach(function (s) { var d = $(s); if (d && d.open) host = d; });
     if (el.parentNode !== host) host.appendChild(el);
   }
   APP.toast = function (text, action) {
@@ -286,19 +290,43 @@ window.DES = window.DES || {};
   A['menu-close'] = function () { closeMenu(true); };
 
   // ---------- シェルの描画 ----------
+  // 役タブ（contract-AD §AD-4）: 子ども と サポーター を押せる。サポーターが active = ルートが sup か、入っている間。描画のたびに描き直す
+  function supRole() { return route() === 'sup' || !!(DES.sup && DES.sup.isJoined()); }
   function renderPreview() {
-    var el = $('#preview-bar');
+    var el = $('#preview-bar'), sr = supRole();
     el.textContent = '';
     el.appendChild(H('div', { class: 'preview-name' }, [H('span', { class: 'preview-dot' }), H('span', null, T('preview'))]));
     el.appendChild(H('div', { class: 'role-tabs', role: 'group', 'aria-label': T('role_tabs') }, [
-      H('button', { type: 'button', class: 'active', 'aria-pressed': 'true' }, T('role_child')),
-      H('button', { type: 'button', disabled: true }, T('role_supporter')),
+      H('button', { type: 'button', class: sr ? '' : 'active', 'aria-pressed': sr ? 'false' : 'true', 'data-action': 'role', 'data-arg': 'child' }, T('role_child')),
+      H('button', { type: 'button', class: sr ? 'active' : '', 'aria-pressed': sr ? 'true' : 'false', 'data-action': 'role', 'data-arg': 'sup' }, T('role_supporter')),
       H('button', { type: 'button', disabled: true }, T('role_factory')),
       H('button', { type: 'button', disabled: true }, T('role_design'))
     ]));
   }
   function navLabel(k) { var html = DES.tNavHTML(k); return html ? DES.raw(html) : T(k); }
   function renderSidebar(r) { fillSidebar($('#sidebar'), r); }
+  // サポーター画面のサイドバー（contract-AD §AD-4）: brand / nav「教室」（+ 個別画面では {child}）/ profile / はじめの状態に戻す
+  function fillSupSidebar(sb) {
+    var SD = DES.supData, onKid = DES.sup.onKid(), rail = navRail();
+    sb.appendChild(H('div', { class: 'sb-top' }, [
+      H('div', { class: 'brand' }, [H('div', { class: 'brand-word' }, ['DE', H('span', null, '-'), 'SCHOOL']), H('div', { class: 'brand-sub' }, T('brand_sub'))]),
+      sb.id === 'sidebar' ? H('button', { class: 'icon-btn nav-toggle', type: 'button', 'data-action': 'nav-toggle', 'aria-controls': 'sidebar', 'aria-expanded': rail ? 'false' : 'true',
+        'aria-label': T(rail ? 'nav_rail_open' : 'nav_rail_close'), title: T(rail ? 'nav_rail_open' : 'nav_rail_close') }, [icon('sidebar')]) : null
+    ]));
+    var items = [['#sup', 'people', DES.sup.t('nav_class'), !onKid]];
+    if (onKid) items.push(['#sup/' + DES.data.child.id, 'self', DES.data.child.name, true]);
+    sb.appendChild(H('nav', { class: 'nav', 'aria-label': T('nav_label') }, items.map(function (it) {
+      return H('button', { type: 'button', 'data-action': 'sup-nav', 'data-arg': it[0], 'aria-label': it[2], title: it[2], class: it[3] ? 'active' : '', 'aria-current': it[3] ? 'page' : null },
+        [icon(it[1]), H('span', { class: 'nav-label' }, it[2])]);
+    })));
+    sb.appendChild(H('div', { class: 'sidebar-bottom' }, [
+      H('div', { class: 'profile' }, [
+        H('span', { class: 'avatar', 'aria-hidden': 'true' }, SD.supporter.initial || SD.supporter.name.charAt(0)),
+        H('div', { class: 'profile-text' }, [H('strong', { style: 'font-size:12px' }, SD.supporter.name), H('p', { class: 'muted' }, DES.sup.t('role_label'))])
+      ]),
+      H('button', { class: 'reset-link', type: 'button', 'data-action': 'reset' }, T('reset'))
+    ]));
+  }
   function navRail() { return !!(DES.state && DES.state.ui && DES.state.ui.nav === 'rail'); }
   function fillSidebar(sb, r) {
     var d = DES.data, cur = r === 'plan' ? 'talk' : r;
@@ -306,6 +334,7 @@ window.DES = window.DES || {};
     var ri = DES.make.resumeInfo(), resumeTitle = ri ? ri.title : d.resume.title, resumeNext = ri ? ri.next : d.resume.next;
     sb.textContent = '';
     sb.appendChild(H('button', { class: 'icon-btn mobile-menu mobile-close', type: 'button', 'data-action': 'menu-close', 'aria-label': T('menu_close') }, [icon('close')]));
+    if (r === 'sup') { fillSupSidebar(sb); return; }
     // 左メニューを閉じる / 開く（§AC-7。≤ 950 は元から細い列なので CSS で出さない。≤ 700 の引き出しの中にも出さない）
     var rail = navRail();
     sb.appendChild(H('div', { class: 'sb-top' }, [
@@ -332,9 +361,23 @@ window.DES = window.DES || {};
       H('button', { class: 'reset-link', type: 'button', 'data-action': 'reset' }, T('reset'))
     ]));
   }
+  // サポーター画面の topbar（contract-AD §AD-4）: サポーター / 教室（個別は {child}）。top-actions は保存の表示だけ
+  function renderSupTopbar(tb) {
+    var st = DES.state;
+    tb.appendChild(H('div', { class: 'tb-left' }, [
+      H('button', { class: 'icon-btn mobile-menu mobile-open', type: 'button', 'data-action': 'menu-open', 'aria-label': T('menu_open'), 'aria-haspopup': 'dialog' }, [icon('menu')]),
+      H('div', { class: 'breadcrumb' }, [
+        H('span', { class: 'crumb-base' }, T('sup')),
+        H('span', { class: 'crumb-base', 'aria-hidden': 'true' }, '/'),
+        H('strong', null, DES.sup.onKid() ? DES.data.child.name : DES.sup.t('nav_class'))
+      ])
+    ]));
+    tb.appendChild(H('div', { class: 'top-actions' }, [H('span', { class: 'save-indicator' + (st.saveFailed ? ' fail' : '') }, T(st.saveFailed ? 'save_fail' : 'saved'))]));
+  }
   function renderTopbar(r) {
     var tb = $('#topbar'), st = DES.state, crumb = r === 'paused' ? 'done_today' : r;
     tb.textContent = '';
+    if (r === 'sup') { renderSupTopbar(tb); return; }
     tb.appendChild(H('div', { class: 'tb-left' }, [
       H('button', { class: 'icon-btn mobile-menu mobile-open', type: 'button', 'data-action': 'menu-open', 'aria-label': T('menu_open'), 'aria-haspopup': 'dialog' }, [icon('menu')]),
       H('div', { class: 'breadcrumb' }, [
@@ -358,6 +401,9 @@ window.DES = window.DES || {};
     var tb = $('#tabbar');
     tb.textContent = '';
     tb.setAttribute('aria-label', T('tabbar'));
+    // サポーター画面には下タブ帯を出さない（contract-AD §AD-4）
+    tb.hidden = r === 'sup';
+    if (r === 'sup') return;
     [['talk', 'talk'], ['make', 'make'], ['works', 'works'], ['today', 'today_tab']].forEach(function (p) {
       var on = p[0] === r || (p[0] === 'talk' && r === 'plan');
       tb.appendChild(H('button', { type: 'button', 'data-action': 'nav', 'data-route': p[0], 'data-arg': 'tab', class: on ? 'active' : '', 'aria-current': on ? 'page' : null }, [icon(p[0]), H('span', null, T(p[1]))]));
@@ -369,10 +415,17 @@ window.DES = window.DES || {};
     var st = DES.state, u = DES.ui, r = route();
     document.documentElement.setAttribute('data-mode', st.mode === 'es' ? 'es' : 'js');
     document.documentElement.classList.toggle('nav-rail', navRail());
+    // サポーター画面のシェル・一緒に入っている間の帯（contract-AD §AD-4 / AD-5）。自己理解は入っている間 見るだけ（§AD-3）
+    var jn = !!(DES.sup && DES.sup.isJoined());
+    document.documentElement.classList.toggle('is-sup', r === 'sup');
+    document.documentElement.classList.toggle('is-joined', jn);
+    if (jn && r === 'self') $('#main').setAttribute('inert', ''); else $('#main').removeAttribute('inert');
+    renderPreview();
+    if (DES.sup) DES.sup.renderBand(r);
     renderSidebar(r);
     renderTopbar(r);
     renderTabbar(r);
-    var main = $('#main'), key = r + '|' + APP.routeArg() + '|' + st.mode, rebuild = u.built !== key;
+    var main = $('#main'), key = r + '|' + APP.routeArg() + '|' + st.mode + '|' + (jn ? 'in' : 'out'), rebuild = u.built !== key;
     u.built = key;
     if (r === 'talk') DES.talk.renderPage(main, rebuild);
     else if (r === 'plan') DES.plan.renderPage(main);
@@ -383,6 +436,7 @@ window.DES = window.DES || {};
     else if (r === 'map') DES.map.render(main, APP.routeArg());
     else if (r === 'self') DES.self.render(main);
     else if (r === 'trail') DES.trail.render(main);
+    else if (r === 'sup') DES.sup.render(main, APP.routeArg(), rebuild);
     else if (rebuild) {
       if (r === 'paused') { if (DES.make.pausedAct()) DES.make.renderPaused(main); else DES.talk.renderPaused(main); }
       else { main.textContent = ''; main.appendChild(H('p', { class: 'empty-line' }, T('not_yet'))); }
@@ -412,6 +466,13 @@ window.DES = window.DES || {};
     APP.openMode(opener);
   };
   A['reset'] = function () { DES.store.reset(); };
+  // 役タブ（contract-AD §AD-4 / 18-9）: サポーター → #sup（入っていれば入ったまま）/ 子ども → 入っていれば出て #talk、入っていなければ sup の時だけ #talk
+  A['role'] = function (el) {
+    closeMenu(false);
+    if (el.getAttribute('data-arg') === 'sup') { if (route() !== 'sup' || APP.routeArg()) window.location.hash = '#sup'; return; }
+    if (DES.sup.isJoined()) { DES.sup.leave('#talk'); return; }
+    if (route() === 'sup') window.location.hash = '#talk';
+  };
   // 左メニューを閉じる / 開く（全ページ共通。表示設定 des3.ui.nav に保存。フォーカスは同じボタンに残る）
   A['nav-toggle'] = function () {
     APP.change(function () { DES.state.ui = { nav: navRail() ? 'open' : 'rail' }; }, { sel: '[data-action="nav-toggle"]' });
@@ -442,7 +503,7 @@ window.DES = window.DES || {};
 
   function closeTransient() {
     var u = DES.ui;
-    ['#plan-dialog', '#nav-drawer', '#row-sheet', '#pick-sheet', '#mode-dialog', '#make-dialog', '#works-dialog', '#today-dialog', '#gallery-dialog'].forEach(function (s) { APP.closeDialog($(s), true); });
+    ['#plan-dialog', '#nav-drawer', '#row-sheet', '#pick-sheet', '#mode-dialog', '#make-dialog', '#works-dialog', '#today-dialog', '#gallery-dialog', '#sup-dialog'].forEach(function (s) { APP.closeDialog($(s), true); });
     u.menu = null; u.edit = null; u.goalEdit = null; u.noSlot = {};
     DES.make.resetUi();
     DES.works.resetUi();
@@ -450,6 +511,7 @@ window.DES = window.DES || {};
     DES.today.resetUi();
     DES.map.resetUi();
     DES.trail.resetUi();
+    DES.sup.resetUi();
   }
   function onHash() {
     var u = DES.ui, st = DES.state, r = route();
@@ -541,7 +603,6 @@ window.DES = window.DES || {};
     DES.ui.bp = APP.bp();
     DES.ui.lastRoute = route();
     document.documentElement.setAttribute('data-mode', DES.state.mode === 'es' ? 'es' : 'js');
-    renderPreview();
     bind();
     DES.plan.initDnD();
     DES.talk.bind();

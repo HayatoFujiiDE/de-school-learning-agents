@@ -4,7 +4,7 @@
 import { first, stmt, tokyoDay, type Stmt } from './db';
 import { cfg, type Env } from './env';
 
-export type IntakeKind = 'scout' | 'meeting';
+export type IntakeKind = 'scout' | 'meeting' | 'topic';
 
 /** Asia/Tokyo の YYYY-MM */
 export const tokyoMonth = (d: Date = new Date()): string => tokyoDay(d).slice(0, 7);
@@ -22,7 +22,7 @@ export async function dayCostCents(db: D1Database, d: Date = new Date()): Promis
 /** 起動してよいか（月次の上限と日次の上限。§R-24 のとおり「起動を止める目安」） */
 export async function capCheck(env: Env, kind: IntakeKind, d: Date = new Date()): Promise<{ ok: true } | { ok: false; reason: 'monthly_cap' | 'daily_cap' }> {
   const c = cfg(env);
-  const cap = kind === 'scout' ? c.scoutMonthlyCapCents : c.meetingMonthlyCapCents;
+  const cap = kind === 'scout' ? c.scoutMonthlyCapCents : kind === 'topic' ? c.topicMonthlyCapCents : c.meetingMonthlyCapCents;
   if ((await monthCostCents(env.DB, kind, d)) >= cap) return { ok: false, reason: 'monthly_cap' };
   if ((await dayCostCents(env.DB, d)) >= c.dailyCapCents) return { ok: false, reason: 'daily_cap' };
   return { ok: true };
@@ -56,3 +56,15 @@ export function sonnetBatchMicroDollars(u: UsageLike | null | undefined): number
   const input = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
   return (input * 2 + (u.output_tokens ?? 0) * 10) * 0.5;
 }
+
+/**
+ * Sonnet 5.5（同期の定価。お題 contract-T T-6）: 入力 $2 / 5 分の cache write $2.50 / cache read $0.10 / 出力 $10 per 1M。
+ * 値は https://platform.claude.com/docs/en/about-claude/pricing（2026-11-06 確認）。cache read は多めに数えて入力と同じ $2 にする
+ */
+export function sonnetMicroDollars(u: UsageLike | null | undefined): number {
+  if (!u) return 0;
+  return (u.input_tokens ?? 0) * 2 + (u.cache_creation_input_tokens ?? 0) * 2.5 + (u.cache_read_input_tokens ?? 0) * 2 + (u.output_tokens ?? 0) * 10;
+}
+
+/** web_search は 1 回 1 セント（$10 / 1,000 回。同じ pricing のページ） */
+export const WEB_SEARCH_CENTS = 1;

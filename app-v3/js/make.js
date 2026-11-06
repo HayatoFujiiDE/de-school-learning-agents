@@ -243,10 +243,14 @@
     for (var i = 0; i < ps.length; i++) if (!from || from[ps[i].key] !== to[ps[i].key]) return ps[i];
     return null;
   }
+  // サポーターが一緒に入っている間の人名（contract-AD §18-1。sup.js が 入る / 出る / 読み込み時 に setWith で設定する）
+  var withName = null;
+  function setWith(name) { withName = typeof name === 'string' && name ? name : null; }
   // 変化を 1 つ積む（積まれる瞬間は 4 つ: 試す / バディが置いた / 写真を足した / 戻した。design-v3 §6-6）
   function commitChange(a, ch) {
     var A = clone(a);
     ch = clone(ch);
+    if (withName && ch.who === 'own' && !ch.with) ch.with = withName;
     var photoLike = ch.kind === 'photo' || ch.kind === 'shot';
     ch.id = nid(A, 'c');
     ch.time = tick(A);
@@ -957,7 +961,9 @@
     // §AE
     fromProject: fromProject, samplePage: samplePage, projectPage: projectPage, isProjectExt: isProjectExt, PROJECT_THEME: PROJECT_THEME,
     // レビューへの裁定（保存の失敗を戻す）
-    trySave: trySave, addAct: addAct, swapPage: swapPage, applySeeds: applySeeds
+    trySave: trySave, addAct: addAct, swapPage: swapPage, applySeeds: applySeeds,
+    // contract-AD §18-1
+    setWith: setWith
   };
   Object.keys(pure).forEach(function (k) { M[k] = pure[k]; });
   // ---------- あしあと（CONTRACT-v3 §Z-5 / Z-14）: 「もう一度試す」= 同じ始まりから新しい活動。元の活動 a は変えない（既存の活動を再利用しない） ----------
@@ -1173,6 +1179,20 @@
     var t = String(text == null ? '' : text).replace(/^\s+|\s+$/g, '');
     if (!t) return;
     createAndOpen(fromText(t, { id: newId('a'), origin: 'make', now: DES.data.now, mode: mode(), works: S().works }));
+  };
+  // サポーターのアイデアの「作るで試す」（contract-AD §18-3）: 言葉から作るが、本人の言葉の枠には入れない（quote = null）。
+  // 活動に idea を持たせ、o.onAdded(a) を同じ change の中で呼んでから作業台へ
+  M.fromSupIdea = function (o) {
+    o = o || {};
+    var t = String(o.text == null ? '' : o.text).replace(/^\s+|\s+$/g, '');
+    if (!t || !o.id) return null;
+    var a = fromText(t, { id: newId('a'), origin: 'talk', now: DES.data.now, mode: mode(), works: S().works });
+    a.quote = null;
+    a.idea = o.id;
+    mk().makeFrom = null;
+    DES.app.change(function () { if (freshCards(a)) S().makeSide.shelfFolded = false; S().activities = [a].concat(S().activities); if (o.onAdded) o.onAdded(a); });
+    go('#make/' + a.id);
+    return a;
   };
   // 予定表 mine 行の「作るで開く」: その取り組みの制作中があれば作業台、無ければ入口（同じカテゴリの見本を先頭に）
   var CAT_THEME = { minecraft: 'mc', programming: 'py', digital: 'circuit', media: 'stop' };
@@ -1520,6 +1540,9 @@
     if (a.resumeNote) sec.appendChild(H('div', { class: 'resume-note' }, [DES.raw(DES.buddy(18, 'think')), H('p', null, tx(a.resumeNote))]));
     var q = quoteEl(a);
     if (q) sec.appendChild(q);
+    // サポーターのアイデアから作った活動（contract-AD §18-3）: 引用枠の場所に 読むだけの枠
+    var it = !q && a.idea && DES.sup && DES.sup.ideaText ? DES.sup.ideaText(a.idea) : null;
+    if (it) sec.appendChild(H('div', { class: 'quote-frame idea-frame' }, [H('div', { class: 'qf-head' }, [chip('record', T('idea_label', { sup: DES.sup.supName() }))]), H('p', { class: 'qf-text' }, it)]));
     var list = H('div', { class: 'message-list', id: 'mk-messages' });
     a.thread.forEach(function (m, i) { list.appendChild(messageEl(a, m, i === a.thread.length - 1)); });
     sec.appendChild(list);

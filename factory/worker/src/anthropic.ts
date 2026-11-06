@@ -37,6 +37,11 @@ export interface CallOpts {
   deadline?: number;
   /** deadline がある時の 1 呼び出しの timeout の上限（既定 60 秒）。同期の検証係（§F-3）は長い呼び出しなので大きくする */
   maxTimeoutMs?: number;
+  /**
+   * SDK の再送の回数（RequestOptions.maxRetries）を呼び出しごとに渡す（お題 contract-T T-4 の「再送なし」= 0）。
+   * 省略時は従来どおり（deadline があれば 0、無ければ client の既定）
+   */
+  maxRetries?: number;
 }
 
 /** batches.results のオプション。maxBytes を省略すると BATCH_RESULTS_MAX_BYTES（会議の 1 MiB） */
@@ -107,15 +112,24 @@ export class PortError extends Error {
     public readonly responded: boolean,
     public readonly status: number | undefined,
     public readonly kind: string,
+    /** API が返した error.message の先頭 200 字（4xx の原因の切り分け用。request 本文・鍵は含めない）。無ければ undefined */
+    public readonly detail?: string,
   ) {
     super(`anthropic_${kind}${status ? `_${status}` : ''}`);
     this.name = 'PortError';
   }
 }
 
+/** APIError の error.message だけを 200 字で切り出す（本文・ヘッダは入れない） */
+function apiErrorDetail(e: InstanceType<typeof Anthropic.APIError>): string | undefined {
+  const err = (e.error as { error?: { message?: unknown } } | undefined)?.error;
+  const m = typeof err?.message === 'string' ? err.message : typeof e.message === 'string' ? e.message : undefined;
+  return m ? m.slice(0, 200) : undefined;
+}
+
 function toPortError(e: unknown): PortError {
   if (e instanceof PortError) return e;
-  if (e instanceof Anthropic.APIError && typeof e.status === 'number') return new PortError(true, e.status, 'api_error');
+  if (e instanceof Anthropic.APIError && typeof e.status === 'number') return new PortError(true, e.status, 'api_error', apiErrorDetail(e));
   if (e instanceof Anthropic.APIConnectionTimeoutError) return new PortError(false, undefined, 'timeout');
   if (e instanceof Anthropic.APIConnectionError) return new PortError(false, undefined, 'connection');
   return new PortError(false, undefined, 'unknown');
@@ -159,9 +173,9 @@ const CALL_TIMEOUT_MAX_MS = 60_000;
 
 /** deadline から SDK の RequestOptions を作る（reconcile では再試行しない） */
 export function requestOptions(o?: CallOpts): { timeout?: number; maxRetries?: number } {
-  if (!o?.deadline) return {};
+  if (!o?.deadline) return o?.maxRetries !== undefined ? { maxRetries: o.maxRetries } : {};
   const remaining = o.deadline - Date.now();
-  return { timeout: Math.max(1_000, Math.min(remaining, o.maxTimeoutMs ?? CALL_TIMEOUT_MAX_MS)), maxRetries: 0 };
+  return { timeout: Math.max(1_000, Math.min(remaining, o.maxTimeoutMs ?? CALL_TIMEOUT_MAX_MS)), maxRetries: o.maxRetries ?? 0 };
 }
 
 /**
@@ -414,6 +428,15 @@ export async function getOEmbedPort(env: Env, ctx: PortContext): Promise<OEmbedP
 export async function getFeedFetch(env: Env, ctx: PortContext): Promise<typeof fetch> {
   const fake = await loadFake(env, ctx);
   return fake ? fake.feedFetch : (input, init) => fetch(input, init);
+}
+
+/**
+ * お題の RSS と出典の取得に使う fetch（contract-T T-4・T-5 の 2。収集部隊と同じく FactoryPort でなく fetch を差し替える）。
+ * fake が許可される時だけ fixture を返す fetch（外部へ出ない）
+ */
+export async function getTopicFetch(env: Env, ctx: PortContext): Promise<typeof fetch> {
+  const fake = await loadFake(env, ctx);
+  return fake ? fake.topicFetch : (input, init) => fetch(input, init);
 }
 
 /** /__fake/* の制御（scenario 切替・呼び出し記録の読み出し）。fake が許可されない時は null（呼び出し側が 404） */

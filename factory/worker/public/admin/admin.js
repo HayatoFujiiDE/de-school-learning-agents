@@ -2560,6 +2560,8 @@
     if (p[0] === 'proposals') return viewProposals(view, r.q);
     if (p[0] === 'images') return viewImages(view);
     if (p[0] === 'videos') return viewVideos(view);
+    // §T-11 お題の棚（topics.js。タブの解釈・描画・遅れた応答の破棄は topics.js 側）
+    if (p[0] === 'topics' && window.FactoryTopics) return window.FactoryTopics.mount(view, { api: api, toast: toast, confirm: confirmDialog });
     view.innerHTML = '<p class="muted">ページが見つかりません。<a href="#/materials">素材へ</a></p>';
   }
   window.FactoryAdminVideos = { videosBandHtml: videosBandHtml, videosAdminHtml: videosAdminHtml, videosLoadingHtml: videosLoadingHtml, videosErrorHtml: videosErrorHtml };

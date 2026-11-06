@@ -76,11 +76,12 @@
     }
     if (n.kind === 'unit') {
       s = SZ.unit; iw = s.w - 2 * s.px - 2;
-      // 中身: 作ったものから = 教科と学年 / 名前 / 基礎学習の 1 行（2 行まで）。分野で見る = 名前 /（算数は）帯 / 基礎学習の 1 行
+      // 中身: 作ったものから = 教科と学年 / 名前 /（算数の near は）帯 / 基礎学習の 1 行（2 行まで）。分野で見る = 名前 /（算数は）帯 / 基礎学習の 1 行
       var kids = mode === 'fields' ? (n.material ? 3 : 2) : 3, kidsMid = mode === 'fields' ? (n.material ? 2 : 1) : 2;
       h = 2 * s.py + 2 + maxLines(n.name, s.name, iw) * s.name * s.lh + 2 * s.basic * s.blh + (kids - 1) * s.gap;
       hm = 2 * s.py + 2 + midLines(n.name, iw) * MID.px * s.lh + (kidsMid - 1) * s.gap;
-      if (mode === 'fields') { if (n.material) { h += s.band; hm += s.band; } } else { h += s.eb; hm += MID.px * MID.eblh; }
+      // 算数の帯: 分野で見る = いつも / 作ったものから = near の時だけ（§AH-2。near の箱だけ 1 段ぶん高く）
+      if (mode === 'fields') { if (n.material) { h += s.band; hm += s.band; } } else { h += s.eb; hm += MID.px * MID.eblh; if (n.material) h += s.band + s.gap; }
       return { w: s.w, h: Math.ceil(Math.max(h, hm)) };
     }
     if (n.kind === 'next') {

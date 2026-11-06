@@ -47,6 +47,18 @@ export interface Env {
   VIDEO_MONTHLY_CAP_CENTS?: string;
   /** 予備のモデル（§Q-10 10）。settings video_fallback_enabled が '1' の時だけ、n ≥ 2 の呼び出しに使う。空なら予備なし */
   GEMINI_VIDEO_FALLBACK_MODEL?: string;
+  // お題のストック（contract-T T-6）。wrangler.jsonc に既定値がある。無い時は cfg() の既定を使う
+  TOPIC_MONTHLY_CAP_CENTS?: string;
+  TOPIC_DAILY_CAP_CENTS?: string;
+  TOPIC_GEN_RESERVE_CENTS?: string;
+  TOPIC_CHECK_RESERVE_CENTS?: string;
+  TOPIC_CHECK_MAX_ATTEMPTS?: string;
+  /** 0=日〜6=土（Asia/Tokyo）。talk・philo・make の週 1 回の生成の日 */
+  TOPIC_WEEKLY_DAY?: string;
+  TOPIC_DERIVE_PER_WEEK?: string;
+  /** 生成のモデル（T-4。既定は会議と同じ Sonnet 5.5）。検査のモデル（T-5 の 3。既定は生成と同じ） */
+  TOPIC_GEN_MODEL?: string;
+  TOPIC_CHECK_MODEL?: string;
 
   // secrets
   ANTHROPIC_API_KEY?: string;
@@ -105,7 +117,21 @@ export const cfg = (env: Env) => ({
   videoMonthlyCapCents: intVar(env.VIDEO_MONTHLY_CAP_CENTS, 1000),
   // §Q-10 10（既定は無し = 予備を使わない。wrangler.jsonc の値は gemini-3.8-flash）
   videoFallbackModel: (env.GEMINI_VIDEO_FALLBACK_MODEL ?? '').trim(),
+  // contract-T T-6（取り置き額は 0 にしない: 0 だと月・日の上限が効かない）
+  topicMonthlyCapCents: intVar(env.TOPIC_MONTHLY_CAP_CENTS, 2000),
+  topicDailyCapCents: intVar(env.TOPIC_DAILY_CAP_CENTS, 200),
+  topicGenReserveCents: Math.max(1, intVar(env.TOPIC_GEN_RESERVE_CENTS, 60)),
+  topicCheckReserveCents: Math.max(1, intVar(env.TOPIC_CHECK_RESERVE_CENTS, 15)),
+  topicCheckMaxAttempts: Math.max(1, intVar(env.TOPIC_CHECK_MAX_ATTEMPTS, 2)),
+  /** 範囲外（7 以上）なら週 1 回の生成はしない */
+  topicWeeklyDay: intVar(env.TOPIC_WEEKLY_DAY, 0),
+  topicDerivePerWeek: intVar(env.TOPIC_DERIVE_PER_WEEK, 3),
+  topicGenModel: (env.TOPIC_GEN_MODEL || TOPIC_DEFAULT_MODEL).trim(),
+  topicCheckModel: (env.TOPIC_CHECK_MODEL || env.TOPIC_GEN_MODEL || TOPIC_DEFAULT_MODEL).trim(),
 });
+
+/** お題の生成・検査の既定のモデル（contract-T T-4: 会議 MEETING_MODEL と同じ Sonnet 5.5 の id） */
+export const TOPIC_DEFAULT_MODEL = 'claude-sonnet-5-5';
 
 /** SCOUT_MAX_TURNS を var で大きくしても 1 run の X 検索がこれ以上の turn を使わない（外部コストの有限化） */
 export const SCOUT_MAX_TURNS_CEILING = 4;

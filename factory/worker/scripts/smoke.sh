@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # smoke: wrangler dev（--local --port 8787、fake）をバックグラウンドで起動し、scripts/smoke.mjs で受け入れ基準を叩く（契約 §I、§K-8）。
 # 入口: 週次・月 2 回の自動起動は SCOUT_DAY=9 / MEETING_DAYS= で止め、手動起動で確かめる。月次上限は 1 セント（1 回目の費用で上限に達し (s) を確かめる）
+# お題: smoke.mjs の後に scripts/smoke-topics.mjs（週 1 回の生成は TOPIC_WEEKLY_DAY=9 で止める）。SMOKE_RESULT は両方が PASS の時だけ PASS
 # 状態は一時ディレクトリに置く（.wrangler/state や手元の .dev.vars には触らない）。終了時に必ず dev を止める。
 # 出力: PASS / FAIL 行と SMOKE_RESULT=PASS|FAIL。rc: 0=PASS / 1=FAIL / 2=起動できなかった
 set -u
@@ -47,6 +48,7 @@ SCOUT_MONTHLY_CAP_CENTS=1
 MEETING_MONTHLY_CAP_CENTS=1
 SCOUT_DAY=9
 MEETING_DAYS=
+TOPIC_WEEKLY_DAY=9
 ENV
 
 bash scripts/sync-claude-assets.sh > "$TMP/assets.log" 2>&1 || { echo "FAIL build_assets"; echo "SMOKE_RESULT=FAIL"; exit 2; }
@@ -71,8 +73,12 @@ if [ "$ready" != "1" ]; then
 fi
 echo "dev ready: $BASE"
 
-SMOKE_BASE="$BASE" SMOKE_WEBHOOK_KEY="$KEY" node scripts/smoke.mjs
-rc=$?
+# smoke.mjs の結果の行は SMOKE_MAIN_RESULT に読み替えて流し、最後にお題の smoke（contract-T T-14 c）と合わせた SMOKE_RESULT を 1 行だけ出す
+SMOKE_BASE="$BASE" SMOKE_WEBHOOK_KEY="$KEY" node scripts/smoke.mjs | awk '{ sub(/^SMOKE_RESULT=/, "SMOKE_MAIN_RESULT="); print; fflush() }'
+main_rc=${PIPESTATUS[0]}
+SMOKE_BASE="$BASE" node scripts/smoke-topics.mjs
+topics_rc=$?
+if [ "$main_rc" -eq 0 ] && [ "$topics_rc" -eq 0 ]; then rc=0; echo "SMOKE_RESULT=PASS"; else rc=1; echo "SMOKE_RESULT=FAIL"; fi
 
 # dev ログに例外が無いこと（本文は出さず件数だけ）
 errs="$(grep -c 'fetch_error' "$TMP/dev.log" || true)"

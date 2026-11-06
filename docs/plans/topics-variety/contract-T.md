@@ -1,4 +1,4 @@
-# contract-T — お題のストック（工場 §T）v2.2
+# contract-T — お題のストック（工場 §T）v2.4
 
 2026-11-06。`CONTRACT-factory.md` §T の正本。§J の「『今日のお題』（`topics`）は本スライスに含めない」と §R-35 の「`topics` は別裁定へ」を、本書で裁定して置き換える。設計の要約は `design.md`。v1 への Astra high レビュー（REVISE。B1〜B7・M1〜M16）と v2 への 2 回目（REVISE。R1〜R10）への裁定は T-16。
 
@@ -47,7 +47,7 @@
 | `stances` | 2〜4 | 2〜4 | 2〜4 | 0 |
 | `next` | 必須。`make_steps` 3〜4 | 同左 | 同左 | null |
 | `make` | null | null | null | 必須。`steps` 3〜4。`category` は `tags.interests` に含まれる |
-| `sources` | 1〜6 | 0〜6 | 1〜6 | 0〜2 |
+| `sources` | 1〜6 | 0〜6 | 1〜6 | 0（make は事実・考えを持たないので、出典も持たない） |
 
 全種類に共通:
 
@@ -95,7 +95,7 @@ CREATE TABLE topics (
 CREATE INDEX idx_topics_status_kind ON topics(status, kind);
 CREATE INDEX idx_topics_lineage ON topics(lineage_id);
 CREATE UNIQUE INDEX uq_topics_live_refresh ON topics(parent_topic_id)
-  WHERE derive_kind = 'refresh' AND status IN ('draft','checking','ready');
+  WHERE derive_kind = 'refresh' AND status IN ('draft','checking','held','ready');
 ```
 
 `body_json`・`content_sha256`・`title`・`title_norm`・`kind`・`origin`・`slot_day`・`lineage_id`・`parent_topic_id`・`derive_kind`・`depth` は INSERT の後に書き換えない（これらの列を SET する UPDATE を書かない）。
@@ -269,7 +269,7 @@ cron の 1 tick で検査するお題は最大 `TOPIC_CHECK_PER_TICK` = 3 本（
 - 結果: `found`（`evidence = 'worker_fetch'`・`excerpt`）/ `not_found`（2xx で開けたが引用が無い）/ `fetch_failed`（2xx 以外・時間切れ・接続の失敗）/ `blocked`（規則違反・種類違い）。
 - 名前が社内の宛先に解決されるかどうかは見ない（Workers の `fetch` は公開のインターネットに出る。約束しない範囲）。
 
-**3. 支えているか・重いか**（呼び出し 1 回。ツールなし。再送なしと絶対の締め切り — `TOPIC_CHECK_TIMEOUT_MS` = 60 秒 — を渡す。`TOPIC_CHECK_MODEL`、既定は生成と同じ。`max_tokens` = 2000）: 入力はお題の本文と、`found` の出典の `excerpt`（user 文の別ブロック）。出力はクライアントツール `save_check` の強制呼び出し:
+**3. 支えているか・重いか**（呼び出し 1 回。ツールなし。再送なしと絶対の締め切り — `TOPIC_CHECK_TIMEOUT_MS` = 60 秒 — を渡す。`TOPIC_CHECK_MODEL`、既定は生成と同じ。`max_tokens` = 2000）: 入力はお題の本文と、`found` の出典の `excerpt`（user 文の別ブロック）。出力はクライアントツール `save_check`（`strict: true`）。今のモデルは `tool_choice` での強制ができない（公式。`CONTRACT-factory.md` §T の末尾）ので `auto` で渡し、呼ばれなかった時は T-7 の「応答が使えない」として扱う:
 
 ```
 { "sources": [{ "source_id", "support": "supported"|"unsupported"|"unclear" }],
@@ -355,9 +355,9 @@ system 文（verbatim）:
 
 ## T-8 出す（毎日の予定）とストック
 
-- **予定の確定**（費用なし。入・切が入の時だけ）: 対象の日 D について、`topic_plans` の INSERT と、その日の `topic_schedule` の INSERT 全部を 1 つの D1 batch で行う（batch は 1 つのトランザクション。`topic_plans` の主キーに当たれば全部が書かれない）。確定は 1 日に 1 回だけで、確定の後に出せるようになったお題はその日の予定に入らない（次の日以降の候補）。
+- **予定の確定**（費用なし。入・切が入の時だけ。工場全体の一時停止 `paused` は、費用のかかる呼び出しだけを止め、予定の確定と配信は止めない）: 対象の日 D について、`topic_plans` の INSERT と、その日の `topic_schedule` の INSERT 全部を 1 つの D1 batch で行う（batch は 1 つのトランザクション。`topic_plans` の主キーに当たれば全部が書かれない）。確定は 1 日に 1 回だけで、確定の後に出せるようになったお題はその日の予定に入らない（次の日以降の候補）。
   - 翌日の分: Asia/Tokyo の 18:00 以降の tick で、`topic_plans` に翌日の行が無ければ作る。
-  - 当日の分: `topic_plans` に当日の行が無ければ、時刻に関係なく作る（初回の deploy の日・前日の tick が全部落ちた日のため）。
+  - 当日の分: `topic_plans` に当日の行が無く、出せるお題（`ready`）が 1 本以上ある時に、時刻に関係なく作る（初回の deploy の日・前日の tick が全部落ちた日のため。出せるお題がまだ 1 本も無いうちに空の予定を確定しない）。
 - 枠: `news` 2 / `talk` 1 / `philo` 1 / `make` 3（定数 `TOPIC_SLOTS`）。
 - 選び方（種類ごと・決定論の純関数 `pickForDay(candidates, history, D)`）: 候補 = その種類の `ready` で、`evergreen = 1` または `fresh_until >= D`。同じ系譜（`lineage_id`）が `D − 30` 以上 `D − 1` 以下の予定にあるものを除く。系譜ごとに 1 本だけ残す（`depth` が大きい方、同じなら新しい方）。並びは (1) `slot_day = D` (2) まだ一度も出していない (3) 最後に出した日が古い (4) `starred` (5) id。上から枠の数だけ。足りなければ足りないまま。種類をまたいで同じ系譜が重なった時は、後の種類の候補から外す（`UNIQUE (day, lineage_id)` に当てない）。
 - 翌日と当日の確定が同じ tick で重なることはあるが、1 つの tick の中で順に行う（当日 → 翌日）。別々の tick が同時に別の日を確定した時に、30 日の規則が 1 日ぶん破れることは約束の外（起きるのは cron が重なって走った時だけ）。
@@ -376,8 +376,8 @@ system 文（verbatim）:
 どちらも「親を入力にして子を 1 本作る run」（`purpose = 'derive'`）。子は新しい行で、`parent_topic_id`・`derive_kind`・`lineage_id`（親と同じ）・`depth = 親 + 1`・新しい id を持ち、T-5 の検査を最初から通る。親子の向きは「先にある行 → 後から作る行」だけなので、輪にならない。
 
 - 親にできるもの（run を取る batch の 1 文目 — 取り置きの INSERT — の WHERE に書く。下の子の数・週の上限も同じ）: `depth < 5` かつ、見直しは `status = 'ready'` か `status = 'held' AND hold_reason IN ('source_lost','source_unreachable')`、発展は `status = 'ready'`。
-- 見直す（refresh）: 前提・事実・出典を今に合わせ、問いの筋と種類は変えない。子が ready になった時、同じ batch で親を引退させる（`UPDATE … SET status = 'retired' WHERE id = <親> AND status IN ('ready','held')` + 記録 `auto_retire`）。親が既に `retired`・`rejected` だった時は何も変わらず、子はそのまま ready になる。見直しの子は親と題が同じでもよい（T-3 の gate と T-5 の重複は、自分の親を比べる相手から除く）。1 つの親に、draft・checking・ready の見直しの子は 1 つまで（索引）。held・rejected の子は数えない（次の見直しを作れる）。
-  - 自動の候補: `hold_reason IN ('source_lost','source_unreachable')` の held / `evergreen = 1` の ready で `created_at` から `TOPIC_REFRESH_DAYS`（180）日を過ぎたもの。どちらも、生きている見直しの子が無いもの。
+- 見直す（refresh）: 前提・事実・出典を今に合わせ、問いの筋と種類は変えない。子が ready になった時、同じ batch で親を引退させる（`UPDATE … SET status = 'retired' WHERE id = <親> AND status IN ('ready','held')` + 記録 `auto_retire`）。親が既に `retired`・`rejected` だった時は何も変わらず、子はそのまま ready になる。見直しの子は親と題が同じでもよい（T-3 の gate と T-5 の重複は、自分の親を比べる相手から除く）。1 つの親に、終わっていない見直しの子（draft・checking・held・ready）は 1 つまで（索引）。見直しの子が held で止まっている間は、次の見直しを作れない。作るには、止まっている子を「出さない」（reject）にする（または、やり直し・承認で先へ進める）。rejected・retired の子は数えない。
+  - 自動の候補: `hold_reason IN ('source_lost','source_unreachable')` の held / `evergreen = 1` の ready で `created_at` から `TOPIC_REFRESH_DAYS`（180）日を過ぎたもの。どちらも、終わっていない見直しの子が無いもの。
 - 発展させる（extend）: 次の問い・別の角度・別の種類を作る。子の種類は生成の時に `talk` / `philo` / `make` から選ばせる（`news` の子は保存しない）。親は残る。
   - 自動の候補: `starred = 1` の ready、または `news` の ready で `fresh_until` が今日 + 2 日以内のもの。発展の子（状態を問わない）を 2 つ持つ親は候補から外す（取り置きの INSERT の WHERE にも書く）。
 - 自動の派生は週に `TOPIC_DERIVE_PER_WEEK` 回まで: 取り置きの INSERT の WHERE に `(SELECT COUNT(*) FROM topic_runs WHERE purpose = 'derive' AND trigger = 'cron' AND week = ?) < 上限` を書く（週は月曜始まり・Asia/Tokyo）。手動は数えない。派生の run は種類（refresh / extend）ごとに同時に 1 つ（`uq_topic_runs_calling`）なので、数えてから入れるまでの間に同じ種類の別の run は入らない。refresh と extend が同時に最後の 1 枠を取って上限を 1 超えることは、cron が重なって走った時だけ起きうる（約束の外）。
@@ -391,7 +391,7 @@ system 文（verbatim）:
 | ルート | 中身 |
 |---|---|
 | `GET /api/topics/meta` | 種類の名前・枠の数・理由コードの表示名・入・切 |
-| `GET /api/topics?status=&kind=&limit=&before=` | 一覧（本文なし）。`limit` 1〜100 |
+| `GET /api/topics?status=&kind=&limit=&before=` | 一覧（本文なし）。`limit` 1〜100。並びは `created_at` の新しい順・同じ時刻は `id` の順。`before` は「作成時刻と id の組」を表す文字列（応答の `next_before` をそのまま渡す）で、同じ時刻のお題がページの境目で抜けない |
 | `GET /api/topics/:id` | 本文・出典の結果・検査の記録・決定の記録・系譜（同じ `lineage_id` の全部を `depth` 順に） |
 | `POST /api/topics/:id/decide` | `{ decision, content_sha256, read_all?, note? }`。`decision` は `approve` / `reject` / `retire` / `star` / `unstar` / `recheck`。条件は T-3。sha 違い・状態違いは 409。`note` は 200 字まで |
 | `POST /api/topics/:id/derive` | T-9 |
@@ -405,7 +405,7 @@ system 文（verbatim）:
 
 ## T-11 管理画面
 
-- 新しいファイル `public/admin/topics.js`・`topics.css`。`index.html` では `topics.js` を `admin.js` より前に読み込む。`topics.js` は `window.FactoryTopics = { mount(view, ctx) }` を置くだけで、自分ではルーティングしない。`admin.js` に足すのは、ナビの 1 項目「お題の棚」と、ルート `#/topics` で `FactoryTopics.mount(共有の view 要素, { api, h })` を呼ぶ数行だけ（既存の行を書き換えない。`api`・`h` は `admin.js` に既にある取得と要素作りの関数を渡す）。`topics.js` は、通信から戻った時に今の hash が `#/topics` で始まらなければ描かない。
+- 新しいファイル `public/admin/topics.js`・`topics.css`。`index.html` では `topics.js` を `admin.js` より前に読み込む。`topics.js` は `window.FactoryTopics = { mount(view, ctx) }` を置くだけで、自分ではルーティングしない。`admin.js` に足すのは、ナビの 1 項目「お題の棚」と、ルート `#/topics` で `FactoryTopics.mount(共有の view 要素, { api, toast, confirm })` を呼ぶ数行だけ（既存の行を書き換えない。`admin.js` に既にある取得・トースト・確認ダイアログの関数を渡す。要素を作る関数は `topics.js` の中に持つ）。`topics.js` は、通信から戻った時に今の hash が `#/topics` で始まらなければ描かない。
 - 画面 `#/topics` は 4 つのタブ:
   1. 今日と明日: 種類ごとの枠。`empty` は赤で「空き」、`stopped` は「止めた」。
   2. 要確認: held を 3 つに分けて出す — 重い話題 / 気になる点（flags）/ 出典。重い話題と気になる点は、全文（事実・考え・問い・出典と抜き書き）を開いた状態で出し、重い話題はチェック「全文を読んだ」を入れるまで「出せるにする」を押せない。出典の held には「出せるにする」を出さず、「検査をやり直す」「見直す」「出さない」を出す。
@@ -493,4 +493,28 @@ d. 本物の呼び出しは、deploy 後にふじさんが入にしてから、�
 | R10 `recheck_tried_at` の NULL | NULL を対象に含める |
 
 3 回目（v2.1 への Astra high。R1〜R5・R7・R8・R10 は閉じた判定。残り 4 件）への裁定: 完了の batch の受け皿にも P を付けた / 決定の記録と親の引退は「この batch の 1 が書けた印（`done_token`）」を条件にした / 判定の重さを「保存済みと今回の重い方」に決めた / 0 本の時の台帳を確定額に統一した。
+
+実装の報告への裁定（v2.3）: 検査・生成の出力は `tool_choice: auto` + `strict`（強制は今のモデルで 400）/ make の `sources` は 0 / 当日の予定は、出せるお題が 1 本以上ある時に確定する / 引用に `<`・`>`・`&` があれば形の検査で不合格（`quote_markup`）・正規化した後の引用が 20 字未満なら探さずに `not_found`。
+
+実装のレビュー（Astra high ×2。どちらも BLOCKING なし・REVISE）への裁定（v2.4）:
+
+契約を改めた（上の本文に反映済み）:
+- 見直しの子: 1 つの親に、終わっていない子（draft・checking・held・ready）は 1 つまで。held の子が次を塞ぐ（止まっている子を reject してから次を作る）。これで「held の兄弟と題がぶつかる」「兄弟がいる時の承認・やり直しが 500」「保存の時に一意制約で run が calling のまま残る」が起きる組み合わせ自体をなくす。
+- 一覧の続きは「作成時刻と id の組」/ 予定の確定と配信は一時停止でも止めない / 管理画面に渡すのは `{ api, toast, confirm }`。
+
+直す（実装）:
+1. 出典の本文の取り出し（`htmlToText`）: 正規表現をやめ、先頭から 1 回で読む状態つきの走査にする（入力の長さに比例する時間）。属性の値の中の `>`・閉じていないコメント・閉じていないタグ・`<script>`・`<style>` の中身は本文に入れない（閉じていない時は、そこから終わりまでを本文に入れない）。文字参照は、数値の参照と、よく使う名前つきの参照（`amp` `lt` `gt` `quot` `apos` `nbsp` `copy` `reg` `trade` `hellip` `mdash` `ndash` `lsquo` `rsquo` `ldquo` `rdquo` `yen` `middot` `times` `deg`）を戻す。生成の応答の web_fetch の結果からの照合も同じ関数を通す。
+2. 見直しの子の規則（上の契約の変更）: migration 0005 の索引 / 派生の取り置きの条件 / 自動の候補 / 管理画面の「見直す」を出す条件と、止まっている子がある時の文。
+3. 一覧の続きの組（サーバーと管理画面）。管理画面のストックと要確認に「もっと読む」。
+4. 予定の確定と配信は `topics_enabled` だけを見る（`paused` では止めない）。
+5. 生成の `save_topics` に `strict: true`（公式の strict の制限で schema がそのままでは通らない時は、通る形に schema を直す。直せない項目がある時だけ、その項目と理由を `CONTRACT-factory.md` §T の末尾に書いて strict を付けない）。
+6. `UPDATE topics` の SQL は、WHERE を別の変数に分けず、1 つの文字列として書く（T-14 b2 の走査が読めるように）。走査のテストに、WHERE を分けた形を違反として見つける対照を足す。
+7. お題の呼び出しの前に、締め切りまでの残りが 5 秒未満なら呼ばない（取り置きもしない。次の tick に回す）。
+8. RSS の見出し: 日付が今より 1 日を超えて先のものは捨てる。
+9. 管理画面: 詳細の取得と操作が重なった時、古い取得の結果で行を描き直さない（行ごとの世代）/ 通信中は、その行の入力（チェック・入力欄・ボタン）を全部 disabled にする / 一言（note）の字数は、入力欄・検査・送る値をコードポイントで同じに数え、勝手に短くしない。
+10. テスト: 予定の batch の途中の失敗（`now` を渡し、2 行目の一意制約で落ちて 1 行も残らないこと）/ 禁止語と flags の両方がある held の承認が 400 / 検査を取った直後・呼ぶ前に落ちた時の台帳 1 行（取り置き額）と外部 0 回 / 全体の日次に検証の飛行中の取り置きを入れた「ちょうど」と「1 セント超え」。
+
+文書だけ直す: `last_run` は「最後に実際に呼んだ run」（`skipped` を除く）と `api-notes.md` に明記。
+
+今回は直さない（前からある・別の変更で扱う）: 管理 API の本文の大きさの制限が読み終わった後の検査になっている（`src/http.ts`）/ `src/anthropic.ts` の締め切りの下限 1 秒（お題の側は上の 7 で避ける）/ 使わなくなった fake のルート `/__fake/topics-replan` は、この修正で消す（`src/fake/anthropic.ts` の呼び出しも）。
 
