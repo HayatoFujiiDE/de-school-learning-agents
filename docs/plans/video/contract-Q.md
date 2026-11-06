@@ -448,3 +448,7 @@ i. **止める意図は、数そのものに残す**（Astra high R2 の指摘�
    - 受け入れの追加: 値が 41 で job が running のまま（片付けの途中で落ちた形）・session が terminated の時、次の reconcile が ingest せずに failed（`too_many_youtube_info`）にする。値が 40 の job は、41 件目の依頼が来るまで止まらない。settings の行が無い job（道具を使っていない）は、入口で止まらない。
 
 凍結（Q-13）: 2026-11-06（Astra high R3 GO）。
+
+Q-13 実装レビュー後の追記（2026-11-06・Astra high GO の non-blocking）:
+- 裁定 a の「待ちが変われば前の待ちの id は消える」は、次に `youtube_info` を処理する時（`info_event_ids` を書き直す時）と、ingest で state が置き換わる時に起きる。次の待ちに `youtube_info` が無い間は、前の id が state に残る。分類は毎回「今の idle の event_ids との共通部分」だけを使うので、残った id が deny・送り直しに影響することは無い（実装のまま。直さない）。
+- state の保存の DB 例外・lease を失った場合は、テストで直接は注入していない（失敗の表のこの 2 行は、既存の `writeState` の扱いに依る）。
