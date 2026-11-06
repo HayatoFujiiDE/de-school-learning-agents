@@ -14,7 +14,12 @@ window.DES = window.DES || {};
   function has(text, w) { return text.indexOf(w) >= 0; }
 
   TK.messages = function () { return (DES.data.talk || []).concat(S().talk || []); };
-  TK.push = function (m) { S().talk = (S().talk || []).concat([m]); };
+  // 会話の唯一の追加口。サポーターが入っている間は 本人の発言・記録行に by を付ける（contract-AD §18-1。supporter は送る側が付ける・buddy は付けない）
+  TK.push = function (m) {
+    var by = DES.sup && DES.sup.byNow ? DES.sup.byNow() : null;
+    if (by && !m.by && (m.who === 'child' || m.who === 'record')) m.by = by;
+    S().talk = (S().talk || []).concat([m]);
+  };
   // 表 → 会話の記録（1 行）。コミットは呼び出し側
   TK.record = function (text) { TK.push({ id: DES.plan.newId('t'), time: DES.data.now, who: 'record', text: text }); };
 
@@ -68,6 +73,16 @@ window.DES = window.DES || {};
     if (!ta || ui().sending) return;
     var text = ta.value;
     if (!text.replace(/\s/g, '')) return;
+    // 入っている間の入力のしかた（contract-AD §AD-6）: {sup}として話す / アイデアを出す は バディの返事の規則を通さない
+    var stance = DES.sup && DES.sup.isJoined() ? DES.sup.stance() : 'proxy';
+    if (stance === 'voice' || stance === 'idea') {
+      ta.value = '';
+      S().draft = { text: '', scroll: S().draft.scroll || 0 };
+      if (stance === 'voice') DES.sup.voice(text); else DES.sup.postIdea(text);
+      TK.syncSend();
+      TK.keepComposerInView();
+      return;
+    }
     ui().sending = true;
     ta.value = '';
     DES.app.change(function () {
@@ -151,22 +166,86 @@ window.DES = window.DES || {};
     else kids.push(H('div', { class: 'actions' }, [DES.plan.btn(T('keep_tomorrow'), 'keep-tomorrow', { id: m.keep })]));
     return H('div', { class: 'proposal-card', 'data-fk': 'keep:' + m.id, tabindex: '-1' }, kids);
   }
+  // ---------- サポーター（contract-AD §AD-6） ----------
+  function supName(by) { return DES.sup ? (by ? DES.sup.nameOf(by) : DES.sup.supName()) : ''; }
+  function recChip(text) { return DES.plan.srcChip('record', text); }
+  // アイデアカード（サポーターの bubble の下）。sup.ideas の状態を、行・活動の今の状態に追従して出す
+  function ideaCard(m) {
+    var v = DES.sup ? DES.sup.ideaView(m.idea) : null;
+    if (!v) return null;
+    var P = DES.plan, id = v.idea.id, name = supName(m.by), head = [recChip(T('idea_label', { sup: name }))], kids, status = null, acts = [];
+    var canPlan = !!(v.idea.catalogId && P.item(v.idea.catalogId));
+    function makeBtn() { return P.btn(T('idea_make'), 'idea-make', { id: id, kls: 'orange' }); }
+    function planBtn() { return canPlan ? P.btn(T('idea_plan'), 'idea-plan', { id: id }) : null; }
+    if (v.state === 'open') acts = [makeBtn(), planBtn(), P.btn(T('idea_later'), 'idea-later', { id: id })];
+    else if (v.state === 'later') { status = T('idea_later_st'); acts = [makeBtn(), planBtn()]; }
+    else if (v.state === 'made') { status = T('idea_made_st'); acts = [P.btn(T('resume_make'), 'idea-open', { id: id, kls: 'orange' })]; }
+    else if (v.state === 'planned') {
+      var r = v.row;
+      if (r.gone === 'removed') { status = T('card_removed'); acts = [planBtn()]; }
+      else if (r.gone === 'finished') status = T('finished');
+      else status = T('in_plan') + ' ' + P.range(r.start, r.end);
+    } else if (v.state === 'withdrawn') status = T('idea_withdrawn', { sup: name });
+    if (DES.sup.isJoined() && DES.sup.canWithdraw(id)) head.push(H('button', { class: 'link-btn idea-withdraw', type: 'button', 'data-action': 'idea-withdraw', 'data-id': id }, DES.sup.t('withdraw')));
+    kids = [H('div', { class: 'pc-head' }, head)];
+    if (status) kids.push(H('div', { class: 'pc-status' }, status));
+    acts = acts.filter(Boolean);
+    if (acts.length) kids.push(H('div', { class: 'actions' }, acts));
+    return H('div', { class: 'proposal-card idea-card', 'data-fk': 'idea:' + id, tabindex: '-1' }, kids);
+  }
+  function supporterEl(m) {
+    var name = supName(m.by);
+    var body = H('div', { class: 'msg-body' }, [H('span', { class: 'sup-name' }, name), H('div', { class: 'bubble' }, m.text)]);
+    if (m.idea) { var c = ideaCard(m); if (c) body.appendChild(c); }
+    body.appendChild(H('span', { class: 'msg-time' }, m.time));
+    return H('div', { class: 'message supporter', 'data-id': m.id }, [H('span', { class: 'sup-avatar', role: 'img', 'aria-label': name }, name.charAt(0)), body]);
+  }
+  // 1 件の発言の要素（サポーター画面の「会話を全部見る」用。readOnly = カードのボタンを出さない）
+  TK.messageEl = function (m, o) {
+    var el = messageEl(m);
+    if (o && o.readOnly) Array.prototype.forEach.call(el.querySelectorAll('.actions, button'), function (n) { if (n.parentNode) n.parentNode.removeChild(n); });
+    return el;
+  };
   function messageEl(m) {
     if (m.who === 'record') {
       return H('div', { class: 'message record', 'data-id': m.id }, [
         DES.plan.srcChip('record', T('record_label')),
+        m.by ? recChip(T('by_with', { sup: supName(m.by) })) : null,
         H('span', { class: 'msg-time' }, m.time),
         H('span', { class: 'rec-text' }, m.text)
       ]);
     }
+    if (m.who === 'supporter') return supporterEl(m);
     var body = H('div', { class: 'msg-body' }, [H('div', { class: 'bubble' }, m.text)]);
     if (m.proposal) { var c = proposalCard(m); if (c) body.appendChild(c); }
     if (m.keep) { var k = keepCard(m); if (k) body.appendChild(k); }
+    if (m.who === 'child' && m.by) body.appendChild(recChip(T('by_typed', { sup: supName(m.by) })));
     body.appendChild(H('span', { class: 'msg-time' }, m.time));
     if (m.who === 'buddy') return H('div', { class: 'message buddy', 'data-id': m.id }, [DES.raw(DES.buddy(30, 'neutral')), body]);
     return H('div', { class: 'message user', 'data-id': m.id }, [body]);
   }
 
+  // 入っている間だけ、textarea の上に 入力のしかた 3 つ（contract-AD §AD-6）。切り替えは aria-pressed と placeholder だけ差し替える（18-9）
+  function joined() { return !!(DES.sup && DES.sup.isJoined()); }
+  function composerPh() { return joined() ? DES.sup.t('ph_' + DES.sup.stance()) : T('composer_ph'); }
+  function stanceEl() {
+    if (!joined()) return null;
+    var cur = DES.sup.stance();
+    return H('div', { class: 'segmented stance', role: 'group', 'aria-label': DES.sup.t('stance_label') }, ['proxy', 'voice', 'idea'].map(function (s) {
+      return H('button', { type: 'button', class: s === cur ? 'active' : '', 'aria-pressed': s === cur ? 'true' : 'false', 'data-action': 'sup-stance', 'data-arg': s }, DES.sup.t('stance_' + s));
+    }));
+  }
+  TK.syncStance = function () {
+    var ta = document.getElementById('composer');
+    if (!ta || !joined()) return;
+    var cur = DES.sup.stance();
+    ta.placeholder = composerPh();
+    Array.prototype.forEach.call(document.querySelectorAll('.segmented.stance button'), function (b) {
+      var on = b.getAttribute('data-arg') === cur;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  };
   // content を作り直すのは route / mode が変わった時だけ（composer の入力とフォーカスを保つ）
   TK.renderPage = function (content, rebuild) {
     var st = S();
@@ -178,8 +257,9 @@ window.DES = window.DES || {};
         H('div', { class: 'message-list', id: 'message-list' }),
         H('div', { class: 'chat-bridge' }, [H('p', null, T('bridge')), H('a', { class: 'btn', href: '#make', 'data-action': 'bridge-make' }, T('make'))]),
         H('div', { class: 'composer' }, [
+          stanceEl(),
           H('label', { class: 'sr-only', for: 'composer' }, T('composer_label')),
-          H('textarea', { id: 'composer', rows: '3', placeholder: T('composer_ph'), 'data-ui': 'composer', value: draft }),
+          H('textarea', { id: 'composer', rows: '3', placeholder: composerPh(), 'data-ui': 'composer', value: draft }),
           H('div', { class: 'composer-bottom' }, [
             H('div', { class: 'composer-tools' }, [
               H('button', { class: 'btn ghost small', type: 'button', 'data-action': 'media' }, [icon('camera'), H('span', null, T('photo'))]),
