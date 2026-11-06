@@ -1,0 +1,643 @@
+{
+ "decision": {
+  "code_parity_claim": "一部だけ確かめられた。「範囲のはっきりしたコード作業なら Sonnet と Opus はほぼ同等」はベンチで裏づけがある。Terminal-Bench 4.0 は Sonnet 70.6% 対 Opus 66.4% で誤差の範囲、FrontierSWE v2 は 61.9 対 62.3、CursorBench は max 同士で 55.5 対 57.8、FrontierCode は Sonnet xhigh 52.1 対 Opus 54.4。ただし同等なのは Sonnet を xhigh〜max で動かした時だけで、その時は 1 タスクあたりの費用も Opus とほぼ同じになる（AA 実測 $10.02 対 $10.04。公式も \"At higher settings, it can perform comparably at a similar cost\" と書いている）。一方、複数ファイルにまたがる大きな修正（SWE-bench Pro 89.9 対 81.3 で Opus が +8.6）、長い文脈（ProgramBench +11.5）、画面を見ながらの修正（SWE-bench Multimodal +7.1）、何段階も続く自律作業（Design Arena Agentic +171 Elo）では Opus がはっきり上。「Opus と同等」という書き方の文言は Anthropic 公式には無い。",
+  "routing": [
+   {
+    "task": "職人の下書き（draft。1 session で本文・SVG・app.html・出典・selfcheck をまとめて作る）",
+    "model": "根拠不足 — 試験で決める（それまでは Sonnet 5.5 high のまま）",
+    "evidence": "作業の中身によって有利なモデルが逆になる。【Sonnet でもほぼ同じ】HTML/JS の単発生成。LMArena WebDev は Sonnet xHigh 1770（3位）対 Opus Max 1810（+40、信頼区間は重ならない）。Design Arena Frontend Web App は +25。【Opus がはっきり上】日本語の文章は Arena 日本語 +70（約200票で区間がわずかに重なる）、創作文 +52、指示追従 +36。事実の正確さは AA-Omniscience +18。何段階も続く自律作業は Design Arena Agentic +171。【effort】Sonnet は high と xhigh で差が大きい（CursorBench は high 47.8、xhigh 53.1、max 55.5）。子ども向けのやさしい日本語を測った公開ベンチは無い。",
+    "cost_effect": "今の実測は Sonnet high で 1 本 $6.17。Opus にした場合、単価は 2 倍だが AA の max 計測では Opus の出力トークンが約 0.6 倍だったので、$6〜12 程度と見込む（未実測）。下書きが良くなって作り直し（Opus で 1 回 $4.58〜16）が 1 回でも減れば、注文 1 本の合計は安くなりうる。判断の物差しは下書き単価ではなく『承認までの合計費用』。",
+    "risk_and_watch": "Sonnet のままにすると、日本語本文と多段階作業の質が作り直しの多さとして出ている可能性がある。ただし 5 回作り直した原因はまだ切り分けていない。見るもの: 注文ごとの作り直し回数、初回の承認率、差し戻し理由の種類（本文・事実・コード・図）、検証係の『矛盾・未確認』の件数、app.html の selfcheck 失敗数。effort を medium へ下げるのは禁止（CursorBench 39.2）。"
+   },
+   {
+    "task": "作り直し（rework。人の差し戻しも auto_return も）",
+    "model": "条件つき（試験で確かめてから）。差し戻し理由がコード・SVG・app.html の局所修正だけなら Sonnet 5.5 xhigh 候補、本文・事実・見た目・複数ファイルにまたがる理由なら Opus 5.5 のまま。今の構成は 1 session = 1 モデルなので、理由ごとに分けるには triage の理由分類でモデルを選ぶ改修が要る。",
+    "evidence": "作り直しは『関係する所だけ直す』作業。範囲の決まった修正では差が小さい: FrontierCode（範囲外の変更は減点）は Sonnet xhigh 52.1 対 Opus 54.4、CursorBench は max 同士で -2.3、Terminal-Bench は Sonnet が上。一方、複数ファイルの大きな差分（SWE-bench Pro +8.6）、画面・デザインを見ながらの修正（SWE-bench Multimodal +7.1）、日本語の文章（Arena 日本語 +70、指示追従 +36）、毎回成功する安定性（Toolathlon Pass³ +3.7）は Opus が上。Sonnet は max にすると範囲外の編集が増えた例がある（FrontierCode 脚注。Claude Code の code-review skill が原因で、Managed Agents に同じことが起きるかは未確認）ので、max ではなく xhigh にする。",
+    "cost_effect": "Opus の実測は 1 回 $4.58（1 件のみ）。Sonnet にすると単価は半分だが、AA の max 計測では出力トークンが約 1.65 倍で、費用差はほぼ消えた。期待できる節約は 1 回あたり $0〜2.3 で幅が大きく、実測で決める。作り直しの回数が減らなければ、モデルを替えても費用の問題は解けない。",
+    "risk_and_watch": "docs/plans/retro/contract-S.md:8 に『制作のモデルを下げる、は禁止の方向』とあり、Opus から Sonnet へ下げるのはオーナー方針に触れる。変えるならオーナーの判断が要る。モデル id は 4 か所（jobs.ts:366 の直書き、env.ts:180 JOB_MODEL.rework、material-maker.md と claude-lock、CONTRACT-factory.md:429-446）を揃える。見るもの: 同じ理由での再差し戻し率、差し戻し理由の解消率、変えていないファイルへの差分の量（範囲外の編集）、作り直し 1 回の費用。"
+   },
+   {
+    "task": "検証係（verify。Opus、Batch）",
+    "model": "Opus 5.5 のまま",
+    "evidence": "事実の正確さと幻覚の少なさは AA-Omniscience Net Score で Opus 48 対 Sonnet 30（+18。第三者の評価）。ツールなしの推論は HLE で +7.5（自己申告）、HLE-Diamond で +15（AA）。図を読む力は Chartography ツールなしで +2.8。どれも検証係の仕事に直結し、差も大きい。オーナーの決定（CONTRACT-factory.md:789）とも一致する。",
+    "cost_effect": "実測は 1 回 35〜36¢（動画の 10¢ を含む）。Sonnet にしても節約は 1 回あたり最大 13¢ 程度で、ほぼ効果がない。",
+    "risk_and_watch": "検証係は質を守る最後の砦なので、ここを下げると下書き・作り直しを Sonnet にする前提そのものが崩れる。見るもの: 検証係の判定と人の承認判断が食い違う率（下書きの A/B を評価する時の物差しにもなる）。"
+   },
+   {
+    "task": "お題の生成（topics gen）",
+    "model": "Sonnet 5.5 のまま",
+    "evidence": "日本語の文章（Arena 日本語 +70）と事実の正確さ（Omniscience +18）は Opus が上。ただしお題には後段に『検査（引用が主張を支えるか）』と Worker 自身による web_fetch があり、事実の誤りはそこで止められる。知識労働の成果物は GDPval-AA で 1844 対 1846 とほぼ同じ。",
+    "cost_effect": "実測は 1 回 13〜18¢。Opus にすると約 2 倍（+13〜18¢）。金額は小さいが、変えても得るものの根拠が弱い。",
+    "risk_and_watch": "見るもの: 検査での unsupported / unclear の率、形の検査で捨てられる率（18¢ 全部を捨てた例あり）、人がお題を却下する率。これが高ければ Opus との A/B に回す。"
+   },
+   {
+    "task": "お題の検査（topics check。引用が主張を支えるか、重い話題か）",
+    "model": "根拠不足 — 試験で決める（それまでは Sonnet 5.5 のまま）",
+    "evidence": "文書を根拠にした判断は OfficeQA で Opus が約 +2（76.9 対 78.9）と近い。ただしこの検査は『緑なら自動公開』の門番で、重い話題かどうかを判断する力を測ったベンチは無い。事実と幻覚の Omniscience は Opus +18。",
+    "cost_effect": "実測 0〜3¢、取り置き 15¢。Opus にしても 1 回 +3¢ 程度で、費用面の理由ではどちらとも決まらない。",
+    "risk_and_watch": "検査の見落としは、そのまま公開事故になる。見るもの: 自動公開されたお題のうち人が後で取り下げた率、supported と判定したのに引用が主張を支えていなかった件数。"
+   },
+   {
+    "task": "エージェント会議（meeting。月 2 回、Batch）",
+    "model": "Sonnet 5.5 のまま",
+    "evidence": "知識労働と企画に近い GDPval-AA は 1844 対 1846、AA-Briefcase は 1811 対 1822（独立評価では 1813 対 1800 で Sonnet が上）で同等。",
+    "cost_effect": "月の上限 $10。変更しないので費用は変わらない。",
+    "risk_and_watch": "提案がオーナーにどれだけ採用されたか（採用率）を見るだけで十分。"
+   },
+   {
+    "task": "振り返り係・改善係（retro。注文ごと、Batch）",
+    "model": "Sonnet 5.5 のまま",
+    "evidence": "数字の分析と提案。OfficeQA（文書からの数値推論）は約 -2 で近く、GDPval も同等。入力は数字と列挙値だけで、日本語の文章の質は問われない。",
+    "cost_effect": "1 件 2¢ 未満。変更しない。",
+    "risk_and_watch": "tips を自動で反映しているので、反映後に費用は下がったが質が落ちていないかを確かめる（contract-S.md:8 の『質を下げる工夫は入れない』）。"
+   },
+   {
+    "task": "収集部隊の仕分け（scout）・動画の記録（Gemini）・画像の生成（gpt-image）",
+    "model": "変更なし（今回の比較の対象外）",
+    "evidence": "確かめたベンチは Sonnet 5.5 と Opus 5.5 の比較だけで、Haiku・Gemini・gpt-image の数字は無い。",
+    "cost_effect": "変化なし",
+    "risk_and_watch": "対象外"
+   }
+  ],
+  "experiments": [
+   "【A/B 1：下書きのモデル（いちばん効果が大きい）】過去に作り直しが多かった注文から、型3と型4を混ぜて 6 本選ぶ。同じ注文書（brief）で、A=Sonnet 5.5 high（今の設定）、B=Opus 5.5 high の下書きを 1 本ずつ作る。評価は見た目でどちらか分からない状態で、オーナーか検証係が行う。測るもの: (1) 初回の承認か差し戻しか、(2) 差し戻し理由の数と種類（本文・事実・コード・図）、(3) 検証係の『矛盾・未確認』の件数、(4) app.html の selfcheck 結果、(5) 下書き費用。作り直しはどちらの側も最大 1 回までにして、『承認までの合計費用』を比べる。費用の上限は 6 本 × 2 方式 × (下書き $8 + 作り直し $10) = $216 で打ち切る。判断の基準: B の作り直しが 1 本あたり 1 回以上少なく、合計費用が A 以下なら、下書きを Opus にする。",
+   "【A/B 2：作り直しのモデルを差し戻し理由ごとに】同じ前の版と同じ差し戻し理由を、A=Opus 5.5 high、B=Sonnet 5.5 xhigh の両方に渡す。理由を『コード・SVG・app.html だけ』と『本文・事実・見た目を含む』に分け、それぞれ 4 件、合計 8 件 × 2 方式で行う。測るもの: 理由が解消されたか（人が判定）、変えていないファイルへの差分の量（範囲外の編集）、検証係の判定、費用。上限は 16 回 × $10 = $160。判断の基準: コードだけの理由で B の解消率が A と同じで、費用が明らかに安い時だけ、理由ごとにモデルを分ける改修を検討する（contract-S.md:8 との関係はオーナーが判断する）。",
+   "【A/B 3：お題の検査】D1 に保存されている過去の検査の入力（お題と取得済みの引用）を 40 件、Batch で Sonnet と Opus の両方に再判定させる。判定が食い違った件だけ人が正解を決め、どちらの誤りが『自動公開してはいけないものを通した』側かを数える。費用は数十セント。Opus の方が通してはいけないものを確実に減らすなら、+3¢/回で切り替える。",
+   "【前提として先に記録を整える】『同じ教材を 5 回作り直した』原因はまだ切り分けていない。候補は、モデルの質、差し戻し理由が職人に伝わっていない、注文の要件が曖昧、など。A/B を始める前に、注文ごとの作り直し回数・理由の種類・各回の費用を retro の D1 から並べて見られるようにする。原因がモデル以外なら、モデルを替えても費用は下がらない。"
+  ],
+  "caveats": [
+   "ベンチのほとんどは英語中心で、Anthropic の自己申告（max effort、5試行平均）。第三者が実行したのは FrontierCode、CursorBench、FrontierSWE、GDPval-AA と Briefcase、AutomationBench、AA と Arena の各評価。子ども向けのやさしい日本語の評価と、日本語単独のベンチ（Nejumi・Swallow・JMMLU）には、5.5 世代の値が無い。",
+   "effort の条件がそろっていない比較が多い（Arena は Opus High/Max 対 Sonnet xHigh、Terminal-Bench は Opus xhigh 対 Sonnet max など）。Sonnet の高いスコアは多くが xhigh か max の値で、今の下書き設定 high での値ではない。",
+   "FrontierCode で Sonnet が max で点を落とした件は Claude Code の code-review skill が原因で、工場の Managed Agents で同じことが起きるかは確かめていない。",
+   "費用の実測は少ない。作り直しは $4.58 の 1 件、下書きは $6.17 の 1 件だけ。同じ注文を Sonnet と Opus の両方で作って比べた値は無い。AA の 1 タスク費用（$10.02 対 $10.04）は max effort での値。二次記事にある $7.60 対 $5.98 は確かめていないので使っていない。『Opus の既定 effort は medium』も一次情報では確かめていない。",
+   "contract-S.md:8 にある『制作のモデルを下げる』は禁止の方向、という方針があるので、作り直しを Opus から Sonnet へ下げる判断はオーナーが決める。",
+   "今の構成では、モデルを session 単位でしか選べない。下書きの中で『本文は Opus、app.html は Sonnet』のように分けるには、session を分ける設計変更が必要になる。"
+  ]
+ },
+ "pricing": [
+  "いずれも公式 docs の値で、単位は 100万トークンあたり。【Sonnet 5.5】入力 $2 / 出力 $10。キャッシュ書き込みは 5分 $2.50、1時間 $4。キャッシュ読み出し $0.10（入力の 0.05倍）。Batch は $1 / $5。【Opus 5.5】入力 $4 / 出力 $20。キャッシュ書き込みは 5分 $5、1時間 $8。キャッシュ読み出し $0.20。Batch は $2 / $10。Fast mode は $8 / $40 で、最大 2.5倍速、Opus のみ。【共通】単価は Sonnet が Opus のちょうど半額。1M コンテキスト全域が標準価格で、長文脈の割増はない（Haiku 5.5 は除く）。inference_geo で US 限定にすると 1.1倍。【注意】1タスクあたりの費用は effort で大きく変わる。公式は「Sonnet を高い effort で動かすと、Opus と同等の性能に近づく代わりに費用も同程度になる」と書いている（\\\"At higher settings, it can perform comparably at a similar cost.\\\"）。出典: https://platform.claude.com/docs/en/about-claude/pricing ・ https://platform.claude.com/docs/en/models/overview ・ https://www.anthropic.com/news/claude-sonnet-5-5 （取得 2026-11-07）",
+  "Anthropic公式発表（https://www.anthropic.com/news/claude-sonnet-5-5 、取得日2026-11-07）より、100万トークンあたりの価格: Sonnet 5.5は入力$2 / 出力$10 / キャッシュ書込$2.50 / キャッシュ読込$0.10。Opus 5.5は入力$4 / 出力$20 / キャッシュ書込$5 / キャッシュ読込$0.20。単価はちょうど半分。ただしArtificial Analysis（AA）の実測では1タスクあたりの費用が Sonnet 5.5（Max）$10.02 / Opus 5.5（Max）$10.04 で、ほぼ同額だった。Sonnetの出力トークンが 285k/タスク と、Opusの 173k/タスク の約1.65倍あるため（https://artificialanalysis.ai/models/comparisons/claude-opus-5-5-vs-claude-sonnet-5-5 、取得日2026-11-07）。Intelligence Index一式の実行費用は $7,981 対 $8,910。「Max effortで使うと単価半分の利点がほぼ消える」点が、費用対効果を考えるうえで最重要。",
+  "公式 platform.claude.com pricing（2026-11-07取得）: Claude Sonnet 5.5 は入力 $2/MTok・5分キャッシュ書き込み $2.50・1時間キャッシュ書き込み $4・キャッシュ読み $0.10・出力 $10。Claude Opus 5.5 は $4・$5・$8・$0.20・$20。Sonnet の単価は Opus のちょうど半分。"
+ ],
+ "notes": [
+  [
+   "【結論】「純粋なコードは Opus と同等」という書き方の文言は、Anthropic 公式には見つからない。近い公式の記述は次の3つ。(1) 発表ページ \"On several evaluations, Sonnet 5.5 at Max effort even performs comparably to Opus 5.5. However ... Opus 5.5 remains clearly stronger at complex, open-ended work requiring sustained judgment.\" (2) \"On CursorBench ... its best score is within about two points of Opus 5.5.\" (3) \"It complements Opus 5.5 best when running at lower effort settings, where it costs less per task. At higher settings, it can perform comparably at a similar cost.\" つまり、同等になるのは主に max か xhigh のときで、そのとき 1タスクあたりの費用も Opus と同程度になる、と公式自身が書いている。",
+   "【同等〜Sonnet 優位】Terminal-Bench 4.0（Sonnet 70.6 vs Opus 66.4。誤差の範囲内）、FrontierSWE v2（61.9 vs 62.3）、CursorBench（max 同士で -2.3）、FrontierCode（Sonnet の最高値 xhigh 52.1 vs Opus 54.4）、Toolathlon Pass@1（同点）、GDPval-AA（-2 Elo）、OSWorld partial（-1.7）、AutomationBench（Sonnet +2.2）、BenchCAD、Chartography のツールあり、HealthBench 系の QA。",
+   "【Opus との差が大きい】ProgramBench 長文脈コーディング（-11.5pt）、SWE-bench Pro（-8.6pt）、Humanity's Last Exam のツールなし推論（-7.5pt）、SWE-bench Multimodal（-7.1pt）、OSWorld strict（-5.2pt）、PhysicianBench（-5.2pt）、ArXivMath のツールなし（-4.4pt）、Toolathlon の安定性 Pass³（-3.7pt）、DeepSWE（-3.2pt）。傾向: 指示がはっきりした短中期の agentic 作業では横並び。大きな差分の修正、長文脈、ツールなしの深い推論、毎回成功する安定性では Opus が優位。",
+   "【effort 依存に注意】Sonnet の高スコアは多くが max effort の値。CursorBench は medium だと 39.2%（max は 55.5%、Opus medium は 52.5%）。FrontierCode は max だと 46.2% に落ちる（Claude Code の code-review skill がサブエージェントに分割し、タイムアウトや範囲外の編集を起こしたため）。Sonnet の既定 effort は API で high、Claude Code とアプリで Medium（発表ページ）。Opus 5.5 の既定は medium。",
+   "【公式に出ていないベンチ】SWE-bench Verified、GPQA（正答率のベンチとしては不在。controllability 実験の題材として名前が出るだけ）、ARC-AGI、MMMU、tau-bench / τ2-bench、BrowseComp、MMMLU は、Sonnet 5.5 の発表ページにも system card にも数値がない。system card のテキストを grep して 0件（同じファイルで SWE-Bench Pro にはヒットすることを確認済みなので、検索自体は機能している）。Opus 5.5 の system card にも SWE-bench Verified、ARC-AGI、MMMU、tau、BrowseComp の行はない。Anthropic の評価セットは SWE-bench Pro / Multilingual / Multimodal、FrontierCode、Terminal-Bench 4.0、CursorBench などに入れ替わっている。多言語 MMLU の代わりは GMMLU と MILU。",
+   "【比較対象の世代】ここに挙げた数値はすべて Sonnet 5.5 と Opus 5.5 を直接比べたもので、旧世代の数字で代用したものはない。",
+   "【仕様・制約（公式 docs）】コンテキスト窓はどちらも 1M。最大出力はどちらも 128K（Batch API ではベータで 300K）。知識カットオフはどちらも 2026年6月。速度の公式表記は相対値だけで、Sonnet が \"Fast\"、Opus が \"Moderate\"。Sonnet 5.5 は \"generates outputs 30%+ faster than Sonnet 5\"。tokens/秒の絶対値は公式には見つからない。Fast mode（最大 2.5倍速、$8/$40）は Opus 5.5 だけで、Sonnet 5.5 は対象外。",
+   "【tool_choice の制約】Sonnet 5.5 も Opus 5.5 も強制ツール使用に非対応。tool_choice に {type:any} または {type:tool} を指定すると 400 エラー（\"tool_choice: type \\\"tool\\\" and \\\"any\\\" are not supported for this model.\"）。auto と none は使える。代わりに strict tool use か structured outputs を使う。Sonnet 5.5 は thinking:disabled も 400 で、代わりに between_tools（low / medium / high でのみ有効。xhigh と max では 400）。temperature / top_p / top_k を指定すると 400。Opus 5.5 は thinking を切れない。",
+   "【思考ブロックの互換】Sonnet 5.5 から Opus 5.5 へ会話の途中で切り替えると、Claude API 上では推論を引き継げる。逆に Opus 5.5 から Sonnet 5.5 へ移ると、Sonnet は Opus 5.5 の思考ブロックを読めない（whats-new-sonnet-5-5）。Sonnet を下請けにする設計なら、別会話として渡すことが前提になる。",
+   "【advisor tool】Sonnet 5.5 を executor にして、Opus 5.5 を advisor にする組み合わせは公式にサポートされている。",
+   "【その他の公式表現】models overview の Sonnet 5.5 の説明は \"The best combination of speed and intelligence\" / \"built for everyday coding, agent, and enterprise workloads\"。Opus 5.5 は \"Multihour autonomous coding agents, large-scale refactoring, complex systems engineering\"。発表ページ: \"Sonnet 5.5 is strongest at well-scoped everyday tasks, fixing bugs, and creating polished documents, slides, and spreadsheets.\" 顧客の声（Creator 社）: \"When Claude Opus 5.5 sets the architecture ... I would feel confident in letting Sonnet 5.5 implement it.\"",
+   "【信頼性の総評】数値の多くは Anthropic の自己申告（5試行平均、safeguards 有効）。第三者が実行したものは FrontierCode（Cognition）、CursorBench（Cursor）、FrontierSWE（Proximal）、GDPval-AA と AA-Briefcase（Artificial Analysis）、AutomationBench（Zapier）。Terminal-Bench は自社環境での値。tbench.ai、swebench.com、Artificial Analysis などのリーダーボード本体は、この担当範囲外のため未確認（Artificial Analysis が Terminal-Bench で Sonnet 63.6% と測ったという話は vellum 経由の二次情報で、未検証）。",
+   "【取得日と根拠ファイル】すべて 2026-11-07 に取得。system card の PDF とテキストは /private/tmp/claude-501/-Users-hayatofujii-Coding-DESystem-Learning-Agents/3d4de6b2-e54e-469f-bed0-6d3d1f3c52f3/scratchpad/dl/ に保存（claude-sonnet-5-5-system-card.txt / claude-opus-5-5-system-card.txt / sonnet55.html.txt / opus55.html.txt）。FrontierCode 行で Sonnet の欄が分割されていること（Max² 46.2%、Xhigh 52.1%）は、発表ページの生 HTML（rowSpan 構造）で確認した。"
+  ],
+  [
+   "結論: 「純粋なコードは Opus と同等」は一部だけ正しい。同等以上だったのは、端末操作型のエージェントコーディング（Terminal-Bench: 自己申告・AA独立とも Sonnet が+4）、範囲の決まった IDE 作業（CursorBench、差は2.3pt。自己申告のみ）、知識労働（GDPval・Briefcase）。一方、難しい長めのコード課題（SWE-bench Pro −8.6〔二次転記〕、FrontierCode −4〔AA〕）、WebDev（−40）、高難度推論（HLE-Diamond −15）、事実の正確さ（Omniscience −18）、文章表現は Opus が明確に上。",
+   "自己申告と独立評価の食い違い: (1) HLE は自己申告 with tools で差3.2pt、AA の HLE-Diamond で差15pt。(2) Terminal-Bench の絶対値は自己申告 70.6/66.4 に対し AA は 64/60（順位は同じ）。(3) AA Intelligence Index は発売直後報道の 56対58 から、現行ページでは 55対59 に変わった（リリース前ビルドでの再評価による）。(4) tbench.ai 公式の行は取得できず、二次情報に Opus 64.8 > Sonnet 61.8（Claude Code harness）という逆順の記載があるが、確認できなかった。",
+   "使い方への含意（データからの推論）: Max effort の Sonnet は出力トークンが Opus の約1.65倍で、1タスク費用が同額（$10.02 対 $10.04）になる。Anthropic も Sonnet は Max より Xhigh の方が FrontierCode で高いと脚注で認め、「lower effort settings で Opus を補完するのが最適」と推奨している。Sonnet の費用優位を得るには、範囲の決まった実装・バグ修正・端末作業・資料作成に中〜高 effort で充てるのが根拠に沿う。",
+   "見つからなかったもの: swebench.com 公式の5.5系エントリ（ページは動的読込で行を取得できず）、Aider polyglot（最新エントリが2025-10で5.x系なし）、LiveBench 公式の値（livebench.ai は本文を取得できず。二次サイト respan の Sonnet 値のみ、Opus 5.5 は無し）、Nejumi Leaderboard の5.5系結果、SimpleQA・BrowseComp の両モデルの値、IFEval の値（代替として Arena の Instruction Following を掲載）、AA の幻覚率の数値（Net Score のみ）。",
+   "日本語: Arena の日本語カテゴリでは Opus 1535（2位）対 Sonnet 1465（30位）だが、各約200票・CI ±40 なので参考程度。英語中心の総合 Arena でも +32 で Opus 優位で、方向は一貫している。",
+   "比較バリアントの注意: Arena は Opus (High/Max) 対 Sonnet (xHigh/High)、AA は両方 Max、Anthropic 表は Sonnet Max 対 Opus Xhigh（Terminal-Bench）など、effort が揃っていない項目がある。",
+   "全ての取得日は 2026-11-07。Anthropic 一次の system card 本体は取得できなかったため、SWE-bench Pro・Multilingual は二次転記（apidog）に依拠している。"
+  ],
+  [
+   "結論: 日本語・文章・図の生成では、信頼できる評価がそろって Opus 5.5 を上と示している。差の大きさは次の順: LMArena 日本語 +70 Elo（票が少なく誤差±40）> 創作文 +52 > Text総合 +32 > GMMLU +2.2pt。どれも Sonnet と Opus が並ぶ領域ではない。",
+   "HTML/JS の教材アプリ生成は差が小さい: Design Arena の Website は +11、Frontend Web App は +25。LMArena WebDev では Sonnet xHigh が3位（1770）、Opus Max が1位（1810）。単発の HTML/JS 生成なら Sonnet でも上位に入る。ただし Design Arena の Overall Agentic（数ステップ続く自律的な作業）では差が +171 と大きい。",
+   "「純粋なコードは Opus と同等」と言える根拠は、公式表では Terminal-Bench 4.0 だけ（Sonnet 70.6% > Opus 66.4%）。GDPval-AA の 1844 対 1846 もほぼ同じ。一方で SWE-Bench Pro は 81.3 対 89.9、FrontierCode は 46.2 対 54.4 と、Opus がはっきり上（system card Table 8.1.A）。コーディングの詳しい判断は別の担当の範囲。",
+   "料金（公式 https://platform.claude.com/docs/en/about-claude/pricing、2026-11-07取得）: Sonnet 5.5 は入力 $2・出力 $10/MTok・キャッシュ読み $0.10。Opus 5.5 は $4・$20・$0.20。Artificial Analysis の数字を伝える二次記事によると、max effort では Sonnet の出力トークンが多く、1タスクあたりの費用が Opus より高くなることがある（$7.60 対 $5.98）。一次ページでは未確認。",
+   "Nejumi は最終更新が 2026-07-28 で、5.5世代は載っていない。Japanese MT-Bench・JMMLU・Swallow・子ども向けのやさしい文章の評価・Sonnet 5.5 の SVG 評価は見つからなかった。",
+   "LMArena と Design Arena の値は、WebFetch の要約モデルが抽出したもの。ページが途中で切れて、別の effort 設定の行が表示されていない可能性がある。Design Arena の Overall HTML ボードは順位の読み取りがあいまいだったので採っていない。",
+   "提案（判断材料）: 子ども向けの日本語文章・説明・SVG は Opus のままにする。単発の HTML/JS 教材アプリの下書きや大量の定型生成は、Sonnet（xhigh）に任せる候補になる。日本語のやさしさは公開ベンチが無いので、少数のお題で両モデルを比べる自前の評価が必要。",
+   "作業ファイル: /private/tmp/claude-501/-Users-hayatofujii-Coding-DESystem-Learning-Agents/3d4de6b2-e54e-469f-bed0-6d3d1f3c52f3/scratchpad/sc/sonnet.txt（system card の抽出テキスト）"
+  ]
+ ],
+ "tasks": {
+  "tasks": [
+   {
+    "task": "職人の下書き制作（draft job）。Managed Agents の 1 session で、注文 1 本ぶんの成果物を全部作る",
+    "produces": "1 session で次を全部作る: 日本語の教材本文（小学生・中学生 × 短い・詳しい の 4 本と game.md）、図の SVG（型 3）、動かせる app.html（型 4。canvas で奥行きのある動く絵、外部の読み込みなし）、出典探し（web_search / web_fetch）と逐語の引用（sources.json）、claims.json、adapt-rules.md、selfcheck.md（コードを実際に走らせる動作確認を含む）、generate_image の prompt 作り、YouTube の選定。最初のターンで questions.json だけを書く",
+    "current_model": "claude-sonnet-5-5（effort: high）",
+    "where": "factory/claude/agents/material-maker.md:4 `model: {id: claude-sonnet-5-5, effort: high}`（agent 定義そのもの。draft の時は jobs.ts:367 で override せず env.FACTORY_AGENT_ID を渡す）。DB の model 列に入る値は factory/worker/src/env.ts:180 `JOB_MODEL.draft`（jobs.ts:278,300、routes/materials.ts:86 で使用）。契約は CONTRACT-factory.md:429",
+    "category": "混在（コード中心 + 文章中心 + 調べもの中心）。1 session の中で分かれていないので、作業ごとにモデルを変えるには session を分ける必要がある",
+    "cost_note": "実測: 段階 0 の最初の本物の session（sesn_01Jfui3apjV7eE2o8TiQN8YC、2026-11-04）は、型 3 + 型 4 + 変奏一式 + 図 4 枚 + app.html の注文で list_cost $6.17。$3 では budget_reached になり、$8 に増やして最後まで作った（CONTRACT-factory.md:1273,1277、factory/README.md:70）。wrangler.jsonc:41 の SESSION_BUDGET_DRAFT_CENTS=800 はこの実測に合わせた値（wrangler.jsonc:36 のコメント）。設計書の机上見積りは 1 本 $2〜3 で、実測の方が高い（docs/content-factory-design.md:17）。retro の 1 件ごとの実測は D1 にあり、repo にはない",
+    "rationale_in_repo": "下書きが Sonnet である理由は書かれていない。関係する制約が 1 つある: docs/plans/retro/contract-S.md:8「質を下げる工夫は作らない・入れない。…制作のモデルを下げる、は禁止の方向」"
+   },
+   {
+    "task": "作り直し（rework job）。人の差し戻しと、自動の差し戻し（triage の auto_return）の両方。同じ職人 agent をモデルだけ差し替えて動かす",
+    "produces": "中身は下書きと同じ（本文・SVG・app.html・出典と引用・claims）。違いは出発点で、前の版のファイルを /mnt/session/uploads/prev/ に付けて渡し、差し戻し理由に関係する所だけを直す（§S-8、material-maker.md の「作り直し」節）。変えていない出典は開き直さなくてよい",
+    "current_model": "claude-opus-5-5（effort: high）。agent_with_overrides で上書きする",
+    "where": "factory/worker/src/jobs.ts:366 `{ type: 'agent_with_overrides', id: env.FACTORY_AGENT_ID, model: { id: 'claude-opus-5-5', effort: 'high' } }`（文字列の直書きで、JOB_MODEL は参照していない）。DB と表示用の値は env.ts:180 `JOB_MODEL.rework`（routes/review.ts:370、triage-step.ts:113 の rework_model）。契約は CONTRACT-factory.md:429,431,446",
+    "category": "混在（コード中心 + 文章中心 + 調べもの中心）。下書きと同じ",
+    "cost_note": "実測 1 件: 2026-11-06 の mc-redstone-buttons-video v4 の作り直しが $4.58（docs/plans/video/probe-results.md:56）。予算は wrangler.jsonc:42 の SESSION_BUDGET_REWORK_CENTS=1000（env.ts:107 の既定値も 1000）",
+    "rationale_in_repo": "Opus を選んだ理由は、コード・契約・設計書・commit メッセージのどこにも書かれていない。`git log -S\"rework: 'claude-opus\"` をたどると、最初の commit 159bd27（2026-11-04、Worker v1）で理由なしに入っている。CONTRACT-factory.md:431 にあるのは仕組みの注記だけで、理由ではない:「override は model を丸ごと置き換えるので effort を必ず入れる」"
+   },
+   {
+    "task": "検証係（verify）。制作とは別の文脈で事実を確かめる。Batch が既定、sync も選べる",
+    "produces": "出典を自分で web_fetch / web_search で開き直し、claim ごとに 確か / 仮説 / 未確認 / 矛盾 を付ける（report_verdicts）。版の png / webp の画像と SVG のソースも図として読み、図ごとに判定する（contract-O12）。Gemini の動画の記録も入力として読む",
+    "current_model": "claude-opus-5-5（thinking: adaptive、max_tokens 8000、tool_choice auto）",
+    "where": "factory/worker/src/verify.ts:54 `VERIFIER_MODEL = 'claude-opus-5-5'`、params は verify.ts:1428-1440（verifierParams）。sync / batch の切り替えは VERIFY_MODE（wrangler.jsonc:46 = batch）。契約は CONTRACT-factory.md:565,578,853",
+    "category": "判断・検証中心（調べものを含む）",
+    "cost_note": "実測: 検証 1 回 35¢（動画の 10¢ を含む。docs/plans/video/probe-results.md:56）と 36¢（同:40）。単価は Batch 50% × Opus（入力 $4 / 出力 $20 per 1M、CONTRACT-factory.md:853）。取り置き: VERIFY_TURN_RESERVE_CENTS=150、VERIFY_ATTEMPT_CAP_CENTS=400（wrangler.jsonc:49-50）。設計書の見積りは 1 本 $0.5〜1（docs/content-factory-design.md:18）。topics-variety/design.md:58 は「1 本 4 ドルの予約」と書いている",
+    "rationale_in_repo": "オーナーの決定として残っている: CONTRACT-factory.md:789「検証係は Opus 5.5 のまま Batch API」（2026-11-04）。設計書 docs/content-factory-design.md:18 は「制作とは別文脈の Claude Opus 5.5」と役割を書いているが、なぜ Opus かの理由は書いていない"
+   },
+   {
+    "task": "動画の記録（verify の中で並行して呼ぶ）",
+    "produces": "YouTube の指定区間を見て、内容と説明の言語の記録（video notes）を書く。検証係への入力になる",
+    "current_model": "gemini-3.6-flash（予備は gemini-3.8-flash。settings video_fallback_enabled='1' の時だけ使う）",
+    "where": "factory/worker/src/env.ts:133 videoModel（GEMINI_VIDEO_MODEL、wrangler.jsonc:66）。予備は env.ts:137 と wrangler.jsonc:70。呼び出しは verify.ts:847-867 と gemini.ts:232",
+    "category": "判断・検証中心（Anthropic 以外）",
+    "cost_note": "1 回の取り置き U は VIDEO_U_CENTS=10（wrangler.jsonc:67）。実測で検証費用のうち動画は 10¢（docs/plans/video/probe-results.md:40,56）",
+    "rationale_in_repo": "Sonnet / Opus の選択とは関係しない（Gemini を使う）"
+   },
+   {
+    "task": "画像の生成（職人の custom tool generate_image を Worker が代わりに実行する）",
+    "produces": "教材の図と挿絵の画像。prompt は職人（Sonnet / Opus）が書く",
+    "current_model": "gpt-image-2.5-flare（standard）/ gpt-image-2.5-sunburst（scientific）",
+    "where": "factory/worker/src/env.ts:129-130、images.ts:132-134 imageModelFor、wrangler.jsonc:62-63",
+    "category": "画像（Anthropic 以外。コード・文章の分類の外）",
+    "cost_note": "実測（docs/plans/image-generation/probe-results.md:25-30）: flare 1024 high 6¢ / max 22¢、sunburst 1024 high 6¢、1536 max 17¢。予約 U は high 以下 10¢・max 35¢",
+    "rationale_in_repo": "対象外"
+   },
+   {
+    "task": "お題の生成（topics gen）。news / weekly / 手動、それに派生（refresh・extend）",
+    "produces": "日本語のお題の本文。web_search / web_fetch で実在の出典と引用を付け、save_topics（strict）で出力する",
+    "current_model": "claude-sonnet-5-5（TOPIC_GEN_MODEL で上書きできる）",
+    "where": "factory/worker/src/env.ts:147,154 `TOPIC_DEFAULT_MODEL = 'claude-sonnet-5-5'`。呼び出しは topics/gen.ts:538（tools は web_search_20250305 と web_fetch_20250910、gen.ts:556-558）。派生も gen.ts の runTopicRun を通る（topics/derive.ts）。契約は contract-T.md:218",
+    "category": "文章中心 + 調べもの中心",
+    "cost_note": "実測（contract-T.md:545）: 成功 1 回 = 13 セント・47 秒・2 本。形の検査で全部捨てた 1 回 = 18 セント。400 で失敗した 7 回 = 0 セント。取り置きは 60 セント（実費の約 3〜4 倍、contract-T.md:548）",
+    "rationale_in_repo": "env.ts:153 と contract-T.md:218「既定は meeting と同じ Sonnet 5.5 の id」。会議に合わせたという記述だけで、性能を比べた理由は書かれていない"
+   },
+   {
+    "task": "お題の検査（topics check）",
+    "produces": "引用がお題の主張を支えているか（supported / unsupported / unclear）と、重い話題かどうか（sensitivity）の判断。save_check で出力する。ツールはなく、web_fetch は Worker が自分で行う",
+    "current_model": "claude-sonnet-5-5（TOPIC_CHECK_MODEL → TOPIC_GEN_MODEL → 既定 の順）",
+    "where": "factory/worker/src/env.ts:148、topics/check.ts:209。契約は contract-T.md:272",
+    "category": "判断・検証中心",
+    "cost_note": "実測（contract-T.md:546）: 2 本で 3 セントと 0 セント（0 セントの方がモデルを呼ぶ前に止まったのかは未確認）。取り置きは 15 セント",
+    "rationale_in_repo": "既定は生成と同じ、とあるだけ（contract-T.md:272）"
+   },
+   {
+    "task": "エージェント会議（meeting）。月 2 回、Batch",
+    "produces": "4 つの視点（調査 / 教材研究 / 技術表現 / 検証）の意見、作るものの提案と優先順位、編集基準の改訂案（JSON schema の構造化出力）",
+    "current_model": "claude-sonnet-5-5（thinking: adaptive、Batch）",
+    "where": "factory/worker/src/meeting.ts:14 `MEETING_MODEL`、呼び出しは meeting.ts:195,262。契約は CONTRACT-factory.md:759",
+    "category": "判断・検証中心（企画）",
+    "cost_note": "repo に実測の値はない。月の上限は MEETING_MONTHLY_CAP_CENTS=1000（wrangler.jsonc:55）、応答が分からない時の見積りは 20¢",
+    "rationale_in_repo": "docs/content-factory-design.md:43「Sonnet 5.5 への 1 回の呼び出しで 4 視点…Batch API で半額」。採用したことは書いてあるが、理由は書かれていない"
+   },
+   {
+    "task": "振り返り係・改善係（retro §S）。注文ごとに 1 件、Batch",
+    "produces": "終わった注文の費用のむだの分析と、費用を下げる工夫（tips）の提案（JSON schema）。入力は数字・列挙値・ホスト名だけで、本文は入れない",
+    "current_model": "claude-sonnet-5-5（Batch、max_tokens 2048）",
+    "where": "factory/worker/src/retro.ts:14 `RETRO_MODEL`、呼び出しは retro.ts:730,1197。契約は docs/plans/retro/contract-S.md:10,70",
+    "category": "判断・検証中心（数字の分析）",
+    "cost_note": "1 件 2¢ 未満の見積り（contract-S.md:106 の「未回収の件数 × 2¢」）。月の上限は RETRO_MONTHLY_CENTS=300。repo に 1 件ごとの実測はない",
+    "rationale_in_repo": "contract-S.md:10 にモデル名が書いてあるだけで、理由はない"
+   },
+   {
+    "task": "収集部隊の仕分け（scout）。週 1 回",
+    "produces": "RSS と X の投稿を「新規 / 改善 / 捨て」に分けた proposals（JSON schema）",
+    "current_model": "claude-haiku-5-5（effort: low）+ X の検索は grok-4.3（xAI）",
+    "where": "factory/worker/src/scout.ts:17 `SCOUT_MODEL = 'claude-haiku-5-5'`、scout.ts:559-564。xAI は env.ts:118 と wrangler.jsonc:52。契約は CONTRACT-factory.md:753",
+    "category": "判断・検証中心（軽い分類）",
+    "cost_note": "repo に実測の値はない。月の上限は SCOUT_MONTHLY_CAP_CENTS=2000（wrangler.jsonc:54）",
+    "rationale_in_repo": "docs/content-factory-design.md:42 に Haiku 5.5 で仕分けるとあるだけ"
+   }
+  ],
+  "notes": [
+   "読んだのは origin/main（fetch した後、ローカルの main より 31 commit 先）で、git show / git grep だけを使った。checkout・ファイルの変更・本番への呼び出しはしていない",
+   "最も大事な点: 職人は 1 回の session の中で、日本語の本文・SVG・app.html・出典と引用・画像の prompt・動作確認（コードの実行）を全部まとめて行う。モデルは session の単位でしか決まらない（agent 定義の model か、agent_with_overrides）。なので『app.html と SVG だけ Sonnet、本文は Opus』のように作業ごとに分けるには、session を分けるか成果物の作り方を作り直す必要がある。いまの構成で選べるのは draft と rework の 2 つのつまみだけ",
+   "いまの割り当て: 下書きは Sonnet 5.5 high、作り直し（人の差し戻しも自動の差し戻しも）は Opus 5.5 high、検証係は Opus 5.5（Batch）。お題の生成と検査・会議・振り返りは Sonnet 5.5、scout は Haiku 5.5。Anthropic 以外は 動画=Gemini 3.6 Flash、画像=gpt-image-2.5、X 検索=grok-4.3",
+   "作り直しで Opus を使う理由は、repo のどこにも書かれていない（コード・CONTRACT-factory.md・設計書・retro 契約・commit メッセージを探した）。最初の commit 159bd27（2026-11-04）から理由なしで入っている。理由が書かれているのは検証係だけで、それもオーナーの決定『検証係は Opus 5.5 のまま Batch API』（CONTRACT-factory.md:789）という形",
+   "作り直しの Opus の id は jobs.ts:366 に直書きされていて、JOB_MODEL.rework（env.ts:180）とは別の場所にある。モデルを変える時は、ここと agent 定義（material-maker.md:4、claude-lock.json で apply する）・JOB_MODEL・CONTRACT-factory.md:429-446 の 4 か所を揃える必要がある",
+   "変える時に守る制約: docs/plans/retro/contract-S.md:8 に『制作のモデルを下げる、は禁止の方向』とある（質を下げる工夫は入れない）。Opus から Sonnet へ下げるなら、この方針と照らし合わせる必要がある",
+   "費用の実測（repo にある値だけ）: 下書き 1 本 $6.17（段階 0、型 3 + 型 4 + 変奏一式）/ 作り直し 1 本 $4.58（Opus、動画素材の v4）/ 検証 35〜36¢ / お題の生成 13〜18¢ / お題の検査 0〜3¢ / 画像 1 枚 1〜22¢。注文ごとの費用は retro が D1 に集めているが、repo には入っていない。同じ注文を Sonnet と Opus で作って比べた値はどこにもない",
+   "参考: tool_choice の any / tool による強制は Opus 5.5・Sonnet 5.5 のどちらも 400 になる（CONTRACT-factory.md:1297）。この点でモデルを選ぶ差は生まれない"
+  ]
+ },
+ "confirmed_by_workflow": [
+  {
+   "b": "SWE-bench Pro",
+   "s": "81.3%",
+   "o": "89.9%",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "SWE-bench Multilingual",
+   "s": "90.3%",
+   "o": "93.9%",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "SWE-bench Multimodal",
+   "s": "54.3%",
+   "o": "61.4%",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "DeepSWE v1.1（長時間のソフトウェア開発 113課題）",
+   "s": "71.0%",
+   "o": "74.2%",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card ・ https://www.anthropic.com/claude-opus-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "FrontierCode v1.1 Main（Cognition 作）",
+   "s": "52.1%（xhigh。Sonnet の最高値）／46.2%（max）",
+   "o": "54.4%（max）。medium（既定）では 54.6%",
+   "url": "https://www.anthropic.com/news/claude-sonnet-5-5 ・ https://www.anthropic.com/news/claude-opus-5-5 ・ Sonnet system card （取得 2026-11-07）"
+  },
+  {
+   "b": "Terminal-Bench 4.0",
+   "s": "70.6%（max・±2.5）",
+   "o": "66.4%（xhigh・±2.6）。max では 64.8%",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "CursorBench 4.0",
+   "s": "55.5%（max）／53.1%（xhigh）／47.8%（high）／39.2%（medium）",
+   "o": "57.8%（max）。medium（既定）では 52.5%",
+   "url": "https://www.anthropic.com/news/claude-sonnet-5-5 ・ system card （取得 2026-11-07）"
+  },
+  {
+   "b": "FrontierSWE v2（Proximal 作、超長時間の 34課題）",
+   "s": "61.9%",
+   "o": "62.3%",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "ProgramBench（長文脈・166課題）",
+   "s": "79.7%",
+   "o": "91.2%",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "OSWorld 2.1",
+   "s": "partial 80.1% / strict 43.5%",
+   "o": "partial 81.8% / strict 48.7%",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "Humanity's Last Exam",
+   "s": "ツールなし 56.9% / ツールあり 64.5%",
+   "o": "ツールなし 64.4% / ツールあり 67.7%",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "ArXivMath（2026年8月版）",
+   "s": "ツールなし 86.8% / ツールあり 95.2%",
+   "o": "91.2% / 96.9%",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "GDPval-AA v2.1（Artificial Analysis 作）",
+   "s": "1844 Elo（max）／1725（xhigh）",
+   "o": "1846 Elo（max）",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "AA-Briefcase v1.1",
+   "s": "1811 Elo（max）／1746（xhigh）",
+   "o": "1822 Elo（max）",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "Toolathlon-Verified",
+   "s": "Pass@1 77.8 / Pass³ 68.5 / 平均 31.6ターン",
+   "o": "Pass@1 77.8 / Pass³ 72.2 / 平均 26.9ターン",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "AutomationBench（Zapier 作）",
+   "s": "44.7%",
+   "o": "42.5%（refusal を fallback で再実行した値）／40.0%（再実行なし）",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "Chartography（Surge AI 作）",
+   "s": "ツールなし 61.6% / ツールあり 90.2%",
+   "o": "64.4% / 89.0%",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "BenchCAD Vision2Code（1000件のサブセット）",
+   "s": "0.747（ツールなし）/ 0.963（ツールあり）",
+   "o": "0.730 / 0.962",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "GMMLU（42言語）／MILU（11言語）",
+   "s": "GMMLU 92.1% / MILU 91.6%",
+   "o": "GMMLU 94.3% / MILU 93.1%",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "OfficeQA / OfficeQA Pro（Databricks 作）",
+   "s": "76.9% / 65.6%",
+   "o": "78.9% / 67.7%",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "HealthBench Professional（長さ補正後）／PhysicianBench",
+   "s": "69.2%（補正前は 77.1%）／63.2%",
+   "o": "65.6%（補正前は 77.1%）／68.4%",
+   "url": "https://www.anthropic.com/document/claude-sonnet-5-5-system-card （取得 2026-11-07）"
+  },
+  {
+   "b": "Artificial Analysis Intelligence Index（総合・Max effort）",
+   "s": "55（69モデル中9位）",
+   "o": "59（69モデル中2位）",
+   "url": "https://artificialanalysis.ai/models/comparisons/claude-opus-5-5-vs-claude-sonnet-5-5 （取得日2026-11-07。個別ページ https://artificialanalysis.ai/models/claude-sonnet-5-5 / https://artificialanalysis.ai/models/claude-opus-5-5 も同値）"
+  },
+  {
+   "b": "FrontierCode（難度の高いエージェント型コーディング）",
+   "s": "AA独立 v2.0: 42% / Anthropic v1.1 Main: 46.2%（Max）、52.1%（Xhigh。表の列配置からの推定）",
+   "o": "AA独立 v2.0: 46% / Anthropic v1.1: 54.4%",
+   "url": "https://artificialanalysis.ai/models/comparisons/claude-opus-5-5-vs-claude-sonnet-5-5 ／ https://www.anthropic.com/news/claude-sonnet-5-5"
+  },
+  {
+   "b": "CursorBench 4.0",
+   "s": "55.5%",
+   "o": "57.8%",
+   "url": "https://www.anthropic.com/news/claude-sonnet-5-5"
+  },
+  {
+   "b": "SWE-bench Pro / SWE-bench Multilingual",
+   "s": "Pro 81.3 / Multilingual 90.3（Max）",
+   "o": "Pro 89.9 / Multilingual 93.9",
+   "url": "https://apidog.com/blog/claude-sonnet-5-5-benchmarks/ （二次。一次の system card は取得できていない）"
+  },
+  {
+   "b": "Code Arena WebDev（LMArena→arena.ai）",
+   "s": "xHigh: 1770±11（3位、4,469票）/ High: 1711±9（8位）",
+   "o": "Max: 1810±13（1位、3,473票）",
+   "url": "https://arena.ai/leaderboard/webdev （取得日2026-11-07）"
+  },
+  {
+   "b": "Text Arena（総合 / Coding / Instruction Following / 日本語）",
+   "s": "総合 1477±7（31位）/ Coding 1529±13（24位）/ IF 1486±11（18位）/ 日本語 1465±40（30位、205票）",
+   "o": "総合 1509±7（3位）/ Coding 1551±12（3位）/ IF 1522±10（3位）/ 日本語 1535±41（2位、214票）",
+   "url": "https://arena.ai/leaderboard/text ／ https://arena.ai/leaderboard/text/coding ／ https://arena.ai/leaderboard/text/instruction-following ／ https://arena.ai/leaderboard/text/japanese （取得日2026-11-07）"
+  },
+  {
+   "b": "AA-PersonalityBench（文体の比較）",
+   "s": "Lexically Varied 17% / Eloquent 23% / Natural Sounding 28% / Literate 40%",
+   "o": "同 83% / 77% / 72% / 60%",
+   "url": "https://artificialanalysis.ai/models/comparisons/claude-opus-5-5-vs-claude-sonnet-5-5"
+  },
+  {
+   "b": "HLE-Diamond / CritPt v2 / Terminal-Bench-Science（AA）、HLE with tools（Anthropic）",
+   "s": "HLE-Diamond 53% / CritPt 59% / TB-Science 53% / HLE with tools 64.5%（自己申告）",
+   "o": "68% / 68% / 59% / 67.7%（自己申告）",
+   "url": "https://artificialanalysis.ai/models/comparisons/claude-opus-5-5-vs-claude-sonnet-5-5 ／ https://www.anthropic.com/news/claude-sonnet-5-5"
+  },
+  {
+   "b": "AA-Omniscience v1.1（知識の正確さと幻覚の少なさ）",
+   "s": "30（Net Score）",
+   "o": "48（Net Score）。Xhigh の Accuracy は 66%",
+   "url": "https://artificialanalysis.ai/models/comparisons/claude-opus-5-5-vs-claude-sonnet-5-5 ／ https://artificialanalysis.ai/evaluations/omniscience"
+  },
+  {
+   "b": "GDPval-AA v2.1 / AA-Briefcase v1.1 / GDP.pdf / AutomationBench-AA",
+   "s": "自己申告 GDPval 1844、Briefcase 1811 / AA独立 Briefcase 1813、GDP.pdf 26%、AutomationBench 72%",
+   "o": "自己申告 GDPval 1846、Briefcase 1822 / AA独立 Briefcase 1800、GDP.pdf 26%、AutomationBench 70%",
+   "url": "https://www.anthropic.com/news/claude-sonnet-5-5 ／ https://artificialanalysis.ai/models/comparisons/claude-opus-5-5-vs-claude-sonnet-5-5"
+  },
+  {
+   "b": "OSWorld 2.1 partial / Chartography",
+   "s": "OSWorld 80.1% / Chartography 61.6%",
+   "o": "81.8% / 64.4%",
+   "url": "https://www.anthropic.com/news/claude-sonnet-5-5"
+  },
+  {
+   "b": "速度・トークン効率（AA）",
+   "s": "151 tok/s、1タスク31.5分、出力285k/タスク、$10.02/タスク",
+   "o": "104 tok/s、1タスク27.7分、出力173k/タスク、$10.04/タスク",
+   "url": "https://artificialanalysis.ai/models/comparisons/claude-opus-5-5-vs-claude-sonnet-5-5"
+  },
+  {
+   "b": "Global MMLU (GMMLU), 42言語の平均。Global-MMLUの42言語には日本語が入る",
+   "s": "92.1%",
+   "o": "94.3%（比較用: Fable 5.1 94.0%、Sonnet 5 89.2%）",
+   "url": "https://www.anthropic.com/claude-sonnet-5-5-system-card（PDFへ転送: https://assets.claude.com/870c8f525702625d2c62fc6dd04c857e3250bec1.pdf、2026-11-07取得、pdftotextで抽出した本文から引用）"
+  },
+  {
+   "b": "MILU（インドの10言語と英語）",
+   "s": "91.6%",
+   "o": "93.1%",
+   "url": "https://assets.claude.com/870c8f525702625d2c62fc6dd04c857e3250bec1.pdf（2026-11-07取得）"
+  },
+  {
+   "b": "LMArena (arena.ai) Text — Japanese カテゴリ",
+   "s": "Claude Sonnet 5.5 (xHigh): 30位, 1465 ±40, 205票",
+   "o": "Claude Opus 5.5 (High): 2位, 1535 ±41, 214票（1位は Fable 5.1 (Max) 1553）",
+   "url": "https://arena.ai/leaderboard/text/japanese（lmarena.aiから転送、2026-11-07取得）"
+  },
+  {
+   "b": "LMArena (arena.ai) Text — Creative Writing カテゴリ（言語は問わない）",
+   "s": "Claude Sonnet 5.5 (xHigh): 23位, 1468 ±14, 2,278票",
+   "o": "Claude Opus 5.5 (High): 1位, 1520 ±13, 2,672票",
+   "url": "https://arena.ai/leaderboard/text/creative-writing（2026-11-07取得）"
+  },
+  {
+   "b": "LMArena (arena.ai) Text 総合",
+   "s": "Claude Sonnet 5.5 (xHigh): 31位, 1477 ±7, 10,033票",
+   "o": "Claude Opus 5.5 (High): 3位, 1509 ±7, 11,415票",
+   "url": "https://arena.ai/leaderboard/text（2026-11-07取得）"
+  },
+  {
+   "b": "LMArena (arena.ai) WebDev（HTML/JSのWebアプリ生成を人が投票で比べる）",
+   "s": "Sonnet 5.5 (xHigh): 3位, 1770 ±11, 4,469票 / Sonnet 5.5 (High): 8位, 1711 ±9",
+   "o": "Opus 5.5 (Max): 1位, 1810 ±13, 3,473票",
+   "url": "https://arena.ai/leaderboard/webdev（2026-11-07取得）"
+  },
+  {
+   "b": "Design Arena — Website",
+   "s": "10位, Elo 1315",
+   "o": "6位, Elo 1326（1位 Muse Wonder (max) 1369）",
+   "url": "https://www.designarena.ai/leaderboard/website（2026-11-07取得）"
+  },
+  {
+   "b": "Design Arena — Frontend Web App",
+   "s": "5位, Elo 1289, 724戦",
+   "o": "3位, Elo 1314, 840戦（1位 GPT-6 Astra (max) 1352）",
+   "url": "https://www.designarena.ai/leaderboard?section=website&board=webapps（2026-11-07取得）"
+  },
+  {
+   "b": "Design Arena — Overall Agentic",
+   "s": "6位, Elo 1282, 勝率58.5%, 1,948戦",
+   "o": "Opus 5.5 (high): 1位, Elo 1453, 勝率73.5%, 1,586戦",
+   "url": "https://www.designarena.ai/leaderboard（2026-11-07取得）"
+  },
+  {
+   "b": "Anthropic 公式の発表ページにある文章の質の記述（定性）",
+   "s": "\"Sonnet 5.5 writes more clearly than our previous generation of models\"",
+   "o": "Every社の評として \"It's got some of Opus 5.5's natural writing upgrades\"",
+   "url": "https://www.anthropic.com/claude-sonnet-5-5（2026-11-07取得）"
+  },
+  {
+   "b": "Nejumi Leaderboard 4（W&B）",
+   "s": "見つからない",
+   "o": "見つからない",
+   "url": "https://wandb.ai/llm-leaderboard/nejumi-leaderboard4/reports/Nejumi-LLM-Leaderboard4--VmlldzoxMzc1OTk1MA（forge.coreweave.comへ転送、2026-11-07取得）"
+  },
+  {
+   "b": "Japanese MT-Bench / JMMLU / Swallow 日本語評価",
+   "s": "見つからない",
+   "o": "見つからない",
+   "url": "（該当なし。検索で確認、2026-11-07）"
+  },
+  {
+   "b": "子ども向けのやさしい文章・要約・説明の質",
+   "s": "見つからない",
+   "o": "見つからない",
+   "url": "https://assets.claude.com/870c8f525702625d2c62fc6dd04c857e3250bec1.pdf"
+  }
+ ],
+ "verified_count": 46,
+ "dropped_count": 2,
+ "switch_cost": {
+  "syn": {
+   "conclusion": "結論: 今の工場では、モデルを切り替えること自体の費用は、作り直し 1 回あたり約 $0.05〜0.15 で、ほぼゼロと見てよい。理由は 2 つある。(1) Managed Agents では session の途中でモデルを替えられず、作り直しはもともと新しい session（文脈は空）で始まる。(2) 下書きから作り直しまでの間には、検証（Batch。cron は 10 分おき）と triage か人のレビューが入る。このため間隔はまず 5 分の TTL を超え、同じ Sonnet で作り直しても cache は外れていたはずだ（推測。D1 の間隔は未実測）。\n\n作り直しで本当に効く費用は別の 2 つにある。\n- 読み直す量 × Opus の単価: 前の版、brief と積み重なった差し戻し理由、出典の開き直し。それらが以後の全ターンで cache read として何度も読まれる。見積もりは $0.5〜1.5/回（推測）。\n- 質が足りず作り直しが 1 回増えること: 作り直し session ＋ 再検証で約 $3〜7。さらに cron 2 周以上とレビュー待ちの遅れが加わる。切り替え費用の 30〜100 倍にあたる。\n\n切り替えが得になるのは、次の 3 条件を満たす設計。\n- 切り替えは、もともと文脈が切れる段の境目（下書き→検証→作り直し）だけで行う。\n- 次の段へ渡すのは、全文ではなくファイルと要約にする（今の resources 方式は正しい）。\n- 下書きは Sonnet high（安い）で作り、外れた時だけ Opus へ上げる。\n\n逆に、同じ会話の中でターンごとに Opus と Sonnet を往復する設計（本文は Opus・コードは Sonnet を 1 本の会話で交互に）は損になる。切り替えるたびに文脈全体を cache に書き直すので、1 回あたり同じモデルで続ける場合の 25〜50 倍かかる。本文とコードを分けたいなら、別 session か subagent に分けて、ファイルで受け渡す。\n\nついでに見つかった、切り替えより大きい無駄の候補がある。検証係は Batch 方式（本番の VERIFY_MODE=batch）で、ターンごとに 5 分 TTL の cache_control を付けている。ところが cron が 10 分おきなので、ターンとターンの間が TTL を超えやすい。その場合、書き込みの割増（1.25 倍）だけ払って読み出しが起きていない可能性が高い（推測。verifications の usage で確かめられる）。",
+   "angles": [
+    {
+     "angle": "(a) キャッシュはモデルをまたげるか",
+     "estimate": "またげない。もし同じ会話の中でモデルを替えると、それまでの前置き P トークンを新しいモデルの書き込み単価で書き直すことになる。費用は P×$5/M（Sonnet→Opus）か P×$2.5/M（Opus→Sonnet）。同じモデルで続けた場合の読み出しは P×$0.20/M（Opus）か P×$0.10/M（Sonnet）なので、25〜50 倍になる。例: P=10 万なら、切り替え直後の 1 回が $0.50、同じモデルで続ければ $0.01〜0.02。ただし工場の作り直しは新しい session なので、この『書き直し』は起きない。失うのは、別 session の間で system と tools の部分が当たったかもしれない分だけ。P_sys≈1.5〜3 万トークン（推測）× ($5−$0.20)/M ≈ 最大 $0.07〜0.15/回。",
+     "basis": "fallback-credit 「Prompt caches are per-model … must be written into the new model's cache in full」、cache-diagnostics `model_changed`「The cache is per-model」。単価は pricing の表（Opus: 入力 4 / 5 分書き込み 5 / 読み出し 0.20 / 出力 20、Sonnet はその半分）。作り直しの session が分かれていることは jobs.ts:364-367（agent_with_overrides で Opus にする）と session-operations 「model … can't change mid-session」。P_sys は material-maker.md の 11,073 字に、ハーネスの tools 定義を足した推測値（トークン数は未計測）。"
+    },
+    {
+     "angle": "(b) 実際の job の間隔と TTL",
+     "estimate": "作り直しまでの間隔の下限 ≈ 検証の Batch ターン数 × 10 分（cron は */10）＋ triage か人のレビュー。検証が 1〜8 ターンなら最短でも 10〜80 分で、5 分 TTL は確実に超え、1 時間 TTL もまず超える（推測）。このため、同じモデルのまま作り直しても cache は当たらない。つまり『モデルを替えたせいで増えた費用』は ≈ $0 と見てよい。検証係の中のターン間隔も 10 分以上になりうる。その場合、5 分 TTL の cache_control は書き込みの割増（1.25 倍）だけになる。",
+     "basis": "wrangler.jsonc:10 `\"crons\": [\"*/10 * * * *\"]`、:46 `\"VERIFY_MODE\": \"batch\"`。verify.ts:1437 は top-level の cache_control で ttl を指定していない（既定は 5 分。prompt-caching 「By default, the cache has a 5-minute lifetime」）。verify.ts:59 MAX_TURNS=8。本番 D1 での間隔の実測は、permission で拒否されたので無い（data の調査）。弱い所: Batch の処理時刻次第では、5 分以内に収まるターンもありうる。"
+    },
+    {
+     "angle": "(c) 読み直す量 × 単価（前の版・brief・定義）",
+     "estimate": "作り直し session の入力費用は ≈ Σ新しく入るトークン×$5/M ＋ Σ(ターンごとの文脈)×$0.20/M。初めに読むもの: system＋tools ≈ 1.5〜3 万、phase1（brief、差し戻し理由、standards_log 40 行、メモ 8 件、採点表）≈ 0.5〜1.5 万。そのあと開くもの: 前の版のファイル V ≈ 1〜5 万、出典の開き直し F ≈ 0〜数十万（1 回の上限は 4 万）。例: 新しく入るのが 15 万、ターン 60 回、平均文脈 8 万なら、15 万×5=$0.75 ＋ 480 万×0.2=$0.96 ＋ 出力 3 万×20=$0.60 ≈ $2.3（Sonnet で同じ量なら ≈ $1.15）。前の版を持ち込む分だけを切り出すと、V=3 万の時 3 万×$5/M=$0.15 ＋ 残り 50 ターン分の読み出し 3 万×50×$0.20/M=$0.30 ≈ $0.45/回。差し戻し理由は作り直しのたびに積み重なり（publish.ts:123）、この量は回を追って増える。",
+     "basis": "コードの調査: jobs.ts:200-247（phase1 の中身）、:209 LIMIT 40、rework.ts:16-23（前の版は resources に置くだけで、文には入らない。上限は 40 ファイル × 200KB）、material-maker.md の web_fetch max_content_tokens 40000、commit 4bb2a76「作り直し 1 回で 63 回の失敗した取得」。単価は pricing。ターン数・文脈・V の値は全部推測（fixtures は合成で 8KB しかなく、目安にならない）。実測は job_retros.metrics_json の requests.*（retro.ts:372-381）で取れる。"
+    },
+    {
+     "angle": "(d) Sonnet を xhigh にした時の出力トークンの増加",
+     "estimate": "Sonnet 5.5 の xhigh についての公式の数字は無い。参考になるのは同系統の Opus 5.5 で、xhigh は high の 2.5 倍の費用で +1.4 点だった。Sonnet もおよそ 2〜2.5 倍と仮定する（推測）と、下書き 1 本 D_high に対して D_xhigh ≈ 2〜2.5×D_high。これは Opus high で下書きした場合の費用（≈ Sonnet high の 2.5 倍。下の (e) を参照）とほぼ同じになる。さらに公式資料は、Sonnet が xhigh/max では『作業を終えた後に自分でレビューを始める』と注意している。つまり出力と cache read の増え方は、作業の長さに比例する以上になりうる。Opus の質を得ないまま Opus 並みの費用を払う可能性が高い。",
+     "basis": "optimizing-for-cost-and-intelligence（llms-full.txt から取り出し）: 「`xhigh` scored about 1.4 points higher for 2.5 times the cost of `high`」（Opus 5.5、SWE-bench Pro の 478 問）。「At `xhigh` and `max`, Claude Sonnet 5.5 can start its own rounds of review after it finishes a task, which takes more time and tokens」。「Use `xhigh` or `max` only where your evals show a quality gain」。弱い所: Sonnet の倍率は Opus からの類推で、課題もコーディングのベンチマーク。教材づくりで同じ倍率になるかは分からない。"
+    },
+    {
+     "angle": "(e) 質が下がって作り直しが 1 回増えた時の費用",
+     "estimate": "1 周の費用 ≈ 作り直し session（Opus、$2〜5 と推測。budget の上限は $10）＋ 再検証（Opus Batch。8 ターン・1 ターン 2 万ずつ増えると仮定すると、cache が当たらない場合で 4×2 万×36/1M×0.5 ≈ $1.4〜1.8）≈ $3.5〜7。加えて cron 2 周以上とレビューの待ち時間がかかる。比べると、切り替え費用（$0.05〜0.15）の 30〜100 倍。損益分岐: 下書きを Opus にすると Sonnet より ≈ 1.5×D 高い（D≈$1〜2 なら +$1.5〜3）。これで元が取れるのは、作り直しが起きる確率が Δp ≥ (1.5D)/周の費用 ≈ 0.3〜0.6 下がる場合だけ。公式のデータでも、安く作って失敗した分だけ上げる方が、最初から全部 high にするより安くて質も同等以上だった。",
+     "basis": "公式 optimizing-for-cost-and-intelligence: Sonnet 5.5 high は「77.8% … $0.33 per attempt, about 9 points below Claude Opus 5.5 at its default for about two fifths of the cost」。エスカレーションは「`low` first, then `high` on its failures, solved 96.4% to 97.5% … for about $0.17; … everything at `high`, 94.8% to 95.8% for $0.29」。budget は env.ts:106-107（下書き 300 セント、作り直し 1000 セント）。1 周の金額は式の上での推測（実測は cost_ledger の kind='session' と kind='verify' を作り直しの job ごとに足せば取れる）。"
+    },
+    {
+     "angle": "(f) 同じ session の中で切り替える設計（本文 Opus・コード Sonnet）",
+     "estimate": "Managed Agents では、1 つの session の中でモデルは替えられない。取れる形は 3 つ。① advisor（Sonnet が作業を回し、Opus に相談する）: 相談 1 回 ≈ その時点の文脈 C×$5/M（初回か、5 分以上あいた時）。5 分以内に続けて相談すれば、増えた分×$5/M ＋ C×$0.20/M。C=8 万なら初回 $0.40、続けての相談は ≈ $0.05〜0.1。② 自前の Messages API でターンごとにモデルを交互にする: 切り替えるたびに C を書き直すので、1 往復 ≈ C×($5+$2.5)/M = 8 万で $0.60。同じモデルで続ければ ≈ $0.016 なので約 40 倍。20 往復すれば +$12 で、これがいちばん損。③ 本文とコードを別の session か subagent に分ける: 受け渡すのはファイルだけで、費用は受け渡す量 H×その段のモデルの単価（H=1 万なら ≈ $0.05）。①は『大半は普通で、ところどころ難しい直列の作業』に向く。③は本文とコードが独立している時に最も安い。",
+     "basis": "session-operations 「model … can't change mid-session」。multiagent-orchestration#give-the-session-an-advisor 「Each consultation sends the advisor the primary thread's conversation so far … billed at the advisor model's rates」「Prompt caching on the advisor's side is automatic」。optimizing-for-cost-and-intelligence の表「Advisor | … Serial work that is hard in spots」と、system を編集した時の実測 25〜50 倍。金額は pricing の単価で計算した。C と H は推測。"
+    },
+    {
+     "angle": "(補) 費用の数え方の食い違い（切り替えの判断を歪めうる所）",
+     "estimate": "Opus 5.5 と Sonnet 5.5 の cache read は、公式では入力の 0.05 倍（Opus $0.20、Sonnet $0.10）。ところが verify.ts は 0.1 倍で計算しているので、検証の cache read を実際の 2 倍に数えている（数え過ぎで、少なく見せる側の誤りではない）。ledger.ts の sonnetMicroDollars の docstring にある『cache read $0.10』は、公式の値と合っている。食い違っているのはコメントにある 0.1 倍という説明の方で、計算は入力と同じ $2 にわざと多めに寄せている。制作 session の金額は Anthropic の list_cost をそのまま使っているので影響を受けない。",
+     "basis": "pricing の脚注 「Cache hits and refreshes on Claude Opus 5.5 and Claude Sonnet 5.5 are priced at 0.05x」。verify.ts:318-326 listPriceMicro `cache_read_input_tokens * PRICE_IN * 0.1`、:1444 のコメント「公式値より多めの可能性あり」。anthropic.ts:151-156（list_cost をそのまま使う）。"
+    }
+   ],
+   "design_implications": [
+    "下書き Sonnet・作り直し Opus を別 session に分ける今の作りは、切り替え費用の面では正しいので、変えなくてよい。session がもともと分かれているので、モデルを替えても余計な費用はほぼ出ない。",
+    "作り直しの費用を決めるのは、新しい session に何をどれだけ読ませるか。前の版を resources に置いてモデルに必要な分だけ開かせる今の形は保つ。そのうえで、積み重なる差し戻し理由（publish.ts:123）を最新の数件か要約に絞れば、以後の全ターンの cache read に効く。",
+    "質を確保する手段として、Sonnet を xhigh に上げるのは得になりにくい（費用が Opus high に近づく割に、質の上げ幅に根拠が無い）。安い設定で下書きし、triage で外れた時だけ Opus で作り直す、という段階的な上げ方の方が公式のデータでも有利。",
+    "本文は Opus・コードは Sonnet、のように役割で分けたいなら、1 つの会話の中でモデルを往復させない。別 session か subagent にして、ファイルで受け渡す。難しい所が散らばっている作業なら advisor（Sonnet が回して、Opus に相談）を候補にする。",
+    "検証係の Batch で付けている 5 分 TTL の cache_control は、cron の 10 分間隔とかみ合っていない疑いがある。verifications の usage（cache_read と cache_creation）を実測し、読み出しが 0 に近ければ、ttl を 1 時間にするか cache_control を外すかを比べる。式の上では、8 ターンなら 1 時間 TTL の方がおよそ半額になる見込み（推測）。",
+    "この試算を次回も使うための実測の入口: job_retros.metrics_json の requests.{input,output,cache_read,cache_creation}_tokens と context_avg/max（retro.ts:372-381）、cost_ledger の kind 別の合計、factory_jobs の作成時刻の間隔。本番 D1 を読む許可をもらえば、用意済みのクエリ Q1〜Q4 で埋められる。"
+   ],
+   "weak_points": [
+    "本番 D1 は一度も読めていない（permission で拒否）。job の間隔、ターン数、文脈の大きさ、前の版の大きさ V、作り直し 1 回の実費は、全部推測の値を式に入れたもの。",
+    "system＋tools のトークン数（1.5〜3 万）は文字数とハーネスの推測から出した値。token counting endpoint では数えていない。",
+    "Opus 5.5 と Sonnet 5.5 のトークナイザが同じというのは推論（公式は『どちらも 4.7 以降の新しい系統』とまでしか書いていない）。",
+    "Managed Agents のハーネスが付ける cache の TTL とブレークポイントの位置、同じ agent の別 session の間で cache が当たるかは、公式資料に書かれていない。",
+    "Sonnet xhigh の倍率（2〜2.5 倍）は、Opus 5.5 のコーディング用ベンチマークからの類推。教材づくりの作業に当てはまるかは分からない。",
+    "検証の Batch で cache が外れているかどうかは、Batch の処理時刻次第。当たっているターンがある可能性も残る（usage の実測で白黒がつく）。",
+    "作り直しが 1 回増えた時の金額（$3.5〜7）と、損益分岐の Δp は、上の推測値をもとにした概算。"
+   ]
+  },
+  "critic": {
+   "findings": [
+    {
+     "claim": "確認: 単価はまとめのとおり。Opus 5.5 は入力 $4・5 分書き込み $5・1 時間書き込み $8・読み出し $0.20・出力 $20。Sonnet 5.5 はちょうど半分（$2 / $2.5 / $4 / $0.10 / $10）。cache read は 0.05 倍。Batch の 50% 引きは cache の倍率と重ねがけになる。",
+     "evidence": "https://platform.claude.com/docs/en/about-claude/pricing の表 21行目・29行目、脚注 2「Cache hits and refreshes on Claude Opus 5.5 and Claude Sonnet 5.5 are priced at 0.05x the base input price」、「These multipliers stack with other pricing modifiers, including the Batch API discount」",
+     "confidence": "high"
+    },
+    {
+     "claim": "確認: cache はモデルごとに分かれる。Managed Agents では session の途中でモデルを替えられない。作り直しは agent_with_overrides で Opus high にした新しい session で動く。",
+     "evidence": "llms-full.txt「Prompt caches are per-model. … must be written into the new model's cache in full」。cache-diagnostics `model_changed`「The cache is per-model」。MA docs「Only the agent's tools and mcp_servers can change after a session is created. To run a session with model … other than the agent's, use agent configuration overrides」。git show origin/main:factory/worker/src/jobs.ts 364-367 `{ type: 'agent_with_overrides', …, model: { id: 'claude-opus-5-5', effort: 'high' } }`",
+     "confidence": "high"
+    },
+    {
+     "claim": "弱点の一部は公式資料で埋まる。まとめは「Managed Agents の cache の TTL は資料に無い」としていたが、公式に「常に有効・既定は 5 分」と書かれている（ブレークポイントの位置と、session をまたいで当たるかは書かれていないまま）。",
+     "evidence": "llms-full.txt 72244行「Managed Agents: Always on. Cache entries use a 5-minute lifetime by default, and cache reads and writes show up in the session's usage.」",
+     "confidence": "high"
+    },
+    {
+     "claim": "検証係の Batch のターン間隔は、推測ではなくコードから下限が決まる。1 回の cron は sweep→lease→submit→collect の順に動くので、回収したターンが次に提出されるのは早くても次の cron（10 分後）。提出から次の提出までは普通 20 分以上になり、5 分 TTL の cache はまず当たらない。まとめの弱点「5 分以内に収まるターンもありうる」はコード上ほぼ起きない（cron が重なった時だけ）。公式も Batch の cache hit は best-effort で、5 分ではなく 1 時間の cache を勧めている。",
+     "evidence": "verify.ts runBatchStep: `await step('sweep'…); if (o.lease) … leaseBatch; await step('submit'…); await step('collect'…)`。collect の後は verify_phase='to_submit' に戻すだけ（2209-2214行）。wrangler.jsonc:10 `*/10`。verify.ts:1437 は ttl を指定しない top-level cache_control。prompt-caching FAQ「cache hits are provided on a best-effort basis」「typically better than using the 5-minute cache because it's common for batch requests to take between 5 minutes and 1 hour to complete」",
+     "confidence": "high（コードの順序）/ 実際の読み出しが 0 かは usage の実測待ち"
+    },
+    {
+     "claim": "検証係の cache_control をどう直すかで損得の向きが変わる。外せば、書き込みの割増分（cache_creation に掛かる 1.25 倍→1.0 倍）が確実に約 20% 減る。1 時間 TTL は、全ターンで当たれば今の約 0.39 倍（cache なしの約 0.48 倍）。逆に Batch の処理が延びて外れると、書き込みが 2 倍になり今より損になる。まとめの「1 時間 TTL ならおよそ半額」は、全ターンで当たる前提と、比べる相手（cache なし）を書き添える必要がある。",
+     "evidence": "式（推測の前提: 文脈がターンごとに Δ ずつ線形に増え、8 ターン）: cache なしは Σ=36Δ、今（5 分・当たらない）は 1.25×36=45Δ、1 時間で全部当たる場合は 書き込み 2×8Δ=16Δ ＋ 読み出し 0.05×28Δ=1.4Δ=17.4Δ。単価は pricing の 1 時間書き込み = 2 倍・読み出し 0.05 倍",
+     "confidence": "medium"
+    },
+    {
+     "claim": "(a) の倍率は比べる相手が混ざっている。同じモデルどうしで見た『書き直しの罰』は、書き込み/読み出し = 5/0.20 = 2.5/0.10 = 25 倍で一定。まとめの 50 倍は、Sonnet のまま続けた場合（$0.10）と Opus への書き直し（$5）を比べており、モデルの単価差（2 倍）が入っている。Opus→Sonnet を Opus のまま続けた場合と比べると 2.5/0.20 = 12.5 倍。正しい範囲は『12.5〜50 倍（うち cache の罰は 25 倍）』。",
+     "evidence": "pricing の単価から計算: 5/0.10=50、2.5/0.20=12.5、5/0.20=25、2.5/0.10=25",
+     "confidence": "high"
+    },
+    {
+     "claim": "(f)② の『ターンごとに交互にすると毎回文脈全体を書き直す・20 往復で +$12』は誇張の疑いが強い。cache はモデルごとに残り続ける。このため A→B→A と戻った時、A の cache が 5 分以内に書かれていれば、A が前回書いた所までは読み出し（0.05 倍）で済む。払うのは、その後に B が足した差分の書き込みだけになる。文脈全体の書き直しは、各モデルで初めて呼ぶ時と、5 分以上あいた時と、20 ブロックの lookback から外れた時だけ。まとめの①（advisor の続けての相談は差分×$5 ＋ C×$0.20）と同じ考え方を②にも当てはめるべき。",
+     "evidence": "prompt-caching: lookback 20 ブロック「In a growing conversation the final block works as long as each turn adds fewer than 20 blocks: earlier content never changes, so the next request's lookback finds the prior write」。cache はモデルごとに分かれ（per-model）、TTL 5 分。②に適用したのは推論（交互の実測は無い）",
+     "confidence": "medium"
+    },
+    {
+     "claim": "(f)② の『約 40 倍』は式が合っていない。$0.60 は 1 往復（2 ターン）分の費用なのに、比べる相手の $0.016 は Opus の 1 ターン分（8 万×$0.20/M）。同じ 2 ターンで比べれば、Opus のまま続けて $0.032 なので約 19 倍、Sonnet のまま続けて $0.016 なので約 37 倍。どちらにしても、上の『cache はモデルごとに残り続ける』点を入れると、さらに大きく下がる。",
+     "evidence": "80000×0.20/1e6=0.016（1 ターン）、×2=0.032。80000×(5+2.5)/1e6=0.60",
+     "confidence": "high"
+    },
+    {
+     "claim": "(e) の再検証費 $1.4〜1.8 は入力しか数えていない。出力（adaptive thinking を含む）を足すと、最大でさらに 8 ターン × 8000 トークン × $10/M（Batch）= $0.64 かかる。また、検証の試行は最大 3 回まであり（VERIFY_MAX_ATTEMPTS=3）、失敗すれば同じ費用がもう一度かかる。動画の記録には Gemini の呼び出しも別に払う（費用は未計測）。",
+     "evidence": "verify.ts:1431 `max_tokens: 8000`・`thinking: { type: 'adaptive' }`、:59 MAX_TURNS=8。env.ts の cfg `verifyMaxAttempts: intVar(env.VERIFY_MAX_ATTEMPTS, 3)`。verify.ts:847-895 の Gemini 動画呼び出し。Batch の出力単価は pricing の表で Opus 5.5 $10/MTok",
+     "confidence": "high（上限の式）/ 実額は未計測"
+    },
+    {
+     "claim": "見落としていた費用がほかにもある。Managed Agents の session runtime が $0.08/時（running 中だけ）、web search が 1,000 回あたり $10。どちらも作り直し 1 回あたりでは小さい（推測: 数セント）。ただ、全体の数字に入れておく必要がある。",
+     "evidence": "pricing「Claude Managed Agents is billed on two dimensions: tokens and session runtime」「Session runtime | $0.08 USD per session-hour | running status duration」「Web search triggered inside a session incurs the standard $10 USD per 1,000 searches」「Batch API discount … Sessions are stateful and interactive. There is no batch mode.」",
+     "confidence": "high（単価）"
+    },
+    {
+     "claim": "(e) で引いた公式の段階的な上げ方のデータ（low で試し、外れた分だけ high、で $0.17）は、Opus 5.5 の中で effort を上げる話だった。Sonnet の下書きから Opus の作り直しへ『モデルを』上げる話ではない。方向を支える材料にはなるが、直接の根拠にはならない。また作り直しの Opus は effort 'high' に固定されている。Opus 5.5 の既定は medium で、high は費用が約 1/0.7 ≈ 1.4 倍になる。この選び方も費用を左右する。",
+     "evidence": "llms-full.txt 194039「Escalation figures come task by task from the Opus 5.5 runs: low first, then high on its failures … about $0.17」。194033「Claude Opus 5.5 scored about 2.5 points lower at its default, medium, for about 70% of the cost per task」。jobs.ts:366 `effort: 'high'`",
+     "confidence": "high"
+    },
+    {
+     "claim": "確認: 引用文は実在した。xhigh が high の 2.5 倍の費用で +1.4 点（Opus 5.5）。Sonnet 5.5 は xhigh/max で、作業の後に自分でレビューを始める。Sonnet high は 77.8%・$0.33 で、Opus の既定より約 9 点低く、費用は約 2/5。advisor への相談は、その時点の会話全体を送り、advisor 側の単価で課金される。『2/5 の費用』から、Opus で下書きした場合の増分 ≈ 1.5×D という式も合っている。",
+     "evidence": "llms-full.txt 194033・193597・194088・131074行",
+     "confidence": "high"
+    },
+    {
+     "claim": "確認: 費用の数え方の食い違いもまとめのとおり。verify.ts は cache read を 0.1 倍で数えており、Opus 5.5 の公式 0.05 倍に比べて 2 倍の数え過ぎ。ただし、上のとおり検証の Batch では読み出しがほぼ 0 と見込まれるので、実際に金額へ響くのは小さいはず（推測）。",
+     "evidence": "verify.ts:318-326 `(u.cache_read_input_tokens ?? 0) * PRICE_IN * 0.1`、:1444 のコメント。pricing の脚注 2",
+     "confidence": "high（食い違いがあること）/ medium（影響が小さいこと）"
+    },
+    {
+     "claim": "確認: (a)(c) の算数は合っている。P_sys 1.5〜3 万 ×($5−$0.20)/M = $0.072〜0.144。(c) の例は $0.75 + $0.96 + $0.60 = $2.31、前の版の分は $0.15 + $0.30 = $0.45。ただし入れた値（ターン数・文脈・V）は推測のまま。",
+     "evidence": "手計算で検算。単価は pricing",
+     "confidence": "high（算数）"
+    }
+   ],
+   "open": [
+    "本番 D1 の実測が無い: verifications の usage（cache_read と cache_creation）、job_retros.metrics_json の requests.*、cost_ledger の kind 別の合計、factory_jobs の時刻の間隔。読む許可が要る",
+    "Managed Agents のハーネスがどこに cache のブレークポイントを置くか、同じ agent の別 session の間で system と tools の cache が当たるかは、公式資料に書かれていない",
+    "triage と改善係（retro）が LLM を呼ぶ費用を、作り直し 1 回あたりの金額に入れるべきかは未確認（今回は調べていない）",
+    "下書き agent の effort の設定値（agent の設定。repo の外の ant apply 側）は確認していない",
+    "buildReworkBrief の origBrief が前の作り直しの brief（差し戻し理由が積み重なった版）を受け取っているかは、呼び出し元までたどっていない（publish.ts:123 の形からの推測）",
+    "交互に切り替える場合の cache の挙動（per-model cache が残り、差分だけ書けば済むか）は推論。実際に呼び出して usage で確かめていない"
+   ]
+  }
+ }
+}
