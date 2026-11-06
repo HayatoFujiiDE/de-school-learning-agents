@@ -565,3 +565,5 @@ gitleaks detect --no-git
    - `GET /api/status` と `GET /api/images/status` の 2 項目。管理画面は escape して出す。
    - §O-8 の grep が `src/env.ts` と `src/openai.ts` の 2 ファイルのまま。既存のテストが green。新しいテストが変更前のコードで落ちる。
 9. **範囲**: `src/openai.ts`・`src/env.ts`・`src/images.ts`（consumer の記録だけ）・`src/routes/images.ts`・`GET /api/status` を組み立てる所・`src/fake/openai.ts`・`public/admin/admin.js`・`test/`。migration・`wrangler.jsonc`（secret は書かない）・職人の定義・rubric は触らない。
+
+§O-13 実装後の裁定（2026-11-06）: 登録の段階（§O-3 c の I1。`openAiKeyPresent` = 主の鍵の有無）は変えない。主の鍵が無く予備だけある運用は想定しない（主を消す時は予備を主に入れ替える）。§O-13 2 の「主なしで予備で 1 回」は port の中だけで効き、登録の後に主の鍵が消えた時にだけ通る。ログの `ok` は「予備の呼び出しが例外にならなかったか」。settings の書き込みは R の後（落ちても生成の結果は保存済み）。
