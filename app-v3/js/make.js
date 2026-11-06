@@ -28,6 +28,10 @@
     var t = String(text || ''), low = t.toLowerCase();
     // 自分を助ける道具（contract-Y §Y-3 / Y-8 の 9）: 既存の判定より前。「マイクラの道具」も tool（意図した仕様）
     if (/論点|道具|整理|合図/.test(t)) return 'tool';
+    // §AE-2: アスレチック → コマ撮り → 物語（既存のマイクラ / Python / 回路より前）
+    if (/アスレチック|パルクール|ギミック/.test(t)) return 'ath';
+    if (/コマ撮り|コマどり|コマドリ|ストップモーション|動画/.test(t)) return 'stop';
+    if (/小説|物語|ものがたり|お話/.test(t)) return 'story';
     if (/マイクラ|建築|コマンド/.test(t)) return 'mc';
     if (low.indexOf('python') >= 0 || /ゲーム|プログラム/.test(t)) return 'py';
     if (low.indexOf('led') >= 0 || /回路|電気|電池/.test(t)) return 'circuit';
@@ -75,7 +79,8 @@
   // 見本から（入口の「動かしてみる」）
   function fromSample(sampleId, o) {
     o = o || {};
-    var s = sampleDef(sampleId) || MD.samples[0], th = MD.theme(s.theme);
+    // 知らない見本 id はマイクラ（§AE-3 で並びが変わっても、今までの落ち先を変えない）
+    var s = sampleDef(sampleId) || sampleDef('mc'), th = MD.theme(s.theme);
     var a = newAct({ id: o.id, title: MD.pick(MD.variant(s.theme, s.variant).title, o.mode), origin: o.origin || 'sample', theme: s.theme,
       sampleId: s.id, catalogId: o.catalogId, stage: stageOf(s.theme, s.variant, 'sample'), now: o.now });
     say(a, 'open', o.mode);
@@ -178,6 +183,34 @@
     if (theme) say(a, 'open', o.mode);
     return { id: a.id, act: a, created: true, changed: false };
   }
+
+  // ---------- §AE-4「こんなのも作れる」: 提案から外で作って写真で記録する活動（stepsKind 'ext'）----------
+  // origin 'project'・projectId・題・提案の手順。題材は 'project'（写真のダミーは提案のカテゴリの線画）。
+  // fromOdai と同じ約束: 同じ提案から作った活動があれば作らずにその id を返す。o: { id, mode, now, acts }。戻り値 { id, act, created }
+  function fromProject(p, o) {
+    o = o || {};
+    if (!p || !p.id) return null;
+    var hit = null;
+    (o.acts || []).forEach(function (x) { if (!hit && x && x.projectId === p.id) hit = x; });
+    if (hit) return { id: hit.id, act: hit, created: false };
+    var a = newAct({ id: o.id, title: MD.pick(p.title, o.mode), origin: 'project', theme: PROJECT_THEME, catalogId: p.catalogId || null,
+      ext: { link: null, photos: [], visible: [] }, steps: p.steps, stepsKind: 'ext', now: o.now });
+    a.projectId = p.id;
+    return { id: a.id, act: a, created: true };
+  }
+  // ---------- §AE-3 / AE-4 入口の組（DOM に触れない）。page は何周しても一巡で最初へ ----------
+  function pageAt(n, size, page) { var c = Math.max(1, Math.ceil(n / size)), p = Math.floor(+page) || 0; return ((p % c) + c) % c; }
+  // 見本 3 枚: first（予定表から来た時の題材）があれば、その題材の見本を含む組をその見本を先頭にして出す。戻り値 { page, items }
+  function samplePageOf(samples, page, first) {
+    var list = samples || [], p = pageAt(list.length, 3, page), hit = -1;
+    if (first) list.forEach(function (s, i) { if (hit < 0 && s.theme === first) hit = i; });
+    if (hit >= 0) p = Math.floor(hit / 3);
+    var items = list.slice(p * 3, p * 3 + 3);
+    if (hit >= 0) items = [list[hit]].concat(items.filter(function (s) { return s !== list[hit]; }));
+    return { page: p, items: items };
+  }
+  function samplePage(samples, page, first) { return samplePageOf(samples, page, first).items; }
+  function projectPage(projects, page) { var list = projects || [], p = pageAt(list.length, 4, page); return list.slice(p * 4, p * 4 + 4); }
 
   // ---------- 作業対象と変化 ----------
   // いま「確かめた」状態（最後の変化の写し。無ければ始めの状態）
@@ -317,9 +350,17 @@
   // 「どこが違う？」の材料・色 は必要な物、それ以外は手順。言葉で頼む も手順
   var ODAI_THEME = 'odai', ODAI_OPTS = ['osteps', 'oneed'], ODAI_ASPECT = ['osteps', 'osteps', 'oneed', 'osteps', 'osteps'];
   function isOdaiExt(a) { return !!(a && a.theme === ODAI_THEME); }
+  // §AE-4: 提案から作った活動（theme 'project'）。任せる候補はお題から作った活動と同じ 2 つ（中身は提案の手順 / 必要な物）
+  var PROJECT_THEME = 'project';
+  function isProjectExt(a) { return !!(a && a.theme === PROJECT_THEME); }
   function odaiDef(a) { var K = DES.todayData; return K && a && a.odaiId ? K.get(a.odaiId) : null; }
+  // 対話のお題（§AF。news / talk / philo）から作った活動: 必要な物の欄が無いので、任せる候補は「手順を整理して」だけ（レビューへの裁定）
+  function isDialogAct(a) { var K = DES.todayData; return !!(isOdaiExt(a) && a.odaiId && K && K.getDialog && K.getDialog(a.odaiId)); }
+  function odaiOpts(a) { return isDialogAct(a) ? ['osteps'] : ODAI_OPTS.slice(); }
   // メモの中身: お題のデータから（today-data.js の leaveNote）。データが無い時は活動の手順だけ
   function odaiNote(a, opt, alt) {
+    var pjd = isProjectExt(a) ? MD.project(a.projectId) : null;
+    if (pjd) return MD.projectNote(pjd, opt, alt);
     var K = DES.todayData, od = odaiDef(a);
     if (od && K.leaveNote) return K.leaveNote(od, opt, alt);
     if (opt !== 'osteps' || !a.steps.length) return null;
@@ -327,23 +368,23 @@
   }
   function leaveOdai(a, opt, o) {
     o = o || {};
-    if (opt === 'aspect') opt = ODAI_ASPECT[Math.max(0, Math.min(4, o.aspect | 0))];
-    if (ODAI_OPTS.indexOf(opt) < 0) return { act: a, ids: [] };
+    if (opt === 'aspect') { opt = ODAI_ASPECT[Math.max(0, Math.min(4, o.aspect | 0))]; if (odaiOpts(a).indexOf(opt) < 0) opt = 'osteps'; }
+    if (odaiOpts(a).indexOf(opt) < 0) return { act: a, ids: [] };
     var A = clone(a), card = o.card ? find(A.shelf, o.card) : null;
     // 同じ種類のメモを作り直す時は、もう一方の形にする（§U-11 指摘 13 と同じ）
     var alt = !!(card && card.kind === 'note' && card.opt === opt && !card.alt), n = odaiNote(A, opt, alt);
     if (!n) return { act: a, ids: [] };
-    var spec = { kind: 'note', theme: ODAI_THEME, title: clone(n.title), lines: clone(n.lines), opt: opt, alt: alt };
+    var spec = { kind: 'note', theme: isProjectExt(A) ? PROJECT_THEME : ODAI_THEME, title: clone(n.title), lines: clone(n.lines), opt: opt, alt: alt };
     spec.batch = nid(A, 'b'); spec.time = tick(A, 1); spec.id = nid(A, 'k'); spec.state = 'making';
     A.shelf = [spec].concat(A.shelf);
     return { act: A, ids: [spec.id], opt: opt };
   }
   function remakeOptions(a, c) {
-    if (isOdaiExt(a)) return ODAI_OPTS.slice();
+    if (isOdaiExt(a) || isProjectExt(a)) return odaiOpts(a);
     return c && c.kind === 'note' ? ['calc', 'steps', 'cmd'] : ['redo', 'two', 'fix'];
   }
   function leaveOptions(a) {
-    if (isOdaiExt(a)) return ODAI_OPTS.slice();
+    if (isOdaiExt(a) || isProjectExt(a)) return odaiOpts(a);
     if (a.stage && a.stage.kind === 'sample') return ['find', 'one'];
     if (a.stage && a.stage.kind === 'draft') return ['redo', 'two', 'fix'];
     if (a.ext) return ['calc', 'steps', 'cmd'];
@@ -396,7 +437,7 @@
   // 任せる（作っている の破線カードを置く。中身は settle で決まる）
   function leave(a, opt, o) {
     o = o || {};
-    if (isOdaiExt(a)) return leaveOdai(a, opt, o);
+    if (isOdaiExt(a) || isProjectExt(a)) return leaveOdai(a, opt, o);
     if (opt === 'aspect') opt = (isToolAct(a) ? TOOL_ASPECT : ASPECT_OPT)[Math.max(0, Math.min(4, o.aspect | 0))];
     var A = clone(a), base = o.card ? { stage: cardStage(find(A.shelf, o.card)), fromStage: false } : baseStage(A);
     if (!base.stage || (base.stage.kind === 'note' && opt !== 'calc' && opt !== 'steps' && opt !== 'cmd')) base = baseStage(A);
@@ -458,6 +499,9 @@
     var n = last ? (last.n + 1) % cnt : 0;
     var ph = { id: nid(A, 'ph'), theme: odai ? ODAI_THEME : (last ? last.theme : A.theme), n: n, kind: kind === 'shot' ? 'shot' : 'photo', time: nowOf(A) };
     if (odai) ph.odai = A.odaiId;
+    // 提案から作った活動の写真は提案のカテゴリの線画（§AE-4）
+    var pjd = isProjectExt(A) ? MD.project(A.projectId) : null;
+    if (pjd) ph.cat = pjd.cat;
     A.ext.visible = visibleIds(A).concat([ph.id]);
     A.ext.photos.push(ph);
     var res = commitChange(A, { who: 'own', kind: ph.kind, what: { k: ph.kind === 'shot' ? 'added_shot' : 'added_photo' }, photoId: ph.id, advance: true });
@@ -563,7 +607,7 @@
     return 'unknown';
   }
   function requestOpt(a) {
-    if (isOdaiExt(a)) return 'osteps';
+    if (isOdaiExt(a) || isProjectExt(a)) return 'osteps';
     if (a.stage && a.stage.kind === 'sample') return 'one';
     if (a.stage && a.stage.kind === 'draft') return 'fix';
     if (a.ext) return 'cmd';
@@ -669,6 +713,8 @@
     var work = { id: o.id, actId: a.id, at: ch ? ch.id : null, atTime: ch ? ch.time : null, title: title, like: like || null, from: 'make',
       theme: a.theme, art: art, roles: roles(a, ch ? ch.id : null), date: o.date || null, snap: clone(st), snapTime: ch ? ch.time : nowOf(a),
       status: status, craft: null, shares: [] };
+    // 提案から作った活動の作品は提案の id を持つ（作品展示の種類を提案のカテゴリにする。レビューへの裁定）
+    if (a.projectId) work.projectId = a.projectId;
     return { works: [work].concat(works || []), work: work, act: a };
   }
   // 保存済みの作品に §W の欄を補う（§W-5）: status 無し → done、craft 無し → null、shares 無し → []。補うだけで消さない
@@ -860,6 +906,44 @@
     return names;
   }
 
+  // ---------- 保存の失敗を戻す（contract-app 共通の約束「失敗は save_fail + 画面状態を戻す」。作る・お題・話す・展示で同じ約束）----------
+  // keys の今の値を写してから fn(st) で書き換え、keys を順に save(key) する。1 つでも偽なら、保存していないキーは書き換える前の値に戻し、
+  // 先に保存できたキーは前の値で保存し直せた時だけ前の値に戻す（保存し直せなければ新しい値のまま = キーごとに「メモリ = 保存」）。
+  // st.saveFailed を立てて false。全部保存できたら true（saveFailed を下げるかは呼ぶ側）
+  function trySave(st, keys, fn, save) {
+    var before = {}, done = [], ok = true;
+    keys.forEach(function (k) { before[k] = clone(st[k]); });
+    fn(st);
+    keys.forEach(function (k) { if (!ok) return; if (save(k)) done.push(k); else ok = false; });
+    if (ok) return true;
+    keys.forEach(function (k) {
+      if (done.indexOf(k) < 0) { st[k] = before[k]; return; }
+      var now = st[k];
+      st[k] = before[k];
+      if (!save(k)) st[k] = now;
+    });
+    st.saveFailed = true;
+    return false;
+  }
+  // 作った活動を先頭に足して保存する（提案の「これで始める」・対話のお題の「作ってみる」）。保存できなければ足さずに false
+  function addAct(st, a, save) { return trySave(st, ['activities'], function (s) { s.activities = [a].concat(s.activities || []); }, save); }
+  // §AE-3 / AE-4「別の見本を見る」「別の提案を見る」: 組の位置を cur の次へ（最後の次は最初）して保存。保存できなければ前の組のまま false
+  function swapPage(st, kind, cur, save) {
+    var samples = kind === 'samples', key = samples ? 'samplePage' : 'projectPage';
+    var total = Math.max(1, Math.ceil((samples ? MD.samples : MD.projects).length / (samples ? 3 : 4)));
+    return trySave(st, ['makeSide'], function (s) { s.makeSide[key] = ((cur | 0) + 1) % total; }, save);
+  }
+  // §AE-6: 見本を足した回が古ければ不足分の活動と作品を足し、活動・作品・番号を順に保存する。番号を進めるのは全部保存できた時だけ
+  // （1 つでも失敗したら足した見本も番号も前に戻す。次の読み込みでまた足す）。本人が外した見本は MD.addSeeds が足さない
+  function applySeeds(s, save) {
+    if (!s.makeSide || s.makeSide.seedV >= MD.SEED_V) return true;
+    var add = MD.addSeeds(s.activities, s.works, s.makeSide.seedV);
+    return trySave(s, add.changed ? ['activities', 'works', 'makeSide'] : ['makeSide'], function (x) {
+      if (add.changed) { x.activities = add.activities; x.works = add.works; }
+      x.makeSide.seedV = MD.SEED_V;
+    }, save);
+  }
+
   var pure = {
     pickTheme: pickTheme, fromSample: fromSample, fromText: fromText, fromExt: fromExt, committed: committed, isDirty: isDirty, setParam: setParam,
     whatDiff: whatDiff, commitChange: commitChange, test: test, revert: revert, canRevert: canRevert, undoRevert: undoRevert,
@@ -874,6 +958,10 @@
     fromSelf: fromSelf, findSelfLink: findSelfLink, isSelfLink: isSelfLink, changeOptsKey: changeOptsKey, TOOL_ASPECT: TOOL_ASPECT,
     // §W（作品の一覧・詳細）が使う
     defaultStatus: defaultStatus, normalizeWorks: normalizeWorks, chState: chState, baseState: baseState, curState: curState,
+    // §AE
+    fromProject: fromProject, samplePage: samplePage, projectPage: projectPage, isProjectExt: isProjectExt, PROJECT_THEME: PROJECT_THEME,
+    // レビューへの裁定（保存の失敗を戻す）
+    trySave: trySave, addAct: addAct, swapPage: swapPage, applySeeds: applySeeds,
     // contract-AD §18-1
     setWith: setWith
   };
@@ -910,9 +998,27 @@
     n.fromActId = a.id;
     n.catalogId = a.catalogId || n.catalogId || null;
     if (a.odaiId) n.odaiId = a.odaiId;
+    // 提案から作った活動（§AE-4）: 提案の id を引き継ぐ（必要な物のメモ・写真のカテゴリ・展示の種類が提案から決まる）
+    if (a.projectId) n.projectId = a.projectId;
     return n;
   }
   pure.fromTrail = M.fromTrail = fromTrail;
+  // 作品展示の「いっしょに作る約束」→「先に準備する」（contract-app §AG-5）: 外で作って写真で記録する活動（origin 'gallery'・promiseId 付き）。
+  // fromOdai と同じ約束: 同じ約束から作った活動があれば作らずにその id を返す。o: { id, title, steps: [[中,小]…], theme, now, acts }
+  // 戻り値: { id, act, created }。約束の id か題が無ければ null
+  function fromPromise(p, o) {
+    o = o || {};
+    if (!p || typeof p.id !== 'string' || !p.id || !o.title) return null;
+    var hit = null;
+    (o.acts || []).forEach(function (x) { if (!hit && x && x.promiseId === p.id) hit = x; });
+    if (hit) return { id: hit.id, act: hit, created: false };
+    var theme = MD.THEMES.indexOf(o.theme) >= 0 ? o.theme : 'mc';
+    var steps = Array.isArray(o.steps) && o.steps.length ? o.steps : MD.theme(theme).extSteps;
+    var a = newAct({ id: o.id, title: String(o.title), origin: 'gallery', theme: theme, ext: { link: null, photos: [], visible: [] }, steps: steps, stepsKind: 'ext', now: o.now });
+    a.promiseId = p.id;
+    return { id: a.id, act: a, created: true };
+  }
+  pure.fromPromise = M.fromPromise = fromPromise;
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
   if (typeof document === 'undefined') return;
 
@@ -928,7 +1034,9 @@
     return isObj(a) && typeof a.id === 'string' && typeof a.title === 'string' && Array.isArray(a.changes) && Array.isArray(a.shelf) &&
       Array.isArray(a.thread) && Array.isArray(a.steps) && typeof a.stepIdx === 'number' && STATES.indexOf(a.state) >= 0;
   }
-  function sideDefaults() { return { chatHidden: false, shelfFolded: false, tab: 'stage', paused: null, lastStop: null }; }
+  // §AE: seedV = 見本を足した回（MD.SEED_V より古ければ読み込み時に足す）/ samplePage・projectPage = 入口の組の位置（リロードで残る）
+  function sideDefaults() { return { chatHidden: false, shelfFolded: false, tab: 'stage', paused: null, lastStop: null, seedV: 0, samplePage: 0, projectPage: 0 }; }
+  function count0(v) { return typeof v === 'number' && v >= 0 && v % 1 === 0 && v < 1000 ? v : 0; }
   var CLEAN = {
     activities: function (v) { return Array.isArray(v) ? v.filter(validAct) : null; },
     works: function (v) { return Array.isArray(v) ? v.filter(function (w) { return isObj(w) && typeof w.id === 'string' && typeof w.title === 'string'; }) : null; },
@@ -936,7 +1044,8 @@
       if (!isObj(v)) return null;
       var d = sideDefaults();
       return { chatHidden: v.chatHidden === true, shelfFolded: v.shelfFolded === true, tab: v.tab === 'consult' ? 'consult' : 'stage',
-        paused: typeof v.paused === 'string' ? v.paused : d.paused, lastStop: typeof v.lastStop === 'string' ? v.lastStop : d.lastStop };
+        paused: typeof v.paused === 'string' ? v.paused : d.paused, lastStop: typeof v.lastStop === 'string' ? v.lastStop : d.lastStop,
+        seedV: count0(v.seedV), samplePage: count0(v.samplePage), projectPage: count0(v.projectPage) };
     }
   };
   if (DES.store && !DES.store._make) {
@@ -958,6 +1067,10 @@
       s.activities = s.activities.map(function (a) { return migrate(a, tx); });
       // 作品が保存されていない（初めて・はじめの状態に戻した）時は見本の作品（§W-6）。活動に結び付くものだけ
       if (!s.works) s.works = MD.seedWorks(s.activities);
+      // §AE-6: 見本を足した回が古ければ、不足分の活動と作品だけ足して番号を上げる（既存の活動・作品は変えない）。
+      // 番号は読み込みの時に保存する（作品だけ保存する操作が続いても、本人が外した見本を次の読み込みでまた足さないように）。
+      // 番号を進めるのは活動・作品・番号の保存が全部できた時だけ（レビューへの裁定。失敗したら足さずに save_fail、次の読み込みでまた足す）
+      applySeeds(s, function (k) { return save0.call(DES.store, k); });
       // 前の版の作品は 残した時点（at / snap）を補い（§U-12 補足 2）、§W の欄（status / craft / shares）を補う（§W-5）
       s.works = normalizeWorks(s.works.map(function (w) { return migrateWork(w, s.activities); }));
       // 「作っている」の途中で閉じた・読み込んだ活動は、ここで完了させる（§U-11 指摘 11）。新しいカードが入るので棚は開く
@@ -1035,6 +1148,16 @@
     return !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   }
   function go(hash) { if (window.location.hash !== hash) window.location.hash = hash; else DES.app.render(); }
+  function esc(v) { return window.CSS && CSS.escape ? CSS.escape(v) : String(v).replace(/"/g, '\\"'); }
+  function storeSave(k) { return DES.store.save(k); }
+  // 保存に失敗した時（共通の約束）: 状態は trySave が戻してある。描き直して押したボタンへフォーカスを戻し、save_fail を出す
+  function saveFailUi(sel) {
+    DES.app.renderSaveState();
+    DES.app.render();
+    var n = sel ? document.querySelector(sel) : null;
+    if (n) n.focus();
+    DES.app.toast(T('save_fail'));
+  }
   function today() { var d = DES.data.today.split('-'); return (+d[1]) + '/' + (+d[2]); }
 
   // ---------- 入口から活動を作る（話す bridge / 予定表 / 入口） ----------
@@ -1072,7 +1195,7 @@
     return a;
   };
   // 予定表 mine 行の「作るで開く」: その取り組みの制作中があれば作業台、無ければ入口（同じカテゴリの見本を先頭に）
-  var CAT_THEME = { minecraft: 'mc', programming: 'py', digital: 'circuit' };
+  var CAT_THEME = { minecraft: 'mc', programming: 'py', digital: 'circuit', media: 'stop' };
   M.openFromPlan = function (row) {
     if (!row) return;
     var hit = null;
@@ -1185,6 +1308,8 @@
     if (vp.length) return MD.photoArt(vp[vp.length - 1]);
     // お題の活動（theme 'odai'）はお題の絵（3 題材の見本を出さない）
     if (isOdaiExt(a)) { var od = odaiDef(a); return od ? DES.todayData.cardArt(od) : MD.photoArt({ theme: ODAI_THEME }); }
+    // 提案から作った活動は提案のカテゴリの線画（§AE-4。マイクラの絵に落とさない）
+    if (isProjectExt(a)) { var pjd = MD.project(a.projectId); return MD.catArt(pjd ? pjd.cat : null); }
     var th = MD.theme(a.theme), c = a.shelf.filter(function (x) { return x.kind !== 'note'; })[0];
     return MD.art(c ? cardStage(c) : stageOf(a.theme, th.sample, 'sample'));
   }
@@ -1214,11 +1339,40 @@
       ])
     ]);
   }
-  function orderedSamples() {
-    var first = mk().makeFirst, list = MD.samples.slice();
-    if (first) list.sort(function (a, b) { return (a.theme === first ? 0 : 1) - (b.theme === first ? 0 : 1); });
-    return list;
+  // §AE-3: 入口の見本 3 枚（組の位置は makeSide.samplePage。予定表から来た時は makeFirst の題材の組）
+  function shownSamples() { return samplePageOf(MD.samples, S().makeSide.samplePage, mk().makeFirst); }
+  // §AE-5: 提案の絵。photo / illust で画像の一覧（DES.thumbs）にあればそれ（「AI が作ったイメージ」の印）、無い・読めない時はカテゴリの線画
+  function thumbOf(p) {
+    var th = DES.thumbs, u = mk();
+    if (p.style !== 'photo' && p.style !== 'illust') return null;
+    if (!th || !Object.prototype.hasOwnProperty.call(th, p.id) || typeof th[p.id] !== 'string' || (u.thumbFail && u.thumbFail[p.id])) return null;
+    return th[p.id];
   }
+  function projectArt(p) {
+    var src = thumbOf(p);
+    if (!src) return H('div', { class: 'pj-art' }, [DES.raw(MD.catArt(p.cat))]);
+    return H('div', { class: 'pj-art has-img' }, [
+      H('img', { src: src, alt: MD.pick(p.title, mode()), loading: 'lazy', 'data-thumb': p.id }),
+      H('span', { class: 'pj-ai' }, T('pj_ai_image'))
+    ]);
+  }
+  function projectCard(p) {
+    var m = mode();
+    return H('article', { class: 'pj-card' }, [
+      projectArt(p),
+      H('div', { class: 'pj-body' }, [
+        H('span', { class: 'pill pj-chip' }, T('pj_cat_' + p.cat)),
+        H('h3', null, MD.pick(p.title, m)),
+        H('p', { class: 'pj-what' }, MD.pick(p.what, m)),
+        H('p', { class: 'pj-first' }, T('pj_first', { step: MD.pick(p.first, m) })),
+        H('p', { class: 'muted pj-need' }, T('pj_need', { need: MD.pick(p.need, m), min: p.min })),
+        p.safety ? H('span', { class: 'pill orange pj-safety' }, T('pj_safety')) : null,
+        H('button', { class: 'btn orange small', type: 'button', 'data-action': 'mk-project', 'data-arg': p.id }, T('pj_start'))
+      ])
+    ]);
+  }
+  // 入れ替えた直後の描画だけ、新しい組をふわっと出す（150ms。reduced-motion は CSS で止まる）
+  function fadeCls(kind) { var u = mk(); if (u.fadeIn !== kind) return ''; u.fadeIn = null; return ' is-fadein'; }
   function renderEntry(main) {
     var acts = S().activities.filter(function (a) { return a.state === 'working' || a.state === 'paused'; });
     var u = mk(), canStart = !!u.ideaText.replace(/\s/g, '');
@@ -1231,8 +1385,16 @@
       ]) : null,
       H('section', { class: 'make-sec', 'aria-labelledby': 'mk-samples-h' }, [
         H('div', { class: 'section-head' }, [H('h2', { id: 'mk-samples-h' }, T('samples_h'))]),
-        H('div', { class: 'idea-options sample-options' }, orderedSamples().map(function (s) { return sampleCard(s); })),
-        H('div', { class: 'more-row' }, [H('button', { class: 'link-btn', type: 'button', 'data-action': 'mk-more-samples' }, T('more_samples'))])
+        H('div', { class: 'idea-options sample-options' + fadeCls('samples'), 'data-swap': 'samples' }, shownSamples().items.map(function (s) { return sampleCard(s); })),
+        H('div', { class: 'more-row' }, [H('button', { class: 'link-btn', type: 'button', 'data-action': 'mk-more-samples' }, T('more_samples'))]),
+        H('p', { class: 'sr-only', 'aria-live': 'polite', 'data-live': 'samples' }, '')
+      ]),
+      // §AE-4「こんなのも作れる」（見本と思いつきの間）
+      H('section', { class: 'make-sec make-projects', 'aria-labelledby': 'mk-pj-h' }, [
+        H('div', { class: 'section-head' }, [H('div', null, [H('h2', { id: 'mk-pj-h' }, T('pj_h')), H('p', { class: 'sec-sub' }, T('pj_sub'))])]),
+        H('div', { class: 'pj-grid' + fadeCls('projects'), 'data-swap': 'projects' }, projectPage(MD.projects, S().makeSide.projectPage).map(projectCard)),
+        H('div', { class: 'more-row' }, [H('button', { class: 'link-btn', type: 'button', 'data-action': 'mk-more-projects' }, T('pj_more'))]),
+        H('p', { class: 'sr-only', 'aria-live': 'polite', 'data-live': 'projects' }, '')
       ]),
       H('section', { class: 'make-sec make-idea', 'aria-labelledby': 'mk-idea-h' }, [
         H('div', { class: 'section-head' }, [H('h2', { id: 'mk-idea-h' }, T('from_idea_h'))]),
@@ -1711,8 +1873,47 @@
 
   A['mk-sample'] = function (el) { createAndOpen(fromSample(el.getAttribute('data-arg'), { id: newId('a'), now: DES.data.now, mode: mode() })); };
   A['mk-open'] = function (el) { openAct(el.getAttribute('data-id')); };
-  // 見本は 3 つだけ（U-1）。見本が 0 件の時の文（no_samples）は使わない（§U-11 指摘 18）
-  A['mk-more-samples'] = function () { DES.app.toast(MD.samples.length ? T('only_samples') : T('no_samples')); };
+  // §AE-3 / AE-4「別の見本を見る」「別の提案を見る」: 次の組へ（最後の次は最初）。今の組が 150ms で消え、次の組が 150ms で現れる（reduced-motion は即時）。
+  // フォーカスはボタンに残し、aria-live で入れ替えたことを伝える。組の位置は makeSide に保存（リロードで残る）。
+  // 先に保存し、保存できなければ入れ替えない（今の組のまま・save_fail。共通の約束）
+  function swapGroup(kind) {
+    var u = mk();
+    if (u.swapping) return;
+    var cur = kind === 'samples' ? shownSamples().page : pageAt(MD.projects.length, 4, S().makeSide.projectPage);
+    var action = kind === 'samples' ? 'mk-more-samples' : 'mk-more-projects', sel = '[data-action="' + action + '"]';
+    if (!swapPage(S(), kind, cur, storeSave)) { saveFailUi(sel); return; }
+    S().saveFailed = false;
+    if (kind === 'samples') u.makeFirst = null;
+    function run() {
+      u.swapping = false;
+      if (motionOK()) u.fadeIn = kind;
+      DES.app.render();
+      var b = document.querySelector(sel);
+      if (b) b.focus();
+      setTimeout(function () { var live = document.querySelector('[data-live="' + kind + '"]'); if (live) live.textContent = T(kind === 'samples' ? 'samples_swapped' : 'pj_swapped'); }, 60);
+    }
+    var grid = document.querySelector('[data-swap="' + kind + '"]');
+    if (!motionOK() || !grid) { run(); return; }
+    u.swapping = true;
+    grid.classList.add('is-fading');
+    setTimeout(run, 150);
+  }
+  A['mk-more-samples'] = function () { swapGroup('samples'); };
+  A['mk-more-projects'] = function () { swapGroup('projects'); };
+  // §AE-4「これで始める」: 外で作って写真で記録する活動を作って作業台へ（同じ提案の活動があればそれを開く）
+  A['mk-project'] = function (el) {
+    var p = MD.project(el.getAttribute('data-arg'));
+    if (!p) return;
+    var r = fromProject(p, { id: newId('a'), mode: mode(), now: DES.data.now, acts: S().activities });
+    if (!r) return;
+    if (!r.created) { openAct(r.id); return; }
+    // 保存できなければ活動を足さず、作業台へ移らない・トーストも出さない（save_fail。共通の約束）
+    if (!addAct(S(), r.act, storeSave)) { saveFailUi('[data-action="mk-project"][data-arg="' + esc(p.id) + '"]'); return; }
+    S().saveFailed = false;
+    DES.app.commit();
+    go('#make/' + r.id);
+    DES.app.toast(T('pj_placed'));
+  };
   A['mk-start'] = function () {
     var text = mk().ideaText.replace(/^\s+|\s+$/g, '');
     if (!text) return;
@@ -2320,6 +2521,17 @@
       if (u.remakeFor && !t.closest('.remake-opts') && !t.closest('[data-action="mk-remake-open"]')) { u.remakeFor = null; redraw = true; }
       if (redraw && DES.app.route() === 'make') DES.app.render();
     });
+    // §AE-5: 提案の画像が読めなかった時はカテゴリの線画に替える（以後の描画も線画。error は bubble しないので capture で受ける）
+    document.addEventListener('error', function (e) {
+      var t = e.target, id = t && t.getAttribute ? t.getAttribute('data-thumb') : null, p = id ? MD.project(id) : null, box = t && t.parentNode;
+      if (!p || !box) return;
+      var u = mk();
+      if (!u.thumbFail) u.thumbFail = {};
+      u.thumbFail[p.id] = true;
+      box.textContent = '';
+      box.classList.remove('has-img');
+      box.appendChild(DES.raw(MD.catArt(p.cat)));
+    }, true);
     var dlg = dlgEl();
     if (dlg) dlg.addEventListener('close', function () {
       var tEl = document.getElementById('toast');
