@@ -147,6 +147,21 @@ var o7 = C.observe(o3s, null, null, CTX(true));
 eq([o7.log.length, o7.snap], [0, C.snap(o3s)], 'observe 写しが無ければ作って終わる');
 // 二度目は増えない
 eq(C.observe(o2s, o2.snap, null, CTX(true)).log.length, 0, 'observe 同じ状態で 2 回目は記録しない');
+// say+ は記録だけ（活動内の発言に by を付けない・18-1）
+ok(o2s.activities[0].thread.filter(function (m) { return m.id === 't3'; })[0].by === undefined, '18-1 say+ で活動内の発言に by を付けない');
+// 入っていない × only あり: 新しい行・活動・作品に by が付かない・記録が増えない・c.day だけ付く
+var o8s = baseState(), o8p = C.snap(o8s);
+o8s.plan.push({ id: 'r9', kind: 'mine', title: 'R9', start: '14:00', end: '14:30' });
+o8s.plan[0].kind = 'mine';
+o8s.activities.push({ id: 'a9', title: 'A9', changes: [{ id: 'c9', who: 'own', what: { text: 'w9' } }], thread: [{ id: 't9', who: 'child', text: 's9' }] });
+o8s.works.push({ id: 'w9', title: 'W9', shares: [] });
+var o8 = [C.observe(o8s, o8p, 'plan', CTX(false)), null, null];
+o8[1] = C.observe(o8s, o8[0].snap, 'activities', CTX(false));
+o8[2] = C.observe(o8s, o8[1].snap, 'works', CTX(false));
+eq(o8.map(function (r) { return r.log.length; }), [0, 0, 0], 'observe 入っていない × only: 記録が増えない');
+eq([o8s.plan[0].by, o8s.plan[3].by, o8s.activities[1].by, o8s.works[1].by, o8s.activities[1].thread[0].by], [undefined, undefined, undefined, undefined, undefined], 'observe 入っていない × only: 新しい行・活動・作品・発言に by が付かない');
+eq([o8s.activities[1].changes[0].day, o8[0].touched, o8[1].touched, o8[2].touched], [TODAY, [], ['activities'], []], 'observe 入っていない × only: c.day だけ付く（touched は activities だけ）');
+eq(o8[2].snap, C.snap(o8s), 'observe 入っていない × only: 写しは 3 つの保存で今の状態になる');
 
 // ---------- make.js setWith（18-1） ----------
 var act0 = M.fromSample('mc', { id: 'a-w', now: '10:20', mode: 'js' });
@@ -218,6 +233,70 @@ var cr = C.childRow({ plan: D.plan, messages: D.talk, ideas: [], joined: false, 
 eq(cr, { id: 'haruto', name: 'はると', mode: 'js', now: '建築（大きく） 10:00〜10:50', next: 'サークル対話 10:50〜', consult: 'Python のゲーム作りやってみたい', checks: ['提案中の予定がある'] }, 'childRow はると（今・次・相談・確認）');
 var cr2 = C.childRow({ plan: [{ id: 'z', kind: 'mine', start: '13:30', end: '14:00', title: 'Z', gone: 'removed' }], messages: [], ideas: [{ id: 'i', state: 'open' }], joined: true, now: '10:20', child: D.child, mode: 'es', text: SD.text });
 eq([cr2.now, cr2.next, cr2.consult, cr2.checks, cr2.mode], ['予定の合間', '今日の予定はここまで', null, ['アイデアに返事待ち', 'いま入っている'], 'es'], 'childRow 行が無い・相談なし・アイデア待ち・入っている');
+var hp = clone(D.plan); hp[0].hidden = true;
+var cr3 = C.childRow({ plan: hp, messages: D.talk, ideas: [{ id: 'i', state: 'open' }], joined: true, now: '10:20', child: D.child, mode: 'js', text: SD.text });
+eq([cr3.now, cr3.checks], ['建築（大きく） 10:00〜10:50', ['提案中の予定がある', 'アイデアに返事待ち', 'いま入っている']], 'childRow 非表示の mine 行も「今」に数える・確認は契約の順に 3 つまで');
+eq(C.childRow({ plan: D.plan, messages: [], ideas: [], now: '10:20', child: D.child, text: { range_fmt: '{start}-{end}' } }).now, '建築（大きく） 10:00-10:50', 'childRow 時間帯は text.range_fmt で作る（記号を直書きしない）');
+// アイデアの 取り下げる / 元に戻す の記録は talk / desk（アイデアの件数に入れない）
+var supJs = fs.readFileSync(path.join(JS, 'sup.js'), 'utf8');
+eq([(supJs.match(/addLog\('talk', 'desk', SUP\.t\('log_idea_(withdraw|back)'/g) || []).length, /addLog\('talk', 'idea', SUP\.t\('log_idea_/.test(supJs)], [2, false], '4 アイデアの 取り下げる / 元に戻す の記録は how = desk');
+eq(C.howCounts([{ day: '11/2', how: 'desk' }, { day: '11/2', how: 'idea' }], ['11/2']).idea, 1, '4 howCounts: desk はアイデアの件数に入らない');
+
+// ---------- W2: サポーター画面の決まりを支える純関数 ----------
+// 記録（AD-9 の 3）: 絞り込み・日の新しい順 → 時刻の新しい順（同じ時刻は後から足したものが先）・日ごとにまとめる
+var LG = [
+  { id: 's1', day: '10/28', time: '10:08', scene: 'join', how: 'in', text: '' }, { id: 's2', day: '10/30', time: '10:05', scene: 'talk', how: 'voice', text: '' },
+  { id: 'a', day: '11/2', time: '10:20', scene: 'talk', how: 'proxy', text: '' }, { id: 'b', day: '11/2', time: '10:20', scene: 'plan', how: 'hands', text: '' },
+  { id: 'c', day: '11/2', time: '9:40', scene: 'note', how: 'desk', text: '' }, { id: 'd', day: '11/2', time: '10:20', scene: 'report', how: 'desk', text: '' }
+];
+var LGb = freeze(LG);
+var lv = C.logView(LG, 'all');
+eq(lv.map(function (g) { return [g.day, g.items.map(function (e) { return e.id; })]; }), [['11/2', ['d', 'b', 'a', 'c']], ['10/30', ['s2']], ['10/28', ['s1']]], 'logView ぜんぶ: 日 → 時刻の新しい順・同じ時刻は後から足したものが先・日ごと');
+eq(C.logView(LG, 'talk').map(function (g) { return g.items.map(function (e) { return e.id; }); }), [['a'], ['s2']], 'logView 話す');
+eq(C.logView(LG, 'other').map(function (g) { return g.items.map(function (e) { return e.id; }); }), [['d', 'c'], ['s1']], 'logView そのほか = 作品・お題・一緒に入る・助言・観察・レポート');
+eq(C.logView(LG, 'make'), [], 'logView 0 件は空（画面は lg_empty）');
+eq(C.logView(SD.log.concat([]), 'all')[0].items[0].id, 'sl-6', 'logView seed の並び（10/30 10:15 が先頭）');
+eq(freeze(LG), LGb, 'logView 引数を書き換えない');
+// 助言の一覧（AD-8）: 同じ id は state 側が勝つ・新しい順・同じ時刻は state の先頭が先
+var adMine = [{ id: 'n2', day: '11/2', time: '10:20', aim: 'B' }, { id: 'n1', day: '11/2', time: '10:20', aim: 'A' }, { id: 'ad-1', day: '10/28', time: '11:20', aim: '直した' }];
+var adl = C.adviceList(SD.advice, adMine);
+eq(adl.map(function (x) { return x.id; }), ['n2', 'n1', 'ad-2', 'ad-1'], 'adviceList 新しい順（足した分が seed より先・同じ時刻は state の先頭が先）');
+eq(adl[3].aim, '直した', 'adviceList 同じ id は state 側が勝つ');
+eq(C.adviceList(SD.advice, []).map(function (x) { return x.id; }), ['ad-2', 'ad-1'], 'adviceList seed だけ');
+// 四角（AD-9）: 自分で → きっかけ → 代わりに・最大 10 個・超えた分
+eq(C.squares({ own: 1, cue: 1, by: 4 }), { n: 6, cells: ['own', 'cue', 'by', 'by', 'by', 'by'], more: 0 }, 'squares 6 回');
+eq(C.squares({ own: 8, cue: 2, by: 3 }), { n: 13, cells: ['own', 'own', 'own', 'own', 'own', 'own', 'own', 'own', 'cue', 'cue'], more: 3 }, 'squares 10 を超えたら ほか');
+eq(C.squares({ own: 0, cue: 0, by: 0 }), { n: 0, cells: [], more: 0 }, 'squares 0 回（画面は 記録なし）');
+// バディの提案（AD-7 の今日 3）
+var pp = clone(D.plan); pp.push({ id: 'x1', start: '9:00', end: '9:15', title: 'X', kind: 'proposed', from: 'talk-5', gone: 'declined' }, { id: 'x2', start: '15:15', end: '15:30', title: 'Y', kind: 'mine', from: 'nope' });
+pp[5].kind = 'mine';
+var props = C.proposals(pp, D.talk);
+eq(props.map(function (p) { return [p.row.id, p.status]; }), [['x1', 'declined'], ['p6', 'chosen'], ['p7', 'proposed']], 'proposals 会話から生まれた行（断った行も）を時刻順・状態');
+eq(props[1].line, 'アクセサリー作りの続きは 13:30 から 45 分くらい？ 新しいことは、今まで取り組んできたことから選んでもいいし、やったことがないものでもいいよ', 'proposals 元の発言の 1 行目');
+eq(C.proposals([{ id: 'r', start: '9:00', end: '9:10', from: 'talk-5', kind: 'held' }, { id: 'q', start: '9:00', end: '9:10', from: 'talk-5', kind: 'mine', gone: 'removed' }, { id: 'f', start: '9:20', end: '9:30', from: 'talk-5', kind: 'mine', gone: 'finished' }], D.talk).map(function (p) { return p.status; }), ['held', 'removed', 'finished'], 'proposals 保留・外した・終わった');
+// レポート（18-13）: 確かめた時点の写し・今の中身との比べ・載せる項目 0・届く形
+var rdOff = C.reportDraft({ report: SD.report, fade: rf, plan: D.plan, text: SD.text, names: NAMES, edits: {}, off: {} });
+var body = C.reportFreeze(rdOff, '補足の文');
+eq([body.length, body[body.length - 1]], [7, { id: 'extra', text: '補足の文' }], 'reportFreeze 6 節 + 補足');
+var th = C.reportThaw(clone(body));
+eq([th.sections.length, th.extra, th.sections[4].note, th.sections[0].items[0].id], [6, '補足の文', SD.text.rp_own_note, 'r-t1'], 'reportThaw 節と補足に戻す');
+eq(C.reportThaw('x'), null, 'reportThaw 形が違えば null');
+ok(C.reportSame(body, rdOff, '補足の文'), 'reportSame 同じ中身');
+ok(!C.reportSame(body, rdOff, '別の補足'), 'reportSame 補足が変わった → 違う');
+var rdMoved = C.reportDraft({ report: SD.report, fade: rf, plan: D.plan.filter(function (r) { return r.id !== 'p7'; }), text: SD.text, names: NAMES, edits: {}, off: {} });
+ok(!C.reportSame(body, rdMoved, '補足の文'), 'reportSame 元の記録（提案中の行）が変わった → 違う（rp_stale）');
+var rdOff2 = C.reportDraft({ report: SD.report, fade: rf, plan: D.plan, text: SD.text, names: NAMES, edits: {}, off: { 'r-t1': true } });
+ok(!C.reportSame(body, rdOff2, '補足の文'), 'reportSame 載せない が変わった → 違う');
+ok(!C.reportSame(null, rdOff, ''), 'reportSame body が無ければ違う');
+var nItems = rdOff.reduce(function (n, s) { return n + s.items.length; }, 0);
+eq(C.reportOnCount(rdOff), nItems, 'reportOnCount 全部載せる');
+var allOff = {}; rdOff.forEach(function (s) { s.items.forEach(function (it) { allOff[it.id] = true; }); });
+var rdNone = C.reportDraft({ report: SD.report, fade: rf, plan: D.plan, text: SD.text, names: NAMES, edits: {}, off: allOff });
+eq(C.reportOnCount(rdNone), 0, 'reportOnCount 載せる項目 0（「確かめた」を押せない）');
+var out = C.reportOut(rdOff2);
+eq([out.length, out[0].items.length, out[0].items.indexOf(rdOff[0].items[0].text)], [6, rdOff[0].items.length - 1, -1], 'reportOut 載せない項目は届く形に出ない');
+eq(C.reportOut(rdNone), [], 'reportOut 全部載せない → 節も出ない');
+eq(out[4].note, SD.text.rp_own_note, 'reportOut 自分で進めたこと の末尾の 1 文');
 
 // ---------- あしあと（18-5 / 18-7） ----------
 eq(TR.talkTopics([{ id: 'c', who: 'child', text: 'a', by: 'tanaka' }, { id: 'b', who: 'buddy', text: 'r', ideaReply: 'i1' }]).map(function (t) { return [t.reply, t.by]; }), [[null, 'tanaka']], '18-5 talkTopics は ideaReply を返事にしない・m.by を渡す');
@@ -254,11 +333,19 @@ var CONTRACT = fs.readFileSync(path.join(__dirname, '../docs/plans/supporter-vie
 var BADSRC = (/grep -rnE '([^']+)' app-v3\//.exec(CONTRACT) || [])[1];
 ok(!!BADSRC && BADSRC.split('|').length === 13, '18-11 禁止語の一覧（13 語）を契約から読めた');
 var BAD = new RegExp(BADSRC || 'x^');
-['sup-data.js', 'sup-core.js', 'sup.js'].forEach(function (f) { ok(!BAD.test(fs.readFileSync(path.join(JS, f), 'utf8')), '18-11 ' + f + ' に禁止語が無い'); });
+['sup-data.js', 'sup-core.js', 'sup.js', 'sup-view.js'].forEach(function (f) { ok(!BAD.test(fs.readFileSync(path.join(JS, f), 'utf8')), '18-11 ' + f + ' に禁止語が無い'); });
 ok(!BAD.test(fs.readFileSync(path.join(__dirname, '../app-v3/css/sup.css'), 'utf8')), '18-11 sup.css に禁止語が無い');
-var supSrc = fs.readFileSync(path.join(JS, 'sup.js'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"\\])\/\/.*$/gm, '$1');
-var jp = supSrc.match(/[\u3040-\u30ff\u3400-\u9fff\uff01-\uff60]/g);
-ok(!jp, 'AD-16 sup.js に日本語の文字列の直書きが無い（コメントを除く）' + (jp ? ' ' + jp.slice(0, 5).join('') : ''));
+['sup.js', 'sup-view.js', 'sup-core.js'].forEach(function (f) {
+  var src = fs.readFileSync(path.join(JS, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"\\])\/\/.*$/gm, '$1');
+  var jp = src.match(/[\u3040-\u30ff\u3400-\u9fff\uff01-\uff60]/g);
+  ok(!jp, 'AD-16 ' + f + ' に日本語の文字列の直書きが無い（コメントを除く）' + (jp ? ' ' + jp.slice(0, 5).join('') : ''));
+});
+// W2 の画面が引く文言 key が DES.supData.text に在る（sup-view.js の t('…') を拾う）
+var viewSrc = fs.readFileSync(path.join(JS, 'sup-view.js'), 'utf8');
+var keys = {}, km, KRE = /(?:^|[^.\w])t\('([a-z0-9_]+)'\s*[,)]/g;
+while ((km = KRE.exec(viewSrc))) keys[km[1]] = true;
+var missing = Object.keys(keys).filter(function (k) { return SD.text[k] == null; });
+ok(Object.keys(keys).length > 50 && !missing.length, 'W2 sup-view.js の文言 key が supData.text に在る' + (missing.length ? ' 無い: ' + missing.join(',') : ''));
 
 console.log('sup-test: ' + pass + ' pass, ' + fail + ' fail');
 console.log('SUP_TEST=' + (fail ? 'FAIL' : 'PASS'));

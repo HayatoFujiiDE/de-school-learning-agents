@@ -328,12 +328,14 @@
   }
 
   // ---------- 教室の一覧の 1 行（はると。AD-7 / 18-12） ----------
-  // o: { plan, messages, ideas, joined, now, child: { id, name }, mode, text }
+  // o: { plan, messages, ideas, joined, now, child: { id, name }, mode, text }。時間帯は text.range_fmt で作る（記号を直書きしない）
+  // 非表示（hidden）の mine 行も時間は占めているので「今・次」に数える。「確認」は当たったものを契約の順に全部（最大 3 つ）
   function childRow(o) {
     o = o || {};
     var tx = o.text || {}, now = toMin(o.now), ch = o.child || {};
+    function rg(start, end) { return fmt(tx.range_fmt, { start: start, end: end == null ? '' : end }); }
     var rows = (o.plan || []).filter(function (r) {
-      if (!r || r.gone || r.hidden) return false;
+      if (!r || r.gone) return false;
       if (r.kind === 'optional') return r.choice !== 'skip';
       return r.kind === 'fixed' || r.kind === 'event' || r.kind === 'mine';
     }).slice().sort(function (a, b) { return toMin(a.start) - toMin(b.start); });
@@ -350,15 +352,112 @@
     if (o.joined) checks.push(tx.chk_joined);
     return {
       id: ch.id, name: ch.name, mode: o.mode === 'es' ? 'es' : 'js',
-      now: cur ? cur.title + ' ' + cur.start + '〜' + cur.end : tx.now_gap,
-      next: nxt ? nxt.title + ' ' + nxt.start + '〜' : tx.next_none,
+      now: cur ? cur.title + ' ' + rg(cur.start, cur.end) : tx.now_gap,
+      next: nxt ? nxt.title + ' ' + rg(nxt.start, '') : tx.next_none,
       consult: consult, checks: checks.filter(Boolean)
     };
   }
 
+  // ---------- サポーター画面の並べ替え・判定（W2。画面の決まりを支える純関数） ----------
+  // 'M/D' → 比べられる数（月 * 100 + 日）。形が違えば -1
+  function dayNum(d) { var m = /^(\d{1,2})\/(\d{1,2})$/.exec(String(d == null ? '' : d)); return m ? (+m[1]) * 100 + (+m[2]) : -1; }
+  // 記録の絞り込み（AD-9 の 3）: そのほか = 作品・今日のお題・一緒に入る・助言・観察・レポート
+  var LOG_GROUP = { plan: ['plan'], talk: ['talk'], make: ['make'], other: ['works', 'today', 'join', 'advice', 'note', 'report'] };
+  // 記録（seed + このブラウザの記録）→ 絞り込み → 日の新しい順 → 時刻の新しい順（同じ時刻は配列の後ろ = 後から足したものが先）→ 日ごとにまとめる
+  // 戻り値 [ { day, items: [記録…] } ]。引数を書き換えない
+  function logView(list, filter) {
+    var g = LOG_GROUP[filter] || null, out = [];
+    var rows = (list || []).map(function (e, i) { return { e: e, i: i }; }).filter(function (x) { return isObj(x.e) && (!g || g.indexOf(x.e.scene) >= 0); });
+    rows.sort(function (a, b) { return (dayNum(b.e.day) - dayNum(a.e.day)) || (toMin(b.e.time) - toMin(a.e.time)) || (b.i - a.i); });
+    rows.forEach(function (x) {
+      var last = out[out.length - 1];
+      if (!last || last.day !== x.e.day) { last = { day: x.e.day, items: [] }; out.push(last); }
+      last.items.push(x.e);
+    });
+    return out;
+  }
+  // 助言の一覧（AD-8）: このブラウザの分（同じ id は state 側が勝つ）+ seed → 日・時刻の新しい順（同じ時刻は state の並び = 先頭が新しい）
+  function adviceList(seed, mine) {
+    var have = {}, all = [];
+    function put(x) { if (isObj(x) && isStr(x.id) && !have[x.id]) { have[x.id] = true; all.push(x); } }
+    (mine || []).forEach(put);
+    (seed || []).forEach(put);
+    return all.map(function (x, i) { return { x: x, i: i }; })
+      .sort(function (a, b) { return (dayNum(b.x.day) - dayNum(a.x.day)) || (toMin(b.x.time) - toMin(a.x.time)) || (a.i - b.i); })
+      .map(function (o) { return o.x; });
+  }
+  // 手伝いの移り変わりの四角（AD-9）: 1 回 = 1 つ。自分で → きっかけ → 代わりに の順に最大 max 個。超えた分は more
+  function squares(w, max) {
+    var cells = [], lim = max || 10;
+    ['own', 'cue', 'by'].forEach(function (k) { for (var i = 0; i < ((w && w[k]) || 0); i++) cells.push(k); });
+    return { n: cells.length, cells: cells.slice(0, lim), more: Math.max(0, cells.length - lim) };
+  }
+  // バディの提案（AD-7 の「今日」3）: 会話から生まれた行（from が会話の id）を時刻順に。状態と、元の発言の 1 行目
+  // status: proposed 提案中 / chosen 本人が選んだ / held 保留 / declined 見送り / removed 予定から外した / finished 終わった
+  function proposals(plan, messages) {
+    var msgs = {};
+    (messages || []).forEach(function (m) { if (isObj(m) && isStr(m.id)) msgs[m.id] = m; });
+    function status(r) {
+      if (r.gone === 'declined') return 'declined';
+      if (r.gone === 'removed') return 'removed';
+      if (r.gone === 'finished') return 'finished';
+      return r.kind === 'proposed' ? 'proposed' : r.kind === 'mine' ? 'chosen' : r.kind === 'held' ? 'held' : null;
+    }
+    return (plan || []).filter(function (r) { return isObj(r) && isStr(r.from) && msgs[r.from] && status(r); })
+      .slice().sort(function (a, b) { return toMin(a.start) - toMin(b.start); })
+      .map(function (r) { return { row: r, status: status(r), line: String(msgs[r.from].text == null ? '' : msgs[r.from].text).split('\n')[0] }; });
+  }
+  // レポート（18-13）: 「確かめた」時点の中身を body に写す。補足は末尾の { id: 'extra', text } に入れる（body は配列のまま）
+  function reportFreeze(sections, extra) {
+    var out = (sections || []).map(function (s) {
+      var o = { id: s.id, head: s.head, items: (s.items || []).map(function (it) { return { id: it.id, text: it.text, orig: it.orig, src: it.src, edited: !!it.edited, off: !!it.off }; }) };
+      if (s.note) o.note = s.note;
+      return o;
+    });
+    out.push({ id: 'extra', text: String(extra == null ? '' : extra) });
+    return out;
+  }
+  // body → { sections, extra }（形が違えば null）
+  function reportThaw(body) {
+    if (!Array.isArray(body)) return null;
+    var secs = [], extra = '';
+    body.forEach(function (s) {
+      if (!isObj(s)) return;
+      if (s.id === 'extra' && !Array.isArray(s.items)) { extra = isStr(s.text) ? s.text : ''; return; }
+      var o = { id: s.id, head: s.head, items: (Array.isArray(s.items) ? s.items : []).filter(isObj) };
+      if (s.note) o.note = s.note;
+      secs.push(o);
+    });
+    return { sections: secs, extra: extra };
+  }
+  // 中身（節・項目の id と文・載せる / 載せない・補足）が同じか。違えば rp_stale を出す
+  function reportKey(sections, extra) {
+    return JSON.stringify([(sections || []).map(function (s) { return [s.id, (s.items || []).map(function (it) { return [it.id, it.text, !!it.off]; })]; }), String(extra == null ? '' : extra)]);
+  }
+  function reportSame(body, sections, extra) {
+    var b = reportThaw(body);
+    return !!b && reportKey(b.sections, b.extra) === reportKey(sections, extra);
+  }
+  // 載せる項目の数（0 なら「確かめた」を押せない）
+  function reportOnCount(sections) {
+    var n = 0;
+    (sections || []).forEach(function (s) { (s.items || []).forEach(function (it) { if (it && !it.off) n += 1; }); });
+    return n;
+  }
+  // おうちの人に届く形: 載せる項目だけ・項目が 0 の節は出さない
+  function reportOut(sections) {
+    return (sections || []).map(function (s) {
+      var o = { id: s.id, head: s.head, items: (s.items || []).filter(function (it) { return it && !it.off; }).map(function (it) { return it.text; }) };
+      if (s.note) o.note = s.note;
+      return o;
+    }).filter(function (s) { return s.items.length > 0; });
+  }
+
   var pure = {
     normalize: normalize, appendLog: appendLog, snap: snap, diff: diff, observe: observe, fade: fade, fadeLines: fadeLines,
-    howCounts: howCounts, reportDraft: reportDraft, childRow: childRow, fmt: fmt, LOG_MAX: LOG_MAX, FILTERS: FILTERS, STANCES: STANCES
+    howCounts: howCounts, reportDraft: reportDraft, childRow: childRow, fmt: fmt, LOG_MAX: LOG_MAX, FILTERS: FILTERS, STANCES: STANCES,
+    logView: logView, adviceList: adviceList, squares: squares, proposals: proposals,
+    reportFreeze: reportFreeze, reportThaw: reportThaw, reportSame: reportSame, reportOnCount: reportOnCount, reportOut: reportOut
   };
   Object.keys(pure).forEach(function (k) { C[k] = pure[k]; });
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;

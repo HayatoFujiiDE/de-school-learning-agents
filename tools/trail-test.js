@@ -184,7 +184,8 @@ eq(TR.filter(es, 'plan').length, 4, 'filter 予定');
 eq(TR.filter(es, 'zzz').length, es.length, 'filter 知らない値 = すべて');
 eq(TR.filter(TR.entries({ messages: D.talk, today: TODAY }), 'found'), [], 'filter 0 件');
 // AD-10 / 18-7 自分で: 手伝いの印が無いものだけ
-eq(ids(TR.filter(es, 'own')).length, es.filter(function (e) { return e.kind !== 'make' || (e.who === 'own' && !e.with); }).length, 'own 印の無い見本データ: 人名の付いた作った（田中さん）だけ外れる');
+eq(ids(TR.filter(es, 'own')), ['make:a-stop', 'found:od-seed:1', 'rec:rec-undo', 'rec:rec-1', 'rec:rec-old', 'work:w-seed-build', 'talk:talk-4', 'talk:talk-2', 'talk:talk-0', 'plan:pf', 'found:od-seed:0', 'make:act-cap', 'work:w-seed-circuit', 'work:w-seed-py', 'work:w-seed-py-trial'],
+  'own 印の無い見本データ: 人名の付いた作った（make:act-build・make:act-py）だけ外れる（固定の期待値）');
 ok(!TR.filter(es, 'own').some(function (e) { return e.id === 'make:act-py' || e.id === 'make:act-build'; }), 'own 最後の変化に人名がある作ったは出さない');
 var helpedMsgs = [
   { id: 'h1', who: 'child', time: '10:30', text: 'by あり', by: 'tanaka' }, { id: 'h2', who: 'buddy', time: '10:30', text: '返事' },
