@@ -1777,7 +1777,19 @@ async function figureInfo(
   if (!refs.ok || refs.refs.length === 0) return { desc, alt, material, shows };
   if (!env.DB) return { error: 'part_missing' };
   for (const r of refs.refs) {
-    const row = await first<{ input_json: string }>(env.DB, stmt("SELECT input_json FROM image_requests WHERE id = ? AND state = 'done' AND job_id = (SELECT job_id FROM material_versions WHERE id = ?)", r.image_id, v.id));
+    // §S-8-3 の取り込みと同じ決まり（別の素材・後の job・draft は拒む）: この版の job の画像か、作り直しの job なら同じ素材のこの job より前の job の画像
+    const row = await first<{ input_json: string }>(
+      env.DB,
+      stmt(
+        `SELECT r.input_json FROM image_requests r
+           JOIN factory_jobs j ON j.id = (SELECT job_id FROM material_versions WHERE id = ?)
+         WHERE r.id = ? AND r.state = 'done'
+           AND (r.job_id = j.id OR (j.kind = 'rework' AND j.parent_version_id IS NOT NULL AND EXISTS (
+             SELECT 1 FROM factory_jobs pj WHERE pj.id = r.job_id AND pj.material_id = j.material_id AND pj.id <> j.id AND pj.created_at < j.created_at)))`,
+        v.id,
+        r.image_id,
+      ),
+    );
     if (!row) return { error: 'part_missing' };
     let input: Record<string, unknown> = {};
     try {

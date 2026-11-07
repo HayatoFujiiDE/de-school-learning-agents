@@ -1,11 +1,13 @@
 // 運用の依頼箱（契約 §W。docs/plans/ops-requests/contract-W.md）。
 // Claude（司令塔）が `wrangler d1 execute` で ops_requests に 1 行書き、cron が 1 tick に 1 件だけ拾う。
-// できるのはお題の run と、invalid_outputs で failed になった job の取り込み直し（§W-2。route の POST /api/jobs/:id/reingest と同じ claimReingest。session は作らない・費用なし）。
+// できるのはお題の run と、invalid_outputs で failed になった job の取り込み直し（§W-2。route の POST /api/jobs/:id/reingest と同じ claimReingest。session は作らない・費用なし）と、
+// review の版の検証し直し（§W-3。route の POST /api/review/:version_id/reverify と同じ claimReverify。検証を pending に戻すだけ）。
 // お題は手動の route と同じ queueTopicRun を通す（台帳・上限・run_in_progress・trigger 'manual' が同じ）。
 // payload は信用しない（形を確かめ、合わなければ failed: bad_payload）。ログに payload の中身（note）は出さない。
 
 import { all, cas, first, isoPlus, nowIso, stmt, tokyoDay } from './db';
 import { claimReingest } from './jobs';
+import { claimReverify } from './reverify';
 import type { Env } from './env';
 import { PARENT_ID_RE, type RunRequest } from './topics/gen';
 import { queueTopicRun } from './topics/queue-run';
@@ -26,6 +28,20 @@ export function parseReingestPayload(raw: string): string | null {
   const p = v as Record<string, unknown>;
   if (Object.keys(p).some((k) => k !== 'job_id')) return null;
   return typeof p.job_id === 'string' && JOB_ID_RE.test(p.job_id) ? p.job_id : null;
+}
+
+/** version_reverify の payload: { version_id }（uuid の形だけ。§W-3）。合わなければ null */
+export function parseReverifyPayload(raw: string): string | null {
+  let v: unknown;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const p = v as Record<string, unknown>;
+  if (Object.keys(p).some((k) => k !== 'version_id')) return null;
+  return typeof p.version_id === 'string' && JOB_ID_RE.test(p.version_id) ? p.version_id : null;
 }
 
 /** 依頼の寿命。作られてこれを超えた pending は expired */
@@ -113,6 +129,26 @@ export async function opsTick(env: Env, opts: { now?: Date } = {}): Promise<OpsT
         } else {
           status = 'done';
           result = { job_id: jobId, status: 'running' };
+        }
+      }
+      await finish(db, row.id, status, result);
+      console.log(JSON.stringify({ at: 'ops_request', id: row.id, kind: row.kind, status }));
+      return { expired, request: { id: row.id, kind: row.kind, status } };
+    }
+    if (row.kind === 'version_reverify') {
+      const versionId = parseReverifyPayload(row.payload_json);
+      if (!versionId) {
+        status = 'failed';
+        result = { error: 'bad_payload' };
+      } else {
+        // 検証を pending に戻すだけ（次の cron の検証の段が走る。route の reverify と同じ述語・同じ断り方。§W-3）
+        const r = await claimReverify(db, versionId);
+        if (!r.ok) {
+          status = 'failed';
+          result = { refused: r.error };
+        } else {
+          status = 'done';
+          result = { version_id: versionId, verification_status: 'pending' };
         }
       }
       await finish(db, row.id, status, result);
