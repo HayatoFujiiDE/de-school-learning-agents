@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { triageVersion } from '../src/checks/triage';
 // @ts-expect-error 素の JS の作り物のデータ（serve.mjs と共通）
 import * as FX from './review-preview/fixtures.mjs';
+import { goodMaterialV2 } from './helpers';
 
 type Obj = Record<string, any>;
 const code = readFileSync(new URL('../public/admin/admin.js', import.meta.url), 'utf8');
@@ -1116,5 +1117,139 @@ describe('§O-13-5 図のサムネイルの下の「絵の主張」（✓ ✗ �
     expect(figs.some((m) => m.includes('data-media-key="parts/p1/p1-rbc.png"'))).toBe(true);
     for (const m of figs) expect(m).not.toMatch(/fig-claims|絵の主張/);
     expect(body).not.toMatch(/fig-claims|data-fig-ref/);
+  });
+});
+
+// §AL-8 末尾・AL-10: schema 2 の版（本文 1 本・切替なし・data-mode="js"・遊びの形・バディ用の枠・読み手係の quality）
+describe('schema 2 の版（§AL-8 確認画面）', () => {
+  const V2 = (p: string) => readFileSync(new URL(`./fixtures/_shared-v2/outputs/${p}`, import.meta.url), 'utf8');
+  const v2 = (): Obj => {
+    const d = FX.clean();
+    d.version.material = goodMaterialV2();
+    return d;
+  };
+  const QUALITY = {
+    first_action: { verdict: 'ok', reason: '最初の段落が「ならべて置いてみよう」で始まる' },
+    questions_first: { verdict: 'problem', reason: '問いの直後に答えが書かれている' },
+    one_idea_per_paragraph: { verdict: 'unclear', reason: '3 段落目に 2 つあるか決められない' },
+    no_goal_words: { verdict: 'ok', reason: '目標の言い回しは無い' },
+  };
+  const BODY = 'parts/p1/body.md', PLAY = 'parts/p1/play.md';
+
+  it('切替（学年・長さ・ゲーム版・見比べ）を描画しない。枠は 1 つで data-mode="js"・「いま表示」なし', () => {
+    const d = v2();
+    const h = R.reviewHtml(d, R.newReviewState(), {});
+    expect(h).not.toContain('data-pv=');
+    expect(n(h, /class="mat-preview"/g)).toBe(1);
+    expect(h).toContain('<div class="mat-preview" data-frame="0" data-mode="js" data-schema="2">');
+    expect(h).not.toContain('data-mp-now');
+    // 見比べにしてあっても 1 枠（schema 2 は切替なし）
+    const st = R.newReviewState();
+    st.pv.compare = true;
+    const c = R.reviewHtml(d, st, {});
+    expect(n(c, /class="mat-preview"/g)).toBe(1);
+    expect(c).not.toContain('is-compare');
+    expect(R.framesFor(d, st.pv)).toHaveLength(1);
+    expect(R.pvSwitchHtml(R.framesFor(d, st.pv)[0], 0)).toBe('');
+  });
+
+  it('枠の頭の要約は material.summary。部品は型の名前・最初にやること', () => {
+    const d = v2();
+    const f = R.previewFrameHtml(d, R.framesFor(d, R.defaultPv())[0], 0, {});
+    expect(f).toContain(`<p class="mp-summary" data-head-k="summary">${d.version.material.summary}</p>`);
+    expect(f).toContain('<span class="mp-kind">説明と図解</span>');
+    expect(f).toContain('粉を 20 個ならべて、レバーをたおしてみよう');
+    expect(f).toContain('id="mp-body-0-0"');
+  });
+
+  it('バディ用の枠（子どもには見えない）: 面白さの芯・問いの種 2 件（答えの claim id）・入口 2 件（表示名）', () => {
+    const d = v2();
+    const f = R.previewFrameHtml(d, R.framesFor(d, R.defaultPv())[0], 0, {});
+    const m = /<aside class="mp-buddy" data-mp-buddy="1"[\s\S]*<\/aside>/.exec(f);
+    expect(m).not.toBe(null);
+    const b = m![0];
+    expect(b).toContain('子どもには見えない（バディ用）');
+    expect(b).toContain('面白さの芯');
+    expect(b).toContain(d.version.material.spark);
+    expect(n(b, /data-buddy-q="/g)).toBe(2);
+    expect(b).toContain('粉は何個目まで光るかな？ <small class="mp-buddy-cl">答え: c1</small>');
+    expect(b).toContain('答え: c2');
+    expect(n(b, /data-buddy-ie="/g)).toBe(2);
+    expect(b).toContain('<span class="mp-buddy-tag">マイクラ</span>');
+    expect(b).toContain('<span class="mp-buddy-tag">ものづくり</span>');
+    // バディ用の枠は部品（子どもの画面の体裁）の外・後ろ
+    expect(f.indexOf('data-mp-buddy')).toBeGreaterThan(f.lastIndexOf('</section>'));
+    // それ以外の interest は id のまま。spark・問い・入口が無ければ枠ごと出さない
+    expect(R.buddyHtml({ parts: [{ interest_entries: [{ interest: 'cooking', text: 'x' }] }] })).toContain('<span class="mp-buddy-tag">cooking</span>');
+    expect(R.buddyHtml({ parts: [{}] })).toBe('');
+    // 職人の書いた文はエスケープ
+    expect(R.buddyHtml({ spark: '<img src=x>', parts: [] })).toContain('&lt;img src=x&gt;');
+  });
+
+  it('本文の下に見出し「遊びの形」と遊びの本文（[cN] は出さない）。付箋は本文の path / play の path で分ける', () => {
+    const d = v2();
+    const part = d.version.material.parts[0];
+    const stickies = [
+      { id: 1, part_index: 0, variant_path: BODY, variant_label: '本文', para_index: 0, head: 'x', kind: 'hard', text: '' },
+      { id: 2, part_index: 0, variant_path: PLAY, variant_label: '遊びの形', para_index: 1, head: 'y', kind: 'long', text: '' },
+    ];
+    const h = R.previewPartV2Html(V2(BODY), V2(PLAY), part, { fileBase: BASE, marks: true, stick: true, frame: 0, pi: 0, path: BODY, stickies, claimIdx: { c1: 0, c2: 1 } });
+    expect(h).toContain('<section class="mp-play" data-mp-play="1"><h4 class="mp-play-h">遊びの形</h4>');
+    expect(h.indexOf('data-mp-play')).toBeGreaterThan(h.indexOf('id="mp-p-0-0-0"'));
+    expect(h).toContain('id="mp-pp-0-0-1"');
+    expect(h).not.toMatch(/\[c\d+\]/);
+    const [body, play] = h.split('data-mp-play');
+    expect(n(body, /付箋 1/g)).toBe(1);
+    expect(body).toMatch(/id="mp-p-0-0-0"[^>]*>.*付箋 1/);
+    expect(n(play, /付箋 1/g)).toBe(1);
+    expect(play).toMatch(/id="mp-pp-0-0-1"[^>]*>.*付箋 1/);
+    // 図・動かせるものは本文側だけ（遊びの形に重ねて出さない）
+    expect(n(h, /data-media="figure"/g)).toBe(1);
+    expect(n(h, /data-media="app"/g)).toBe(1);
+    // play が無い部品・読めなかった時
+    expect(R.previewPartV2Html(V2(BODY), null, part, { path: BODY })).not.toContain('mp-play');
+    expect(R.previewPartV2Html(V2(BODY), false, part, { path: BODY })).toContain('遊びの形を読み込めませんでした');
+  });
+
+  it('表示する本文は body の path（「無い」表示にならない）。場所は「本文 N 段落目」・見つからない時は「本文にあります」/「遊びの形にあります」', () => {
+    const d = v2();
+    const part = d.version.material.parts[0];
+    const frames = R.framesFor(d, R.defaultPv());
+    expect(R.pickVariant(part, frames[0])).toMatchObject({ path: BODY, label: '本文' });
+    expect(R.bodiesOfPart(part).map((x: Obj) => x.path)).toEqual([BODY, PLAY]);
+    const md = { [BODY]: V2(BODY), [PLAY]: V2(PLAY) };
+    expect(R.locateItem({ kind: 'claim', claim_id: 'c1' }, d, md, frames)).toMatchObject({ t: 'para', path: BODY, para: 2, inView: true, fi: 0, label: '本文 3 段落目' });
+    expect(R.locateItem({ path: PLAY, quote: '当たったら 1 点' }, d, md, frames)).toMatchObject({ path: PLAY, para: 0, inView: true, role: 'play', label: '遊びの形 1 段落目' });
+    expect(R.locateItem({ path: BODY, quote: 'x' }, d, null, frames)).toMatchObject({ path: BODY, para: -1, label: '本文にあります' });
+    expect(R.locateItem({ path: PLAY, quote: 'x' }, d, null, frames)).toMatchObject({ path: PLAY, para: -1, label: '遊びの形にあります' });
+  });
+
+  it('body の無い schema 2 の版は「本文がありません」の 1 行（schema 1 の「無い」の文は変えない）', () => {
+    const d = v2();
+    const part = { ...d.version.material.parts[0] };
+    delete part.body;
+    const sel = R.framesFor(d, R.defaultPv())[0];
+    expect(R.pickVariant(part, sel)).toBe(null);
+    expect(R.missingVariantHtml(part, sel)).toBe('<p class="mp-missing">本文がありません</p>');
+    const s1 = fixture().version.material.parts[0];
+    expect(R.missingVariantHtml(s1, { aud: 'secondary', len: 'long', game: true })).toContain('この部品には「ゲーム版」がありません');
+  });
+
+  it('読み手係の quality: 表示名 4 件。reader.quality があれば「説明と表現」の補足に 4 行（ok / problem / unclear と理由）。無ければ出さない', () => {
+    expect(R.READER_QUALITY_KEYS).toEqual(['first_action', 'questions_first', 'one_idea_per_paragraph', 'no_goal_words']);
+    expect(R.READER_QUALITY_LABEL).toEqual({ first_action: '最初の段落が動作', questions_first: '問いが答えより先', one_idea_per_paragraph: '1 段落に 1 つ', no_goal_words: '目標の言い回しなし' });
+    const d = v2();
+    d.reader = { ...d.reader, quality: QUALITY };
+    const h = R.machineHtml(d);
+    expect(n(h, /data-quality="/g)).toBe(4);
+    expect(h).toContain('<p data-quality="first_action" data-quality-verdict="ok"><b>最初の段落が動作</b> <span class="pill green">問題なし</span> <span class="muted">最初の段落が「ならべて置いてみよう」で始まる</span></p>');
+    expect(h).toContain('data-quality="questions_first" data-quality-verdict="problem"><b>問いが答えより先</b> <span class="pill red">問題あり</span>');
+    expect(h).toContain('data-quality="one_idea_per_paragraph" data-quality-verdict="unclear"><b>1 段落に 1 つ</b> <span class="pill yellow">決められなかった</span>');
+    // 説明と表現（explanation_and_expression）の補足の中
+    const ex = /data-mk="explanation_and_expression"[\s\S]*?<\/details>/.exec(h)![0];
+    expect(n(ex, /data-quality="/g)).toBe(4);
+    // quality が無い（schema 1・旧 row）
+    expect(R.machineHtml(v2())).not.toContain('data-quality');
+    expect(R.machineHtml(fixture())).not.toContain('data-reader-quality');
   });
 });

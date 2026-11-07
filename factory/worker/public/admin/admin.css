@@ -694,6 +694,19 @@ button.sc-cid { text-decoration: underline; text-underline-offset: 2px; }
 .mp-entry { background: var(--mp-orange-soft); border-radius: 12px; padding: 10px 14px; margin: 0 0 16px; }
 .mp-entry-k { display: block; font-size: 12px; font-weight: 700; color: #8a5000; }
 .mp-entry p { margin: 2px 0 0; font-weight: 600; }
+/* §AL-8 schema 2: 本文の下の「遊びの形」と、子どもの画面の体裁の外の「バディ用」の枠（.mat-preview の中に閉じ込める） */
+.mat-preview .mp-play { border-top: 2px dashed var(--mp-line); margin: 18px 0 0; padding: 4px 0 0; min-width: 0; }
+.mat-preview .mp-play-h { display: inline-block; font-size: 13px; font-weight: 700; color: var(--mp-green); background: var(--mp-green-soft); border-radius: 999px; padding: 2px 12px; margin: 10px 0 10px; }
+.mat-preview .mp-buddy { margin: 18px 0 0; padding: 14px 16px; border: 1px dashed #b9b4a6; border-radius: 12px; background: var(--gray-soft); color: var(--mp-ink); font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+.mat-preview .mp-buddy p { line-height: 1.7; margin: 0 0 6px; }
+.mat-preview .mp-buddy-h { font-weight: 700; color: var(--mp-muted); margin: 0 0 10px !important; }
+.mat-preview .mp-buddy-k { font-size: 12px; font-weight: 700; color: #8a5000; margin: 10px 0 2px !important; }
+.mat-preview .mp-buddy-pt { font-weight: 700; margin: 12px 0 0 !important; }
+.mat-preview .mp-buddy-spark { margin: 0 0 4px !important; }
+.mat-preview .mp-buddy-list { margin: 0 0 4px; padding-left: 1.3em; }
+.mat-preview .mp-buddy-list li { line-height: 1.7; margin: 0 0 4px; }
+.mat-preview .mp-buddy-cl { color: var(--mp-muted); font-size: 11px; }
+.mat-preview .mp-buddy-tag { display: inline-block; font-size: 11px; font-weight: 700; color: var(--mp-green); background: var(--mp-green-soft); border-radius: 999px; padding: 0 8px; margin-right: 6px; }
 .mp-md { min-width: 0; }
 .mp-ul { margin: 0 0 12px; padding-left: 1.4em; }
 .mp-ul li { line-height: 1.9; margin: 0 0 4px; }
