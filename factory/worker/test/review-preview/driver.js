@@ -12,13 +12,25 @@
   }
   var loaded = function (n) { return function () { return document.querySelectorAll('.mp-md').length >= n; }; };
   // フォーカスで動いたスクロールも戻す（撮れるのは先頭の画面だけ）
-  function done() { setTimeout(function () { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); window.scrollTo(0, 0); document.title = 'ready'; }, 400); }
+  // y: 窓を少し下げて撮る時だけ（右の一覧を窓の上に貼り付けて、下の固定フッターに隠れないようにする）
+  function done(y) { setTimeout(function () { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); window.scrollTo(0, typeof y === 'number' ? y : 0); document.title = 'ready'; }, 400); }
   function addSticky(para, kind, text, then) {
     if (!click('#mp-body-0-0 [data-stick-open="' + para + '"]')) return then();
     when(function () { return !!$('[data-stick-form]'); }, function () {
       click('[data-stick-kind="' + kind + '"]');
       var inp = $('[data-stick-form] input');
       if (inp) inp.value = text;
+      click('[data-stick-add]');
+      setTimeout(then, 150);
+    });
+  }
+  function railToStickies() { var r = $('.rv-rail'); if (r) r.scrollTop = r.scrollHeight; }
+  function addFigSticky(then) {
+    if (!click('#mp-body-0-0 [data-stick-media="figure"]')) return then();
+    when(function () { return !!$('[data-stick-form]'); }, function () {
+      click('[data-stick-kind="3d"]');
+      var inp = $('[data-stick-form] input');
+      if (inp) inp.value = '赤血球を立体の絵にして、血管の中を流れている様子に';
       click('[data-stick-add]');
       setTimeout(then, 150);
     });
@@ -66,6 +78,20 @@
     },
     list: function () { when(function () { return !!$('#rl-autopub') && !!$('[data-rl-sec]'); }, done); },
     videos: function () { when(function () { return !!$('[data-channel-key]') || !!$('[data-channels-empty]'); }, done); },
+    // §L-9: 図のボタン → 種類「立体の絵にする」+ 一言 → 付ける（右の一覧に 1 件）。-return はその後「直してもらう」で理由欄に入った状態
+    // 右の一覧は中で巻き取る枠（.rv-rail）なので、付箋の区画が見えるところまで巻く
+    'fig-sticky': function () { addFigSticky(function () { done(160); setTimeout(railToStickies, 450); }); },
+    'fig-sticky-return': function () { addFigSticky(function () { click('#return-btn'); setTimeout(function () { done(160); setTimeout(railToStickies, 450); }, 200); }); },
+    // 入力の枠を開いて種類と一言を選んだところ（付ける前）
+    'fig-sticky-form': function () {
+      if (!click('#mp-body-0-0 [data-stick-media="figure"]')) return done();
+      when(function () { return !!$('[data-stick-form]'); }, function () {
+        click('[data-stick-kind="3d"]');
+        var inp = $('[data-stick-form] input');
+        if (inp) inp.value = '赤血球を立体の絵にして、血管の中を流れている様子に';
+        done();
+      });
+    },
     sticky: function () {
       addSticky(2, 'hard', '「いちばん 数が 多い」の根拠が子どもに伝わらない', function () {
         addSticky(3, 'fact', '核と運搬量の関係は食い違いの指摘あり', function () { done(); });

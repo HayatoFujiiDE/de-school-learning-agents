@@ -941,3 +941,118 @@ describe('付箋 → 直してもらう理由の文', () => {
     expect(R.claimParaSelectors('4"]x', true)).toEqual(['.mat-preview[data-frame="0"] [data-cl~="4"]', '.mat-preview[data-frame="1"] [data-cl~="4"]']);
   });
 });
+
+describe('図・動かせるものへの付箋（§L-9）', () => {
+  const d = fixture();
+  const p1 = d.version.material.parts[0];
+  const p2 = d.version.material.parts[1];
+  const FIG = 'parts/p1/p1-figure-1.svg';
+  const APP = 'parts/p2/p2-app.html';
+  const fig = { id: 1, target: 'media', media: 'figure', media_key: 'parts/p1/figure-1.svg', part_id: 'p1', part_title: '赤血球のしごと', part_index: 0, kind: '3d', text: '血管の中を流れている様子に', flowed: false };
+  const app = { ...fig, id: 2, media: 'app', media_key: APP, part_id: 'p2', part_title: '血の流れを動かしてみよう', part_index: 1, kind: 'depth', text: '' };
+  const para = { id: 3, part_id: 'p1', part_title: '赤血球のしごと', part_index: 0, variant_path: 'parts/p1/p1-elementary-short.md', variant_label: '小学生・短い', para_index: 2, head: '赤血球は', kind: 'hard', text: '', flowed: false };
+  const o = (x: Obj = {}) => ({ fileBase: BASE, marks: true, stick: true, frame: 0, pi: 0, path: 'parts/p1/p1-elementary-short.md', ...x });
+  const p1md = md('parts/p1/p1-elementary-short.md');
+  const p2md = md('parts/p2/p2-elementary-short.md');
+
+  it('種類の一覧（図 6・動かせるもの 5）', () => {
+    expect(R.STICK_FIG_KINDS.map((k: string[]) => k[0])).toEqual(['3d', 'redraw', 'mismatch', 'text', 'fact', 'other']);
+    expect(R.STICK_FIG_KINDS[0][1]).toBe('立体の絵にする');
+    expect(R.STICK_APP_KINDS.map((k: string[]) => k[0])).toEqual(['depth', 'pointless', 'controls', 'mismatch', 'broken', 'other']);
+    expect(R.STICK_VIDEO_KINDS.map((k: string[]) => k[0])).toEqual(['span', 'content', 'remove', 'fact', 'other']);
+  });
+
+  it('a. 理由の 1 行: 図 3d は補足つき・一言が後ろ。redraw は補足なし。動かせるもの depth に補足。段落は今までどおり', () => {
+    const l = R.stickyLine(fig);
+    expect(l.startsWith('- 図 p1 parts/p1/figure-1.svg: 立体の絵にする（generate_image で')).toBe(true);
+    expect(l).toBe('- 図 p1 parts/p1/figure-1.svg: 立体の絵にする（generate_image で、光と影・質感のある実物らしい立体の画像に描き直す。平たい SVG のままにしない。名前の引き出し線や説明は画像に入れず本文か別の SVG で） — 血管の中を流れている様子に');
+    expect(R.stickyLine({ ...fig, kind: 'redraw', text: '' })).toBe('- 図 p1 parts/p1/figure-1.svg: 描き直す');
+    expect(R.stickyLine(app)).toBe('- 動かせるもの p2 parts/p2/p2-app.html: 動きに奥行きがない（app.html の canvas に奥行きのある動く絵にする。遠くは小さく暗く、近くは大きく明るく）');
+    expect(R.stickyLine({ ...app, kind: 'pointless', text: 'y' })).toBe('- 動かせるもの p2 parts/p2/p2-app.html: 操作の意味がない（操作は「さわると何が分かるか」を 1 文で言えるものだけにする。速さや数を変えるだけの操作は外し、本文の学びに結びつく操作に置き換える） — y');
+    expect(R.stickyLine({ ...app, kind: 'controls', text: 'x' })).toBe('- 動かせるもの p2 parts/p2/p2-app.html: 操作が分かりにくい — x');
+    expect(R.stickyLine(para)).toBe('- parts/p1/p1-elementary-short.md 3 段落目「赤血球は」: 言葉が難しい');
+  });
+
+  it('b. 印 ON・stick あり: 図に data-stick-media="figure"、動かせるものに "app" のボタン。印 OFF では両方とも出ない', () => {
+    const h1 = R.previewBodyHtml(p1md, p1, o());
+    expect(h1).toContain(`<figcaption class="mp-fig-tools"><button type="button" class="mp-stick-btn" data-stick-media="figure" data-stick-key="${FIG}">この図に付箋</button></figcaption></figure>`);
+    const h2 = R.previewBodyHtml(p2md, p2, o({ pi: 1, path: 'parts/p2/p2-elementary-short.md' }));
+    expect(h2).toContain(`<button type="button" class="mp-stick-btn" data-stick-media="app" data-stick-key="${APP}">これに付箋</button>`);
+    expect(h2.indexOf('data-stick-media="app"')).toBeLessThan(h2.indexOf('<iframe'));
+    for (const h of [R.previewBodyHtml(p1md, p1, o({ marks: false })), R.previewBodyHtml(p2md, p2, o({ pi: 1, marks: false, path: 'parts/p2/p2-elementary-short.md' }))]) {
+      expect(h).not.toContain('data-stick-media');
+      expect(h).not.toContain('mp-fig-tools');
+      expect(h).not.toContain('mp-app-tools');
+    }
+  });
+
+  it('c. 図の付箋 1 件: その図だけに「付箋 1」と has-stick（別の図には付かない）。印 OFF は札も出ない', () => {
+    const two = { ...p1, files: [...p1.files, { path: 'parts/p1/p1-figure-2.png', role: 'figure' }] };
+    const s = { ...fig, media_key: FIG };
+    const h = R.previewBodyHtml(p1md, two, o({ stickies: [s, para] }));
+    expect(h).toMatch(new RegExp(`<figure class="mp-fig has-stick" data-media="figure" data-media-key="${FIG}">[\\s\\S]*?<span class="mp-stuck" title="この図の付箋">付箋 1</span>[\\s\\S]*?</figure>`));
+    expect(h).toMatch(/<figure class="mp-fig" data-media="figure" data-media-key="parts\/p1\/p1-figure-2.png">/);
+    expect(n(h, /付箋 1<\/span>/g)).toBe(2); // 図 1 と段落 3（段落の札は今までどおり）
+    expect(n(h, /title="この図の付箋"/g)).toBe(1);
+    expect(h).toContain('class="mp-para has-stick" id="mp-p-0-0-2"');
+    expect(R.previewBodyHtml(p1md, two, o({ stickies: [s, { ...s, id: 9 }] }))).toContain('付箋 2</span>');
+    const off = R.previewBodyHtml(p1md, two, o({ marks: false, stickies: [s] }));
+    expect(off).not.toContain('has-stick');
+    expect(off).not.toContain('mp-stuck');
+    const a = R.previewBodyHtml(p2md, p2, o({ pi: 1, path: 'parts/p2/p2-elementary-short.md', stickies: [app] }));
+    expect(a).toContain('<div class="mp-app has-stick" data-media="app"');
+    expect(a).toContain('<span class="mp-stuck" title="この動かせるものの付箋">付箋 1</span>');
+  });
+
+  it('d. 一覧: 図の行に「図 parts/p1/figure-1.svg」、動かせるものの行に「動かせるもの …」。種類は図の言葉。文字はエスケープ', () => {
+    const h = R.stickyListHtml([fig, app, para]);
+    expect(h).toContain('<span class="mp-stick-where">赤血球のしごと・図 parts/p1/figure-1.svg</span>');
+    expect(h).toContain('<span class="mp-stick-where">血の流れを動かしてみよう・動かせるもの parts/p2/p2-app.html</span>');
+    expect(h).toContain('<span class="mp-stick-kind">立体の絵にする</span>');
+    expect(h).toContain('<span class="mp-stick-kind">動きに奥行きがない</span>');
+    expect(h).toContain('赤血球のしごと・小学生・短い 3 段落目「赤血球は」');
+    expect(n(h, /data-stick-del="/g)).toBe(3);
+    expect(R.stickyListHtml([{ ...fig, media_key: '<x>.svg' }])).toContain('図 &lt;x&gt;.svg');
+  });
+
+  it('e. 理由の文に入れた図の行も、却下の時に外せる', () => {
+    const r = R.stickyNoteText('出典を直して', [para, fig, app]);
+    expect(r.added).toBe(3);
+    expect(r.note).toContain(R.stickyLine(fig));
+    expect(R.noteWithoutStickyLines(r.note, r.lines)).toBe('出典を直して');
+    expect(R.decisionNote({ note: r.note, flowedLines: r.lines }, 'reject')).toBe('出典を直して');
+  });
+
+  it('動画: 印 ON で .mp-video の先頭にボタン（鍵は videos[].id）、OFF では出ない。行は題名あり・なし。一覧は題名か id', () => {
+    const on = R.previewBodyHtml(p1md, p1, o());
+    expect(on).toMatch(/<div class="mp-video[^"]*" data-media="video" data-media-key="v1"[^>]*><span class="mp-video-tools"><button type="button" class="mp-stick-btn" data-stick-media="video" data-stick-key="v1">この動画に付箋<\/button><\/span>/);
+    expect(R.previewBodyHtml(p1md, p1, o({ marks: false }))).not.toContain('data-stick-media="video"');
+    const vs = { ...fig, id: 5, media: 'video', media_key: 'v1', media_title: '赤血球が流れる様子（作り物）', kind: 'span', text: '1:20 からの区間だけに' };
+    expect(R.stickyLine(vs)).toBe('- 動画 p1 v1（赤血球が流れる様子（作り物））: 区間が合わない — 1:20 からの区間だけに');
+    expect(R.stickyLine({ ...vs, media_title: '', kind: 'remove', text: '' })).toBe('- 動画 p1 v1: 要らない');
+    const withV = R.previewBodyHtml(p1md, p1, o({ stickies: [vs] }));
+    expect(withV).toContain('<span class="mp-stuck" title="この動画の付箋">付箋 1</span>');
+    expect(withV).toMatch(/<div class="mp-video[^"]* has-stick"/);
+    expect(R.stickyListHtml([vs])).toContain('赤血球のしごと・動画 赤血球が流れる様子（作り物）（v1）</span>');
+    expect(R.stickyListHtml([{ ...vs, media_title: '' }])).toContain('赤血球のしごと・動画 v1</span>');
+    expect(R.stickyListHtml([])).toContain('段落の「ここに付箋」や、図・動かせるもの・動画のボタンから付けられます。');
+  });
+
+  it('動画: 題名に改行があっても行は 1 行（却下時に外せる）。同じ YouTube 動画の別区間は videos[].id で区別。id の無い動画にはボタンを出さない', () => {
+    const vs = { ...fig, id: 6, media: 'video', media_key: 'v2', media_title: '前半\n後半', kind: 'remove', text: 'いら\nない' };
+    const line = R.stickyLine(vs);
+    expect(line).toBe('- 動画 p1 v2（前半 後半）: 要らない — いら ない');
+    const flowed = R.stickyNoteText('手書き理由', [vs]);
+    expect(R.noteWithoutStickyLines(flowed.note, flowed.lines)).toBe('手書き理由');
+    const two = { ...p1, videos: [{ ...p1.videos[0], id: 'v1', title: '前半', start_sec: 0, end_sec: 20 }, { ...p1.videos[0], id: 'v2', title: '後半', start_sec: 20, end_sec: 40 }] };
+    const h = R.previewBodyHtml(p1md, two, o({ stickies: [vs] }));
+    expect(h.match(/data-stick-key="v1"/g)).toHaveLength(1);
+    expect(h.match(/data-stick-key="v2"/g)).toHaveLength(1);
+    expect(h.match(/title="この動画の付箋">付箋 1/g)).toHaveLength(1);
+    expect(h).toMatch(/data-media-key="v2"[^>]*>(?:(?!<\/div>).)*付箋 1/);
+    const noId = { ...p1, videos: [{ ...p1.videos[0], id: undefined }] };
+    const h2 = R.previewBodyHtml(p1md, noId, o());
+    expect(h2).toContain('data-media="video"');
+    expect(h2).not.toContain('data-stick-media="video"');
+  });
+});

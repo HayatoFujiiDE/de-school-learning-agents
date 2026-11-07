@@ -752,6 +752,16 @@ li.mp-para.has-pin, li.mp-para.is-note { margin-left: 0; margin-right: 0; }
 @media (hover: none) { .mp-stick-btn { opacity: 1; } }
 .mp-stuck { display: inline-block; margin-left: 6px; font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif; font-size: 11px; letter-spacing: 0; line-height: 1.6; padding: 0 8px; border-radius: 4px; background: #fde68a; color: #6b4a00; font-weight: 700; box-shadow: 1px 1px 0 rgba(0, 0, 0, .08); vertical-align: 1px; }
 .mp-para.has-stick { box-shadow: inset -3px 0 0 #f5c542; }
+/* 図・動かせるものの付箋（§L-9）: 図の下に小さく右寄せ・動かせるものは「さわってみよう」の行の右。付箋のある図は枠に段落と同じ黄色の目印 */
+.mp-fig-tools { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 4px 0; margin: 4px 0 0; }
+.mp-app { position: relative; }
+.mp-app-tools { position: absolute; top: 2px; right: 0; display: flex; align-items: center; }
+.mp-app-main .mp-app-cap { padding-right: 180px; }
+/* 図・動かせるもの・動画のボタンは印 ON なら常に見える薄いチップ（段落の「ここに付箋」はホバーのまま） */
+.mp-stick-btn[data-stick-media] { opacity: 1; background: #fffbea; border-style: solid; border-color: #ecd9a4; }
+.mp-stick-btn[data-stick-media]:hover { background: #fdf0c4; }
+.mp-video-tools { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; max-width: 640px; margin: 0 0 4px; }
+.mp-fig.has-stick img, .mp-app.has-stick .mp-app-frame, .mp-video.has-stick iframe { border-color: #f5c542; box-shadow: 0 0 0 2px #f5c542; }
 .mp-stick-form { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 4px; padding: 12px 14px; border: 1px solid #f0d58a; border-radius: 12px; background: #fffbea; font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif; font-size: 13px; letter-spacing: 0; line-height: 1.6; box-shadow: 0 4px 14px rgba(41, 44, 41, .08); }
 .mp-stick-q { font-weight: 600; color: #6b4a00; }
 .mp-chips { display: flex; flex-wrap: wrap; gap: 6px; }

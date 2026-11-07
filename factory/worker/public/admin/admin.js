@@ -2644,24 +2644,42 @@
     o = o || {};
     var figs = [], apps = [], others = [];
     var pinOf = function (media, key) { return pinAttrs(o.marks && o.pins ? pinsFor(o.pins.media, function (x) { return x.media === media && x.key === key; }) : []); };
+    // 図・動かせるものの付箋の数（§L-9。印 OFF は札も出さない。付箋そのものは消さない）
+    var stuckOf = function (media, key) {
+      return o.marks ? (o.stickies || []).filter(function (s) { return s.target === 'media' && s.media === media && s.media_key === key; }).length : 0;
+    };
+    var stickTools = function (media, key, label) {
+      var k = stuckOf(media, key);
+      return (k ? '<span class="mp-stuck" title="' + (media === 'app' ? 'この動かせるものの付箋' : media === 'video' ? 'この動画の付箋' : 'この図の付箋') + '">付箋 ' + k + '</span>' : '') +
+        (o.marks && o.stick ? '<button type="button" class="mp-stick-btn" data-stick-media="' + media + '" data-stick-key="' + esc(key) + '">' + label + '</button>' : '');
+    };
     (Array.isArray(part.files) ? part.files : []).forEach(function (f) {
       if (!f || typeof f.path !== 'string') return;
       var src = esc(fileBase + f.path);
-      var pa;
+      var pa, tools;
       if (IMAGE_RE.test(f.path)) {
         pa = pinOf('figure', f.path);
-        figs.push('<figure class="mp-fig' + pa.cls + '" data-media="figure" data-media-key="' + esc(f.path) + '"' + pa.attr + '><img alt="' + esc(typeof f.alt === 'string' && f.alt ? f.alt : '図') + '" src="' + src + '">' + pa.btns + '</figure>');
+        tools = stickTools('figure', f.path, 'この図に付箋');
+        figs.push('<figure class="mp-fig' + pa.cls + (stuckOf('figure', f.path) ? ' has-stick' : '') + '" data-media="figure" data-media-key="' + esc(f.path) + '"' + pa.attr + '><img alt="' + esc(typeof f.alt === 'string' && f.alt ? f.alt : '図') + '" src="' + src + '">' + pa.btns +
+          (tools ? '<figcaption class="mp-fig-tools">' + tools + '</figcaption>' : '') + '</figure>');
       } else if (/\.html$/i.test(f.path)) {
         pa = pinOf('app', f.path);
-        apps.push('<div class="mp-app' + pa.cls + '" data-media="app" data-media-key="' + esc(f.path) + '"' + pa.attr + '><p class="mp-app-cap">さわってみよう</p>' + pa.btns +
-          '<iframe class="mp-app-frame" sandbox="allow-scripts" title="動かせるもの" src="' + src + '"></iframe></div>');
+        tools = stickTools('app', f.path, 'これに付箋');
+        var appMain = '<p class="mp-app-cap">さわってみよう</p>' + pa.btns + '<iframe class="mp-app-frame" sandbox="allow-scripts" title="動かせるもの" src="' + src + '"></iframe>';
+        // 付箋の札とボタンは「さわってみよう」の行の右（CSS で右上に置く）。入力の枠は DOM 側が iframe の上に入れる
+        apps.push('<div class="mp-app' + pa.cls + (stuckOf('app', f.path) ? ' has-stick' : '') + '" data-media="app" data-media-key="' + esc(f.path) + '"' + pa.attr + '>' +
+          (tools ? '<span class="mp-app-tools">' + tools + '</span><div class="mp-app-main">' + appMain + '</div>' : appMain) + '</div>');
       } else others.push('<p class="mp-file"><a href="' + src + '" target="_blank" rel="noopener noreferrer">' + esc(f.path) + '</a></p>');
     });
     var vids = (Array.isArray(part.videos) ? part.videos : []).map(function (v) {
       v = v && typeof v === 'object' ? v : {};
       var emb = ytEmbedHtml(v);
       var pa = pinOf('video', v.id);
-      return '<div class="mp-video' + pa.cls + '" data-media="video" data-media-key="' + esc(v.id) + '"' + pa.attr + '>' + pa.btns + (emb || '<p class="mp-missing">動画の id か区間の形が正しくないため、埋め込みません</p>') +
+      // 動画の付箋（§L-9 追記）: 鍵は material.json の videos[].id（同じ YouTube 動画の別区間を区別する）。id が無い動画にはボタンを出さない。ボタンは .mp-video の先頭
+      var yk = typeof v.id === 'string' && v.id ? v.id : '';
+      var vt = yk ? stickTools('video', yk, 'この動画に付箋') : '';
+      return '<div class="mp-video' + pa.cls + (stuckOf('video', yk) ? ' has-stick' : '') + '" data-media="video" data-media-key="' + esc(v.id) + '"' + pa.attr + '>' +
+        (vt ? '<span class="mp-video-tools">' + vt + '</span>' : '') + pa.btns + (emb || '<p class="mp-missing">動画の id か区間の形が正しくないため、埋め込みません</p>') +
         (v.why ? '<p class="mp-video-why"><span class="mp-k">見どころ</span>' + esc(v.why) + '</p>' : '') + '</div>';
     });
     var top = part.kind === 4 ? apps : [];
@@ -2678,7 +2696,7 @@
     o = o || {};
     var known = o.claimIdx || {}, pins = o.marks && o.pins ? o.pins : null;
     var stuck = {};
-    (o.stickies || []).forEach(function (s) { stuck[s.para_index] = (stuck[s.para_index] || 0) + 1; });
+    (o.stickies || []).forEach(function (s) { if (s.target !== 'media') stuck[s.para_index] = (stuck[s.para_index] || 0) + 1; });
     var media = previewMedia(part || {}, o.fileBase || '', o);
     var idx = 0;
     function para(tag, raw) {
@@ -2732,9 +2750,38 @@
   var STICK_KINDS = [['hard', '言葉が難しい'], ['long', '長い'], ['figure', '図と合わない'], ['fact', '事実が心配'], ['other', 'その他']];
   var STICK_LABEL = {};
   STICK_KINDS.forEach(function (k) { STICK_LABEL[k[0]] = k[1]; });
+  // 図・動かせるものの付箋（§L-9）。記録は同じ stickies の配列に target: 'media' で入る
+  var STICK_FIG_KINDS = [['3d', '立体の絵にする'], ['redraw', '描き直す'], ['mismatch', '本文と合わない'], ['text', '文字が読めない・崩れている'], ['fact', '事実が心配'], ['other', 'その他']];
+  var STICK_APP_KINDS = [['depth', '動きに奥行きがない'], ['pointless', '操作の意味がない'], ['controls', '操作が分かりにくい'], ['mismatch', '本文と合わない'], ['broken', '動かない・おかしい'], ['other', 'その他']];
+  var STICK_VIDEO_KINDS = [['span', '区間が合わない'], ['content', '内容が合わない・別の動画に'], ['remove', '要らない'], ['fact', '事実が心配'], ['other', 'その他']];
+  var STICK_FIG_LABEL = {}, STICK_APP_LABEL = {}, STICK_VIDEO_LABEL = {};
+  STICK_VIDEO_KINDS.forEach(function (k) { STICK_VIDEO_LABEL[k[0]] = k[1]; });
+  STICK_FIG_KINDS.forEach(function (k) { STICK_FIG_LABEL[k[0]] = k[1]; });
+  STICK_APP_KINDS.forEach(function (k) { STICK_APP_LABEL[k[0]] = k[1]; });
+  /** 種類が 3d / depth の時だけ理由の行に付く固定の文（職人への指示） */
+  var STICK_MEDIA_EXTRA = {
+    figure: { '3d': '（generate_image で、光と影・質感のある実物らしい立体の画像に描き直す。平たい SVG のままにしない。名前の引き出し線や説明は画像に入れず本文か別の SVG で）' },
+    app: {
+      depth: '（app.html の canvas に奥行きのある動く絵にする。遠くは小さく暗く、近くは大きく明るく）',
+      pointless: '（操作は「さわると何が分かるか」を 1 文で言えるものだけにする。速さや数を変えるだけの操作は外し、本文の学びに結びつく操作に置き換える）'
+    },
+    video: {}
+  };
+  function stickyKindLabel(s) {
+    var L = s.target === 'media' ? (s.media === 'app' ? STICK_APP_LABEL : s.media === 'video' ? STICK_VIDEO_LABEL : STICK_FIG_LABEL) : STICK_LABEL;
+    return Object.prototype.hasOwnProperty.call(L, s.kind) ? L[s.kind] : 'その他';
+  }
   var NOTE_MAX = 4000; // 差し戻しの理由の上限（routes/review.ts の note）
   /** 付箋 1 件 → 理由の 1 行（例: "- parts/p1/p1-elementary-short.md 3 段落目「赤血球は…」: 言葉が難しい — 一言"） */
   function stickyLine(s) {
+    if (s.target === 'media') {
+      var mk = s.media === 'app' || s.media === 'video' ? s.media : 'figure', ex = STICK_MEDIA_EXTRA[mk];
+      var name = mk === 'app' ? '動かせるもの' : mk === 'video' ? '動画' : '図';
+      var one = function (x) { return String(x == null ? '' : x).replace(/\s+/g, ' ').trim(); }; // 行の中に改行を入れない（却下時の除外は行単位）
+      var vt = mk === 'video' && one(s.media_title) ? '（' + one(s.media_title) + '）' : '';
+      return '- ' + name + ' ' + one(s.part_id) + ' ' + one(s.media_key) + vt + ': ' + stickyKindLabel(s) +
+        (Object.prototype.hasOwnProperty.call(ex, s.kind) ? ex[s.kind] : '') + (one(s.text) ? ' — ' + one(s.text) : '');
+    }
     return '- ' + s.variant_path + ' ' + (Number(s.para_index) + 1) + ' 段落目「' + s.head + '」: ' + (STICK_LABEL[s.kind] || 'その他') + (s.text ? ' — ' + s.text : '');
   }
   /**
@@ -2786,23 +2833,28 @@
     return null;
   }
   function stickyListHtml(stickies) {
-    if (!stickies.length) return '<p class="mp-stick-empty">付箋はまだありません。「印を見る」を ON にして、段落の「ここに付箋」から付けられます。</p>';
+    if (!stickies.length) return '<p class="mp-stick-empty">付箋はまだありません。「印を見る」を ON にして、段落の「ここに付箋」や、図・動かせるもの・動画のボタンから付けられます。</p>';
     var pending = stickies.filter(function (s) { return !s.flowed; }).length;
     return '<div class="mp-stick-head"><b>付箋 ' + stickies.length + ' 件</b><span class="muted">' + (pending ? '「直してもらう」を押すと、まだ入れていない ' + pending + ' 件を理由欄に箇条書きで足します（書いてある理由は消しません）' : 'すべて理由欄に入れました') + '</span></div>' +
       '<ul class="mp-stick-list">' + stickies.map(function (s) {
-        return '<li class="mp-stick-item" data-stick-item="' + s.id + '"><span class="mp-stick-kind">' + esc(STICK_LABEL[s.kind] || 'その他') + '</span>' +
-          '<span class="mp-stick-where">' + esc(s.part_title || s.part_id) + '・' + esc(s.variant_label) + ' ' + (Number(s.para_index) + 1) + ' 段落目「' + esc(s.head) + '」</span>' +
+        var where = s.target === 'media' ? (s.media === 'app' ? '動かせるもの ' + esc(s.media_key) : s.media === 'video' ? '動画 ' + (s.media_title ? esc(s.media_title) + '（' + esc(s.media_key) + '）' : esc(s.media_key)) : '図 ' + esc(s.media_key)) : esc(s.variant_label) + ' ' + (Number(s.para_index) + 1) + ' 段落目「' + esc(s.head) + '」';
+        return '<li class="mp-stick-item" data-stick-item="' + s.id + '"><span class="mp-stick-kind">' + esc(stickyKindLabel(s)) + '</span>' +
+          '<span class="mp-stick-where">' + esc(s.part_title || s.part_id) + '・' + where + '</span>' +
           (s.text ? '<span class="mp-stick-text">' + esc(s.text) + '</span>' : '') +
           (s.flowed ? '<span class="pill green">理由欄に入れました</span>' : '') +
           '<button type="button" class="btn small" data-stick-del="' + s.id + '">消す</button></li>';
       }).join('') + '</ul>';
   }
-  function stickyFormHtml(kind) {
-    return '<span class="mp-stick-form" data-stick-form="1" role="group" aria-label="付箋を付ける"><span class="mp-stick-q">この段落に付箋を付けます。どれに近いですか？</span>' +
-      '<span class="mp-chips">' + STICK_KINDS.map(function (k) {
+  /** 付箋の入力の枠。media: 無し = 段落 / 'figure' = 図 / 'app' = 動かせるもの（§L-9 で種類・問い・一言の例が変わる） */
+  function stickyFormHtml(kind, media) {
+    var kinds = media === 'figure' ? STICK_FIG_KINDS : media === 'app' ? STICK_APP_KINDS : media === 'video' ? STICK_VIDEO_KINDS : STICK_KINDS;
+    var q = media === 'figure' ? 'この図に付箋を付けます。どれに近いですか？' : media === 'app' ? 'この動かせるものに付箋を付けます。どれに近いですか？' : media === 'video' ? 'この動画に付箋を付けます。どれに近いですか？' : 'この段落に付箋を付けます。どれに近いですか？';
+    var ex = media === 'figure' ? '赤血球を立体の絵にして、血管の中を流れている様子に' : media === 'app' ? '奥から手前に流れてくる見え方に' : media === 'video' ? '1:20 からの区間だけにして' : '「酸素」が小学生には難しい';
+    return '<span class="mp-stick-form" data-stick-form="1" role="group" aria-label="付箋を付ける"><span class="mp-stick-q">' + q + '</span>' +
+      '<span class="mp-chips">' + kinds.map(function (k) {
         return '<button type="button" class="mp-chip' + (kind === k[0] ? ' on' : '') + '" data-stick-kind="' + k[0] + '" aria-pressed="' + (kind === k[0] ? 'true' : 'false') + '">' + k[1] + '</button>';
       }).join('') + '</span>' +
-      '<input type="text" class="mp-stick-input" maxlength="200" placeholder="一言（任意）例: 「酸素」が小学生には難しい" aria-label="付箋の一言">' +
+      '<input type="text" class="mp-stick-input" maxlength="200" placeholder="一言（任意）例: ' + ex + '" aria-label="付箋の一言">' +
       '<span class="mp-stick-btns"><button type="button" class="btn small primary" data-stick-add="1"' + (kind ? '' : ' disabled') + '>付箋を付ける</button><button type="button" class="btn small" data-stick-cancel="1">やめる</button>' +
       (kind ? '' : '<span class="muted mp-stick-hint">種類を選ぶと付けられます</span>') + '</span></span>';
   }
@@ -3331,7 +3383,8 @@
           var o = {};
           for (var k in base) o[k] = base[k];
           o.frame = fi; o.pi = pi; o.path = vr.path;
-          o.stickies = (st.stickies || []).filter(function (s) { return s.part_index === pi && s.variant_path === vr.path; });
+          // 段落の付箋は表示中の変奏の分だけ。図・動かせるものは部品ごと（どの変奏でも同じ図が出る）
+          o.stickies = (st.stickies || []).filter(function (s) { return s.part_index === pi && (s.target === 'media' || s.variant_path === vr.path); });
           el.innerHTML = previewBodyHtml(t, p, o);
         }, function (e) {
           if (reviewCtx !== c || c.pvToken !== token) return;
@@ -3542,9 +3595,11 @@
     var st = c.st;
     st.stickies = st.stickies || [];
     st.stickySeq = (st.stickySeq || 0) + 1;
-    st.stickies.push({
+    var text = inp ? inp.value.trim().slice(0, 200) : '';
+    if (dr.target === 'media') st.stickies.push({ id: st.stickySeq, target: 'media', media: dr.media, media_key: dr.media_key, media_title: dr.media_title || '', part_id: dr.part_id, part_title: dr.part_title, part_index: dr.pi, kind: dr.kind, text: text, flowed: false });
+    else st.stickies.push({
       id: st.stickySeq, part_id: dr.part_id, part_title: dr.part_title, part_index: dr.pi, variant_path: dr.path, variant_label: dr.label,
-      para_index: dr.para, head: dr.head, kind: dr.kind, text: inp ? inp.value.trim().slice(0, 200) : '', flowed: false
+      para_index: dr.para, head: dr.head, kind: dr.kind, text: text, flowed: false
     });
     c.stickDraft = null;
     fillPreview();
@@ -3554,6 +3609,28 @@
   }
   /** 付箋の操作なら true */
   function onStickyClick(c, t) {
+    var mb = t.closest('[data-stick-media]');
+    if (mb) {
+      closeStickyForm();
+      var mediaEl = mb.closest('[data-media]'), mbody = mb.closest('[data-mp-body]');
+      if (!mediaEl || !mbody) return true;
+      var mpi = Number(mbody.getAttribute('data-mp-body')) || 0;
+      var mpart = ((c.d.version.material || {}).parts || [])[mpi] || {};
+      var ma = mb.getAttribute('data-stick-media'), mk = ma === 'app' || ma === 'video' ? ma : 'figure';
+      var mkey = mb.getAttribute('data-stick-key') || '';
+      // 動画は理由の行と一覧に題名を出す（part.videos の title。無ければ空）
+      var mvid = mk === 'video' ? (Array.isArray(mpart.videos) ? mpart.videos : []).filter(function (v) { return v && v.id === mkey; })[0] : null;
+      c.stickDraft = { target: 'media', media: mk, media_key: mkey, media_title: mvid && typeof mvid.title === 'string' ? mvid.title : '', pi: mpi, part_id: String(mpart.id || ''), part_title: String(mpart.title || ''), kind: null };
+      // 図は <figure> の末尾、動かせるものは見出しの行の下・iframe の上、動画はボタンの行の下・埋め込みの上
+      var frameEl = mk === 'app' ? mediaEl.querySelector('iframe') : null;
+      var vtools = mk === 'video' ? mb.closest('.mp-video-tools') : null;
+      if (vtools) vtools.insertAdjacentHTML('afterend', stickyFormHtml(null, mk));
+      else if (frameEl) frameEl.insertAdjacentHTML('beforebegin', stickyFormHtml(null, mk));
+      else mediaEl.insertAdjacentHTML('beforeend', stickyFormHtml(null, mk));
+      var mfirst = mediaEl.querySelector('[data-stick-kind]');
+      if (mfirst) mfirst.focus();
+      return true;
+    }
     var open = t.closest('[data-stick-open]');
     if (open) {
       closeStickyForm();
@@ -3575,7 +3652,7 @@
       c.stickDraft.kind = kind.getAttribute('data-stick-kind');
       var form = kind.closest('[data-stick-form]');
       var text = form.querySelector('input').value;
-      form.outerHTML = stickyFormHtml(c.stickDraft.kind);
+      form.outerHTML = stickyFormHtml(c.stickDraft.kind, c.stickDraft.media);
       var nf = document.querySelector('[data-stick-form]');
       if (nf) { var ni = nf.querySelector('input'); ni.value = text; ni.focus(); }
       return true;
@@ -3875,6 +3952,7 @@
     defaultPv: defaultPv,
     // 付箋
     stickyLine: stickyLine, stickyNoteText: stickyNoteText, stickyListHtml: stickyListHtml, STICK_KINDS: STICK_KINDS, appendLines: appendLines,
+    STICK_FIG_KINDS: STICK_FIG_KINDS, STICK_APP_KINDS: STICK_APP_KINDS, STICK_VIDEO_KINDS: STICK_VIDEO_KINDS,
     noteWithoutStickyLines: noteWithoutStickyLines, decisionNote: decisionNote, inInputOf: inInputOf, claimParaSelectors: claimParaSelectors, stickyKeyAction: stickyKeyAction, stripCites: stripCites
   };
 

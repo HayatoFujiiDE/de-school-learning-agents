@@ -14,7 +14,7 @@
 
 - 図: `STICK_FIG_KINDS = [['3d','立体の絵にする'], ['redraw','描き直す'], ['mismatch','本文と合わない'], ['text','文字が読めない・崩れている'], ['fact','事実が心配'], ['other','その他']]`
 - 動かせるもの: `STICK_APP_KINDS = [['depth','動きに奥行きがない'], ['pointless','操作の意味がない'], ['controls','操作が分かりにくい'], ['mismatch','本文と合わない'], ['broken','動かない・おかしい'], ['other','その他']]`
-- 動画（追記 2026-11-07。ふじさん「図とかだけじゃなくて、動画とかも」）: `STICK_VIDEO_KINDS = [['span','区間が合わない'], ['content','内容が合わない・別の動画に'], ['remove','要らない'], ['fact','事実が心配'], ['other','その他']]`。対象は `.mp-video`（L9-1 の 1 の「動画は対象外」を取り消す）。ボタン「この動画に付箋」は `.mp-video` の先頭（印 ON の時だけ）、`data-stick-media="video"`・`data-stick-key="<youtube の id>"`。記録は `media: 'video', media_key: <id>`。理由の行は `- 動画 <part_id> <id>（<title>）: <種類> — <一言>`。
+- 動画（追記 2026-11-07。ふじさん「図とかだけじゃなくて、動画とかも」）: `STICK_VIDEO_KINDS = [['span','区間が合わない'], ['content','内容が合わない・別の動画に'], ['remove','要らない'], ['fact','事実が心配'], ['other','その他']]`。対象は `.mp-video`（L9-1 の 1 の「動画は対象外」を取り消す）。ボタン「この動画に付箋」は `.mp-video` の先頭（印 ON の時だけ）、`data-stick-media="video"`・`data-stick-key="<videos[].id（v1 など。同じ YouTube 動画の別区間を区別するため youtube_id ではない）>"`。`id` の無い動画にはボタンを出さない。記録は `media: 'video', media_key: <videos[].id>, media_title: <title>`。理由の行は `- 動画 <part_id> <videos[].id>（<title>）: <種類> — <一言>`（題名・一言の改行や連続する空白は 1 つの空白に畳む。行の中に改行を入れない — 却下時の除外が行単位のため）。
 - 付箋の記録（`reviewStates[vid].stickies` の 1 件。段落の付箋は今までどおり `target` 無し）:
   `{ id, target: 'media', media: 'figure'|'app', media_key: <path>, part_id, part_title, part_index, kind, text, flowed }`
 - 理由の 1 行（`stickyLine`。職人が読んで、どのファイルをどう直すかが一意に分かる）:
