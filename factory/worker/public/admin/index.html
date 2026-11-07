@@ -10,16 +10,18 @@
 <body>
   <header class="top">
     <a class="brand" href="#/">コンテンツファクトリー</a>
-    <nav class="nav">
+    <nav class="nav" aria-label="メニュー">
       <a href="#/">工場</a>
-      <a href="#/materials">素材</a>
-      <a href="#/new">新しい素材</a>
-      <a href="#/proposals">提案箱</a>
       <a href="#/review">確認待ち</a>
-      <a href="#/standards">編集基準</a>
-      <a href="#/topics">お題の棚</a>
-      <a href="#/models3d">立体モデル</a>
-      <a href="#/retro">改善係</a>
+      <details class="nav-more">
+        <summary>道具と記録</summary>
+        <div class="nav-pop">
+          <div class="nav-grp"><span class="nav-grp-h">入口</span><a href="#/proposals">提案箱</a><a href="#/new">新しい素材</a></div>
+          <div class="nav-grp"><span class="nav-grp-h">制作</span><a href="#/standards">編集基準</a><a href="#/images">画像の生成</a><a href="#/videos">動画の確認</a></div>
+          <div class="nav-grp"><span class="nav-grp-h">倉庫</span><a href="#/materials">素材</a><a href="#/models3d">立体モデル</a><a href="#/library/images">生成した画像</a></div>
+          <div class="nav-grp"><span class="nav-grp-h">そのほか</span><a href="#/topics">今日のお題</a><a href="#/retro">改善係</a></div>
+        </div>
+      </details>
     </nav>
   </header>
   <section id="status" class="status" aria-label="状況"><span class="muted">状況を読み込み中…</span></section>

@@ -257,17 +257,20 @@
   }
 
   // ---- 状況（上部帯）----
-  // 仕事ごとの枠 4 つを横に並べる（1100px 以上で 1 段・狭い時は 2×2）: 制作 / お金 / 入口（収集・会議）/ 画像・動画。
-  // 各枠 = 見出し → 中身 → その仕事のボタン。その仕事の注意は枠の中の下に出し、注意がある枠は左の線を赤 / 黄にする。同じ注意を 2 つの枠に出さない。
+  // 仕事ごとの枠 3 つを横に並べる（1100px 以上で 1 段・狭い時は 1 列。§N-8）: 制作 / お金 / 注意。
+  // 入口（収集・会議）と画像・動画の中身は工場の係のパネル（§N-7）にあるので帯には置かない。
+  // 注意は全部「注意」の枠に 1 列（赤が先・黄が後）。各行の末尾に、その原因の係のパネルを開くリンク（#/?st=<係>）。行き先の無い注意（停止中・定期処理・職人 未設定・今日の上限）はリンクなし。
   // 帯の中の金額は全部 $（fmtCents）。上限は整数ドルなら小数を落とす。¢ は #/images・#/videos の画面にだけ残す。
   /** 定期処理（cron）の最終からの経過の閾値（分）。ここ 1 か所だけで決める */
   var CRON_LATE_MIN = 20, CRON_STALE_MIN = 60;
   /** 今日の費用のメーターの段階（上限に対する割合。判定は >=） */
   var COST_NEAR = 0.8;
-  /** 枠の順と見出し（key は注意の行き先の名前） */
-  var STATUS_CARDS = [['run', '制作'], ['money', 'お金'], ['intake', '入口（収集・会議）'], ['media', '画像・動画']];
+  /** 枠の順と見出し */
+  var STATUS_CARDS = [['run', '制作'], ['money', 'お金'], ['alerts', '注意']];
+  /** 注意の行き先（係の id → リンクの文）。ここに無い係にはリンクを付けない */
+  var ALERT_GO_TEXT = { intake: '入口の係を開く', meeting: '会議の係を開く', maker: '職人の係を開く', verifier: '検証係を開く', topics: 'お題係を開く' };
   var statusTimer = null; // 相対時間を 1 分ごとに直す単一のタイマー（loadStatus のたびに clear → set）
-  var statusLast = null; // { s, alerts: { <枠>: html } }: タイマーが描き直しに使う最後の /api/status の応答と、枠ごとに描いた注意
+  var statusLast = null; // { s, alerts: html }: タイマーが描き直しに使う最後の /api/status の応答と、描いた注意の中身
   /** 上限の表示: 整数ドルなら小数を落とす（$200）。0 / 未定義は — */
   function fmtCap(c) {
     var v = Number(c);
@@ -300,56 +303,74 @@
     return '<span class="meter" role="meter" aria-label="今日の費用（上限に対する割合）" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + esc(Math.min(100, Math.round(pct))) + '" data-meter="' + lv + '">' +
       '<span class="meter-fill m-' + lv + ' w' + step + '"></span></span>';
   }
-  /** 注意の 1 件。card = 出す枠（STATUS_CARDS の key）。1 件は 1 つの枠にだけ出す */
-  function alertItem(card, level, html) { return { card: card, level: level, html: html }; }
-  function alertLi(a) { return '<li class="sa-item sa-' + a.level + '">' + a.html + '</li>'; }
+  /** 注意の 1 件。st = 行き先の係（ALERT_GO_TEXT の key。行き先なしは null）、kind = 種類（画像の注意の互換の描き方に使う） */
+  function alertItem(st, level, html, kind) { return { st: st || null, level: level, html: html, kind: kind || '' }; }
+  /** 行き先のリンク（係のパネルを開く #/?st=<係>）。行き先なしは空文字 */
+  function alertGoHtml(st) {
+    if (!st || !Object.prototype.hasOwnProperty.call(ALERT_GO_TEXT, st)) return '';
+    return ' <a class="sa-go" href="#/?st=' + st + '" data-sa-go="' + st + '">' + esc(ALERT_GO_TEXT[st]) + ' ›</a>';
+  }
+  function alertLi(a) { return '<li class="sa-item sa-' + a.level + '">' + a.html + alertGoHtml(a.st) + '</li>'; }
   function goLink(href, text) { return ' <a class="sa-go" href="' + href + '">' + esc(text) + ' ›</a>'; }
-  /** 注意の全件（純関数）。赤を先に、同じ色の中は並べた順。各件は card の枠にだけ出る */
+  /** お題係（status.topics）から出せる注意: 最後の作成が失敗（赤）/ 24 時間以内に失敗あり（黄）・今月の上限 80% 以上（黄） */
+  function topicsAlerts(tp) {
+    if (!tp || typeof tp !== 'object') return [];
+    var out = [], lr = tp.last_run && typeof tp.last_run === 'object' ? tp.last_run : null, f24 = Number(tp.failed_24h || 0);
+    if (lr && lr.status === 'failed') out.push(alertItem('topics', 'red', 'お題の作成が失敗しました（' + esc(fmtTime(lr.updated_at || lr.created_at)) + '）'));
+    else if (f24 > 0) out.push(alertItem('topics', 'yellow', 'お題の作成が 24 時間以内に ' + esc(f24) + ' 回失敗しています'));
+    var lv = capLevel(tp.month_cents, tp.month_cap_cents);
+    if (lv === 'near' || lv === 'over') out.push(alertItem('topics', 'yellow', '今月のお題の費用が上限' + (lv === 'over' ? 'に達しました' : 'に近づいています') + '（' + fmtUsed(tp.month_cents) + ' / ' + fmtCap(tp.month_cap_cents) + '）'));
+    return out;
+  }
+  /** 注意の全件（純関数）。赤を先に、同じ色の中は並べた順 */
   function statusAlerts(s, nowMs) {
     var out = [];
-    // 制作: 停止中・定期処理の遅れ / 停止・職人 未設定（今日の上限で新しい制作が始まらないことはお金の枠に出す）
-    if (s.paused) out.push(alertItem('run', 'red', '停止中です。新しい制作と検証は始まりません' + (s.paused_note ? '（メモ: ' + esc(s.paused_note) + '）' : '')));
+    // 制作（行き先なし）: 停止中・定期処理の遅れ / 停止・職人 未設定・今日の上限 80% / 100%
+    if (s.paused) out.push(alertItem(null, 'red', '停止中です。新しい制作と検証は始まりません' + (s.paused_note ? '（メモ: ' + esc(s.paused_note) + '）' : '')));
     var ca = cronAge(s.last_cron_at, nowMs), last = s.last_cron_at ? '（最終 ' + esc(fmtTime(s.last_cron_at)) + '）' : '（記録がありません）';
-    if (ca.level === 'stale') out.push(alertItem('run', 'red', '定期処理が 1 時間以上動いていません' + last));
-    else if (ca.level === 'late') out.push(alertItem('run', 'yellow', '定期処理が遅れています' + last));
-    if (!s.agent_configured) out.push(alertItem('run', 'red', '職人（agent）が設定されていません'));
-    // お金: 今日の上限 80% / 100%
+    if (ca.level === 'stale') out.push(alertItem(null, 'red', '定期処理が 1 時間以上動いていません' + last));
+    else if (ca.level === 'late') out.push(alertItem(null, 'yellow', '定期処理が遅れています' + last));
+    if (!s.agent_configured) out.push(alertItem(null, 'red', '職人（agent）が設定されていません'));
     var dl = capLevel(s.today_cents, s.daily_cap_cents), money = '（' + fmtUsed(s.today_cents) + ' / ' + fmtCap(s.daily_cap_cents) + '）';
-    if (dl === 'over') out.push(alertItem('money', 'red', '今日の費用が上限に達しました' + money + '。新しい制作は日付が変わるまで始まりません'));
-    else if (dl === 'near') out.push(alertItem('money', 'yellow', '今日の費用が上限に近づいています' + money));
-    // 入口: 収集・会議の失敗 / 失効（→ 提案箱）・月の上限 80% 以上
+    if (dl === 'over') out.push(alertItem(null, 'red', '今日の費用が上限に達しました' + money + '。新しい制作は日付が変わるまで始まりません'));
+    else if (dl === 'near') out.push(alertItem(null, 'yellow', '今日の費用が上限に近づいています' + money));
+    // 収集 → 入口の係・会議 → 会議の係: 失敗 / 失効・月の上限 80% 以上
     var sc = s.scout || {}, mt = s.meeting || {};
-    if (sc.last_status === 'failed') out.push(alertItem('intake', 'red', '収集が' + esc(RUN_LABEL.failed) + 'しました（' + esc(fmtTime(sc.last_run_at)) + '）' + goLink('#/proposals', '提案箱を見る')));
-    if (mt.last_status === 'failed' || mt.last_status === 'expired') out.push(alertItem('intake', 'red', '会議が' + esc(RUN_LABEL[mt.last_status]) + 'しました（' + esc(fmtTime(mt.last_at)) + '）' + goLink('#/proposals', '提案箱を見る')));
-    [['収集', sc], ['会議', mt]].forEach(function (p) {
+    if (sc.last_status === 'failed') out.push(alertItem('intake', 'red', '収集が' + esc(RUN_LABEL.failed) + 'しました（' + esc(fmtTime(sc.last_run_at)) + '）'));
+    if (mt.last_status === 'failed' || mt.last_status === 'expired') out.push(alertItem('meeting', 'red', '会議が' + esc(RUN_LABEL[mt.last_status]) + 'しました（' + esc(fmtTime(mt.last_at)) + '）'));
+    [['収集', sc, 'intake'], ['会議', mt, 'meeting']].forEach(function (p) {
       var lv = capLevel(p[1].month_cents, p[1].month_cap_cents);
-      if (lv === 'near' || lv === 'over') out.push(alertItem('intake', 'yellow', '今月の' + p[0] + 'の費用が上限' + (lv === 'over' ? 'に達しました' : 'に近づいています') + '（' + fmtUsed(p[1].month_cents) + ' / ' + fmtCap(p[1].month_cap_cents) + '）'));
+      if (lv === 'near' || lv === 'over') out.push(alertItem(p[2], 'yellow', '今月の' + p[0] + 'の費用が上限' + (lv === 'over' ? 'に達しました' : 'に近づいています') + '（' + fmtUsed(p[1].month_cents) + ' / ' + fmtCap(p[1].month_cap_cents) + '）'));
     });
-    // 画像・動画: 画像の停止・予備の鍵・画像の月の上限 80% 以上
+    // 画像 → 職人の係: 画像の停止・予備の鍵・画像の月の上限 80% 以上（動画の注意は今は無い。出す時は verifier）
     out = out.concat(imagesAlerts(s.images, nowMs));
+    // お題 → お題係
+    out = out.concat(topicsAlerts(s.topics));
     return out.filter(function (a) { return a.level === 'red'; }).concat(out.filter(function (a) { return a.level !== 'red'; }));
   }
-  /** 注意の全件を枠ごとに分ける: { run: [...], money: [...], intake: [...], media: [...] } */
-  function alertsByCard(s, nowMs) {
-    var all = statusAlerts(s, nowMs), by = {};
-    STATUS_CARDS.forEach(function (c) { by[c[0]] = all.filter(function (a) { return a.card === c[0]; }); });
-    return by;
+  /** 注意の枠の中身: 0 件は「注意はありません」の 1 行（枠は残して 3 枠の形を保つ） */
+  function alertsBodyHtml(list) {
+    return list.length ? '<ul class="sa-list">' + list.map(alertLi).join('') + '</ul>' : '<p class="sa-none muted">注意はありません</p>';
   }
-  /** 枠の注意の中身（0 件なら空文字） */
-  function cardAlertsHtml(list) { return list.length ? '<ul class="sa-list">' + list.map(alertLi).join('') + '</ul>' : ''; }
-  /** 枠のクラス: 赤が 1 件でもあれば sb-red、黄だけなら sb-yellow */
-  function cardClass(list) {
+  /** 注意の枠のクラス: 赤が 1 件でもあれば sb-red、黄だけなら sb-yellow */
+  function alertsCardClass(list) {
     var red = list.some(function (a) { return a.level === 'red'; });
-    return 'sb-card' + (red ? ' sb-red' : list.length ? ' sb-yellow' : '');
+    return 'sb-card sb-note' + (red ? ' sb-red' : list.length ? ' sb-yellow' : '');
   }
-  /** 枠 1 つ: 見出し（右端にその仕事のボタンを置ける）→ 中身 → 注意（aria-live はこの容器） */
-  function statusCardHtml(key, title, headRight, body, list) {
-    return '<div class="' + cardClass(list) + '" id="status-card-' + key + '" data-card="' + key + '">' +
+  function alertsCountText(list) { return list.length ? list.length + ' 件' : ''; }
+  /** 枠 1 つ: 見出し（右端にその仕事のボタンを置ける）→ 中身 */
+  function statusCardHtml(key, title, headRight, body) {
+    return '<div class="sb-card" id="status-card-' + key + '" data-card="' + key + '">' +
       '<div class="sb-head"><span class="sb-title">' + esc(title) + '</span>' + headRight + '</div>' +
-      '<div class="sb-body">' + body + '</div>' +
-      '<div class="sb-alerts" id="status-alerts-' + key + '" aria-live="polite">' + cardAlertsHtml(list) + '</div></div>';
+      '<div class="sb-body">' + body + '</div></div>';
   }
-  /** 制作の枠の中身: 稼働・制作中 / 順番待ち・定期処理の相対時間 */
+  /** 注意の枠: 見出し（件数）→ 注意の 1 列（aria-live はこの容器だけ） */
+  function alertsCardHtml(list) {
+    return '<div class="' + alertsCardClass(list) + '" id="status-card-alerts" data-card="alerts">' +
+      '<div class="sb-head"><span class="sb-title">注意</span><span class="sb-count" id="status-alerts-n">' + alertsCountText(list) + '</span></div>' +
+      '<div class="sb-alerts" id="status-alerts" aria-live="polite">' + alertsBodyHtml(list) + '</div></div>';
+  }
+  /** 制作の枠の中身: 稼働・制作中 / 順番待ち・定期処理の相対時間（注意は注意の枠へ） */
   function runBodyHtml(s, nowMs) {
     var ca = cronAge(s.last_cron_at, nowMs);
     return '<div class="sb-line"><span class="sb-state"><span class="dot ' + (s.paused ? 'red' : 'green') + '" aria-hidden="true"></span><b>' + (s.paused ? '停止中' : '動いています') + '</b></span></div>' +
@@ -357,74 +378,53 @@
         '<span class="item">順番待ち <b>' + esc(s.queued_jobs) + '</b></span></div>' +
       '<div class="sb-line"><span class="item" title="定期処理の最終 ' + esc(fmtTime(s.last_cron_at)) + '">定期処理 <span id="cron-rel" class="cron-rel ' + ca.level + '" data-cron-rel="1">' + esc(ca.text) + '</span></span></div>';
   }
-  /** お金の枠の中身: 今日のメーター・今月の額（上限は各枠にあるので額だけ。合計は出さない） */
+  /** お金の枠の画像の額（今月・#/images へのリンク・smoke (i12) の印 data-img-band）。images が無い応答（古い Worker）では出さない */
+  function moneyImageHtml(im) {
+    if (!im || typeof im !== 'object') return '';
+    return '<a class="item" href="#/images" data-img-band="1" title="予約額で数えた記帳。OpenAI の実際の請求とは違うことがあります">画像 ' + fmtUsed(im.month_cents) + '（概算）</a>';
+  }
+  /** お金の枠の中身: 今日のメーター・今月の額（上限は各係のパネルにあるので額だけ。合計は出さない） */
   function moneyBodyHtml(s) {
-    var sc = s.scout || {}, mt = s.meeting || {}, im = s.images && typeof s.images === 'object' ? s.images : null;
+    var sc = s.scout || {}, mt = s.meeting || {};
     return '<div class="sb-line sb-money"><span class="sb-label">今日</span><span class="sb-vals">' + costMeterHtml(s.today_cents, s.daily_cap_cents) +
         '<span class="sb-num"><b>' + fmtUsed(s.today_cents) + '</b> / ' + fmtCap(s.daily_cap_cents) + '</span></span></div>' +
       '<div class="sb-line sb-money"><span class="sb-label">今月</span><span class="sb-vals"><span class="item">収集 ' + fmtUsed(sc.month_cents || 0) + '</span>' +
-        '<span class="item">会議 ' + fmtUsed(mt.month_cents || 0) + '</span>' +
-        (im ? '<span class="item">画像 ' + fmtUsed(im.month_cents) + '</span>' : '') + '</span></div>';
+        '<span class="item">会議 ' + fmtUsed(mt.month_cents || 0) + '</span>' + moneyImageHtml(s.images) + '</span></div>';
   }
-  /** 入口の 1 行: 名前・最終の状態（未実行は muted 文字・失敗系は赤 pill）・今月 $x / $上限・[今すぐ] */
-  function intakeRowHtml(name, o, at, bad, btn) {
-    var label = o.last_status ? (RUN_LABEL[o.last_status] || o.last_status) : '';
-    var title = at ? ' title="最終 ' + esc(fmtTime(at)) + '"' : '';
-    var st = !o.last_status ? '<span class="sb-st muted">未実行</span>'
-      : bad ? '<span class="sb-st"' + title + '>' + pill(label, 'red') + '</span>'
-      : '<span class="sb-st muted"' + title + '>' + esc(label) + '</span>';
-    return '<div class="sb-line sb-intake"><span class="sb-name">' + name + '</span>' + st +
-      '<span class="sb-num">' + fmtUsed(o.month_cents || 0) + ' / ' + fmtCap(o.month_cap_cents) + '</span>' + btn + '</div>';
+  /** 収集・会議の「今すぐ」ボタン（工場の入口 / 会議のパネル §N-7。文言・busy 文・disabled 条件・id は状況帯にあった時のまま）。s = /api/status（未着なら null） */
+  function scoutBtnHtml(s) {
+    if (!s) return '<button type="button" class="btn small primary" id="scout-btn" disabled data-sp-loading="1">読み込み中…</button>';
+    var busy = !!(s.scout || {}).running;
+    return '<button type="button" class="btn small primary" id="scout-btn"' + (busy || s.paused ? ' disabled' : '') + (s.paused ? ' title="停止中は実行できません"' : '') + '>' + (busy ? '収集中…' : '収集を今すぐ') + '</button>';
   }
-  /** 入口の枠の中身: 収集の行・会議の行（ボタンの文言・busy 文・disabled 条件・id は今のまま） */
-  function intakeBodyHtml(s) {
-    var sc = s.scout || {}, mt = s.meeting || {};
-    var scoutBusy = !!sc.running, meetBusy = !!mt.pending_batch;
-    var pausedTitle = ' title="停止中は実行できません"';
-    return intakeRowHtml('収集', sc, sc.last_run_at, sc.last_status === 'failed',
-        '<button type="button" class="btn small" id="scout-btn"' + (scoutBusy || s.paused ? ' disabled' : '') + (s.paused ? pausedTitle : '') + '>' + (scoutBusy ? '収集中…' : '収集を今すぐ') + '</button>') +
-      intakeRowHtml('会議', mt, mt.last_at, mt.last_status === 'failed' || mt.last_status === 'expired',
-        '<button type="button" class="btn small" id="meeting-btn"' + (meetBusy || s.paused ? ' disabled' : '') + (s.paused ? pausedTitle : '') + '>' + (meetBusy ? '結果待ち' : '会議を今すぐ') + '</button>');
+  function meetingBtnHtml(s) {
+    if (!s) return '<button type="button" class="btn small primary" id="meeting-btn" disabled data-sp-loading="1">読み込み中…</button>';
+    var busy = !!(s.meeting || {}).pending_batch;
+    return '<button type="button" class="btn small primary" id="meeting-btn"' + (busy || s.paused ? ' disabled' : '') + (s.paused ? ' title="停止中は実行できません"' : '') + '>' + (busy ? '結果待ち' : '会議を今すぐ') + '</button>';
   }
-  /** 画像・動画の枠の中身。images / videos が無い応答（古い Worker）ではその行を出さない */
-  function mediaBodyHtml(s) {
-    var img = imagesMonthHtml(s.images), vid = videosBandHtml(s.videos);
-    if (!img && !vid) return '<div class="sb-line muted">—</div>';
-    return (img ? '<div class="sb-line">' + img + '</div>' : '') + (vid ? '<div class="sb-line">' + vid + '</div>' : '');
-  }
-  /** #status の中身全部（純関数）。注意の容器（#status-alerts-<枠>）は 0 件でも置く */
+  /** #status の中身全部（純関数）。注意の枠は 0 件でも置く */
   function statusBandHtml(s, nowMs) {
     var now = typeof nowMs === 'number' ? nowMs : Date.now();
-    var by = alertsByCard(s, now);
     var pause = '<button type="button" class="btn small' + (s.paused ? ' primary' : '') + '" id="pause-btn">' + (s.paused ? '再開' : '止める') + '</button>';
     return '<div class="status-band">' +
-      statusCardHtml('run', '制作', pause, runBodyHtml(s, now), by.run) +
-      statusCardHtml('money', 'お金', '', moneyBodyHtml(s), by.money) +
-      statusCardHtml('intake', '入口（収集・会議）', '', intakeBodyHtml(s), by.intake) +
-      statusCardHtml('media', '画像・動画', '', mediaBodyHtml(s), by.media) +
+      statusCardHtml('run', '制作', pause, runBodyHtml(s, now)) +
+      statusCardHtml('money', 'お金', '', moneyBodyHtml(s)) +
+      alertsCardHtml(statusAlerts(s, now)) +
       '</div>';
   }
-  /** 枠ごとに描いた注意の中身（タイマーが「変わったか」を比べる元） */
-  function alertsHtmlByCard(s, nowMs) {
-    var by = alertsByCard(s, nowMs), out = {};
-    STATUS_CARDS.forEach(function (c) { out[c[0]] = cardAlertsHtml(by[c[0]]); });
-    return out;
-  }
-  /** 1 分ごと: 相対時間の文字と色、各枠の注意と枠の色（中身が変わった枠だけ。読み上げを毎分起こさない）を直す */
+  /** 1 分ごと: 相対時間の文字と色、注意の中身と枠の色・件数（中身が変わった時だけ。読み上げを毎分起こさない）を直す */
   function tickStatus() {
     if (!statusLast) return;
     var now = Date.now(), s = statusLast.s;
     var rel = $('#cron-rel');
     if (rel) { var ca = cronAge(s.last_cron_at, now); rel.textContent = ca.text; rel.className = 'cron-rel ' + ca.level; }
-    var by = alertsByCard(s, now);
-    STATUS_CARDS.forEach(function (c) {
-      var k = c[0], h = cardAlertsHtml(by[k]);
-      if (h === statusLast.alerts[k]) return;
-      var box = $('#status-alerts-' + k), card = $('#status-card-' + k);
-      if (box) box.innerHTML = h;
-      if (card) card.className = cardClass(by[k]);
-      statusLast.alerts[k] = h;
-    });
+    var list = statusAlerts(s, now), h = alertsBodyHtml(list);
+    if (h === statusLast.alerts) return;
+    var box = $('#status-alerts'), card = $('#status-card-alerts'), cnt = $('#status-alerts-n');
+    if (box) box.innerHTML = h;
+    if (card) card.className = alertsCardClass(list);
+    if (cnt) cnt.textContent = alertsCountText(list);
+    statusLast.alerts = h;
   }
   function loadStatus() {
     var el = $('#status');
@@ -432,9 +432,9 @@
       var now = Date.now();
       el.innerHTML = statusBandHtml(s, now);
       clearInterval(statusTimer);
-      statusLast = { s: s, alerts: alertsHtmlByCard(s, now) };
+      statusLast = { s: s, alerts: alertsBodyHtml(statusAlerts(s, now)) };
       statusTimer = setInterval(tickStatus, 60000);
-      bindIntakeButtons(s);
+      onFloorStatus(); // 工場にいる時: お題係の札・あなたの番・係のパネル（§N-7）を status の値で描き直す
       var btn = $('#pause-btn');
       btn.addEventListener('click', function () {
         action(btn, {
@@ -454,11 +454,16 @@
     });
   }
 
-  // ---- 状況欄: 収集・会議（§K-7）。ボタンと今月の額は入口の枠 ----
-  function bindIntakeButtons(s) {
+  // ---- 収集・会議（§K-7）。ボタンは工場の入口 / 会議のパネル（§N-7）。今月の額は状況帯のお金の枠と各パネル（§N-8） ----
+  /** 工場にいる時はパネルを閉じないように工場と状況だけ取り直す（route() は工場を作り直して選択が外れる）。ほかの画面では今までどおり route() */
+  function afterIntakeAction() {
+    if (floor.active) { fetchFloor(); loadStatus(); } else route();
+  }
+  /** onAction（任意）は action() の promise を受け取る（送信中・ダイアログ中にパネルを差し替えないため） */
+  function bindIntakeButtons(s, onAction) {
     var sb = $('#scout-btn');
     if (sb) sb.addEventListener('click', function () {
-      action(sb, {
+      var p = action(sb, {
         title: '収集を今すぐ実行します',
         body: 'RSS と X（設定されていれば）を読み、Haiku で仕分けて提案箱に入れます。費用は今月の収集の上限（' + fmtCents((s.scout || {}).month_cap_cents) + '）の範囲で記録します。25 秒で打ち切ります。',
         okText: '実行する',
@@ -468,13 +473,14 @@
           if (res && res.skipped) toast('上限に達しているため飛ばしました（' + (res.reason || '') + '）', true);
           else if (res && res.status === 'failed') toast('収集は失敗しました: ' + (res.error || ''), true);
           else if (res) toast('収集: 提案 ' + res.proposed + ' 件 / 捨てた ' + res.dropped + ' 件');
-          route();
+          afterIntakeAction();
         }
       });
+      if (onAction) onAction(p);
     });
     var mb = $('#meeting-btn');
     if (mb) mb.addEventListener('click', function () {
-      action(mb, {
+      var p = action(mb, {
         title: '会議を今すぐ起こします',
         body: '提案箱と素材を Batch API（1 件）で検討します。結果は 10 分ごとの回収で入ります（最長 24 時間）。費用は今月の会議の上限（' + fmtCents((s.meeting || {}).month_cap_cents) + '）の範囲で記録します。',
         okText: '起こす',
@@ -482,9 +488,10 @@
         success: '会議を起こしました。結果は回収後に提案箱に出ます',
         after: function (res) {
           if (res && res.skipped) toast('上限に達しているため起こしませんでした（' + (res.reason || '') + '）', true);
-          route();
+          afterIntakeAction();
         }
       });
+      if (onAction) onAction(p);
     });
   }
 
@@ -516,31 +523,40 @@
     // 未来の日時（端末の時計のずれ）は 7 日以内に数えない（Astra レビューの指摘）
     return isFinite(ts) && nowMs - ts >= 0 && nowMs - ts <= BACKUP_RECENT_MS;
   }
-  /** 状況帯の「画像・動画」の枠の画像の生成の行（§O-5 e）。images が無い応答（古い Worker）では何も出さない。#/images へのリンクはここの 1 本 */
+  /** 旧い状況帯（§O-5 e・§N-8 より前）の画像の生成の行。今の帯はお金の枠の moneyImageHtml。互換のため純関数だけ残す（imagesBandHtml が使う） */
   function imagesMonthHtml(im) {
     if (!im || typeof im !== 'object') return '';
     return '<a class="item" href="#/images" data-img-band="1" title="予約額で数えた記帳。OpenAI の実際の請求とは違うことがあります">画像の生成 ' +
       fmtUsed(im.month_cents) + ' / ' + fmtCap(im.month_cap_cents) + '（概算）</a>';
   }
-  /** 状況帯の「画像・動画」の枠の注意の件（純関数）。停止中は赤（行き先リンク付き）・予備の鍵を 7 日以内に使った は黄・月の上限 80% 以上は黄。
-   * #/images へのリンクは注意の中で 1 本まで（画像の生成の行と合わせて 2 本まで）: 停止中なら停止の行が持ち、予備の鍵の行はリンクにしない */
+  /** 画像の注意の件（純関数。行き先は職人の係 = st 'maker'）。停止中は赤・予備の鍵を 7 日以内に使った は黄・月の上限 80% 以上は黄。
+   * 印 data-img-halted / data-img-backup-band は行の中の span（smoke (i12) とテストが数える）。kind と mark は imagesAlertHtml（互換）の描き方に使う */
   function imagesAlerts(im, nowMs) {
     if (!im || typeof im !== 'object') return [];
     var now = typeof nowMs === 'number' ? nowMs : Date.now();
     var out = [];
-    if (im.halted) out.push(alertItem('media', 'red', '<span class="item" data-img-halted="1">画像の生成を止めています（' + esc(haltText(im.halted)) + '）</span>' + goLink('#/images', '画像の停止を見る')));
+    if (im.halted) out.push(alertItem('maker', 'red', '<span class="item" data-img-halted="1">画像の生成を止めています（' + esc(haltText(im.halted)) + '）</span>', 'halted'));
     if (backupUsedRecently(im.backup_last_used_at, now)) {
       var mark = pill('画像: 予備の鍵を使いました（' + fmtTime(im.backup_last_used_at) + '）', 'orange');
-      out.push(alertItem('media', 'yellow', im.halted
-        ? '<span class="item" data-img-backup-band="1">' + mark + '</span>'
-        : '<a class="item" href="#/images" data-img-backup-band="1">' + mark + ' <span class="sa-go">画像の生成を見る ›</span></a>'));
+      var b = alertItem('maker', 'yellow', '<span class="item" data-img-backup-band="1">' + mark + '</span>', 'backup');
+      b.mark = mark;
+      out.push(b);
     }
     var lv = capLevel(im.month_cents, im.month_cap_cents);
-    if (lv === 'near' || lv === 'over') out.push(alertItem('media', 'yellow', '今月の画像の記帳が上限' + (lv === 'over' ? 'に達しました' : 'に近づいています') + '（' + fmtUsed(im.month_cents) + ' / ' + fmtCap(im.month_cap_cents) + '）'));
+    if (lv === 'near' || lv === 'over') out.push(alertItem('maker', 'yellow', '今月の画像の記帳が上限' + (lv === 'over' ? 'に達しました' : 'に近づいています') + '（' + fmtUsed(im.month_cents) + ' / ' + fmtCap(im.month_cap_cents) + '）', 'cap'));
     return out;
   }
-  function imagesAlertHtml(im, nowMs) { return imagesAlerts(im, nowMs).map(alertLi).join(''); }
-  /** 状況帯の画像の部分（画像の生成の行 + 注意の件）。images が無い応答では何も出さない。nowMs はテストの時だけ渡す */
+  /** 旧い状況帯の画像の注意（互換のため純関数だけ残す。今の帯は statusAlerts の行に係のパネルへのリンクを付ける）。
+   * #/images へのリンクは注意の中で 1 本まで（画像の生成の行と合わせて 2 本まで）: 停止中なら停止の行が持ち、予備の鍵の行はリンクにしない */
+  function imagesAlertHtml(im, nowMs) {
+    return imagesAlerts(im, nowMs).map(function (a) {
+      var html = a.kind === 'halted' ? a.html + goLink('#/images', '画像の停止を見る')
+        : a.kind === 'backup' && !im.halted ? '<a class="item" href="#/images" data-img-backup-band="1">' + a.mark + ' <span class="sa-go">画像の生成を見る ›</span></a>'
+        : a.html;
+      return '<li class="sa-item sa-' + a.level + '">' + html + '</li>';
+    }).join('');
+  }
+  /** 旧い状況帯の画像の部分（画像の生成の行 + 注意の件。互換のため純関数だけ残す）。images が無い応答では何も出さない。nowMs はテストの時だけ渡す */
   function imagesBandHtml(im, nowMs) {
     if (!im || typeof im !== 'object') return '';
     return imagesMonthHtml(im) + imagesAlertHtml(im, nowMs);
@@ -632,10 +648,95 @@
     });
   }
 
+  // ---- 画面: 倉庫の「生成した画像」（§N-8 C）。GET /api/images/gallery（done だけ・新しい順・キー付き）を格子で。読むだけ ----
+  var GALLERY_LIMIT = 24;
+  /** 1 ページ目・続きの url（next = { before, before_id } | null） */
+  function galleryUrl(next) {
+    var q = ['limit=' + GALLERY_LIMIT];
+    if (next && next.before && next.before_id) q.push('before=' + encodeURIComponent(next.before), 'before_id=' + encodeURIComponent(next.before_id));
+    return '/api/images/gallery?' + q.join('&');
+  }
+  function galleryItemsOf(d) {
+    return (d && Array.isArray(d.items) ? d.items : []).filter(function (x) { return isObj(x) && typeof x.request_id === 'string'; });
+  }
+  /** カード 1 枚（純関数）: サムネ（/api/images/requests/<id>/file を lazy で）・作った日時・教材の名前（あれば #/material/<id>）・alt。外の値は全部 esc */
+  function galleryCardHtml(it) {
+    var file = '/api/images/requests/' + encodeURIComponent(it.request_id) + '/file';
+    var alt = typeof it.alt === 'string' && it.alt ? it.alt : '';
+    var mat = typeof it.material_id === 'string' && it.material_id && typeof it.material_title === 'string'
+      ? '<a class="gl-mat" href="#/material/' + esc(it.material_id) + '">' + esc(it.material_title) + '</a>'
+      : '<span class="gl-mat muted">教材なし</span>';
+    return '<figure class="gl-card" data-gl-card="1">' +
+      '<a class="gl-thumb" href="' + esc(file) + '" target="_blank" rel="noopener noreferrer" title="原寸で開く"><img loading="lazy" src="' + esc(file) + '" alt="' + esc(alt) + '"></a>' +
+      '<figcaption><span class="gl-time muted">' + esc(fmtTime(it.created_at)) + '</span>' + mat +
+        (alt ? '<span class="gl-alt">' + esc(alt) + '</span>' : '<span class="gl-alt muted">（説明の文なし）</span>') + '</figcaption></figure>';
+  }
+  /** 「もっと見る」（next がある時だけ）。busy = 読み込み中、err = 続きを読めなかった理由 */
+  function galleryMoreHtml(next, busy, err) {
+    if (!next) return '';
+    return '<div class="gl-more" data-gl-more="1">' + (err ? '<p class="err">続きを読み込めませんでした: ' + esc(err) + '</p>' : '') +
+      '<button type="button" class="btn" id="gl-more-btn"' + (busy ? ' disabled' : '') + '>' + (busy ? '読み込み中…' : err ? 'もう一度読み込む' : 'もっと見る') + '</button></div>';
+  }
+  /** 画面の本体（純関数）。items = それまでに読んだ全部、next = 続き。0 件は「まだありません」 */
+  function galleryHtml(items, next, busy, err) {
+    return '<h1>生成した画像</h1><p class="muted">職人が作った画像（完成したものだけ）を新しい順に並べています。画像を押すと原寸で開きます。</p>' +
+      (items.length
+        ? '<div class="gl-grid" data-gl-grid="1">' + items.map(galleryCardHtml).join('') + '</div>' + galleryMoreHtml(next, busy, err)
+        : '<div class="card"><p class="muted" data-gl-empty="1">まだありません</p></div>');
+  }
+  function galleryLoadingHtml() { return '<h1>生成した画像</h1><p class="loading" data-gl-loading="1">読み込み中…</p>'; }
+  function galleryErrorHtml(msg) {
+    return '<h1>生成した画像</h1><div class="card" data-gl-error="1"><p class="err">読み込めませんでした: ' + esc(msg) + '</p><p><button type="button" class="btn" id="gl-retry">もう一度読み込む</button></p></div>';
+  }
+  function viewGallery(view) {
+    view.innerHTML = galleryLoadingHtml();
+    var here = location.hash;
+    var g = { items: [], next: null, busy: false, err: null };
+    function draw(focusMore) {
+      view.innerHTML = galleryHtml(g.items, g.next, g.busy, g.err);
+      var b = $('#gl-more-btn');
+      if (!b) return;
+      b.addEventListener('click', more);
+      if (focusMore) b.focus();
+    }
+    function more() {
+      if (g.busy || !g.next) return;
+      g.busy = true; g.err = null;
+      var shown = g.items.length;
+      draw(true);
+      api('GET', galleryUrl(g.next)).then(function (d) {
+        if (location.hash !== here) return;
+        g.items = g.items.concat(galleryItemsOf(d));
+        g.next = d && isObj(d.next) ? d.next : null;
+        g.busy = false;
+        draw(true);
+        // 足した分の先頭のカードへフォーカスを送る（もっと見るのボタンが下へ動くので）
+        var first = view.querySelectorAll('.gl-card')[shown];
+        var link = first && first.querySelector('a');
+        if (link) link.focus();
+      }, function (e) {
+        if (location.hash !== here) return;
+        g.busy = false; g.err = e.message || '失敗しました';
+        draw(true);
+      });
+    }
+    api('GET', galleryUrl(null)).then(function (d) {
+      if (location.hash !== here) return;
+      g.items = galleryItemsOf(d);
+      g.next = d && isObj(d.next) ? d.next : null;
+      draw(false);
+    }, function (e) {
+      if (location.hash !== here) return;
+      view.innerHTML = galleryErrorHtml(e.message);
+      var b = $('#gl-retry');
+      if (b) b.addEventListener('click', route);
+    });
+  }
+
   // ---- 画面: 動画の確認（Gemini。§Q-9.5）----
   /** probe の clip_accepted の意味（src/routes/videos.ts の PROBE_CLIP_ACCEPTED_LABEL と同じ文） */
   var PROBE_CLIP_ACCEPTED_LABEL = 'API が区間つきの要求を受けて本文を返したか（中身が区間どおりかは司令塔が text_head で判断）';
-  /** 状況帯の 1 行。videos が無い応答（古い Worker）では何も出さない */
+  /** 旧い状況帯の動画の確認の行（§N-8 で帯から外した。動画の確認の有効 / 無効は検証係のパネル。互換のため純関数だけ残す）。videos が無い応答（古い Worker）では何も出さない */
   function videosBandHtml(vi) {
     if (!vi || typeof vi !== 'object') return '';
     return '<a class="item" href="#/videos" data-video-band="1">動画の確認 ' + (vi.enabled ? pill('有効', 'green') : pill('無効', 'gray')) + '</a>';
@@ -933,7 +1034,7 @@
       '<div class="row end"><button type="submit" class="btn primary" id="p-submit">提案箱に足す</button></div></form>' +
       '<div id="minutes"></div>';
     bindManualForm();
-    loadMinutes();
+    loadMinutes(q.at === 'minutes'); // ?at=minutes（工場の会議のパネルの「最新の会議を読む」§N-7）は議事録の位置へ送る
     api('GET', '/api/proposals?status=' + encodeURIComponent(status)).then(function (d) {
       var list = $('#plist');
       list.classList.remove('loading');
@@ -1061,7 +1162,7 @@
     });
   }
 
-  function loadMinutes() {
+  function loadMinutes(jump) {
     api('GET', '/api/meeting/latest').then(function (d) {
       var el = $('#minutes');
       if (!el) return;
@@ -1073,10 +1174,11 @@
         '<h3>編集基準への提案</h3><p class="muted">採用する時は「編集基準」画面で追記してください（自動では追記しません）。</p>' +
         ((m.standards_suggestions || []).length ? '<ul>' + m.standards_suggestions.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>' : '<p class="muted">なし</p>') +
         '</div>';
+      if (jump && el.scrollIntoView) el.scrollIntoView({ block: 'start' });
     }, function () { /* 会議の表示は補助。失敗しても一覧は使える */ });
   }
 
-  // ---- 画面: 工場（§N-3 / §N-6）。読み取り専用。書き込み操作は置かず、既存の画面へ送る ----
+  // ---- 画面: 工場（§N-3 / §N-6 / §N-7）。書き込みは係のパネルの係の動作（収集・会議を今すぐ。予告ダイアログ付き §N-7）だけ。それ以外は既存の画面へ送る ----
   // 場面（背景・キャラ・名札・状態札・矢印）の座標と持ち場の判定は floor-scene.js（window.FactoryFloorScene）。ここは DOM と表だけ
   var FLOOR_POLL_MS = 15000;
   var FLOOR_ATT = [['answer', '回答待ち', 'yellow'], ['review', '確認待ち', 'yellow'], ['failed', '失敗', 'red'], ['budget', '予算の上限', 'yellow']];
@@ -1087,7 +1189,11 @@
   // filter = 絞り込み中の持ち場 id、open = ▶ で詳細を開いている素材 id、prevSt = 前回の持ち場の札（変わったら 1 回跳ねる）
   // menuOpen = 表の「…」の説明を開いている、userScrolled = 人が場面を横にスクロールした（以後は自動で送らない）、resizeObs = 札の寄せ直し用
   var floor = { active: false, gen: 0, timer: null, inflight: null, data: null, prev: null, errAt: null, bandHtml: null, filter: null, open: {}, prevSt: null,
-    menuOpen: false, userScrolled: false, autoScrollAt: 0, resizeObs: null };
+    menuOpen: false, userScrolled: false, autoScrollAt: 0, resizeObs: null,
+    // 係のパネル（§N-7）: panelHtml = いま #station-panel に入れている HTML（同じなら差し替えない）、panelHold = 送信中・ダイアログ中の数（0 より大きい間は差し替えない）
+    panelHtml: null, panelHold: 0,
+    // 確認する人のパネルの自動公開（§N-8）: reviewStats = GET /api/review/stats（null = 読み込み中・文字列 = 読めなかった理由）。パネルを開いた時に 1 回・押した後に取り直す（15 秒ごとには取らない）
+    reviewStats: null, reviewBusy: false };
 
   function floorScene() { return window.FactoryFloorScene || null; }
   function hhmm(d) { var p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(d.getHours()) + ':' + p(d.getMinutes()); }
@@ -1118,12 +1224,20 @@
     return '<svg class="scene-sym scene-sym-' + kind + '" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="9.5"/><path d="' + fg + '"/></svg>';
   }
 
-  /** 人の番の帯（§N-3 1.）。att = floor.attention、errAt = 更新に失敗した時刻（HH:MM）か null */
-  function floorBandHtml(att, errAt) {
+  /**
+   * 人の番の帯（§N-3 1.・§N-7）。att = floor.attention、errAt = 更新に失敗した時刻（HH:MM）か null。
+   * more（任意）= { proposed: 提案の判断の件数（stations.intake.proposed）, topicsReview: お題の要確認の合計（/api/status の topics.needs_review）}。0 / 未着は出さない。
+   * 素材のピルは表の行へ送り、提案の判断は提案箱（#/proposals）、お題の要確認は今日のお題の要確認タブ（#/topics/held）へ送る
+   */
+  var FLOOR_MORE = [['proposed', '提案の判断', '#/proposals'], ['topicsReview', 'お題の要確認', '#/topics/held']];
+  function floorBandHtml(att, errAt, more) {
     att = att || {};
+    more = more || {};
     var pills = FLOOR_ATT.filter(function (a) { return Number(att[a[0]] || 0) > 0; }).map(function (a) {
       return '<button type="button" class="floor-att ' + a[2] + '" data-floor-goto="' + a[0] + '">' + esc(a[1] + ' ' + att[a[0]]) + '</button>';
-    });
+    }).concat(FLOOR_MORE.filter(function (a) { return Number(more[a[0]] || 0) > 0; }).map(function (a) {
+      return '<a class="floor-att yellow" href="' + a[2] + '" data-floor-link="' + a[0] + '">' + esc(a[1] + ' ' + Number(more[a[0]])) + '</a>';
+    }));
     return (pills.length ? '<span class="floor-band-title">あなたの番</span>' + pills.join('') : '<span class="floor-band-calm">あなたの番の作業はありません</span>') +
       (errAt ? '<span class="floor-band-err">更新できませんでした（' + esc(errAt) + '）</span>' : '');
   }
@@ -1257,10 +1371,10 @@
     var drop = SC.charDrop;
     SC.stations.forEach(function (st, si) {
       var main = st.chars[0];
-      // クリック範囲（anchor 中心の楕円。キャラが 2 体なら 2 体の足元の中点）
+      // クリック範囲（anchor 中心の楕円。キャラが 2 体なら 2 体の足元の中点）。キャラの無い札（お題係 §N-7）は札の中心
       var cx = 0, cy = 0;
       st.chars.forEach(function (c) { cx += c.anchor[0]; cy += c.anchor[1]; });
-      cx /= st.chars.length; cy /= st.chars.length;
+      if (st.chars.length) { cx /= st.chars.length; cy /= st.chars.length; } else { cx = st.pill[0]; cy = st.pill[1] + 12; }
       var hit = document.createElement('button');
       hit.type = 'button';
       hit.className = 'scene-hit';
@@ -1291,7 +1405,8 @@
         el.appendChild(h);
         mountChar(h, c.id);
       });
-      // 机の上の光の粒（動いている時だけ見える）と、人の番の「!」の吹き出し
+      // 机の上の光の粒（動いている時だけ見える）と、人の番の「!」の吹き出し（キャラの無い札には無い。札が脈打つ）
+      if (main) {
       var spark = document.createElement('div');
       spark.className = 'scene-spark';
       spark.setAttribute('data-st', st.id);
@@ -1306,6 +1421,7 @@
       alert.textContent = '!';
       placeCenter(alert, [main.anchor[0] - main.size * 0.08, main.anchor[1] - main.size * 0.66]);
       el.appendChild(alert);
+      }
       if (st.bubble) {
         var bub = document.createElement('div');
         bub.className = 'scene-bubble';
@@ -1356,7 +1472,7 @@
     var S = floorScene();
     var root = $('#scene');
     if (!S || !root) return;
-    var states = S.stationStates(d);
+    var states = S.stationStates(d, floorStatus());
     var prev = floor.prevSt;
     var next = {};
     S.SCENE.stations.forEach(function (st) {
@@ -1438,19 +1554,123 @@
     var st = S ? S.SCENE.stations.filter(function (x) { return x.id === id; })[0] : null;
     return st ? st.filterName || st.name : id;
   }
+  /** 素材を持たない係（改善係・お題係）か */
+  function noItemsStation(id) { return !!(STATION_PANEL[id] && STATION_PANEL[id].noItems); }
   function renderFilterChip() {
     var b = $('#scene-filter');
     if (!b) return;
     if (!floor.filter) { b.classList.add('hidden'); b.textContent = ''; return; }
     b.classList.remove('hidden');
-    var chip = floor.filter === 'retro' ? stationName(floor.filter) + 'を選んでいます' : stationName(floor.filter) + 'にいる素材だけ表示中';
+    var sel = noItemsStation(floor.filter);
+    var chip = stationName(floor.filter) + 'の係を開いています';
     b.innerHTML = esc(chip) + ' <span class="scene-filter-x" aria-hidden="true">✕</span>';
-    b.setAttribute('aria-label', chip + (floor.filter === 'retro' ? '。押すと選択を解除します' : '。押すと絞り込みを解除します'));
+    b.setAttribute('aria-label', chip + (sel ? '。押すと選択を解除します' : '。押すと絞り込みを解除します'));
+  }
+  /** 場面の持ち場 id か（hash の ?st= を受ける時の確認） */
+  function isStationId(id) {
+    var S = floorScene();
+    return !!S && typeof id === 'string' && S.SCENE.stations.some(function (x) { return x.id === id; });
   }
   function setFloorFilter(id) {
     floor.filter = id && floor.filter !== id ? id : null;
+    onStationPanelOpen();
     renderFilterChip();
     if (floor.data) { renderScene(floor.data); renderQueue(floor.data, false); }
+    renderStationPanel(true);
+  }
+  /** パネルを開いた時に 1 回だけ取るもの（確認する人: 自動公開の状態 §N-8） */
+  function onStationPanelOpen() {
+    if (floor.filter === 'reviewer') loadPanelReviewStats(false);
+  }
+  /** 確認する人のパネルの /api/review/stats を取り直す。届いたら（失敗も）描き直す。refocus = 押した後（スイッチにフォーカスを戻す） */
+  function loadPanelReviewStats(refocus) {
+    var gen = floor.gen;
+    if (!floor.reviewBusy) floor.reviewStats = null; // 押した後の取り直しの間は「切り替え中…」のまま
+    api('GET', '/api/review/stats').then(function (st) {
+      if (gen !== floor.gen) return;
+      floor.reviewStats = isObj(st) ? st : '応答の形が違います';
+    }, function (e) {
+      if (gen !== floor.gen) return;
+      floor.reviewStats = e.message || '失敗しました';
+    }).then(function () {
+      if (gen !== floor.gen) return;
+      floor.reviewBusy = false;
+      renderStationPanel(false);
+      var sw = refocus ? $('#sp-autopub') : null;
+      if (sw) sw.focus();
+    });
+  }
+  /** 確認する人のパネルのスイッチ（押すと #/review と同じ確認ダイアログ・同じ文言。switchAutoPublish を共有）と、読めなかった時の読み直し */
+  function bindReviewerPanel() {
+    var sw = $('#sp-autopub');
+    if (sw && !sw.disabled) sw.addEventListener('click', function () {
+      var st = floor.reviewStats;
+      if (!isObj(st) || floor.reviewBusy) return;
+      holdStationPanel(switchAutoPublish(st.auto_publish !== true, {
+        start: function () { floor.reviewBusy = true; renderStationPanel(true); },
+        end: function () { loadPanelReviewStats(true); },
+        cancel: function () { var b = $('#sp-autopub'); if (b) b.focus(); }
+      }));
+    });
+    var rt = $('#sp-autopub-retry');
+    if (rt) rt.addEventListener('click', function () { loadPanelReviewStats(false); renderStationPanel(true); });
+  }
+  /** 係のパネルを窓に入れる（状況帯の注意の行き先・#/?st= で開いた時。パネルは場面の下にあるので） */
+  function scrollToStationPanel() {
+    var box = $('#station-panel');
+    if (box && !box.hidden && typeof box.scrollIntoView === 'function') box.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+  /** 状況帯の注意の行き先の href（#/?st=<係>）から係の id を取る。形が違えば null */
+  function stationGoId(href) {
+    var m = /^#\/\?st=([a-z]+)$/.exec(String(href || ''));
+    return m ? m[1] : null;
+  }
+  /**
+   * #/?st=<係> のリンクを押した時（§N-8）。hash が今と違えば hashchange → route() が工場を作り直してパネルを開く（viewFloor の q.st）ので何もしない。
+   * 工場にいて hash が同じ（前に同じリンクで開いて ✕ で閉じた等）時は hashchange が起きないので、ここでそのパネルを開く（開いていれば閉じずに窓へ送るだけ）
+   */
+  function onStationGo(e) {
+    var a = e.target && e.target.closest ? e.target.closest('a[href^="#/?st="]') : null;
+    if (!a || !floor.active || a.getAttribute('href') !== location.hash) return;
+    var id = stationGoId(a.getAttribute('href'));
+    if (!isStationId(id)) return;
+    e.preventDefault();
+    if (floor.filter !== id) setFloorFilter(id); // setFloorFilter は同じ id で閉じるので、違う時だけ呼ぶ
+    scrollToStationPanel();
+  }
+  /** 工場の描画で使う最後の /api/status の応答（未着・失敗なら null） */
+  function floorStatus() { return statusLast ? statusLast.s : null; }
+  /** /api/status が届いた時（loadStatus から）: 工場にいればお題係の札・あなたの番・係のパネルを描き直す */
+  function onFloorStatus() {
+    if (!floor.active) return;
+    if (floor.data) renderScene(floor.data);
+    renderFloorBand();
+    renderStationPanel(false);
+  }
+  /** 送信中・ダイアログ中の間はパネルを差し替えない（終わったら描き直す） */
+  function holdStationPanel(p) {
+    if (!p || typeof p.then !== 'function') return;
+    floor.panelHold++;
+    var release = function () { floor.panelHold = Math.max(0, floor.panelHold - 1); renderStationPanel(false); };
+    p.then(release, release);
+  }
+  /**
+   * 係のパネル（#station-panel）を描く。HTML が前と同じなら触らない（15 秒ごとの再取得でボタンやフォーカスを壊さない）。
+   * force = 人が札・✕で選び直した時（送信中でも描き直す）。それ以外は送信中・ダイアログ中は待つ
+   */
+  function renderStationPanel(force) {
+    var box = $('#station-panel');
+    if (!box) return;
+    var html = floor.filter ? stationPanelHtml(floor.filter, floor.data, floorStatus(), { reviewStats: floor.reviewStats, reviewBusy: floor.reviewBusy }) : '';
+    if (html === floor.panelHtml) return;
+    var dlg = $('#dlg');
+    if (!force && (floor.panelHold > 0 || (dlg && dlg.open))) return;
+    floor.panelHtml = html;
+    box.innerHTML = html;
+    box.hidden = !html;
+    var st = floorStatus();
+    if (html && st) bindIntakeButtons(st, holdStationPanel);
+    if (html) bindReviewerPanel();
   }
 
   // ---- 制作キュー（§N-3 5. の中身・リンク、§N-6-5 の見た目）----
@@ -1532,42 +1752,268 @@
   }
   var FQ_ORDER_NOTE = '並び順: あなたの番（回答待ち・確認待ち・失敗・予算の上限）→ 動いている → 24 時間以内に終わった。同じまとまりの中は更新の新しい順（最大 100 件）。' +
     '▶ で工程ごとの詳細を開きます。場面の持ち場を押すと、その持ち場にいる素材だけを表示します。';
-  /** 見出し「≡ 制作キュー（N件）」と右端の「…」（並び順の説明を出す小さなポップオーバー） */
-  function fqHeadHtml(count, menuOpen) {
-    return '<div class="fq-head">' + iconSvg('menu', 'fq-menu') + '<h2 id="fq-h">制作キュー' + (count === null ? '' : '<span class="fq-count">（' + count + '件）</span>') + '</h2>' +
+  /** 見出し「≡ 制作キュー（N件）」と右端の「…」（並び順の説明を出す小さなポップオーバー）。title を渡すと見出しの文を差し替える（係のパネルの下の「この係にいる素材」） */
+  function fqHeadHtml(count, menuOpen, title) {
+    return '<div class="fq-head">' + iconSvg('menu', 'fq-menu') + '<h2 id="fq-h">' + esc(title || '制作キュー') + (count === null ? '' : '<span class="fq-count">（' + count + '件）</span>') + '</h2>' +
       '<div class="fq-more"><button type="button" class="fq-more-btn" data-fq-menu="1" aria-expanded="' + (menuOpen ? 'true' : 'false') + '" aria-controls="fq-more-pop" aria-label="表の並び順の説明">' +
       '<span aria-hidden="true">…</span></button><div id="fq-more-pop" class="fq-pop" role="note"' + (menuOpen ? '' : ' hidden') + '>' + esc(FQ_ORDER_NOTE) + '</div></div></div>';
   }
-  /** 工場で改善係を選んだ時の入口（GET /api/floor の stations.retro から描く純関数） */
-  function retroFloorPanelHtml(rt) {
-    rt = rt || {};
-    var notes = Number(rt.active_maker_notes || 0), pending = Number(rt.pending || 0);
-    return '<div class="fq-empty retro-floor" data-retro-floor="1"><h2 id="fq-h">改善係</h2>' +
-      '<p>終わった注文ごとに費用を振り返り、質を下げずに費用を下げる「工夫」を職人に渡します。</p>' +
-      '<ul class="retro-facts"><li>いま職人に渡している工夫 <b>' + esc(notes) + ' 件</b></li>' +
-      '<li>振り返り中 <b>' + esc(pending) + ' 件</b></li>' +
-      '<li>最後の振り返り <b>' + esc(rt.last_retro_at ? fmtTime(rt.last_retro_at) : 'まだありません') + '</b></li></ul>' +
-      '<div class="row"><a class="btn primary" href="#/retro">改善係の記録を開く</a><button type="button" class="btn" data-fq-clear="1">選択を解除</button></div></div>';
+  // ---- 係のパネル（§N-7）。札を押すと制作キューのカードの先頭に開く。型（順番固定）:
+  // ①見出し（名前・札と同じ状態ピル・✕）②ひとこと ③事実 2〜4 個 ④操作 0〜2 個（この係の動作だけ・予告ダイアログ = action()）⑤入口リンク 1〜3 本 ⑥この係にいる素材（表は floorQueueHtml）
+  // 事実は /api/floor の stations と /api/status から取れるものだけ。未着の値は「読み込み中…」。外の値は全部 esc を通す
+  var SP_LOADING = '読み込み中…';
+  function spNum(x) { var v = Number(x); return isFinite(v) ? v : 0; }
+  /** 事実 1 個。value は HTML（呼び出し側で esc 済み）。value が null なら「読み込み中…」 */
+  function spFact(label, value, cls) { return { label: label, value: value, cls: cls || '' }; }
+  function spStation(fl, key) { var s = fl && fl.stations && fl.stations[key]; return s && typeof s === 'object' ? s : null; }
+  /** 収集・会議の「最終」: 時刻（状態）。未実行は「未実行」。失敗系は赤 */
+  function spRunFact(label, o, at, bad) {
+    if (!o) return spFact(label, null);
+    if (!o.last_status) return spFact(label, '未実行');
+    var st = RUN_LABEL[o.last_status] || o.last_status;
+    return spFact(label, esc(at ? fmtTime(at) : '—') + '（' + (bad ? pill(st, 'red') : esc(st)) + '）');
   }
+  /** 今月 $x / $上限（status の o.month_cents / o.month_cap_cents）。80% 以上は黄・上限で赤 */
+  function spMoneyFact(label, o) {
+    if (!o) return spFact(label, null);
+    var lv = capLevel(o.month_cents, o.month_cap_cents);
+    return spFact(label, esc(fmtUsed(o.month_cents || 0) + ' / ' + fmtCap(o.month_cap_cents)), lv === 'over' ? 'sp-red' : lv === 'near' ? 'sp-yellow' : '');
+  }
+  function spLink(href, text, primary) { return { href: href, text: text, primary: !!primary }; }
+  /** 確認する人のパネルの自動公開のスイッチ（§N-8。#/review の #rl-autopub と同じ見た目・同じ API）。st = /api/review/stats（null = 読み込み中・文字列 = 読めなかった） */
+  function spAutoPubHtml(st, busy) {
+    if (st === null || st === undefined) return '<button type="button" class="rl-switch" id="sp-autopub" disabled data-sp-loading="1"><span class="rl-knob" aria-hidden="true"></span><span class="rl-switch-t">自動公開の状態を' + esc(SP_LOADING) + '</span></button>';
+    if (!isObj(st)) return '<span class="err sp-err">自動公開の状態を読めませんでした: ' + esc(st) + '</span><button type="button" class="btn small" id="sp-autopub-retry">もう一度読み込む</button>';
+    return autoPubSwitchHtml('sp-autopub', st.auto_publish === true, busy);
+  }
+  var STATION_PANEL = {
+    intake: {
+      name: '入口', role: '外の記事や子どもの声から素材の種を集め、提案箱に入れます。',
+      facts: function (fl, s) {
+        var it = spStation(fl, 'intake');
+        return [
+          spFact('提案（判断待ち）', it ? esc(spNum(it.proposed)) + ' 件' : null, it && spNum(it.proposed) > 0 ? 'sp-yellow' : ''),
+          spRunFact('収集の最終', s && (s.scout || {}), s && (s.scout || {}).last_run_at, s && (s.scout || {}).last_status === 'failed'),
+          spMoneyFact('今月の収集', s && (s.scout || {}))
+        ];
+      },
+      actions: function (fl, s) { return [scoutBtnHtml(s)]; },
+      links: [spLink('#/proposals', '提案箱を開く'), spLink('#/new', '新しい素材を注文する')]
+    },
+    meeting: {
+      name: '会議', role: '提案箱と素材を見比べて、次に作るものと編集基準の直し方を話し合います。',
+      facts: function (fl, s) {
+        var it = spStation(fl, 'intake'), mt = s && (s.meeting || {});
+        return [
+          spRunFact('最終の会議', mt, mt && mt.last_at, !!mt && (mt.last_status === 'failed' || mt.last_status === 'expired')),
+          spFact('結果待ち', it ? (it.meeting_pending ? 'あり（回収は 10 分ごと）' : 'なし') : null, it && it.meeting_pending ? 'sp-yellow' : ''),
+          spMoneyFact('今月の会議', mt)
+        ];
+      },
+      actions: function (fl, s) { return [meetingBtnHtml(s)]; },
+      links: [spLink('#/proposals?at=minutes', '最新の会議を読む')]
+    },
+    maker: {
+      name: '職人', role: '注文票と編集基準をもとに、素材（説明・図・動かせるもの）を作ります。',
+      facts: function (fl, s) {
+        var mk = spStation(fl, 'maker'), im = s && s.images && typeof s.images === 'object' ? s.images : null;
+        var img = !s ? spFact('画像の生成（今月）', null)
+          : !im ? null
+          : im.halted ? spFact('画像の生成（今月）', pill('停止中', 'red') + ' ' + esc(haltText(im.halted)) + '・' + esc(fmtUsed(im.month_cents) + ' / ' + fmtCap(im.month_cap_cents)), 'sp-red')
+          : spMoneyFact('画像の生成（今月）', im);
+        return [
+          spFact('制作中', mk ? esc(spNum(mk.running) + spNum(mk.creating)) + ' / 最大 ' + esc(spNum(mk.max_concurrent)) : null),
+          spFact('順番待ち', mk ? esc(spNum(mk.queued)) + ' 件' : null),
+          img
+        ];
+      },
+      links: [spLink('#/standards', '編集基準'), spLink('#/images', '画像の生成（道具）'), spLink('#/retro', '改善係の工夫')]
+    },
+    clerk: {
+      name: '受付', role: '職人が作ったものを受け取り、形を確かめて版として取り込みます。',
+      facts: function (fl) {
+        var ck = spStation(fl, 'clerk');
+        return [
+          spFact('取り込み中', ck ? esc(spNum(ck.ingesting)) + ' 件' : null),
+          spFact('取り込みの失敗', ck ? esc(spNum(ck.failed_invalid_outputs)) + ' 件' : null, ck && spNum(ck.failed_invalid_outputs) > 0 ? 'sp-red' : '')
+        ];
+      }
+    },
+    questions: {
+      name: '質問', role: '職人が注文票だけでは決められないことを、あなたに質問します。',
+      facts: function (fl) {
+        var mk = spStation(fl, 'maker');
+        return [spFact('回答待ち', mk ? esc(spNum(mk.needs_answer)) + ' 件' : null, mk && spNum(mk.needs_answer) > 0 ? 'sp-yellow' : '')];
+      }
+    },
+    autofix: {
+      name: '自動の作り直し', role: '機械の確認で見つかった直す所を、人に出す前に職人へ自動で作り直してもらいます。',
+      facts: function (fl) {
+        var rw = spStation(fl, 'rework');
+        return [spFact('自動の作り直し中', rw ? esc(spNum(rw.auto_active)) + ' 件' : null)];
+      }
+    },
+    rework: {
+      name: '作り直しへ', role: 'あなたが「直してもらう」にした素材を、職人が作り直します。',
+      facts: function (fl) {
+        var rw = spStation(fl, 'rework');
+        return [spFact('作り直し中', rw ? esc(spNum(rw.manual_active)) + ' 件' : null)];
+      }
+    },
+    verifier: {
+      name: '検証係', role: '素材の主張を出典と照らし合わせて確かめます。',
+      facts: function (fl, s) {
+        var vf = spStation(fl, 'verifier'), vi = s && s.videos && typeof s.videos === 'object' ? s.videos : null;
+        return [
+          spFact('検証中', vf ? esc(spNum(vf.running)) + ' 件' : null),
+          spFact('順番待ち', vf ? esc(spNum(vf.pending)) + ' 件' : null),
+          spFact('検証の失敗', vf ? esc(spNum(vf.failed)) + ' 件' : null, vf && spNum(vf.failed) > 0 ? 'sp-red' : ''),
+          !s ? spFact('動画の確認', null) : vi ? spFact('動画の確認', vi.enabled ? pill('有効', 'green') : pill('無効', 'gray')) : null
+        ];
+      },
+      links: [spLink('#/videos', '動画の確認（道具）')]
+    },
+    reviewer: {
+      name: '確認する人', role: 'あなたが子どもの画面で素材を確かめ、公開するか直してもらうかを決めます。',
+      // x = { reviewStats: GET /api/review/stats の応答（null = 読み込み中・文字列 = 読めなかった理由）, reviewBusy }（§N-8。パネルを開いた時に 1 回取る）
+      facts: function (fl, s, x) {
+        var rv = spStation(fl, 'reviewer'), st = x && x.reviewStats;
+        var num = function (v) { return typeof v === 'number' && isFinite(v) ? v : 0; };
+        var c = isObj(st) && isObj(st.clean) ? st.clean : null;
+        return [
+          spFact('確認待ち', rv ? esc(spNum(rv.waiting)) + ' 件' : null, rv && spNum(rv.waiting) > 0 ? 'sp-yellow' : ''),
+          spFact('要確認', rv ? esc(spNum(rv.needs_review_total)) + ' 件' : null),
+          st === null || st === undefined ? spFact('全部通った教材への判断', null)
+            : c ? spFact('全部通った教材への判断', esc('公開 ' + num(c.approve) + '・直す ' + num(c['return']) + '・却下 ' + num(c.reject) + '（続けて公開 ' + num(st.streak) + '）'))
+            : null
+        ];
+      },
+      actions: function (fl, s, x) { return [spAutoPubHtml(x && x.reviewStats, !!(x && x.reviewBusy))]; },
+      links: [spLink('#/review', '確認待ちを開く', true)]
+    },
+    library: {
+      name: '倉庫', role: '公開した素材をしまい、教室に渡します。止めた素材もここに残ります。',
+      facts: function (fl) {
+        var lb = spStation(fl, 'library');
+        return [
+          spFact('利用できる', lb ? esc(spNum(lb.available)) + ' 本' : null),
+          spFact('止めている', lb ? esc(spNum(lb.stopped)) + ' 本' : null)
+        ];
+      },
+      links: [spLink('#/materials', '素材の台帳を開く'), spLink('#/materials?publish=available', '利用できる教材'), spLink('#/models3d', '立体モデル'), spLink('#/library/images', '生成した画像')]
+    },
+    retro: {
+      name: '改善係', role: '終わった注文ごとに費用を振り返り、質を下げずに費用を下げる「工夫」を職人に渡します。',
+      facts: function (fl) {
+        var rt = spStation(fl, 'retro');
+        return [
+          spFact('いま職人に渡している工夫', rt ? esc(spNum(rt.active_maker_notes)) + ' 件' : null),
+          spFact('振り返り中', rt ? esc(spNum(rt.pending)) + ' 件' : null),
+          spFact('最後の振り返り', rt ? esc(rt.last_retro_at ? fmtTime(rt.last_retro_at) : 'まだありません') : null)
+        ];
+      },
+      links: [spLink('#/retro', '改善係の記録を開く', true)],
+      noItems: true
+    },
+    topics: {
+      name: 'お題係', role: '子どもに出す今日と明日のお題を作り、出典を確かめて並べます。',
+      facts: function (fl, s) {
+        if (!s) return [spFact('今日・明日', null), spFact('要確認', null), spFact('今月', null), spFact('作成', null)];
+        var tp = s.topics && typeof s.topics === 'object' ? s.topics : null;
+        if (!tp) return [];
+        var day = function (label, d) {
+          if (!d || typeof d !== 'object') return '';
+          var e = spNum(d.empty), st = spNum(d.stopped);
+          return '<span class="sp-day">' + esc(label) + ' 空き ' + esc(e) + '・止まり ' + esc(st) + '</span>';
+        };
+        var days = day('今日', tp.today) + day('明日', tp.tomorrow);
+        var nr = floorScene() ? floorScene().topicsNeedsReview(s) : 0;
+        var empty = (tp.today ? spNum(tp.today.empty) : 0) + (tp.tomorrow ? spNum(tp.tomorrow.empty) : 0);
+        return [
+          days ? spFact('今日・明日', days, empty > 0 ? 'sp-yellow' : '') : null,
+          spFact('要確認', esc(nr) + ' 件', nr > 0 ? 'sp-yellow' : ''),
+          spMoneyFact('今月', tp),
+          typeof tp.enabled === 'boolean' ? spFact('作成', tp.enabled ? pill('入', 'green') : pill('切', 'gray')) : null
+        ];
+      },
+      links: [spLink('#/topics', '今日のお題を開く', true)],
+      noItems: true
+    }
+  };
+  /** 係のパネルの状態ピル（場面の札と同じ stationStates。場面の関数が無い時は出さない） */
+  function spPillHtml(id, fl, s) {
+    var S = floorScene();
+    if (!S) return '';
+    var x = S.stationStates(fl || {}, s || null)[id];
+    if (!x) return '';
+    if (!fl && id !== 'topics') return '<span class="sp-pill idle" data-sp-pill="loading">' + esc(SP_LOADING) + '</span>';
+    if (id === 'topics' && !s) return '<span class="sp-pill idle" data-sp-pill="loading">' + esc(SP_LOADING) + '</span>';
+    return '<span class="sp-pill ' + esc(x.kind) + '" data-sp-pill="' + esc(x.kind) + '">' + esc(x.text) + (x.text2 ? '・' + esc(x.text2) : '') + '</span>';
+  }
+  /**
+   * 係のパネル（純関数。§N-7）。id = 持ち場 id、floorData = GET /api/floor（未着は null）、statusData = GET /api/status（未着は null）、
+   * extra = 係ごとの追加のデータ（確認する人: { reviewStats, reviewBusy }。§N-8）。知らない id は空文字。
+   * 操作のボタンは入口の #scout-btn・会議の #meeting-btn・確認する人の自動公開のスイッチ #sp-autopub だけ
+   */
+  function stationPanelHtml(id, floorData, statusData, extra) {
+    var P = Object.prototype.hasOwnProperty.call(STATION_PANEL, id) ? STATION_PANEL[id] : null;
+    if (!P) return '';
+    var fl = floorData && typeof floorData === 'object' && floorData.stations ? floorData : null;
+    var s = statusData && typeof statusData === 'object' ? statusData : null;
+    var x = extra && typeof extra === 'object' ? extra : {};
+    var name = P.name;
+    var facts = (P.facts(fl, s, x) || []).filter(Boolean).map(function (f) {
+      if (f.value === null || f.value === undefined) return '<li class="sp-fact sp-loading" data-sp-loading="1"><span class="sp-k">' + esc(f.label) + '</span><span class="sp-v muted">' + esc(SP_LOADING) + '</span></li>';
+      return '<li class="sp-fact' + (f.cls ? ' ' + f.cls : '') + '"><span class="sp-k">' + esc(f.label) + '</span><b class="sp-v">' + f.value + '</b></li>';
+    });
+    var acts = P.actions ? P.actions(fl, s, x) : [];
+    var links = (P.links || []).map(function (l) {
+      return '<a class="' + (l.primary ? 'btn primary small sp-link' : 'sp-link') + '" href="' + esc(l.href) + '">' + esc(l.text) + ' ›</a>';
+    });
+    return '<div class="sp" data-sp-station="' + esc(id) + '"' + (id === 'retro' ? ' data-retro-floor="1"' : '') + ' role="region" aria-labelledby="sp-h">' +
+      '<div class="sp-head" data-sp="head"><h2 class="sp-title" id="sp-h">' + esc(name) + '</h2>' + spPillHtml(id, fl, s) +
+        '<button type="button" class="sp-close" data-fq-clear="1" aria-label="' + esc(name) + 'のパネルを閉じる"><span aria-hidden="true">✕</span></button></div>' +
+      '<p class="sp-role" data-sp="role">' + esc(P.role) + '</p>' +
+      (facts.length ? '<ul class="sp-facts" data-sp="facts">' + facts.join('') + '</ul>' : '') +
+      (acts.length ? '<div class="sp-actions" data-sp="actions">' + acts.join('') + '</div>' : '') +
+      (links.length ? '<div class="sp-links" data-sp="links">' + links.join('') + '</div>' : '') +
+      '</div>';
+  }
+  /** 改善係のパネル（旧名。stationPanelHtml('retro') と同じ） */
+  function retroFloorPanelHtml(rt) { return stationPanelHtml('retro', { stations: { retro: rt || {} } }, null); }
 
-  /** 制作キュー（見出し + 表）。opts = { filter: 持ち場 id | null, open: { 素材 id: true }, menuOpen, retro: stations.retro }。0 件なら案内 */
+  /**
+   * 制作キュー（見出し + 表）。opts = { filter: 持ち場 id | null, open: { 素材 id: true }, menuOpen, floor: /api/floor, status: /api/status, retro: stations.retro（旧い呼び方）, panel }。0 件なら案内。
+   * filter がある時（§N-7）は 係のパネル（stationPanelHtml）+ 「この係にいる素材」の表 を返す。panel: false なら表だけ（画面ではパネルを別の容器 #station-panel に置くため）
+   */
   function floorQueueHtml(queue, opts) {
     opts = opts || {};
     queue = queue || [];
-    var S = floorScene();
-    // 改善係（§S）は素材を持たない見回り役。選んだ時は表の代わりに「改善係の記録」への入口を出す
-    if (opts.filter === 'retro') return retroFloorPanelHtml(opts.retro);
-    var rows = opts.filter && S ? queue.filter(function (r) { return S.rowStations(r).indexOf(opts.filter) >= 0; }) : queue;
-    var head = fqHeadHtml(rows.length, !!opts.menuOpen);
+    if (opts.filter) return floorStationHtml(queue, opts);
+    var head = fqHeadHtml(queue.length, !!opts.menuOpen);
     if (!queue.length) {
       return head + '<div class="fq-empty"><p>動いている素材はありません。新しい素材を注文するか、提案箱から採択してください</p>' +
         '<div class="row"><a class="btn primary" href="#/new">新しい素材を注文する</a><a class="btn" href="#/proposals">提案箱を見る</a></div></div>';
     }
-    if (!rows.length) {
-      return head + '<div class="fq-empty"><p>' + esc(stationName(opts.filter)) + 'にいる素材はありません</p><button type="button" class="btn" data-fq-clear="1">絞り込みを解除</button></div>';
-    }
+    return head + fqTableHtml(queue, opts);
+  }
+  /** 札を押した時: 係のパネル（⑤まで）+ ⑥この係にいる素材。改善係・お題係は素材を持たない */
+  function floorStationHtml(queue, opts) {
+    var S = floorScene();
+    var id = opts.filter;
+    var P = Object.prototype.hasOwnProperty.call(STATION_PANEL, id) ? STATION_PANEL[id] : null;
+    var fl = opts.floor || (opts.retro ? { stations: { retro: opts.retro } } : null);
+    var panel = opts.panel === false ? '' : stationPanelHtml(id, fl, opts.status || null);
+    if (P && P.noItems) return panel + '<div class="fq-empty sp-items" data-sp="items"><p class="muted">この係は素材を持ちません</p></div>';
+    var rows = S ? queue.filter(function (r) { return S.rowStations(r).indexOf(id) >= 0; }) : queue;
+    var head = fqHeadHtml(rows.length, !!opts.menuOpen, 'この係にいる素材');
+    if (!rows.length) return panel + '<div class="sp-items" data-sp="items">' + head + '<div class="fq-empty"><p class="muted">' + esc(stationName(id)) + 'にいる素材はありません</p></div></div>';
+    return panel + '<div class="sp-items" data-sp="items">' + head + fqTableHtml(rows, opts) + '</div>';
+  }
+  /** 制作キューの表の中身（見出しは呼び出し側） */
+  function fqTableHtml(rows, opts) {
     var open = opts.open || {};
-    return head + '<div class="fq-wrap"><table class="fq-table"><colgroup><col class="fq-c-name"><col class="fq-c-steps"><col class="fq-c-prog"><col class="fq-c-status"><col class="fq-c-op"></colgroup><thead><tr><th scope="col">コンテンツ名</th><th scope="col">進行状況（制作ステップ）</th><th scope="col">進捗</th><th scope="col">ステータス</th><th scope="col">操作</th></tr></thead><tbody>' +
+    return '<div class="fq-wrap"><table class="fq-table"><colgroup><col class="fq-c-name"><col class="fq-c-steps"><col class="fq-c-prog"><col class="fq-c-status"><col class="fq-c-op"></colgroup><thead><tr><th scope="col">コンテンツ名</th><th scope="col">進行状況（制作ステップ）</th><th scope="col">進捗</th><th scope="col">ステータス</th><th scope="col">操作</th></tr></thead><tbody>' +
       rows.map(function (r) {
         var m = r.material || {}, v = r.version;
         var pct = Math.max(0, Math.min(100, Number(r.progress_pct || 0)));
@@ -1602,7 +2048,10 @@
   function renderFloorBand() {
     var el = $('#floor-band');
     if (!el) return;
-    var html = floorBandHtml(floor.data ? floor.data.attention : null, floor.errAt);
+    var st = floorStatus(), S = floorScene();
+    var it = floor.data && floor.data.stations && floor.data.stations.intake;
+    var more = { proposed: it ? Number(it.proposed || 0) : 0, topicsReview: st && S ? S.topicsNeedsReview(st) : 0 };
+    var html = floorBandHtml(floor.data ? floor.data.attention : null, floor.errAt, more);
     if (floor.data === null && !floor.errAt) html = '<span class="muted">読み込み中…</span>';
     if (html === floor.bandHtml) return; // 同じ内容は書き直さない（aria-live が毎回読み上げないように）
     floor.bandHtml = html;
@@ -1623,7 +2072,8 @@
     var q = $('#floor-queue');
     if (!q) return;
     q.classList.remove('loading');
-    q.innerHTML = floorQueueHtml(d.queue, { filter: floor.filter, open: floor.open, menuOpen: floor.menuOpen, retro: d.stations && d.stations.retro });
+    // 係のパネルは別の容器（#station-panel・renderStationPanel）。ここは「この係にいる素材」の表だけ
+    q.innerHTML = floorQueueHtml(d.queue, { filter: floor.filter, open: floor.open, menuOpen: floor.menuOpen, panel: false });
     if (!flashChanged) return;
     var prev = floor.prev;
     var next = {};
@@ -1642,6 +2092,7 @@
     renderFloorBand();
     renderScene(d);
     renderQueue(d, true);
+    renderStationPanel(false);
     var upd = $('#floor-updated');
     if (upd) upd.textContent = '更新 ' + hhmm(new Date());
   }
@@ -1720,11 +2171,18 @@
     floor.prevSt = null;
     floor.errAt = null;
     floor.bandHtml = null;
-    floor.filter = null;
+    // ?st=<持ち場 id> で開いた時はその係のパネルを開いておく（§N-7。setFloorFilter は hash を書き換えない）
+    var stq = parseHash().q.st;
+    floor.filter = isStationId(stq) ? stq : null;
     floor.open = {};
     floor.menuOpen = false;
     floor.userScrolled = false;
     floor.autoScrollAt = 0;
+    floor.panelHtml = null;
+    floor.panelHold = 0;
+    floor.reviewStats = null;
+    floor.reviewBusy = false;
+    onStationPanelOpen();
     document.body.classList.add('floor-wide');
     view.innerHTML = '<div class="floor-view">' +
       '<div id="floor-band" class="floor-band" aria-live="polite"><span class="muted">読み込み中…</span></div>' +
@@ -1732,9 +2190,12 @@
       '<div class="scene-stage">' +
       '<button type="button" id="scene-filter" class="scene-filter hidden"></button>' +
       '<div class="scene-scroll" id="scene-scroll"><div class="scene" id="scene"></div></div>' +
-      '<section class="fq-card" aria-labelledby="fq-h"><div id="floor-queue" class="loading">' + floorSkeletonHtml() + '</div></section>' +
+      '<section class="fq-card" aria-labelledby="fq-h"><div id="station-panel" class="sp-wrap" hidden></div><div id="floor-queue" class="loading">' + floorSkeletonHtml() + '</div></section>' +
       '</div></div>';
     buildScene($('#scene'));
+    renderFilterChip();
+    renderStationPanel(true);
+    if (floor.filter) scrollToStationPanel(); // #/?st= で開いた時（状況帯の注意の行き先など）はパネルを窓に入れる
     var fv = view.querySelector('.floor-view');
     fv.addEventListener('click', onFloorClick);
     fv.addEventListener('keydown', onFloorKey);
@@ -1749,7 +2210,8 @@
   }
 
   // smoke（§N-5 (n3)）から描画の純関数を呼べるようにする。画面の動作には使わない
-  window.FactoryAdminFloor = { floorBandHtml: floorBandHtml, floorQueueHtml: floorQueueHtml, floorChipsHtml: floorChipsHtml, sanitizeCharSvg: sanitizeCharSvg, retroFloorPanelHtml: retroFloorPanelHtml };
+  window.FactoryAdminFloor = { floorBandHtml: floorBandHtml, floorQueueHtml: floorQueueHtml, floorChipsHtml: floorChipsHtml, sanitizeCharSvg: sanitizeCharSvg, retroFloorPanelHtml: retroFloorPanelHtml,
+    STATION_PANEL: STATION_PANEL, stationPanelHtml: stationPanelHtml };
 
   // ---- 画面: 素材一覧 ----
   function viewMaterials(view, q) {
@@ -4340,10 +4802,35 @@
     var a = num(c.approve), r = num(c['return']), x = num(c.reject);
     var line = '機械が『全部通った』とした教材で、ふじさんの判断は ' + (a + r + x ? '公開 ' + a + ' 本・直してもらう ' + r + ' 本・却下 ' + x + ' 本（直近 ' + num(s.streak) + ' 本つづけて公開）' : 'まだありません');
     var on = s.auto_publish === true;
-    return '<p class="rl-stats-line">' + esc(line) + '</p><div class="rl-auto">' +
-      '<button type="button" class="rl-switch' + (on ? ' on' : '') + '" id="rl-autopub" aria-pressed="' + (on ? 'true' : 'false') + '"' + (busy ? ' disabled' : '') + '>' +
-        '<span class="rl-knob" aria-hidden="true"></span><span class="rl-switch-t">全部通った教材は自動で公開する</span><span class="rl-switch-s">' + (busy ? '切り替え中…' : on ? 'ON' : 'OFF') + '</span></button>' +
+    return '<p class="rl-stats-line">' + esc(line) + '</p><div class="rl-auto">' + autoPubSwitchHtml('rl-autopub', on, busy) +
       (on ? '<span class="muted" data-rl-autopub-n="1">自動で公開した教材 ' + num(s.auto_published) + ' 本</span>' : '') + '</div>';
+  }
+  /** 自動公開のスイッチ（#/review の #rl-autopub と工場の確認する人のパネルの #sp-autopub で共有。§N-8） */
+  function autoPubSwitchHtml(id, on, busy) {
+    return '<button type="button" class="rl-switch' + (on ? ' on' : '') + '" id="' + id + '" aria-pressed="' + (on ? 'true' : 'false') + '"' + (busy ? ' disabled' : '') + '>' +
+      '<span class="rl-knob" aria-hidden="true"></span><span class="rl-switch-t">全部通った教材は自動で公開する</span><span class="rl-switch-s">' + (busy ? '切り替え中…' : on ? 'ON' : 'OFF') + '</span></button>';
+  }
+  /**
+   * 自動公開の切り替え（#/review と確認する人のパネルで共有。§V-8 の API・確認ダイアログ・トーストの文はここ 1 か所）。
+   * on = 切り替えた後の状態。ON にする時だけ確認ダイアログ。h = { start(): 送信の直前, end(): 送信が終わった後（成功・失敗とも。読み直しはここで）, cancel(): ダイアログで やめる }。
+   * 返す promise は全部終わった時（キャンセルも）に解ける
+   */
+  function switchAutoPublish(on, h) {
+    var go = function () {
+      if (h.start) h.start();
+      return api('POST', '/api/review/auto-publish', { on: on }).then(function (res) {
+        toast(res && res.auto_publish ? '全部通った教材を自動で公開するようにしました' : '自動で公開するのをやめました（全部通った教材も確認待ちに並びます）');
+        if (h.end) h.end();
+      }, function (e) {
+        toast(e.message || '切り替えられませんでした', true);
+        if (h.end) h.end();
+      });
+    };
+    if (!on) return go();
+    return confirmDialog({ title: '全部通った教材を自動で公開します', body: '機械の確認が全部通った教材を、人を通さずに公開します。見てほしい所がある教材は、これまでどおり確認待ちに出ます。', okText: 'ON にする' }).then(function (r) {
+      if (r.ok) return go();
+      if (h.cancel) h.cancel();
+    });
   }
   function loadRlStats(here, refocus) {
     var box = $('#rl-stats');
@@ -4354,19 +4841,11 @@
       var sw = $('#rl-autopub');
       if (refocus) sw.focus();
       sw.addEventListener('click', function () {
-        var on = s.auto_publish !== true;
-        var go = function () {
-          box.innerHTML = rlStatsHtml(s, true);
-          api('POST', '/api/review/auto-publish', { on: on }).then(function (res) {
-            toast(res && res.auto_publish ? '全部通った教材を自動で公開するようにしました' : '自動で公開するのをやめました（全部通った教材も確認待ちに並びます）');
-            loadRlStats(here, true);
-          }, function (e) {
-            toast(e.message || '切り替えられませんでした', true);
-            loadRlStats(here, true);
-          });
-        };
-        if (!on) { go(); return; }
-        confirmDialog({ title: '全部通った教材を自動で公開します', body: '機械の確認が全部通った教材を、人を通さずに公開します。見てほしい所がある教材は、これまでどおり確認待ちに出ます。', okText: 'ON にする' }).then(function (r) { if (r.ok) go(); else sw.focus(); });
+        switchAutoPublish(s.auto_publish !== true, {
+          start: function () { box.innerHTML = rlStatsHtml(s, true); },
+          end: function () { loadRlStats(here, true); },
+          cancel: function () { sw.focus(); }
+        });
       });
     }, function (e) {
       if (location.hash !== here || !$('#rl-stats')) return;
@@ -4697,6 +5176,21 @@
     }, function (e) { view.innerHTML = '<p class="err">読み込めませんでした: ' + esc(e.message) + '</p>'; });
   }
 
+  // ---- メニュー「道具と記録 ▾」（§N-7。<details> なので開け閉めに JS は要らない。画面を移ったら・外を押したら・Esc で閉じる）----
+  function closeNavMore() { var d = $('.nav-more'); if (d && d.open) d.open = false; }
+  function onNavMoreDoc(e) {
+    var d = $('.nav-more');
+    if (!d || !d.open) return;
+    if (e.type === 'keydown') {
+      if (e.key !== 'Escape') return;
+      d.open = false;
+      var sm = d.querySelector('summary');
+      if (sm) sm.focus();
+      return;
+    }
+    if (!(e.target && e.target.closest && e.target.closest('.nav-more'))) d.open = false;
+  }
+
   // ---- router ----
   function parseHash() {
     var h = location.hash.replace(/^#/, '') || '/';
@@ -4710,6 +5204,7 @@
     var view = $('#view');
     var r = parseHash(), p = r.parts;
     reviewCtx = null;
+    closeNavMore();
     stopFloor(); // 工場のポーリングは他の画面へ移ったら必ず止める（viewFloor が開き直す）
     document.body.classList.remove('has-foot');
     document.body.classList.remove('review-wide');
@@ -4724,10 +5219,11 @@
     if (p[0] === 'standards') return viewStandards(view);
     if (p[0] === 'proposals') return viewProposals(view, r.q);
     if (p[0] === 'images') return viewImages(view);
+    if (p[0] === 'library' && p[1] === 'images') return viewGallery(view); // §N-8 C: 倉庫の「生成した画像」
     if (p[0] === 'videos') return viewVideos(view);
     if (p[0] === 'models3d') return viewModels3d(view);
     if (p[0] === 'retro') return viewRetro(view);
-    // §T-11 お題の棚（topics.js。タブの解釈・描画・遅れた応答の破棄は topics.js 側）
+    // §T-11 今日のお題（表示名 §N-7。topics.js。タブの解釈・描画・遅れた応答の破棄は topics.js 側）
     if (p[0] === 'topics' && window.FactoryTopics) return window.FactoryTopics.mount(view, { api: api, toast: toast, confirm: confirmDialog });
     view.innerHTML = '<p class="muted">ページが見つかりません。<a href="#/materials">素材へ</a></p>';
   }
@@ -4741,20 +5237,28 @@
     rightsUnblockBody: rightsUnblockBody, model3dRightsLineHtml: model3dRightsLineHtml, model3dBlockedText: model3dBlockedText,
     M3D_CHECK_BODY: M3D_CHECK_BODY, M3D_BLOCK_BODY: M3D_BLOCK_BODY
   };
-  // 状況帯（上部）の純関数（テストから呼ぶ）
+  // 状況帯（上部。§N-8 の 3 枠）の純関数（テストから呼ぶ）
   window.FactoryAdminStatus = {
     CRON_LATE_MIN: CRON_LATE_MIN, CRON_STALE_MIN: CRON_STALE_MIN, cronAge: cronAge, capLevel: capLevel, fmtCap: fmtCap, costMeterHtml: costMeterHtml,
-    STATUS_CARDS: STATUS_CARDS, statusAlerts: statusAlerts, statusBandHtml: statusBandHtml
+    STATUS_CARDS: STATUS_CARDS, ALERT_GO_TEXT: ALERT_GO_TEXT, statusAlerts: statusAlerts, statusBandHtml: statusBandHtml, stationGoId: stationGoId
   };
   window.FactoryAdminVideos = { videosBandHtml: videosBandHtml, videosAdminHtml: videosAdminHtml, videosLoadingHtml: videosLoadingHtml, videosErrorHtml: videosErrorHtml };
   window.FactoryAdminImages = {
     HALT_TEXT: HALT_TEXT, haltText: haltText, imagesBandHtml: imagesBandHtml, imagesMonthHtml: imagesMonthHtml, imagesAlertHtml: imagesAlertHtml, imagesHtml: imagesHtml,
     imagesLoadingHtml: imagesLoadingHtml, imagesErrorHtml: imagesErrorHtml, genCaption: genCaption
   };
+  // 倉庫の「生成した画像」（§N-8 C）の純関数（テストから呼ぶ）
+  window.FactoryAdminGallery = {
+    GALLERY_LIMIT: GALLERY_LIMIT, galleryUrl: galleryUrl, galleryItemsOf: galleryItemsOf, galleryCardHtml: galleryCardHtml, galleryMoreHtml: galleryMoreHtml,
+    galleryHtml: galleryHtml, galleryLoadingHtml: galleryLoadingHtml, galleryErrorHtml: galleryErrorHtml
+  };
   if (window.__FACTORY_ADMIN_NO_BOOT__) return; // smoke が純関数だけを読む時
   window.addEventListener('hashchange', route);
   window.addEventListener('resize', function () { if (reviewCtx) measureReviewChrome(); });
   document.addEventListener('keydown', onReviewKey);
   document.addEventListener('visibilitychange', onFloorVisibility);
+  document.addEventListener('click', onNavMoreDoc);
+  document.addEventListener('click', onStationGo);
+  document.addEventListener('keydown', onNavMoreDoc);
   route();
 })();

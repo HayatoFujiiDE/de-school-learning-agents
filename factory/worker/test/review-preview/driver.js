@@ -35,6 +35,15 @@
       setTimeout(then, 150);
     });
   }
+  // 工場: 表と状況（お題の要確認のピル）が届くまで待つ
+  var floorReady = function () { return !!$('#floor-queue [data-floor-row]') && !!$('#pause-btn') && !!$('[data-floor-link="topicsReview"]'); };
+  // 札を押す → パネルが開いて状況の値が入る（読み込み中が消える）まで待つ。y = パネルが窓に入るように少し下げる
+  function floorPanel(id) {
+    when(floorReady, function () {
+      click('#scene .scene-hit[data-st="' + id + '"]');
+      when(function () { return !!$('#station-panel .sp') && !$('#station-panel [data-sp-loading]'); }, function () { done(Number(new URLSearchParams(location.search).get('y')) || 0); });
+    });
+  }
   // 項目の場所（「小学生・短い 2 段落目」など）は全部の変奏を読んでから出る
   var located = function () { return !!$('.rv-it-where') || !$('.rv-it'); };
   var steps = {
@@ -105,6 +114,58 @@
         }, 200);
       });
     },
+    // §N-7 工場: 札を押して係のパネルを開いた状態（panel-<持ち場 id>）・メニュー「道具と記録」を開いた状態・あなたの番が出そろった状態
+    'panel-intake': function () { floorPanel('intake'); },
+    'panel-maker': function () { floorPanel('maker'); },
+    'panel-library': function () { floorPanel('library'); },
+    'panel-topics': function () { floorPanel('topics'); },
+    'panel-meeting': function () { floorPanel('meeting'); },
+    // §N-8: 確認する人のパネル（自動公開のスイッチ。/api/review/stats が届くまで待つのは floorPanel の「読み込み中が消える」）
+    'panel-reviewer': function () { floorPanel('reviewer'); },
+    // §N-8: 確認する人のパネルのスイッチを押す → #/review と同じ確認ダイアログが出た状態（body の data-dlg に題名）
+    'panel-reviewer-on': function () {
+      when(floorReady, function () {
+        click('#scene .scene-hit[data-st="reviewer"]');
+        when(function () { var b = $('#sp-autopub'); return !!b && !b.disabled; }, function () {
+          click('#sp-autopub');
+          when(function () { return !!$('#dlg') && $('#dlg').open; }, function () {
+            document.body.setAttribute('data-dlg', ($('#dlg-title') || {}).textContent || '');
+            done(Number(new URLSearchParams(location.search).get('y')) || 0);
+          });
+        });
+      });
+    },
+    // §N-8: #/?st=intake で開いた工場で ✕ で閉じ、状況帯の注意の「入口の係を開く」（同じ hash）を押す → パネルがまた開く（body の data-st-same に結果）
+    'st-same': function () {
+      when(function () { return floorReady() && !!$('#station-panel .sp'); }, function () {
+        click('#station-panel [data-fq-clear]');
+        var closed = !$('#station-panel .sp');
+        click('#status a[data-sa-go="intake"]');
+        when(function () { return !!$('#station-panel .sp[data-sp-station="intake"]'); }, function () {
+          document.body.setAttribute('data-st-same', 'closed=' + closed + ' reopened=' + !!$('#station-panel .sp[data-sp-station="intake"]') + ' hash=' + location.hash);
+          done();
+        });
+      });
+    },
+    // §N-8: #/ の工場で状況帯の「職人の係を開く」（違う hash）を押す → route() が作り直して職人のパネルが開く
+    'st-diff': function () {
+      when(floorReady, function () {
+        click('#status a[data-sa-go="maker"]');
+        when(function () { return !!$('#station-panel .sp[data-sp-station="maker"]'); }, function () {
+          document.body.setAttribute('data-st-diff', 'opened=true hash=' + location.hash);
+          done();
+        });
+      });
+    },
+    // §N-8 C: 倉庫の「生成した画像」（カードと画像が出そろうまで待つ）
+    gallery: function () {
+      when(function () {
+        var imgs = document.querySelectorAll('.gl-card img');
+        return imgs.length > 0 && Array.prototype.every.call(imgs, function (i) { return i.complete; });
+      }, done);
+    },
+    'nav-open': function () { when(floorReady, function () { var d = $('.nav-more'); if (d) d.open = true; done(); }); },
+    floor: function () { when(floorReady, done); },
     sticky: function () {
       addSticky(2, 'hard', '「いちばん 数が 多い」の根拠が子どもに伝わらない', function () {
         addSticky(3, 'fact', '核と運搬量の関係は食い違いの指摘あり', function () { done(); });

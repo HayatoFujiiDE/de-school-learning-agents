@@ -1,10 +1,10 @@
-// 管理画面の上部「状況帯」（仕事ごとの枠 4 つ: 制作 / お金 / 入口（収集・会議）/ 画像・動画）の純関数。
+// 管理画面の上部「状況帯」（仕事ごとの枠 3 つ: 制作 / お金 / 注意。§N-8）の純関数。
 // public/admin/admin.js を node:vm で起動せず読み（image-admin.test.ts と同じ読み方）、返す HTML を数える。
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 
-type Card = 'run' | 'money' | 'intake' | 'media';
+type Card = 'run' | 'money' | 'alerts';
 interface StatusUi {
   CRON_LATE_MIN: number;
   CRON_STALE_MIN: number;
@@ -12,8 +12,10 @@ interface StatusUi {
   cronAge(lastIso: string | null, nowMs: number): { text: string; level: 'ok' | 'late' | 'stale' };
   capLevel(used: number, cap: number): 'ok' | 'near' | 'over' | null;
   costMeterHtml(used: number, cap: number): string;
-  statusAlerts(s: unknown, nowMs: number): { card: Card; level: string; html: string }[];
+  ALERT_GO_TEXT: Record<string, string>;
+  statusAlerts(s: unknown, nowMs: number): { st: string | null; level: string; html: string }[];
   statusBandHtml(s: unknown, nowMs: number): string;
+  stationGoId(href: string): string | null;
 }
 
 const code = readFileSync(new URL('../public/admin/admin.js', import.meta.url), 'utf8');
@@ -23,7 +25,7 @@ const S = win.FactoryAdminStatus as StatusUi;
 const n = (html: string, re: RegExp) => (html.match(re) || []).length;
 const NOW = Date.parse('2026-11-07T12:00:00.000Z');
 const ago = (min: number) => new Date(NOW - min * 60_000).toISOString();
-const CARDS: Card[] = ['run', 'money', 'intake', 'media'];
+const CARDS: Card[] = ['run', 'money', 'alerts'];
 
 /** 何も起きていない応答（注意 0 件） */
 const ok = (o: Record<string, unknown> = {}) => ({
@@ -41,13 +43,17 @@ function card(band: string, key: Card): string {
   expect(hit).toHaveLength(1);
   return hit[0];
 }
-/** 枠の注意の容器の中身 */
-function alertsOf(band: string, key: Card): string {
-  const m = new RegExp(`<div class="sb-alerts" id="status-alerts-${key}" aria-live="polite">(.*?)</div></div>`).exec(card(band, key));
+/** 注意の枠の容器の中身 */
+function alertsOf(band: string): string {
+  const m = /<div class="sb-alerts" id="status-alerts" aria-live="polite">(.*?)<\/div><\/div>/.exec(card(band, 'alerts'));
   expect(m).not.toBeNull();
   return m![1];
 }
-/** 枠のクラス（sb-card / sb-card sb-red / sb-card sb-yellow） */
+/** 注意の行（li）を 1 本ずつ */
+const rowsOf = (band: string) => [...alertsOf(band).matchAll(/<li class="sa-item sa-(\w+)">(.*?)<\/li>/g)].map((m) => ({ level: m[1], html: m[2] }));
+/** 行の末尾の行き先（#/?st=<係>）。無ければ null */
+const goOf = (row: string) => /<a class="sa-go" href="#\/\?st=(\w+)" data-sa-go="\1">[^<]+ ›<\/a>$/.exec(row)?.[1] ?? null;
+/** 枠のクラス（sb-card / sb-card sb-note / sb-card sb-note sb-red / …） */
 const cardCls = (band: string, key: Card) => /^<div class="([^"]*)"/.exec(card(band, key))![1];
 
 describe('cronAge（定期処理の最終からの経過）', () => {
@@ -93,28 +99,26 @@ describe('今日の費用のメーター', () => {
 });
 
 describe('枠の並びと中身', () => {
-  it('4 枠の見出しがこの順で出る: 制作 → お金 → 入口（収集・会議）→ 画像・動画', () => {
+  it('3 枠の見出しがこの順で出る: 制作 → お金 → 注意（入口・画像・動画の枠は無い）', () => {
     expect(S.STATUS_CARDS.map((c) => c[0])).toEqual(CARDS);
     const h = S.statusBandHtml(ok(), NOW);
     const titles = [...h.matchAll(/<span class="sb-title">([^<]*)<\/span>/g)].map((m) => m[1]);
-    expect(titles).toEqual(['制作', 'お金', '入口（収集・会議）', '画像・動画']);
+    expect(titles).toEqual(['制作', 'お金', '注意']);
     expect([...h.matchAll(/data-card="(\w+)"/g)].map((m) => m[1])).toEqual(CARDS);
     expect(h.startsWith('<div class="status-band">')).toBe(true);
+    expect(h).not.toMatch(/入口（収集・会議）|画像・動画|sb-go-floor/);
   });
-  it('ボタンはその仕事の枠の中: 止める → 制作（見出し行）・収集 / 会議を今すぐ → 入口', () => {
+  it('ボタンは 止める（制作の見出し行）だけ。収集 / 会議を今すぐは工場の係のパネル（§N-7）。aria-live は注意の容器だけ', () => {
     const h = S.statusBandHtml(ok(), NOW);
     expect(card(h, 'run')).toContain('<div class="sb-head"><span class="sb-title">制作</span><button type="button" class="btn small" id="pause-btn">止める</button></div>');
-    expect(card(h, 'intake')).toContain('id="scout-btn">収集を今すぐ</button>');
-    expect(card(h, 'intake')).toContain('id="meeting-btn">会議を今すぐ</button>');
-    for (const k of ['money', 'media'] as Card[]) expect(card(h, k)).not.toMatch(/<button/);
-    for (const id of ['pause-btn', 'scout-btn', 'meeting-btn', 'cron-rel']) expect(n(h, new RegExp(`id="${id}"`, 'g'))).toBe(1);
-    for (const k of CARDS) {
-      expect(n(h, new RegExp(`id="status-card-${k}"`, 'g'))).toBe(1);
-      expect(n(h, new RegExp(`id="status-alerts-${k}" aria-live="polite"`, 'g'))).toBe(1);
-    }
-    expect(n(h, /aria-live=/g)).toBe(4); // 注意の容器だけ
+    for (const k of ['money', 'alerts'] as Card[]) expect(card(h, k)).not.toMatch(/<button/);
+    for (const id of ['scout-btn', 'meeting-btn']) expect(n(h, new RegExp(`id="${id}"`, 'g'))).toBe(0);
+    for (const id of ['pause-btn', 'cron-rel', 'status-alerts', 'status-alerts-n']) expect(n(h, new RegExp(`id="${id}"`, 'g'))).toBe(1);
+    for (const k of CARDS) expect(n(h, new RegExp(`id="status-card-${k}"`, 'g'))).toBe(1);
+    expect(n(h, /aria-live=/g)).toBe(1);
+    expect(n(h, /id="status-alerts" aria-live="polite"/g)).toBe(1);
   });
-  it('制作: 緑の点・制作中 / 順番待ち・定期処理の相対時間（title に絶対時刻）。見える文字に cron・正常時の設定の状態は出さない', () => {
+  it('制作: 緑の点・制作中 / 順番待ち・定期処理の相対時間（title に絶対時刻）。枠の中に注意を持たない。見える文字に cron・正常時の設定の状態は出さない', () => {
     const h = S.statusBandHtml(ok(), NOW);
     const r = card(h, 'run');
     expect(r).toContain('<span class="dot green" aria-hidden="true"></span><b>動いています</b>');
@@ -123,160 +127,152 @@ describe('枠の並びと中身', () => {
     expect(r).toContain('<span id="cron-rel" class="cron-rel ok" data-cron-rel="1">3 分前</span>');
     expect(r).toMatch(/title="定期処理の最終 [^"]+"/);
     expect(h.replace(/<[^>]*>/g, '')).not.toMatch(/cron|職人|設定済み|U で数えた記帳|›\s*・/);
+    // 停止中・定期処理の遅れでも制作の枠の中には注意を出さない（注意の枠へ）
+    const bad = S.statusBandHtml(ok({ paused: true, paused_note: 'メモ', last_cron_at: ago(48), agent_configured: false }), NOW);
+    expect(card(bad, 'run')).not.toMatch(/sa-item|sb-alerts|停止中です/);
+    expect(cardCls(bad, 'run')).toBe('sb-card');
   });
-  it('停止中: 赤の点・再開（primary）・今すぐのボタンは disabled + title', () => {
+  it('停止中: 赤の点・再開（primary）', () => {
     const h = S.statusBandHtml(ok({ paused: true, paused_note: 'メモ' }), NOW);
     expect(card(h, 'run')).toContain('<span class="dot red" aria-hidden="true"></span><b>停止中</b>');
     expect(card(h, 'run')).toContain('<button type="button" class="btn small primary" id="pause-btn">再開</button>');
-    expect(card(h, 'intake')).toContain('id="scout-btn" disabled title="停止中は実行できません">収集を今すぐ</button>');
-    expect(card(h, 'intake')).toContain('id="meeting-btn" disabled title="停止中は実行できません">会議を今すぐ</button>');
   });
-  it('収集中・結果待ちの文と disabled は今のまま（停止中でなければ title は付けない）', () => {
-    const h = S.statusBandHtml(ok({ scout: { ...ok().scout, running: true }, meeting: { ...ok().meeting, pending_batch: true } }), NOW);
-    expect(h).toContain('id="scout-btn" disabled>収集中…</button>');
-    expect(h).toContain('id="meeting-btn" disabled>結果待ち</button>');
-  });
-  it('お金: 今日 $95.55 / $200 とメーター・今月は収集・会議・画像の額だけ（上限・合計は出さない）・¢ は出さない', () => {
-    const m = card(S.statusBandHtml(ok({ scout: { ...ok().scout, month_cents: 5 } }), NOW), 'money');
+  it('お金: 今日 $95.55 / $200 とメーター・今月は収集・会議・画像の額だけ（上限・合計は出さない）・¢ は出さない・画像の額に data-img-band（#/images・title・概算）', () => {
+    const h = S.statusBandHtml(ok({ scout: { ...ok().scout, month_cents: 5 } }), NOW);
+    const m = card(h, 'money');
     expect(m).toContain('<span class="sb-label">今日</span><span class="sb-vals"><span class="meter"');
     expect(m).toContain('<b>$95.55</b> / $200');
-    expect(m).toContain('<span class="sb-label">今月</span><span class="sb-vals"><span class="item">収集 $0.05</span><span class="item">会議 $0.00</span><span class="item">画像 $1.70</span></span>');
+    expect(m).toContain('<span class="sb-label">今月</span><span class="sb-vals"><span class="item">収集 $0.05</span><span class="item">会議 $0.00</span>' +
+      '<a class="item" href="#/images" data-img-band="1" title="予約額で数えた記帳。OpenAI の実際の請求とは違うことがあります">画像 $1.70（概算）</a></span>');
     expect(m).not.toMatch(/合計|\$20\b|\$10\b|\$100\b|¢/);
-  });
-  it('入口: 名前・最終の状態（未実行は muted・失敗系は赤 pill）・今月 $x / $上限（整数ドルは小数を落とす）', () => {
-    const i = card(S.statusBandHtml(ok(), NOW), 'intake');
-    expect(i).toMatch(/<span class="sb-name">収集<\/span><span class="sb-st muted" title="最終 [^"]+">完了<\/span><span class="sb-num">\$0\.00 \/ \$20<\/span>/);
-    expect(i).toMatch(/<span class="sb-name">会議<\/span><span class="sb-st muted" title="最終 [^"]+">完了<\/span><span class="sb-num">\$0\.00 \/ \$10<\/span>/);
-    const never = card(S.statusBandHtml(ok({ scout: { month_cents: 5, month_cap_cents: 2050 }, meeting: {} }), NOW), 'intake');
-    expect(never).toContain('<span class="sb-name">収集</span><span class="sb-st muted">未実行</span><span class="sb-num">$0.05 / $20.50</span>');
-    expect(never).toContain('<span class="sb-name">会議</span><span class="sb-st muted">未実行</span><span class="sb-num">$0.00 / —</span>');
-    const bad = card(S.statusBandHtml(ok({ scout: { ...ok().scout, last_status: 'failed' }, meeting: { ...ok().meeting, last_status: 'expired' } }), NOW), 'intake');
-    expect(bad).toMatch(/<span class="sb-name">収集<\/span><span class="sb-st" title="最終 [^"]+"><span class="pill red">失敗<\/span><\/span>/);
-    expect(bad).toMatch(/<span class="sb-name">会議<\/span><span class="sb-st" title="最終 [^"]+"><span class="pill red">失効<\/span><\/span>/);
-  });
-  it('画像・動画: 画像の生成（#/images・title 付き・概算）と動画の確認（既存の印）。#/images は通常 1 本', () => {
-    const h = S.statusBandHtml(ok(), NOW);
-    const md = card(h, 'media');
-    expect(md).toContain('<a class="item" href="#/images" data-img-band="1" title="予約額で数えた記帳。OpenAI の実際の請求とは違うことがあります">画像の生成 $1.70 / $100（概算）</a>');
-    expect(md).toContain('<a class="item" href="#/videos" data-video-band="1">動画の確認 <span class="pill green">有効</span></a>');
-    expect(n(h, /data-img-band="1"/g)).toBe(1);
-    expect(n(h, /data-video-band="1"/g)).toBe(1);
+    expect(n(h, /data-img-band="1"/g)).toBe(1); // smoke (i12) が #status の中で数える
     expect(n(h, /href="#\/images"/g)).toBe(1);
+    expect(n(h, /data-video-band="1"/g)).toBe(0); // 動画の確認は検証係のパネルへ（videosBandHtml の純関数は残す）
     expect(h).not.toContain('¢');
   });
-  it('images / videos が無い応答（古い Worker）ではその行を出さない', () => {
+  it('images / videos が無い応答（古い Worker）では画像の額を出さない', () => {
     const h = S.statusBandHtml(ok({ images: undefined, videos: undefined }), NOW);
     expect(n(h, /data-img-band="1"/g)).toBe(0);
-    expect(n(h, /data-video-band="1"/g)).toBe(0);
-    expect(card(h, 'media')).toContain('<div class="sb-line muted">—</div>');
     expect(card(h, 'money')).not.toContain('画像 ');
-    expect(card(h, 'intake')).toContain('<span class="sb-num">$0.00 / $20</span>');
-    const onlyVideo = card(S.statusBandHtml(ok({ images: undefined }), NOW), 'media');
-    expect(onlyVideo).toContain('data-video-band="1"');
-    expect(onlyVideo).not.toContain('—');
+    expect(alertsOf(h)).toBe('<p class="sa-none muted">注意はありません</p>');
   });
 });
 
-describe('注意はその仕事の枠の中', () => {
-  it('0 件なら全部の枠の注意の容器が空で、枠は色なし', () => {
+describe('注意の枠（すべての注意を 1 列・行き先は係のパネル）', () => {
+  it('0 件: 「注意はありません」を muted で 1 行・件数なし・枠は色なしで残る（3 枠の形）', () => {
     const h = S.statusBandHtml(ok(), NOW);
     expect(S.statusAlerts(ok(), NOW)).toEqual([]);
-    for (const k of CARDS) {
-      expect(alertsOf(h, k)).toBe('');
-      expect(cardCls(h, k)).toBe('sb-card');
-    }
+    expect(alertsOf(h)).toBe('<p class="sa-none muted">注意はありません</p>');
+    expect(cardCls(h, 'alerts')).toBe('sb-card sb-note');
+    expect(card(h, 'alerts')).toContain('<span class="sb-count" id="status-alerts-n"></span>');
+    for (const k of ['run', 'money'] as Card[]) expect(cardCls(h, k)).toBe('sb-card');
   });
-  it('停止中 → 制作（赤・paused_note は escape する）', () => {
+  it('停止中（赤・paused_note は escape する・行き先なし）', () => {
     const h = S.statusBandHtml(ok({ paused: true, paused_note: '<img src=x onerror=alert(1)>' }), NOW);
-    const a = alertsOf(h, 'run');
-    expect(a).toContain('<li class="sa-item sa-red">停止中です。新しい制作と検証は始まりません（メモ: &lt;img src=x onerror=alert(1)&gt;）</li>');
+    const rs = rowsOf(h);
+    expect(rs).toEqual([{ level: 'red', html: '停止中です。新しい制作と検証は始まりません（メモ: &lt;img src=x onerror=alert(1)&gt;）' }]);
     expect(h).not.toContain('<img');
-    expect(cardCls(h, 'run')).toBe('sb-card sb-red');
-    for (const k of ['money', 'intake', 'media'] as Card[]) { expect(alertsOf(h, k)).toBe(''); expect(cardCls(h, k)).toBe('sb-card'); }
+    expect(cardCls(h, 'alerts')).toBe('sb-card sb-note sb-red');
+    expect(card(h, 'alerts')).toContain('<span class="sb-count" id="status-alerts-n">1 件</span>');
   });
-  it('今日の費用: 上限ちょうど（>=）で お金 に赤・80% で黄・79% は出さない。制作の枠には出さない', () => {
-    const over = S.statusBandHtml(ok({ today_cents: 20000 }), NOW);
-    expect(alertsOf(over, 'money')).toContain('<li class="sa-item sa-red">今日の費用が上限に達しました（$200.00 / $200）。新しい制作は日付が変わるまで始まりません</li>');
-    expect(cardCls(over, 'money')).toBe('sb-card sb-red');
-    expect(alertsOf(over, 'run')).toBe('');
-    expect(cardCls(over, 'run')).toBe('sb-card');
-    const near = S.statusBandHtml(ok({ today_cents: 16000 }), NOW);
-    expect(alertsOf(near, 'money')).toContain('<li class="sa-item sa-yellow">今日の費用が上限に近づいています（$160.00 / $200）</li>');
-    expect(cardCls(near, 'money')).toBe('sb-card sb-yellow');
-    expect(alertsOf(S.statusBandHtml(ok({ today_cents: 15800 }), NOW), 'money')).toBe('');
+  it('今日の費用: 上限ちょうど（>=）で赤・80% で黄・79% は出さない。行き先なし', () => {
+    const over = rowsOf(S.statusBandHtml(ok({ today_cents: 20000 }), NOW));
+    expect(over).toEqual([{ level: 'red', html: '今日の費用が上限に達しました（$200.00 / $200）。新しい制作は日付が変わるまで始まりません' }]);
+    const nearBand = S.statusBandHtml(ok({ today_cents: 16000 }), NOW);
+    expect(rowsOf(nearBand)).toEqual([{ level: 'yellow', html: '今日の費用が上限に近づいています（$160.00 / $200）' }]);
+    expect(cardCls(nearBand, 'alerts')).toBe('sb-card sb-note sb-yellow');
+    expect(rowsOf(S.statusBandHtml(ok({ today_cents: 15800 }), NOW))).toEqual([]);
   });
-  it('定期処理 → 制作: 21 分で黄・61 分と null で赤・19 分は出さない', () => {
-    const late = S.statusBandHtml(ok({ last_cron_at: ago(21) }), NOW);
-    expect(alertsOf(late, 'run')).toContain('<li class="sa-item sa-yellow">定期処理が遅れています（最終 ');
-    expect(cardCls(late, 'run')).toBe('sb-card sb-yellow');
-    expect(alertsOf(S.statusBandHtml(ok({ last_cron_at: ago(61) }), NOW), 'run')).toContain('<li class="sa-item sa-red">定期処理が 1 時間以上動いていません（最終 ');
-    expect(alertsOf(S.statusBandHtml(ok({ last_cron_at: null }), NOW), 'run')).toContain('定期処理が 1 時間以上動いていません（記録がありません）');
-    expect(alertsOf(S.statusBandHtml(ok({ last_cron_at: ago(19) }), NOW), 'run')).toBe('');
+  it('定期処理: 21 分で黄・61 分と null で赤・19 分は出さない。行き先なし', () => {
+    const late = rowsOf(S.statusBandHtml(ok({ last_cron_at: ago(21) }), NOW));
+    expect(late).toHaveLength(1);
+    expect(late[0].level).toBe('yellow');
+    expect(late[0].html).toMatch(/^定期処理が遅れています（最終 /);
+    expect(goOf(late[0].html)).toBeNull();
+    expect(rowsOf(S.statusBandHtml(ok({ last_cron_at: ago(61) }), NOW))[0].html).toMatch(/^定期処理が 1 時間以上動いていません（最終 /);
+    expect(rowsOf(S.statusBandHtml(ok({ last_cron_at: null }), NOW))[0].html).toBe('定期処理が 1 時間以上動いていません（記録がありません）');
+    expect(rowsOf(S.statusBandHtml(ok({ last_cron_at: ago(19) }), NOW))).toEqual([]);
   });
-  it('職人 未設定 → 制作（赤）', () => {
-    const h = S.statusBandHtml(ok({ agent_configured: false }), NOW);
-    expect(alertsOf(h, 'run')).toContain('<li class="sa-item sa-red">職人（agent）が設定されていません</li>');
-    expect(cardCls(h, 'run')).toBe('sb-card sb-red');
+  it('職人 未設定（赤・行き先なし）', () => {
+    expect(rowsOf(S.statusBandHtml(ok({ agent_configured: false }), NOW))).toEqual([{ level: 'red', html: '職人（agent）が設定されていません' }]);
   });
-  it('収集の失敗・会議の失効 → 入口（赤・行き先は提案箱）。未実行は出さない', () => {
-    const h = S.statusBandHtml(ok({ scout: { ...ok().scout, last_status: 'failed' }, meeting: { ...ok().meeting, last_status: 'expired' } }), NOW);
-    const a = alertsOf(h, 'intake');
-    expect(n(a, /収集が失敗しました/g)).toBe(1);
-    expect(n(a, /会議が失効しました/g)).toBe(1);
-    expect(n(a, /href="#\/proposals"/g)).toBe(2);
-    expect(cardCls(h, 'intake')).toBe('sb-card sb-red');
-    expect(alertsOf(S.statusBandHtml(ok({ scout: { month_cents: 0, month_cap_cents: 2000 }, meeting: {} }), NOW), 'intake')).toBe('');
+  it('収集の失敗 → 入口の係・会議の失効 → 会議の係（赤）。未実行は出さない', () => {
+    const rs = rowsOf(S.statusBandHtml(ok({ scout: { ...ok().scout, last_status: 'failed' }, meeting: { ...ok().meeting, last_status: 'expired' } }), NOW));
+    expect(rs.map((r) => [r.level, goOf(r.html)])).toEqual([['red', 'intake'], ['red', 'meeting']]);
+    expect(rs[0].html).toMatch(/^収集が失敗しました（[^）]+） <a class="sa-go" href="#\/\?st=intake" data-sa-go="intake">入口の係を開く ›<\/a>$/);
+    expect(rs[1].html).toMatch(/^会議が失効しました（[^）]+） <a class="sa-go" href="#\/\?st=meeting" data-sa-go="meeting">会議の係を開く ›<\/a>$/);
+    expect(rowsOf(S.statusBandHtml(ok({ scout: { month_cents: 0, month_cap_cents: 2000 }, meeting: {} }), NOW))).toEqual([]);
   });
-  it('月の上限 80% 以上: 収集・会議 → 入口（黄）・画像 → 画像・動画（黄）', () => {
-    const h = S.statusBandHtml(ok({ scout: { ...ok().scout, month_cents: 1600 }, meeting: { ...ok().meeting, month_cents: 1000 }, images: { ...ok().images, month_cents: 8000 } }), NOW);
-    expect(alertsOf(h, 'intake')).toContain('今月の収集の費用が上限に近づいています（$16.00 / $20）');
-    expect(alertsOf(h, 'intake')).toContain('今月の会議の費用が上限に達しました（$10.00 / $10）');
-    expect(cardCls(h, 'intake')).toBe('sb-card sb-yellow');
-    expect(alertsOf(h, 'media')).toContain('今月の画像の記帳が上限に近づいています（$80.00 / $100）');
-    expect(cardCls(h, 'media')).toBe('sb-card sb-yellow');
-    expect(alertsOf(h, 'money')).toBe('');
+  it('月の上限 80% 以上: 収集 → 入口・会議 → 会議・画像 → 職人・お題 → お題係（黄）', () => {
+    const h = S.statusBandHtml(ok({
+      scout: { ...ok().scout, month_cents: 1600 }, meeting: { ...ok().meeting, month_cents: 1000 }, images: { ...ok().images, month_cents: 8000 },
+      topics: { month_cents: 2500, month_cap_cents: 3000, failed_24h: 0, last_run: null },
+    }), NOW);
+    const rs = rowsOf(h);
+    expect(rs.map((r) => [r.level, goOf(r.html)])).toEqual([['yellow', 'intake'], ['yellow', 'meeting'], ['yellow', 'maker'], ['yellow', 'topics']]);
+    expect(rs[0].html).toContain('今月の収集の費用が上限に近づいています（$16.00 / $20）');
+    expect(rs[1].html).toContain('今月の会議の費用が上限に達しました（$10.00 / $10）');
+    expect(rs[2].html).toContain('今月の画像の記帳が上限に近づいています（$80.00 / $100）');
+    expect(rs[3].html).toContain('今月のお題の費用が上限に近づいています（$25.00 / $30）');
+    expect(cardCls(h, 'alerts')).toBe('sb-card sb-note sb-yellow');
   });
-  it('画像の停止（赤）・予備の鍵（黄）→ 画像・動画。赤が先。#/images へのリンクは帯全体で 2 本まで', () => {
+  it('画像の停止（赤）・予備の鍵（黄）→ 職人の係。印は注意の行に（data-img-halted・data-img-backup-band）。#/images へのリンクはお金の枠の 1 本だけ', () => {
     const t = ago(60);
     const both = ok({ images: { ...ok().images, halted: 'manual', backup_last_used_at: t } });
     const h = S.statusBandHtml(both, NOW);
-    const a = alertsOf(h, 'media');
-    expect(n(a, /data-img-halted="1"/g)).toBe(1);
-    expect(n(a, /data-img-backup-band="1"/g)).toBe(1);
-    expect(n(h, /href="#\/images"/g)).toBe(2);
-    expect(cardCls(h, 'media')).toBe('sb-card sb-red');
-    expect(S.statusAlerts(both, NOW).map((x) => [x.card, x.level])).toEqual([['media', 'red'], ['media', 'yellow']]);
+    const rs = rowsOf(h);
+    expect(rs.map((r) => [r.level, goOf(r.html)])).toEqual([['red', 'maker'], ['yellow', 'maker']]);
+    expect(rs[0].html).toContain('<span class="item" data-img-halted="1">画像の生成を止めています（手で止めました）</span>');
+    expect(rs[1].html).toMatch(/^<span class="item" data-img-backup-band="1"><span class="pill orange">画像: 予備の鍵を使いました（[^）<]+）<\/span><\/span>/);
+    expect(n(h, /data-img-halted="1"/g)).toBe(1);
+    expect(n(h, /data-img-backup-band="1"/g)).toBe(1);
+    expect(n(alertsOf(h), /data-img-halted="1"|data-img-backup-band="1"/g)).toBe(2);
+    expect(n(h, /href="#\/images"/g)).toBe(1);
+    expect(cardCls(h, 'alerts')).toBe('sb-card sb-note sb-red');
     const onlyBackup = S.statusBandHtml(ok({ images: { ...ok().images, backup_last_used_at: t } }), NOW);
-    expect(alertsOf(onlyBackup, 'media')).toContain('<a class="item" href="#/images" data-img-backup-band="1"><span class="pill orange">');
-    expect(cardCls(onlyBackup, 'media')).toBe('sb-card sb-yellow');
-    expect(n(onlyBackup, /href="#\/images"/g)).toBe(2);
+    expect(rowsOf(onlyBackup).map((r) => [r.level, goOf(r.html)])).toEqual([['yellow', 'maker']]);
+    expect(cardCls(onlyBackup, 'alerts')).toBe('sb-card sb-note sb-yellow');
   });
-  it('全部起きた時: 各注意は 1 つの枠にだけ出る（同じ注意が 2 枠に出ない）・枠の色・帯の外に注意をまとめる段は無い', () => {
+  it('お題: 最後の作成が失敗なら赤・成功していて 24 時間以内に失敗があれば黄 → お題係。topics が無い応答では出さない', () => {
+    const red = rowsOf(S.statusBandHtml(ok({ topics: { last_run: { status: 'failed', updated_at: ago(30) }, failed_24h: 2, month_cents: 0, month_cap_cents: 3000 } }), NOW));
+    expect(red.map((r) => [r.level, goOf(r.html)])).toEqual([['red', 'topics']]);
+    expect(red[0].html).toMatch(/^お題の作成が失敗しました（/);
+    const y = rowsOf(S.statusBandHtml(ok({ topics: { last_run: { status: 'done' }, failed_24h: 2, month_cents: 0, month_cap_cents: 3000 } }), NOW));
+    expect(y.map((r) => [r.level, goOf(r.html)])).toEqual([['yellow', 'topics']]);
+    expect(y[0].html).toContain('お題の作成が 24 時間以内に 2 回失敗しています');
+    expect(rowsOf(S.statusBandHtml(ok({ topics: { last_run: null, failed_24h: 0, month_cents: 0, month_cap_cents: 3000 } }), NOW))).toEqual([]);
+    expect(rowsOf(S.statusBandHtml(ok({ topics: undefined }), NOW))).toEqual([]);
+  });
+  it('全部起きた時: 1 列で赤が先・黄が後・各件は 1 回だけ・枠は赤・行き先は係の対応どおり', () => {
     const all = ok({
       paused: true, paused_note: 'メモ', today_cents: 21040, last_cron_at: ago(48), agent_configured: false,
       scout: { ...ok().scout, last_status: 'failed', month_cents: 1700 }, meeting: { ...ok().meeting, last_status: 'failed' },
       images: { ...ok().images, halted: 'manual', month_cents: 8400, backup_last_used_at: ago(60) },
+      topics: { last_run: { status: 'failed', updated_at: ago(5) }, failed_24h: 1, month_cents: 0, month_cap_cents: 3000 },
     });
     const list = S.statusAlerts(all, NOW);
     const h = S.statusBandHtml(all, NOW);
-    // 1 件ずつ、出る枠はちょうど 1 つ（その件の card の枠）
-    for (const a of list) {
-      const inCards = CARDS.filter((k) => alertsOf(h, k).includes(a.html));
-      expect(inCards).toEqual([a.card]);
-    }
-    // 枠ごとの件数の合計 = 全件（取りこぼし・重複なし）
-    const total = CARDS.reduce((sum, k) => sum + n(alertsOf(h, k), /<li class="sa-item/g), 0);
-    expect(total).toBe(list.length);
+    const rs = rowsOf(h);
+    expect(rs).toHaveLength(list.length);
     expect(n(h, /<li class="sa-item/g)).toBe(list.length);
-    expect(Object.fromEntries(CARDS.map((k) => [k, list.filter((a) => a.card === k).length]))).toEqual({ run: 3, money: 1, intake: 3, media: 3 });
+    const lv = rs.map((r) => r.level);
+    expect(lv).toEqual([...lv].sort((x, y) => (x === 'red' ? 0 : 1) - (y === 'red' ? 0 : 1)));
+    // 行き先の対応（st の値 → リンク）を 1 件ずつ: 行き先なしの件にはリンクが無い
+    for (let i = 0; i < list.length; i++) expect([i, goOf(rs[i].html)]).toEqual([i, list[i].st]);
+    // 赤: 停止中・職人 未設定・今日の上限・収集・会議・画像の停止・お題 / 黄: 定期処理・収集の月の上限・予備の鍵・画像の月の上限
+    expect(list.map((a) => a.st)).toEqual([null, null, null, 'intake', 'meeting', 'maker', 'topics', null, 'intake', 'maker', 'maker']);
+    expect(lv).toEqual(['red', 'red', 'red', 'red', 'red', 'red', 'red', 'yellow', 'yellow', 'yellow', 'yellow']);
     expect(n(h, /今日の費用が上限に達しました/g)).toBe(1);
     expect(n(h, /停止中です/g)).toBe(1);
-    for (const k of CARDS) expect(cardCls(h, k)).toBe('sb-card sb-red');
-    expect(h).not.toMatch(/注意 \d+ 件|status-alerts"|data-status-alerts/);
-    // 枠の中は赤が先
-    for (const k of CARDS) {
-      const lv = [...alertsOf(h, k).matchAll(/<li class="sa-item sa-(\w+)">/g)].map((m) => m[1]);
-      expect(lv).toEqual([...lv].sort((x, y) => (x === 'red' ? 0 : 1) - (y === 'red' ? 0 : 1)));
-    }
+    expect(cardCls(h, 'alerts')).toBe('sb-card sb-note sb-red');
+    for (const k of ['run', 'money'] as Card[]) expect(cardCls(h, k)).toBe('sb-card');
+  });
+  it('行き先のリンクの文は係ごとに 1 つ（ALERT_GO_TEXT）。href の形 #/?st=<係> から係の id を取れる', () => {
+    expect(Object.keys(S.ALERT_GO_TEXT).sort()).toEqual(['intake', 'maker', 'meeting', 'topics', 'verifier']);
+    expect(S.stationGoId('#/?st=intake')).toBe('intake');
+    expect(S.stationGoId('#/?st=maker')).toBe('maker');
+    expect(S.stationGoId('#/?st=intake&x=1')).toBeNull();
+    expect(S.stationGoId('#/materials')).toBeNull();
+    expect(S.stationGoId('')).toBeNull();
   });
 });

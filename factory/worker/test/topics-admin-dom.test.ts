@@ -1,4 +1,4 @@
-// 管理画面「お題の棚」（contract-T T-11）の操作のループを、小さな偽物の DOM の上で mount から動かして確かめる（v2.4 の裁定 2・3・9）。
+// 管理画面「今日のお題」（表示名 §N-7。旧名 お題の棚。contract-T T-11）の操作のループを、小さな偽物の DOM の上で mount から動かして確かめる（v2.4 の裁定 2・3・9）。
 // public/admin/topics.js を node:vm で読む（topics-admin.test.ts と同じ読み方）。ブラウザと同じく、disabled の部品はクリック・入力を受けない。
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';

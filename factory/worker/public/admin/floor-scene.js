@@ -54,7 +54,10 @@
       // 札は指定の [1445, 530] から少し右下へ（自動の作り直しが「作り直し中 N・↩ 職人へ」の時の札と重ならないように）
       // 改善係は机の無い見回り役。確認する人の札（確認待ち n・要確認 n は横に長い）に頭が隠れない高さに立たせ、札は右横（倉庫の机の下の床）に出す
       { id: 'retro', name: '改善係', icon: null, pill: [1478, 513], hit: [200, 150], branch: true,
-        chars: [{ id: 'owl', anchor: [1368, 506], size: 124 }] }
+        chars: [{ id: 'owl', anchor: [1368, 506], size: 124 }] },
+      // お題係（§N-7。今日のお題 = お題のストック §T）: 素材の本線とは別の仕事なので、本線から離れた左下の空いた床（植木と会議の猫の間）に札だけを置く。
+      // キャラの絵は無い（chars は空）。クリック範囲は札の中心。札の状態は /api/status の topics から（stationStates の 2 番目の引数）
+      { id: 'topics', name: 'お題係', icon: null, pill: [290, 468], hit: [170, 70], branch: true, chars: [] }
     ],
     // 矢印（すべて 3 次ベジェ。c1 / c2 は参考画像の曲がり方に合わせた制御点）。to = 流れ先の持ち場（そこが動いている・人の番なら流れる）
     arrows: [
@@ -120,12 +123,22 @@
   function idle() { return { kind: 'idle', text: '待機' }; }
   function clampPct(x) { return Math.max(0, Math.min(100, Math.round(x))); }
 
+  /** お題の要確認の合計（/api/status の topics.needs_review = { heavy, source, other }）。status が無い・形が違えば 0 */
+  function topicsNeedsReview(status) {
+    var t = status && status.topics;
+    var r = t && t.needs_review;
+    if (!r || typeof r !== 'object') return 0;
+    return num(r.heavy) + num(r.source) + num(r.other);
+  }
+
   /**
    * 持ち場の状態（§N-6-2）。floor = GET /api/floor の応答。
+   * status（任意・§N-7）= GET /api/status の応答。2 番目の引数を渡した時だけお題係（topics）の札を足す（/api/floor は変えないため。
+   * 未着なら null を渡す → 待機）。渡さない呼び方は従来どおり 11 個
    * 戻り値: 持ち場 id → { kind: 'moving'|'human'|'done'|'failed'|'idle', text, text2?, bar?, spin? }
    *   bar = 札の下の細い進捗（0〜100）。spin = false の時はリングを回さない（検証の順番待ち）
    */
-  function stationStates(floor) {
+  function stationStates(floor, status) {
     var d = floor || {};
     var s = d.stations || {};
     var q = Array.isArray(d.queue) ? d.queue : [];
@@ -201,6 +214,12 @@
     else if (recentRetro) out.retro = st('done', '振り返り 完了');
     else out.retro = idle();
 
+    // topics（お題係 §N-7）: 要確認があれば人の番、無ければ待機
+    if (arguments.length > 1) {
+      var tr = topicsNeedsReview(status);
+      out.topics = tr > 0 ? st('human', 'お題の要確認 ' + tr) : idle(); // 札にキャラの絵が無いので、人の番の文にも係の名前を入れる
+    }
+
     return out;
   }
 
@@ -253,6 +272,7 @@
     SCENE: SCENE,
     ACTIVE_JOB_STATUSES: ACTIVE_JOB_STATUSES,
     stationStates: stationStates,
+    topicsNeedsReview: topicsNeedsReview,
     rowStations: rowStations,
     arrowFlowing: arrowFlowing,
     chipArrowKind: chipArrowKind
