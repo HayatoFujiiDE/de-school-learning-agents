@@ -308,6 +308,18 @@ describe('読み手係の項目（契約 V-6 c）', () => {
       ['reader:reader_partial:conditions_of_use', 'ask', '読み手チェックが全部を読めていない: 使う条件'],
     ]);
   });
+  it('<material> の節を切った版（not_read が [material.json]）→ reader_partial の ask 3 件で gate attention・読み手係の auto 3 項目は review（自動公開は通らない）', () => {
+    const t = triageVersion(build({ claims: [['confirmed', ['s1']]], reader: { status: 'done', token: 'rt1', result: okReading({ not_read: ['material.json'] }) } }));
+    expect(t.items.map((i) => [i.id, i.severity, i.cause, i.detail])).toEqual([
+      ['reader:reader_partial:explanation_and_expression', 'ask', 'reader_partial', 'material.json'],
+      ['reader:reader_partial:relation_to_learning', 'ask', 'reader_partial', 'material.json'],
+      ['reader:reader_partial:conditions_of_use', 'ask', 'reader_partial', 'material.json'],
+    ]);
+    expect(t.gate).toBe('attention');
+    expect([t.auto.explanation_and_expression, t.auto.relation_to_learning, t.auto.conditions_of_use]).toEqual(['review', 'review', 'review']);
+    expect(t.action).toBe('none');
+  });
+
   it('reader_json が壊れている（done なのに読めない）版は failed と同じ 3 項目の ask。例外を投げない', () => {
     for (const result of [null, 'x', { findings: 'x' }, { findings: [{ kind: 'bad' }], learning: { verdict: 'ok' }, conditions: { verdict: 'ok' } }]) {
       const t = triageVersion(build({ claims: [['confirmed', ['s1']]], reader: { status: 'done', token: 'rt1', result } }));
