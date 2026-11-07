@@ -4,12 +4,13 @@
 // (c) 4 回目まで save が無い → no_output・呼び出し 4 回 / (d) 費用の見込みが取り置きを超える → 続けず cost_cap
 // (e) max_tokens → 続けず failed: max_tokens（v2.8）・ログに stop_reason / (f) genActualCents の cache の単価
 // (g) 実額 > 60 → 台帳は実額・上限の判定も実額で数える / (h) philo の本数の上限は 2 / (i) tools の最後と top-level に cache_control
+// v2.10: 続きの呼び出しの失敗の精算（5xx・タイムアウト・応答不明は + 直前の 1 回）・空の end_turn は催促せず no_output・run の終わりのログの cents = 台帳・turns は失敗も数える
 // 費用の見込みは pause_turn の続きも催促も直前の 1 回の実額（凍結 spec 2。催促は新しいターンで max_uses が新しくなるので安く見込まない）
 import type { DatabaseSync } from 'node:sqlite';
 import type { Message } from '@anthropic-ai/sdk/resources/messages/messages';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { genActualCents, runMaxCount, runTopicRun, TOPIC_GEN_MAX_CONTINUES, TOPIC_SAVE_NUDGE } from '../src/topics/gen';
-import { enable, fetchStub, genMessage, ledger, makeBody, migratedDb, philoBody, scriptedPort, talkBody, tomorrow, topicEnv } from './topics-helpers';
+import { apiError, enable, fetchStub, genMessage, ledger, makeBody, migratedDb, philoBody, scriptedPort, talkBody, timeoutError, tomorrow, topicEnv } from './topics-helpers';
 
 let db: DatabaseSync;
 let logs: Array<Record<string, unknown>>;
@@ -198,14 +199,14 @@ describe('v2.7 続きの呼び出し', () => {
     expect(logs.find((l) => l.at === 'topic_run' && l.no_output)).toMatchObject({ no_output: 'max_tokens' });
   });
 
-  it('続きの途中で呼び出しが失敗 → 同じ分類のコードで閉じ、台帳はそれまでの実額', async () => {
+  it('続きの途中で呼び出しが失敗 → 同じ分類のコードで閉じ、台帳はそれまでの実額 + 失敗した呼び出しの見込み（v2.10: 529 は課金なしと分からない）', async () => {
     const { apiError } = await import('./topics-helpers');
     const p = scriptedPort([paused(), apiError(529)]);
     const o = await runTopicRun(topicEnv(db), p.port, genReq(), { deadline: far(), fetchImpl });
     expect(o.status).toBe('failed');
     expect(p.calls).toHaveLength(2);
-    expect(run()).toMatchObject({ status: 'failed', error: 'overloaded', cents: 7 });
-    expect(topicLedger().map((r) => r.cents)).toEqual([7]);
+    expect(run()).toMatchObject({ status: 'failed', error: 'overloaded', cents: 14 });
+    expect(topicLedger().map((r) => r.cents)).toEqual([14]);
   });
 
   it('呼び出しのログは fetch のエラーを種類ごとに数える（URL・本文は出さない）', async () => {
@@ -291,5 +292,79 @@ describe('v2.7 本数とキャッシュ', () => {
     expect(o.status).toBe('failed');
     expect(run()).toMatchObject({ status: 'failed', error: 'no_valid_topic', made: 0, dropped: 0, cents: 7 });
     expect(p.calls).toHaveLength(1);
+  });
+});
+
+const diagOf = () => JSON.parse(String(run().diag_json)) as Record<string, unknown>;
+const runEndLog = () => logs.filter((l) => l.at === 'topic_run' && 'turns' in l).at(-1);
+/** 25 セントの応答（cache write 100000 × $2.50） */
+const cents25 = (content: unknown[], stop: string) => msgOf(content, stop, { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 100_000 });
+
+describe('v2.10 続きの残り', () => {
+  it('費用の上限は累計で効く: 25 の pause_turn → 25 の pause_turn → 3 回目の見込み 50 + 25 = 75 > 60 で cost_cap（呼び出し 2 回・台帳 50）', async () => {
+    const p = scriptedPort([cents25(searchBlocks('a'), 'pause_turn'), cents25(searchBlocks('b'), 'pause_turn'), genMessage([talkBody()])]);
+    const o = await runTopicRun(topicEnv(db), p.port, genReq(), { deadline: far(), fetchImpl });
+    expect(o.status).toBe('failed');
+    expect(p.calls).toHaveLength(2);
+    expect(run()).toMatchObject({ status: 'failed', error: 'cost_cap', cents: 50 });
+    expect(topicLedger().map((r) => r.cents)).toEqual([50]);
+    expect(logs.find((l) => l.at === 'topic_run' && l.no_output)).toMatchObject({ no_output: 'cost_cap', turns: 2, cents: 50 });
+    expect(runEndLog()).toMatchObject({ status: 'failed', error: 'cost_cap', turns: 2, cents: 50 });
+  });
+
+  it('stop_reason: tool_use で結果の無いサーバーツール（isPendingServerTool）→ 同じ params で続けて save → done', async () => {
+    const first = msgOf([{ type: 'server_tool_use', id: 'srvtoolu_x', name: 'web_fetch', input: { url: 'https://example.org/a' } }], 'tool_use');
+    const p = scriptedPort([first, genMessage([talkBody()])]);
+    const o = await runTopicRun(topicEnv(db), p.port, genReq(), { deadline: far(), fetchImpl });
+    expect(o.status).toBe('done');
+    expect(p.calls).toHaveLength(2);
+    expect(p.calls[1].params.messages).toHaveLength(2);
+    expect(p.calls[1].params.messages[1]).toEqual({ role: 'assistant', content: first.content });
+    expect(p.calls[1].params.messages.some((x) => x.role === 'user' && x.content === TOPIC_SAVE_NUDGE)).toBe(false);
+    expect(run()).toMatchObject({ status: 'done', made: 1, cents: 14 });
+  });
+
+  it('続きの途中のタイムアウト（応答不明）→ 台帳はそれまで + 直前の 1 回（7 + 7）。run の終わりのログは台帳と同じ cents・turns は失敗も数える', async () => {
+    const p = scriptedPort([paused(), timeoutError()]);
+    const o = await runTopicRun(topicEnv(db), p.port, genReq(), { deadline: far(), fetchImpl });
+    expect(o.status).toBe('failed');
+    expect(p.calls).toHaveLength(2);
+    expect(run()).toMatchObject({ status: 'failed', error: 'timeout', cents: 14 });
+    expect(topicLedger().map((r) => r.cents)).toEqual([14]);
+    expect(runEndLog()).toMatchObject({ status: 'failed', error: 'timeout', turns: 2, cents: 14 });
+  });
+
+  it('続きの途中で応答のある 4xx → 今のまま（それまでの実額だけ）。ログも台帳と同じ', async () => {
+    const p = scriptedPort([paused(), apiError(400)]);
+    const o = await runTopicRun(topicEnv(db), p.port, genReq(), { deadline: far(), fetchImpl });
+    expect(o.status).toBe('failed');
+    expect(run()).toMatchObject({ status: 'failed', error: 'bad_request', cents: 7 });
+    expect(topicLedger().map((r) => r.cents)).toEqual([7]);
+    expect(runEndLog()).toMatchObject({ turns: 2, cents: 7 });
+  });
+
+  it('0 回目の失敗のログ: 応答不明は取り置きのまま（台帳 60・ログ 60）・課金なしの 429 は 0。turns は 1', async () => {
+    const p = scriptedPort([timeoutError()]);
+    await runTopicRun(topicEnv(db), p.port, genReq('talk'), { deadline: far(), fetchImpl });
+    expect(topicLedger().map((r) => r.cents)).toEqual([60]);
+    expect(runEndLog()).toMatchObject({ error: 'timeout', turns: 1, cents: 60 });
+    const q = scriptedPort([apiError(429)]);
+    await runTopicRun(topicEnv(db), q.port, genReq('philo'), { deadline: far(), fetchImpl });
+    expect(topicLedger().map((r) => r.cents)).toEqual([60, 0]);
+    expect(runEndLog()).toMatchObject({ error: 'rate_limited', turns: 1, cents: 0 });
+  });
+
+  it.each([
+    ['content が空', [] as unknown[]],
+    ['空白だけの text', [{ type: 'text', text: '  ' }]],
+  ])('空の end_turn（%s）→ 空の assistant を積んで催促しない。no_output・diag の stop は empty_end_turn', async (_n, content) => {
+    const p = scriptedPort([msgOf(content, 'end_turn'), genMessage([talkBody()])]);
+    const o = await runTopicRun(topicEnv(db), p.port, genReq(), { deadline: far(), fetchImpl });
+    expect(o.status).toBe('failed');
+    expect(p.calls).toHaveLength(1);
+    expect(run()).toMatchObject({ status: 'failed', error: 'no_output', cents: 7 });
+    expect(diagOf()).toMatchObject({ turns: 1, nudged: false, stop: 'empty_end_turn' });
+    expect(logs.find((l) => l.at === 'topic_run' && l.no_output)).toMatchObject({ no_output: 'empty_end_turn', turns: 1, cents: 7 });
+    expect(runEndLog()).toMatchObject({ status: 'failed', error: 'no_output', turns: 1, cents: 7 });
   });
 });

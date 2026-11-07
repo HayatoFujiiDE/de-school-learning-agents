@@ -7,6 +7,8 @@
 //       呼び出しごとに {at:'topic_call'} を 1 行（数と種類だけ。本文は出さない）。台帳は実額で精算する。
 // v2.8: run を閉じる時に topic_runs.diag_json へ呼び出しごとの数と保存の数・理由コードを書く（diag.ts。閉じる文と同じ UPDATE）。
 //       stop_reason が max_tokens の応答は save_topics があっても使わず failed: max_tokens（台帳は実額）。
+// v2.10: 続きの呼び出しの失敗が課金なしと分からない時（5xx・タイムアウト・応答不明）は、それまでの実額 + 直前の 1 回で精算する。
+//       空の end_turn は催促せず no_output（diag の stop: empty_end_turn）。run の終わりのログの cents は台帳と同じ・turns は失敗した呼び出しも数える。
 
 import type { Message, MessageCreateParamsNonStreaming, MessageParam, Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { PortError, type CallOpts, type FactoryPort } from '../anthropic';
@@ -238,6 +240,11 @@ export function hasPendingServerTool(content: readonly unknown[]): boolean {
 export function isPendingServerTool(content: readonly unknown[]): boolean {
   if ((content as RawBlock[]).some((b) => !!b && b.type === 'tool_use')) return false;
   return hasPendingServerTool(content);
+}
+
+/** 応答の content が空か（v2.10）: block が 0 個、または空白だけの text の block しかない（どちらも assistant として積むと 400） */
+export function isEmptyContent(content: readonly unknown[]): boolean {
+  return (content as RawBlock[]).every((b) => !!b && b.type === 'text' && (typeof (b as { text?: unknown }).text !== 'string' || ((b as { text: string }).text.trim() === '')));
 }
 
 const SAFE_CODE = /^[a-z_]{1,40}$/;
@@ -720,9 +727,12 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
       // 4xx の原因の切り分け: API の error.message（200 字）だけをログに出す（request 本文・鍵は出さない）
       if (k.detail) console.log(JSON.stringify({ at: 'topic_run', run_id: runId, call_error: k.code, status: k.status, detail: k.detail, turn }));
       // 最初の呼び出しの失敗は今までどおり（課金なし = 0・それ以外 = 取り置き額のまま）。
-      // 続きの途中の失敗は同じ分類のコードで閉じ、台帳はそれまでの実額の合計（v2.7）
-      if (turn === 0) return finishFailed(k.code, k.noCharge, 0, 0, undefined, { turns: 0, cents: 0 });
-      return finishFailed(k.code, false, 0, 0, totalCents, { turns, cents: totalCents });
+      // 続きの途中の失敗は同じ分類のコードで閉じ、台帳はそれまでの実額の合計（v2.7）。
+      // v2.10: 課金なしと分からない失敗（5xx・タイムアウト・応答不明）は、失敗した呼び出しの見込み = 直前の 1 回の実額を足す（T-6: 少なく数えない）。
+      // run の終わりのログの cents は台帳に書いた額（0 回目で取り置きのまま残る時はその額）・turns は失敗した呼び出しも数える
+      if (turn === 0) return finishFailed(k.code, k.noCharge, 0, 0, undefined, { turns: 1, cents: k.noCharge ? 0 : reserveCents });
+      const charged = k.noCharge ? totalCents : totalCents + lastCents;
+      return finishFailed(k.code, false, 0, 0, charged, { turns: turn + 1, cents: charged });
     }
     turns = turn + 1;
     // 実額（呼び出しごと）。万一数えられない時は取り置き額で数える（少なく数えない）
@@ -757,6 +767,11 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
       break;
     }
     if (content.some((b) => (b as RawBlock)?.type === 'tool_use' && (b as RawBlock).name === SAVE_TOPICS_TOOL_NAME)) break;
+    // v2.10: 空の end_turn は催促しない（空の assistant を積むと、最後以外の assistant の空の content で Messages API が 400）。no_output で閉じる
+    if (stop === 'end_turn' && isEmptyContent(content)) {
+      stopWhy = 'empty_end_turn';
+      break;
+    }
     let next: 'continue' | 'nudge' | null = null;
     if (stop === 'pause_turn' || (stop === 'tool_use' && isPendingServerTool(content))) next = 'continue';
     else if (stop === 'end_turn' && !nudged) next = 'nudge';
