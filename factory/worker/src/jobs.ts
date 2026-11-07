@@ -7,7 +7,8 @@ import type { SessionCreateParams } from '@anthropic-ai/sdk/resources/beta/sessi
 import { PortError, type CallOpts, type FactoryPort, type FileMeta } from './anthropic';
 import { accumulateCitations, applyCarry, finishCitations, isCitationAcc, newCitationAcc, type CitationAcc } from './checks/citations';
 import { versionVideosOf } from './videos';
-import { models3dSectionLines } from './models3d';
+import { models3dSectionLines, viewableModels3d } from './models3d';
+import { hostedModel3dIds } from './models3d-file';
 import type { Model3dEntry } from './generated/models3d-catalog';
 import { checkForbidden } from './checks/forbidden';
 import { checkChildText } from './checks/childtext';
@@ -253,16 +254,16 @@ export async function standardsLogLines(db: D1Database, materialId: string | nul
 /**
  * prev: §S-8-1 作り直しで前の版のファイルを付けた時だけ（付けたファイル名と開き直さなくてよい出典）。
  * 注文票の直後・編集基準の前に「前の版」の区画を入れる。無ければ従来の文と 1 文字も変わらない。
- * models3d: §AJ-2 a の一覧（既定は MODELS3D。テストで差し替える）。前の版の区画の後・編集基準の前に「使ってよい立体モデル（一覧）」の節を入れる。
- * 埋め込めるもの（sketchfab / voyager）が無ければ節ごと出さず、従来の文と 1 文字も変わらない
+ * models3d: §AJ-2 a・§AJ2-1 の一覧（必須。注文の開始側が viewableModels3d(取り込み済みの id) を渡す）。前の版の区画の後・編集基準の前に
+ * 「使ってよい立体モデル（一覧）」の節を入れる（渡された一覧をそのまま出す）。空なら節ごと出さず、従来の文と 1 文字も変わらない
  */
 export async function buildPhase1Message(
   db: D1Database,
   briefMd: string,
   kinds: number[],
   prev: { names: readonly string[]; reopenFree: readonly string[] } | null = null,
-  materialId: string | null = null,
-  models3d?: readonly Model3dEntry[],
+  materialId: string | null,
+  models3d: readonly Model3dEntry[],
 ): Promise<string> {
   const lines = await standardsLogLines(db, materialId);
   const kindLines = kinds.map((k) => `- 型 ${k}（${KIND_LABEL[k] ?? '不明'}）`);
@@ -409,7 +410,8 @@ export async function startJob(env: Env, port: FactoryPort, jobId: string): Prom
   // §S-8-1: 作り直しの最初の create（claim の前に読んだ create_attempts が 0）だけ、前の版のファイルを付ける。
   // 2 回目以降（失敗して queued に戻った後・復旧の後）は付けない（resources が原因で create が失敗し続けない）
   const prev = await prevForStart(env, port, job);
-  const phase1Message = await buildPhase1Message(db, job.brief_md, kinds, prev, job.material_id);
+  // §AJ2-1: 注文票の一覧は埋め込める + 取り込み済みの download（D1 の行 + R2 の object）
+  const phase1Message = await buildPhase1Message(db, job.brief_md, kinds, prev, job.material_id, viewableModels3d(await hostedModel3dIds(env)));
   const params: SessionCreateParams = {
     agent:
       job.kind === 'rework'
@@ -1889,7 +1891,8 @@ class Reconciler {
       }
       files.set(ref.path, img.bytes);
     }
-    const schema = validateOutputs(files);
+    // §AJ2-0: 取り込み済みの立体モデル（D1 の行 + R2 の object）の id を先に取り、検査の一覧に入れる
+    const schema = validateOutputs(files, { models3dHosted: await hostedModel3dIds(this.env) });
     if (!schema.ok) {
       await this.casJob('last_error = ?', '', schema.detail.slice(0, 200));
       return this.fail(job, 'invalid_outputs');

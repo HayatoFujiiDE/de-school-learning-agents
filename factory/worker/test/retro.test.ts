@@ -8,6 +8,7 @@ import { PortError } from '../src/anthropic';
 import { createFakePort } from '../src/fake/anthropic';
 import type { Env } from '../src/env';
 import { buildPhase1Message, PHASE1_LOG, standardsLogLines } from '../src/jobs';
+import { viewableModels3d } from '../src/models3d';
 import { buildReworkBrief, OLD_REASON_NOTE, reworkReasonChars } from '../src/publish';
 import {
   accumulateRetro,
@@ -46,6 +47,8 @@ import { decideRetroTip, getRetro } from '../src/routes/retro';
 import { d1, migratedDb, one, rows } from './d1-shim';
 import { intakePort } from './intake-port';
 import { routeCtx } from './topics-helpers';
+/** §AJ2-1: 注文票の一覧（buildPhase1Message の引数は必須。取り込み済みの立体モデルは無い = 埋め込めるものだけ） */
+const M3D_NONE = viewableModels3d(new Set());
 
 const NOW = new Date('2026-11-06T03:00:00.000Z'); // JST 11/06 12:00
 const SINCE = '2026-11-01T00:00:00.000Z';
@@ -904,7 +907,7 @@ describe('段 a〜d（node:sqlite の実 DB + stub port）', () => {
     const r2 = await retroTick(env, p.port, { deadline: deadline(), now: new Date(NOW.getTime() + 600_000) });
     expect(r2.collected).toEqual(['j1:ended']);
     expect(retro(raw, 'j1').status).toBe('ended');
-    const msg = await buildPhase1Message(env.DB, 'brief', [3]);
+    const msg = await buildPhase1Message(env.DB, 'brief', [3], null, null, M3D_NONE);
     expect(msg).toContain(`${MAKER_NOTE_HEADING}\n- 同じサイトで 2 回開けなければ、そのサイトは使わない\n`);
   });
 });
@@ -920,20 +923,20 @@ describe('職人へ渡す文（§S-5 2）', () => {
   });
 
   it('active の maker_note が無ければ見出しごと出さない（proposed・他の target の active・retired は入らない）', async () => {
-    const before = await buildPhase1Message(db, '# 注文\n本文', [3]);
+    const before = await buildPhase1Message(db, '# 注文\n本文', [3], null, null, M3D_NONE);
     seedTip(raw, { id: 'p', status: 'proposed', decided_by: null, activated_at: null });
     seedTip(raw, { id: 'o', target: 'worker_code', decided_by: 'human' });
     seedTip(raw, { id: 'r', status: 'retired' });
-    const after = await buildPhase1Message(db, '# 注文\n本文', [3]);
+    const after = await buildPhase1Message(db, '# 注文\n本文', [3], null, null, M3D_NONE);
     expect(after).toBe(before);
     expect(after.includes('費用の工夫')).toBe(false);
     expect(makerNoteLines([])).toEqual([]);
   });
 
   it('active の maker_note を古い順に 8 件まで、編集基準の記録の後・「今回の型」の前に入れる。消すと元の文に戻る', async () => {
-    const base = await buildPhase1Message(db, 'brief', [3, 4]);
+    const base = await buildPhase1Message(db, 'brief', [3, 4], null, null, M3D_NONE);
     for (let i = 0; i < 10; i++) seedTip(raw, { id: `t${i}`, text: `工夫 ${i}`, activated_at: `2026-11-0${i < 9 ? 1 : 2}T0${i % 9}:00:00.000Z` });
-    const msg = await buildPhase1Message(db, 'brief', [3, 4]);
+    const msg = await buildPhase1Message(db, 'brief', [3, 4], null, null, M3D_NONE);
     const section = [MAKER_NOTE_HEADING, ...Array.from({ length: 8 }, (_, i) => `- 工夫 ${i}`), ''].join('\n') + '\n';
     expect(msg).toContain(section + '# 今回の型');
     expect(msg.includes('工夫 8')).toBe(false);
@@ -1523,7 +1526,7 @@ describe('contract-S v2 C: 読ませる量の上限', () => {
     }
     expect(others.some((l) => l.includes('ほかの理由15:'))).toBe(true);
     expect(others.some((l) => l.includes('ほかの理由14:'))).toBe(false); // 古い方は入らない（新しい 15 件）
-    const msg = await buildPhase1Message(db, 'brief', [3], null, 'mown');
+    const msg = await buildPhase1Message(db, 'brief', [3], null, 'mown', M3D_NONE);
     for (let i = 0; i < 20; i++) expect(msg).toContain(`自分の理由${i}:` + 'い'.repeat(1000));
     expect(msg).toContain(GLOBAL);
     // 素材が分からない時（前の呼び方）: 全体の追記は全文、素材のある行は全部「ほか」で 15 件・600 字

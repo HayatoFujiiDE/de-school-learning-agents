@@ -12,7 +12,7 @@ import type { Env } from '../src/env';
 import { createFakePort } from '../src/fake/anthropic';
 import { grayPng } from '../src/fake/openai';
 import { buildPhase1Message, reconcileJob, startJob } from '../src/jobs';
-import { models3dSectionLines } from '../src/models3d';
+import { models3dSectionLines, viewableModels3d } from '../src/models3d';
 import { PREV_FILES_MAX, PREV_FILE_MAX_BYTES, PREV_MOUNT_DIR, carryRecordsOf, prevResources, prevSectionLines } from '../src/rework';
 import { SOURCE_CAPTURES_FILE, loadSourceCaptures, type SourceCapturesFile } from '../src/verify';
 import { d1, migratedDb, one, rows } from './d1-shim';
@@ -50,6 +50,10 @@ function makeEnv(): Env {
       },
       async delete(keys: string | string[]) {
         for (const k of Array.isArray(keys) ? keys : [keys]) r2.delete(k);
+      },
+      async head(k: string) {
+        const b = r2.get(k);
+        return b ? { key: k, size: b.byteLength } : null;
       },
     },
     FACTORY_AGENT_ID: 'agent_test',
@@ -219,10 +223,41 @@ describe('§S-8-1 付けるファイルの選び方（prevResources）', () => {
   });
 });
 
+/** §AJ2-1: startJob は viewableModels3d(取り込み済みの id) を渡す。この test の D1 には取り込みの行が無い = 埋め込めるものだけ */
+const M3D_NONE = viewableModels3d(new Set());
+
+describe('§AJ2-1 startJob: 注文票の一覧は viewableModels3d(取り込み済みの id)', () => {
+  const ROVER = 'nasa-perseverance-rover';
+  const SHA = 'a'.repeat(64);
+  const seedHosted = () =>
+    db
+      .prepare('INSERT INTO models3d_files (catalog_id, sha256, bytes, r2_key, draco, fetched_at, fetched_by) VALUES (?, ?, 10, ?, 1, ?, ?)')
+      .run(ROVER, SHA, `models3d/${ROVER}/${SHA}.glb`, iso(DAY), 'ops@example.invalid');
+
+  it('D1 の行と R2 の object がある download は注文票に出る（buildPhase1Message に viewableModels3d を渡した文と同じ）', async () => {
+    seedHosted();
+    r2.set(`models3d/${ROVER}/${SHA}.glb`, new Uint8Array([1, 2, 3]));
+    seedRework({ parent: null });
+    const s = startPort();
+    expect((await startJob(env, s.port, 'jr')).status).toBe(201);
+    const text = textOf(s.calls[0]);
+    expect(text).toContain(`\n- ${ROVER}: `);
+    expect(text).toBe(await buildPhase1Message(env.DB, BRIEF, [3], null, 'm1', viewableModels3d(new Set([ROVER]))));
+  });
+
+  it('D1 に行があっても R2 に object が無ければ出ない（取り込み済みではない）', async () => {
+    seedHosted();
+    seedRework({ parent: null });
+    const s = startPort();
+    expect((await startJob(env, s.port, 'jr')).status).toBe(201);
+    expect(textOf(s.calls[0]).includes(ROVER)).toBe(false);
+  });
+});
+
 describe('§S-8-1 startJob: resources を付ける条件と最初の文の区画', () => {
   const expectPlain = async (p: SessionCreateParams, kinds = [3]) => {
     expect(p.resources).toBeUndefined();
-    expect(textOf(p)).toBe(await buildPhase1Message(env.DB, BRIEF, kinds));
+    expect(textOf(p)).toBe(await buildPhase1Message(env.DB, BRIEF, kinds, null, null, M3D_NONE));
     expect(textOf(p).includes('# 前の版')).toBe(false);
   };
 
@@ -253,8 +288,8 @@ describe('§S-8-1 startJob: resources を付ける条件と最初の文の区画
     expect(text).toContain(`## 開き直さなくてよい出典\n`);
     expect(text).toContain(`\n- ${URL_A}\n`);
     // §AJ-2 a: 前の版の区画の後・編集基準の前に「使ってよい立体モデル（一覧）」の節
-    expect(text).toContain(section.join('\n') + '\n' + models3dSectionLines().join('\n') + '\n# 編集基準');
-    expect(text.replace(section.join('\n') + '\n', '')).toBe(await buildPhase1Message(env.DB, BRIEF, [3]));
+    expect(text).toContain(section.join('\n') + '\n' + models3dSectionLines(M3D_NONE).join('\n') + '\n# 編集基準');
+    expect(text.replace(section.join('\n') + '\n', '')).toBe(await buildPhase1Message(env.DB, BRIEF, [3], null, null, M3D_NONE));
   });
 
   it('開き直さなくてよい出典が 0 件なら「ありません」（記録が R2 に無く親の events も読めない）', async () => {

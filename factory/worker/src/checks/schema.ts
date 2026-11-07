@@ -2,7 +2,11 @@
 // ここで失敗したものだけが invalid_outputs（必須キー欠落・参照先不在・parts 外参照・JSON 不正・サイズ超過・画像の先頭バイト不一致 §M-2・動画の形 §Q-1・絵の主張の形 §O-13-2 1・立体モデルの形 §AJ-1）。
 
 import { urlHostMatches } from './hosts';
-import { MODELS3D, type Model3dEntry } from '../generated/models3d-catalog';
+import type { Model3dEntry } from '../generated/models3d-catalog';
+import { viewableCatalogMap } from '../models3d';
+
+/** §AJ2-0: validateOutputs の既定（取り込み済みの立体モデルは無い） */
+const EMPTY_HOSTED: ReadonlySet<string> = new Set();
 
 export const REQUIRED_FILES = ['material.json', 'claims.json', 'sources.json', 'adapt-rules.md', 'selfcheck.md'] as const;
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -445,7 +449,7 @@ export function checkVideos(
 
 /**
  * §AJ-1: parts[].models3d[] の検査（純関数。checkVideos と同じ形）。parts は part id と models3d の配列（無い part は null）を出現順に渡す。
- * sourceUrlById は sources.json の id → url。catalog は一覧の id → 項目（呼び出し側が MODELS3D から作る。テストでは小さな一覧を渡せる）。
+ * sourceUrlById は sources.json の id → url。catalog は見せられる一覧の id → 項目（呼び出し側が viewableCatalogMap で作る。テストでは小さな一覧を渡せる）。
  * 失敗は bad_model3d:{part_id}:{index}:{理由}（理由は id / catalog / text / source / dup / too_many）。素材全体で 4 件以上なら 4 件目で too_many
  */
 export function checkModels3d(
@@ -467,9 +471,10 @@ export function checkModels3d(
       if (!isPlainObj(raw)) return bad(part.id, index, 'id');
       const d = raw;
       if (!isStr(d.id) || !MODEL3D_ID_RE.test(d.id)) return bad(part.id, index, 'id');
-      // 一覧に無い id・kind が download（埋め込めない）の id は catalog（継承プロパティを踏まないよう Map で引く）
+      // 渡された一覧（Map）に無い id は catalog（継承プロパティを踏まないよう Map で引く）。§AJ2-0: kind の判定はしない。
+      // 見せられるか（埋め込める・取り込み済みの download）は呼び出し側が viewableCatalogMap で決める（未取り込みの download は Map に無い）
       const entry = isStr(d.catalog_id) ? catalog.get(d.catalog_id) : undefined;
-      if (!entry || (entry.kind !== 'sketchfab' && entry.kind !== 'voyager')) return bad(part.id, index, 'catalog');
+      if (!entry) return bad(part.id, index, 'catalog');
       if (!textLenOk(d.why, 300)) return bad(part.id, index, 'text');
       if (seenIds.has(d.id) || seenCatalog.has(entry.id)) return bad(part.id, index, 'dup');
       seenIds.add(d.id);
@@ -482,9 +487,6 @@ export function checkModels3d(
   return { ok: true, byPart };
 }
 
-/** §AJ-1: validateOutputs が使う一覧（MODELS3D から 1 回だけ作る） */
-let models3dCatalogMap: ReadonlyMap<string, Model3dEntry> | null = null;
-const models3dCatalog = (): ReadonlyMap<string, Model3dEntry> => (models3dCatalogMap ??= new Map(MODELS3D.map((e) => [e.id, e])));
 
 /** パーツ配下の参照パスか（parts/<part_id>/ 配下で .md/.svg/.html）。variants はこれだけ（§M-1） */
 export function isPartPath(p: string, partId: string): boolean {
@@ -516,7 +518,11 @@ export function imageBytesMatch(path: string, bytes: Uint8Array): boolean {
   return true;
 }
 
-export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
+/**
+ * opts.models3dHosted（§AJ2-0）: 取り込み済みの立体モデルの id の集合（既定は空集合）。checkModels3d に渡す一覧は
+ * viewableCatalogMap(hosted)（埋め込める + hosted にある download）。呼び出し側（取り込み）が先に hostedModels3d の id を取って渡す
+ */
+export function validateOutputs(files: Map<string, Uint8Array>, opts: { models3dHosted?: ReadonlySet<string> } = {}): SchemaResult {
   if (files.size > MAX_FILES) return fail(`too_many_files:${files.size}`);
   for (const [p, bytes] of files) {
     if (bytes.byteLength > MAX_FILE_BYTES) return fail(`file_too_large:${p}`);
@@ -701,7 +707,7 @@ export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
     if (vs) part.videos = vs;
   }
   // §AJ-1: parts[].models3d[]（一覧の id と、出典の行の url = 一覧の page_url）。models3d のある part にだけ付ける
-  const dc = checkModels3d(rawModels3d, new Map(sources.map((s) => [s.id, s.url])), models3dCatalog());
+  const dc = checkModels3d(rawModels3d, new Map(sources.map((s) => [s.id, s.url])), viewableCatalogMap(opts.models3dHosted ?? EMPTY_HOSTED));
   if (!dc.ok) return fail(dc.detail);
   for (const part of parts) {
     const ds = dc.byPart.get(part.id);

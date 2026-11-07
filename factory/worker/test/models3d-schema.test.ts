@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { checkModels3d, MAX_MODELS3D, MODEL3D_ID_RE, validateOutputs } from '../src/checks/schema';
 import type { Model3dEntry } from '../src/generated/models3d-catalog';
-import { MODELS3D_BY_ID, model3dEntryOf, versionModels3dOf, versionModels3dOfMaterial } from '../src/models3d';
+import { MODELS3D_BY_ID, model3dEntryOf, versionModels3dOf, versionModels3dOfMaterial, viewableCatalogMap } from '../src/models3d';
 import { goodFiles, goodMaterial } from './helpers';
 
 type Obj = Record<string, unknown>;
@@ -181,11 +181,25 @@ describe('§AJ-1 checkModels3d（純関数・小さな一覧を渡す）', () =>
     ['s3', 'https://example.org/voy'],
   ]);
 
-  it('一覧にある sketchfab / voyager は通り、download は catalog', () => {
+  it('一覧にある sketchfab / voyager は通る', () => {
     const ok = checkModels3d([{ id: 'p1', models3d: [{ id: 'd1', catalog_id: 'x-one', why: 'a', source_id: 's1' }, { id: 'd2', catalog_id: 'x-voy', why: 'b', source_id: 's3' }] }], urls, catalog);
     expect(ok.ok).toBe(true);
     if (ok.ok) expect(ok.byPart.get('p1')?.map((d) => d.catalog_id)).toEqual(['x-one', 'x-voy']);
-    expect(checkModels3d([{ id: 'p1', models3d: [{ id: 'd1', catalog_id: 'x-dl', why: 'a', source_id: 's2' }] }], urls, catalog)).toEqual({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
+  });
+
+  // §AJ2-5 7: 埋め込み判定の責務は viewableCatalogMap に移った（checkModels3d は Map に無いことで落とす）
+  it('§AJ2: viewableCatalogMap(空集合) で作った Map に download は入らない（→ catalog で落ちる）', () => {
+    const viewable = viewableCatalogMap(new Set(), [...catalog.values()]);
+    expect([...viewable.keys()]).toEqual(['x-one', 'x-voy']);
+    expect(checkModels3d([{ id: 'p1', models3d: [{ id: 'd1', catalog_id: 'x-dl', why: 'a', source_id: 's2' }] }], urls, viewable)).toEqual({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
+  });
+
+  it('§AJ2: download を含む Map を渡せば通る（hosted にある download = viewableCatalogMap に入る）', () => {
+    expect(checkModels3d([{ id: 'p1', models3d: [{ id: 'd1', catalog_id: 'x-dl', why: 'a', source_id: 's2' }] }], urls, catalog).ok).toBe(true);
+    const viewable = viewableCatalogMap(new Set(['x-dl']), [...catalog.values()]);
+    expect([...viewable.keys()]).toEqual(['x-one', 'x-dl', 'x-voy']);
+    const r = checkModels3d([{ id: 'p1', models3d: [{ id: 'd1', catalog_id: 'x-dl', why: 'a', source_id: 's2' }] }], urls, viewable);
+    expect(r.ok && r.byPart.get('p1')?.map((d) => d.catalog_id)).toEqual(['x-dl']);
   });
 
   it('models3d が null の part は byPart に入らない', () => {
@@ -216,5 +230,27 @@ describe('§AJ-1 versionModels3dOf / versionModels3dOfMaterial（src/models3d.ts
     expect(versionModels3dOf(null)).toEqual([]);
     expect(versionModels3dOfMaterial({ parts: [{ id: 'p1', models3d: {} }] })).toEqual([]);
     expect(versionModels3dOfMaterial(null)).toEqual([]);
+  });
+});
+
+describe('§AJ2-0・§AJ2-5 7 validateOutputs(files, { models3dHosted })', () => {
+  const ROVER = 'nasa-perseverance-rover';
+  const files = () => filesWith([[model({ catalog_id: ROVER, source_id: 's13' })]], [...DEFAULT_SOURCES, m3Source(ROVER, 's13')]);
+
+  it('models3dHosted に id を入れると download の id が通り、part に 4 キーだけが付く', () => {
+    const r = validateOutputs(files(), { models3dHosted: new Set([ROVER]) });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.material.parts[0].models3d).toEqual([{ id: 'd1', catalog_id: ROVER, why: model().why, source_id: 's13' }]);
+  });
+
+  it('入れないと（既定も空集合）catalog で落ちる。別の id だけ入れても落ちる', () => {
+    expect(validateOutputs(files())).toMatchObject({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
+    expect(validateOutputs(files(), { models3dHosted: new Set() })).toMatchObject({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
+    expect(validateOutputs(files(), { models3dHosted: new Set(['nasa-iss']) })).toMatchObject({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
+  });
+
+  it('hosted に入れても一覧に無い id・埋め込みの id の扱いは v1 のまま', () => {
+    expect(validateOutputs(filesWith([[model({ catalog_id: 'no-such-model' })]]), { models3dHosted: new Set(['no-such-model']) })).toMatchObject({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
+    expect(validateOutputs(filesWith([[model()]]), { models3dHosted: new Set([ROVER]) }).ok).toBe(true);
   });
 });

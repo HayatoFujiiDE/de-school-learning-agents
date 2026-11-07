@@ -1,13 +1,14 @@
 // 確認画面の見た目を手元で確かめるための小さなサーバー（本番・wrangler を使わない。作り物のデータだけを返す）。
 // 使い方: node test/review-preview/serve.mjs [port]  →  http://127.0.0.1:<port>/admin/#/review/vfix-0001
 // 版は 4 通り（fixtures.mjs）: vfix-0001 見てほしい所がある / vclean-0001 全部通った / vpend-0001 機械の確認中 / vrdr-0001 読み手チェック待ち。
-// 一覧（#/review）・判断の数・自動公開のスイッチ・確認済みのチャンネル（#/videos）も作り物を返す（POST はメモリの中だけ）。
+// 一覧（#/review）・判断の数・自動公開のスイッチ・確認済みのチャンネル（#/videos）・立体モデル（#/models3d）も作り物を返す（POST はメモリの中だけ）。
+// §AJ2: FACTORY_PREVIEW_GLB=<探査車の .glb のパス> を付けると #/review/vm3d-0001 の d3 が回せる（無ければ「読み込めませんでした」）。
 // ?shot=<名前> を付けると driver.js が画面を操作してから document.title を "ready" にする（headless Chrome で撮るため）。
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, normalize, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ALL, listRows } from './fixtures.mjs';
+import { ALL, listRows, models3dAdmin, ROVER_BYTES, ROVER_FILE_URL, ROVER_ID, ROVER_SHA } from './fixtures.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ADMIN = join(HERE, '../../public/admin');
@@ -17,9 +18,11 @@ const DETAILS = Object.fromEntries(Object.values(ALL).map((f) => { const d = f()
 const VID = 'vfix-0001';
 const state = { auto_publish: false, channels: [{ channel_key: 'https://www.youtube.com/@fixture-science', channel_name: '作り物の科学チャンネル', channel_url: 'https://www.youtube.com/@fixture-science', first_version_id: 'vclean-0001', approved_by: 'owner@example.invalid', created_at: '2026-11-05T09:00:00.000Z' }] };
 const readBody = (req) => new Promise((resolve) => { let b = ''; req.on('data', (c) => { b += c; }); req.on('end', () => { try { resolve(b ? JSON.parse(b) : null); } catch { resolve(null); } }); });
-// Worker の /admin と同じ CSP（src/index.ts）
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self' https://www.youtube-nocookie.com https://sketchfab.com https://3d-api.si.edu; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.md': 'text/markdown; charset=utf-8', '.json': 'application/json' };
+// Worker の /admin と同じ CSP（src/index.ts。§AJ2-3 の model-viewer + Draco の分を含む。style の hash は src/index.ts の MODEL_VIEWER_STYLE_HASH）
+const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'sha256-PXtZZkJMMyc18o/DN1ZEFOJ2qEGq95IQbVaJFMOXOb0='; img-src 'self' data:; connect-src 'self' blob:; worker-src blob:; frame-src 'self' https://www.youtube-nocookie.com https://sketchfab.com https://3d-api.si.edu; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.md': 'text/markdown; charset=utf-8', '.json': 'application/json', '.wasm': 'application/wasm' };
+// §AJ2-3: FACTORY_PREVIEW_GLB=<手元の .glb のパス> がある時だけ、作り物の版の探査車（vm3d-0001 の d3）の配信の url でそのファイルを返す（GLB は repo に入れない）
+const PREVIEW_GLB = process.env.FACTORY_PREVIEW_GLB || '';
 
 /** base の下のファイルだけを返す（.. で外へ出ない） */
 function inside(base, rel) {
@@ -64,6 +67,19 @@ createServer((req, res) => {
     return json(res, 200, { deleted: state.channels.length < before });
   }
   if (path === '/api/channels') return json(res, 200, { channels: state.channels });
+  // §AJ2: 立体モデルのページ（#/models3d）と取り込んだ GLB の配信の作り物。POST はメモリにも書かない（探査車は unchanged・ISS は too_large）
+  if (path === '/api/models3d' && req.method === 'GET') return json(res, 200, models3dAdmin());
+  const mf = /^\/api\/models3d\/([a-z0-9-]{3,40})\/fetch$/.exec(path);
+  if (mf && req.method === 'POST') {
+    if (mf[1] === ROVER_ID) return json(res, 200, { status: 'unchanged', catalog_id: ROVER_ID, sha256: ROVER_SHA, bytes: ROVER_BYTES });
+    if (mf[1] === 'nasa-iss') return json(res, 413, { error: 'too_large' });
+    return json(res, 400, { error: 'not_download' });
+  }
+  if (path === ROVER_FILE_URL) {
+    if (!PREVIEW_GLB || !existsSync(PREVIEW_GLB) || !statSync(PREVIEW_GLB).isFile()) return json(res, 404, { error: 'not_found' });
+    const glb = readFileSync(PREVIEW_GLB);
+    return send(res, 200, glb, 'model/gltf-binary', { 'content-length': String(glb.byteLength), 'x-content-type-options': 'nosniff', 'access-control-allow-origin': '*' });
+  }
   if (path === '/api/videos/status') return json(res, 200, { enabled: true, configured: true, month_cents: 40, month_cap_cents: 1000, u_cents: 10, model: 'fixture' });
   const m = /^\/api\/review\/([\w-]+)(\/.*)?$/.exec(path);
   const d = m && DETAILS[m[1]];

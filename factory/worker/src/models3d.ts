@@ -4,6 +4,7 @@
 
 import { MAX_MODELS3D, MODEL3D_ID_RE } from './checks/schema';
 import { MODELS3D, type Model3dEntry } from './generated/models3d-catalog';
+import { fileUrlOf, type HostedModel3d } from './models3d-file';
 
 /** 版の立体モデル 1 件（material.json の parts[].models3d[] の 4 キー） */
 export interface VersionModel3d {
@@ -30,6 +31,20 @@ export const isEmbeddableModel3d = (e: Model3dEntry): boolean => e.kind === 'ske
 /** 一覧のうち埋め込めるもの（一覧の順） */
 export function embeddableModels3d(catalog: readonly Model3dEntry[] = MODELS3D): Model3dEntry[] {
   return catalog.filter(isEmbeddableModel3d);
+}
+
+/** §AJ2-1: 見せられる項目か = 埋め込める or（kind が download かつ 取り込み済み = hosted にある） */
+export const isViewableModel3d = (e: Model3dEntry, hosted: ReadonlySet<string>): boolean =>
+  isEmbeddableModel3d(e) || (e.kind === 'download' && hosted.has(e.id));
+
+/** §AJ2-1: 一覧のうち見せられるもの（一覧の順）。注文票・学習者側の一覧に渡す */
+export function viewableModels3d(hosted: ReadonlySet<string>, catalog: readonly Model3dEntry[] = MODELS3D): Model3dEntry[] {
+  return catalog.filter((e) => isViewableModel3d(e, hosted));
+}
+
+/** §AJ2-0: 取り込み検査（checkModels3d）に渡す一覧の Map（埋め込める + hosted にある download） */
+export function viewableCatalogMap(hosted: ReadonlySet<string>, catalog: readonly Model3dEntry[] = MODELS3D): ReadonlyMap<string, Model3dEntry> {
+  return new Map(viewableModels3d(hosted, catalog).map((e) => [e.id, e]));
 }
 
 /** §AJ-4: 埋め込みの url の形（表示の直前にもう一度確かめる。学習者側のアプリも同じ 2 つ） */
@@ -73,11 +88,10 @@ export function versionModels3dOfMaterial(m: unknown): VersionModel3d[] {
 export const MODELS3D_SECTION_HEAD = '# 使ってよい立体モデル（一覧）';
 
 /**
- * §AJ-2 a: 注文票の「使ってよい立体モデル（一覧）」の節（末尾は空行）。埋め込めるものが 1 件も無ければ []（節ごと出さない）。
- * 値は一覧のものをそのまま（職人向けの文。一覧は repo の人が書く）
+ * §AJ-2 a・§AJ2-1: 注文票の「使ってよい立体モデル（一覧）」の節（末尾は空行）。渡された一覧をそのまま出す（中で埋め込み判定をしない。
+ * 呼び出し側が viewableModels3d を渡す）。1 件も無ければ []（節ごと出さない）。値は一覧のものをそのまま（職人向けの文。一覧は repo の人が書く）
  */
-export function models3dSectionLines(catalog: readonly Model3dEntry[] = MODELS3D): string[] {
-  const list = embeddableModels3d(catalog);
+export function models3dSectionLines(list: readonly Model3dEntry[]): string[] {
   if (list.length === 0) return [];
   return [
     MODELS3D_SECTION_HEAD,
@@ -87,7 +101,7 @@ export function models3dSectionLines(catalog: readonly Model3dEntry[] = MODELS3D
   ];
 }
 
-/** §AJ-4・§AJ-5: 確認画面と学習者側に渡す 1 件の形（一覧から） */
+/** §AJ-4・§AJ-5: 確認画面と学習者側に渡す 1 件の形（一覧から）。§AJ2-1: 取り込み済みの download だけ file_url・bytes・sha256 が付く */
 export interface Model3dView {
   id: string;
   title: string;
@@ -97,9 +111,14 @@ export interface Model3dView {
   page_url: string;
   license: string;
   attribution: string;
+  /** 相対の配信パス（学習者側の一覧 API は呼び出し側で origin を前に付けて絶対 url にする） */
+  file_url?: string;
+  bytes?: number;
+  sha256?: string;
 }
 
-export const model3dViewOf = (e: Model3dEntry): Model3dView => ({
+/** hostedRow があり e.kind が download の時だけ file_url（相対）・bytes・sha256 を足す。それ以外は v1 の 8 キー */
+export const model3dViewOf = (e: Model3dEntry, hostedRow?: HostedModel3d | null): Model3dView => ({
   id: e.id,
   title: e.title_ja,
   org: e.org,
@@ -108,4 +127,5 @@ export const model3dViewOf = (e: Model3dEntry): Model3dView => ({
   page_url: e.page_url,
   license: e.license.label,
   attribution: e.attribution,
+  ...(hostedRow && e.kind === 'download' ? { file_url: fileUrlOf(e.id, hostedRow.sha256), bytes: hostedRow.bytes, sha256: hostedRow.sha256 } : {}),
 });

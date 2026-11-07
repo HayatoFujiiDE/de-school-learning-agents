@@ -10,7 +10,8 @@ import { runImage } from './images';
 import { executeTopicRun, parseTopicRunMessage } from './topics/gen';
 import { getFloor } from './routes/floor';
 import { answerJobRoute, cancelJobRoute, createJob, getJobDetail, raiseBudgetRoute, reconcileJobRoute, reingestJobRoute, startJobRoute } from './routes/jobs';
-import { libraryAvailable, libraryFile, libraryModels3d, libraryTopicStock, libraryTopics } from './routes/library';
+import { libraryAvailable, libraryFile, libraryModel3dFile, libraryModels3d, libraryTopicStock, libraryTopics } from './routes/library';
+import { fetchModel3d, listModels3d } from './routes/models3d';
 import { createMaterial, getMaterialDetail, listMaterials, rollbackMaterial, stopMaterial } from './routes/materials';
 import { createOrder } from './routes/orders';
 import {
@@ -101,17 +102,29 @@ const ROUTES: Array<[string, RegExp, Handler]> = [
   ['GET', new RegExp(`^/api/topics/${TOPIC_ID}$`), getTopic],
   ['POST', new RegExp(`^/api/topics/${TOPIC_ID}/decide$`), decideTopic],
   ['POST', new RegExp(`^/api/topics/${TOPIC_ID}/derive$`), deriveTopicRoute],
+  // 立体モデル v2（§AJ2-2。運営が一覧の download を取り込む。service token はこの route では Access の層で 401）
+  ['POST', /^\/api\/models3d\/([a-z0-9-]{3,40})\/fetch$/, (c, id) => fetchModel3d(c, id)],
+  ['GET', /^\/api\/models3d$/, (c) => listModels3d(c)],
 ];
 
 // 管理画面に付ける CSP（同一 origin の /api/* だけを読む。確認用 iframe は sandbox 付きで同一 origin から読む）。
 // §Q-5・§Q-9.8: 確認画面の動画の埋め込みのため frame-src に youtube-nocookie だけを足す（/admin の HTML だけ。生成物の配信の CSP は変えない）
 // §AJ-4: 立体モデルの公式の埋め込み（Sketchfab・Smithsonian Voyager）のため frame-src に 2 つのホストを足す（/admin だけ）
+// §AJ2-3: 取り込んだ GLB を vendor の model-viewer + Draco で回して見るため（実ブラウザで確かめた最小の組。/admin だけ。img-src・frame-src は変えない）:
+//   script-src 'wasm-unsafe-eval'（Draco の wasm のコンパイル）・worker-src blob:（DRACOLoader の Blob の Worker）・
+//   connect-src blob:（GLTFLoader が埋め込みの画像を blob: の URL で読む）・style-src の hash（model-viewer が shadow root に入れる <style> の本文）
+/** model-viewer 4.4.0（public/admin/vendor/model-viewer.min.js）の <style> 本文の sha256（base64）。vendor を上げたら上げる（scripts/vendor-model-viewer.sh が最後に出す） */
+const MODEL_VIEWER_STYLE_HASH = 'sha256-PXtZZkJMMyc18o/DN1ZEFOJ2qEGq95IQbVaJFMOXOb0=';
 const ADMIN_CSP =
-  "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self' https://www.youtube-nocookie.com https://sketchfab.com https://3d-api.si.edu; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+  "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' '" +
+  MODEL_VIEWER_STYLE_HASH +
+  "'; img-src 'self' data:; connect-src 'self' blob:; worker-src blob:; frame-src 'self' https://www.youtube-nocookie.com https://sketchfab.com https://3d-api.si.edu; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 async function serveAdmin(request: Request, env: Env): Promise<Response> {
   const res = await env.ASSETS.fetch(request);
   const headers = new Headers(res.headers);
+  // §AJ2-3: Draco の復号器（.wasm）は application/wasm で返す（ASSETS の既定は未確認なので上書きする）
+  if (new URL(request.url).pathname.endsWith('.wasm')) headers.set('content-type', 'application/wasm');
   headers.set('content-security-policy', ADMIN_CSP);
   headers.set('x-content-type-options', 'nosniff');
   headers.set('cache-control', 'no-store');
@@ -135,7 +148,9 @@ export default {
         if (path === '/api/library/available') return await libraryAvailable(env);
         if (path === '/api/library/topics') return await libraryTopics(env, url);
         if (path === '/api/library/topics/stock') return await libraryTopicStock(env, url);
-        if (path === '/api/library/models3d') return libraryModels3d();
+        if (path === '/api/library/models3d') return await libraryModels3d(env, url.origin);
+        const mf = /^\/api\/library\/models3d\/files\/([a-z0-9-]{3,40})\/([0-9a-f]{64})\.glb$/.exec(path);
+        if (mf) return await libraryModel3dFile(env, mf[1], mf[2]);
         const m = new RegExp(`^/api/library/files/${ID}/(.*)$`).exec(path);
         if (m) return await libraryFile(env, m[1], m[2]);
         return jsonError(404, 'not_found');

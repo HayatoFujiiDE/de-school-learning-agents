@@ -5,7 +5,8 @@ import type { Env } from '../env';
 import { json, parseJsonField } from '../http';
 import { isRealDate } from '../topics/schema';
 import { isTopicKind, topicsSwitch } from '../topics/store';
-import { embeddableModels3d, model3dViewOf } from '../models3d';
+import { model3dViewOf, viewableModels3d } from '../models3d';
+import { hostedModels3d, MODEL3D_CATALOG_ID_RE, R2_KEY, SHA256_HEX_RE } from '../models3d-file';
 
 const HTML_CSP = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:";
 const SVG_CSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'";
@@ -167,9 +168,35 @@ export async function libraryTopicStock(env: Env, url: URL): Promise<Response> {
 }
 
 /**
- * §AJ-5: GET /api/library/models3d（認証なし）。一覧のうち埋め込めるもの（kind が sketchfab / voyager）を一覧の順に。
- * 子ども向けアプリは material.json の catalog_id をこれで引いて描く（埋め込みの url の形の再確認は §AJ-4 と同じ 2 つの正規表現）
+ * §AJ-5・§AJ2-0: GET /api/library/models3d（認証なし）。一覧のうち埋め込めるもの（sketchfab / voyager）と取り込み済みの download を一覧の順に。
+ * download の件は v1 の 8 キーに file_url（絶対 url = origin + 配信パス。学習者のアプリは別オリジン）・bytes・sha256 を足した 11 キー。
+ * 埋め込みの件は v1 のまま 8 キー。子ども向けアプリは material.json の catalog_id をこれで引いて描く
  */
-export function libraryModels3d(): Response {
-  return json(200, { models: embeddableModels3d().map(model3dViewOf) }, { 'cache-control': 'public, max-age=3600' });
+export async function libraryModels3d(env: Env, origin: string): Promise<Response> {
+  const hosted = await hostedModels3d(env);
+  const models = viewableModels3d(new Set(hosted.keys())).map((e) => {
+    const v = model3dViewOf(e, hosted.get(e.id));
+    return v.file_url === undefined ? v : { ...v, file_url: origin + v.file_url };
+  });
+  return json(200, { models }, { 'cache-control': 'public, max-age=3600', 'access-control-allow-origin': '*' });
+}
+
+/**
+ * §AJ2-0: GET /api/library/models3d/files/<catalog_id>/<sha256>.glb（認証なし）。D1 は見ない: 形が合えば key を組み立てて R2 から get し、無ければ 404。
+ * 取り直しの後も古い sha の object は残るので、cache された一覧の url が取り直しの直後に死なない
+ */
+export async function libraryModel3dFile(env: Env, catalogId: string, sha: string): Promise<Response> {
+  if (!MODEL3D_CATALOG_ID_RE.test(catalogId) || !SHA256_HEX_RE.test(sha)) return notFound();
+  const obj = await env.R2.get(R2_KEY(catalogId, sha));
+  if (!obj) return notFound();
+  return new Response(obj.body, {
+    status: 200,
+    headers: {
+      'content-type': 'model/gltf-binary',
+      'content-length': String(obj.size),
+      'cache-control': 'public, max-age=31536000, immutable',
+      'x-content-type-options': 'nosniff',
+      'access-control-allow-origin': '*',
+    },
+  });
 }

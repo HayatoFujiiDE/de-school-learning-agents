@@ -8,7 +8,7 @@
 |---|---|
 | ライセンス | CC0 / CC BY（`cc0` / `cc-by`）と、NASA の利用の決まり（`nasa-media`）だけ。非営利限定（NC）は載せない（将来の月額販売と合わない） |
 | 確かめ方 | Sketchfab は Data API v3（`GET https://api.sketchfab.com/v3/models/<uid>` の `license.slug`）。Smithsonian は 3d.si.edu の記録の表示。NASA は brand center の利用の決まり。`checked_how` に書く |
-| 見せ方（kind） | `sketchfab` = Sketchfab の公式の埋め込み（`https://sketchfab.com/models/<uid>/embed`）/ `voyager` = Smithsonian Voyager の公式の iframe（`https://3d-api.si.edu/voyager/3d_package:<id>`）/ `download` = 取ってきて自前で見せる予定（まだ素材に使わない） |
+| 見せ方（kind） | `sketchfab` = Sketchfab の公式の埋め込み（`https://sketchfab.com/models/<uid>/embed`）/ `voyager` = Smithsonian Voyager の公式の iframe（`https://3d-api.si.edu/voyager/3d_package:<id>`）/ `download` = 取ってきて自前で見せる（契約 §AJ2。運営が確認画面の「立体モデル」ページで取り込んだもの = GLB・24 MiB まで だけが素材に使える） |
 | 出典 | `page_url` は提供元のそのモデルのページ。素材の sources.json にはこの url を一字も変えずに書く |
 | 題材の札（topics） | 1〜8 個。職人が題材から探す手がかり（恐竜・クジラ・昆虫・花・宇宙 など） |
 
@@ -33,6 +33,18 @@
 | 花 | kyu-sakura-someiyoshino / kyu-lotus / kyu-red-spider-lily | 同上 | CC0 | sketchfab |
 | 宇宙（自前で見せる予定） | nasa-perseverance-rover / nasa-iss | NASA | NASA の利用の決まり | download |
 | 体のつくり（自前で見せる予定） | dbcls-bodyparts3d | DBCLS | CC BY 4.0 | download |
+
+## 子ども向けアプリでの見せ方（契約 §AJ2-4）
+
+- 一覧は `GET <工場のオリジン>/api/library/models3d`（認証なし・`access-control-allow-origin: *`・1 時間 cache）。material.json の `parts[].models3d[].catalog_id` をここの `id` で引く。埋め込みの件（`kind` が `sketchfab` / `voyager`）は v1 のまま `embed_url` を iframe に渡す（形の再確認は §AJ-4 と同じ 2 つの正規表現）
+- 取り込み済みの `download` の件には `file_url`（**絶対 url**）・`bytes`・`sha256` が付く。`file_url` はそのまま `<model-viewer src="…">` に渡す（工場とアプリは別オリジンなので、相対の url に組み直さない）。配信は `GET /api/library/models3d/files/<id>/<sha256>.glb`（`content-type: model/gltf-binary`・`access-control-allow-origin: *`・`immutable` で 1 年 cache）
+- アプリ側の CSP に要るもの（確認画面 `/admin` で実ブラウザ・Chrome で確かめた組）:
+  - `connect-src` に工場のオリジン（GLB の取得）と `blob:`（three の GLTFLoader が埋め込みの画像を `blob:` の URL で読む。無いと質感が全部落ちる）
+  - `script-src` に `'wasm-unsafe-eval'`（Draco の復号器の wasm のコンパイル）
+  - `worker-src blob:`（DRACOLoader が Blob の URL で Worker を作る）
+  - `style-src` に model-viewer が shadow root に入れる `<style>` の本文の hash（版ごとに違う。model-viewer 4.4.0 は `src/index.ts` の `MODEL_VIEWER_STYLE_HASH`）か、アプリ自前の許し方。拒否されると要素が 0×0 になり何も見えない
+- Draco の復号器は自前に置いて `dracoDecoderLocation` を指す（既定の置き場は外部の gstatic）。model-viewer の script より前に `window.ModelViewerElement = { dracoDecoderLocation: '<自前の置き場>/' };` を実行する（確認画面は `public/admin/vendor/draco/` に three 0.183.2 の `draco_decoder.wasm`・`draco_wasm_wrapper.js` を置いている）
+- ライセンスの表示は一覧の `attribution` をそのまま出す（`license` はライセンスの名前、`page_url` は提供元のページ）
 
 ## 載せなかったもの（理由つき）
 

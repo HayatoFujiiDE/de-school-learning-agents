@@ -1,18 +1,23 @@
 // §AJ-2・§AJ-6 3・8: 注文票の「使ってよい立体モデル（一覧）」の節（buildPhase1Message）と、職人の定義・rubric の文。
+// §AJ2-1・§AJ2-5 6・7: 一覧は呼び出し側が viewableModels3d(取り込み済みの id) で渡す（埋め込み判定の責務は viewable* に移った）。
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { RUBRIC_COMMON, RUBRIC_KINDS } from '../src/generated/claude-assets';
 import { MODELS3D } from '../src/generated/models3d-catalog';
 import { buildPhase1Message } from '../src/jobs';
-import { embeddableModels3d, MODELS3D_SECTION_HEAD, models3dSectionLines } from '../src/models3d';
+import { embeddableModels3d, MODELS3D_SECTION_HEAD, models3dSectionLines, viewableModels3d } from '../src/models3d';
 import { d1, migratedDb } from './d1-shim';
 
 const HEAD = '# 使ってよい立体モデル（一覧）';
+/** 取り込み済みの立体モデルが無い時の一覧（= 埋め込めるものだけ） */
+const NONE = viewableModels3d(new Set());
+const ROVER = 'nasa-perseverance-rover';
+const row = (e: (typeof MODELS3D)[number]) => `- ${e.id}: ${e.title_ja}（${e.org}・${e.license.label}）— 札: ${e.topics.join('・')} — 出典の url: ${e.page_url}`;
 
 describe('§AJ-2 a 注文票の一覧の節', () => {
   it('節があり、一覧の行の数は埋め込める件数と同じ（download は出ない）。編集基準の前・注文票の後', async () => {
     const db = d1(migratedDb());
-    const msg = await buildPhase1Message(db, 'brief', [3]);
+    const msg = await buildPhase1Message(db, 'brief', [3], null, null, NONE);
     expect(MODELS3D_SECTION_HEAD).toBe(HEAD);
     expect(msg).toContain(`\n${HEAD}\n題材に合うものがあれば、material.json の parts[].models3d[] に catalog_id で書く（1 素材 3 件まで。無ければ使わない）。\n`);
     const embeddable = MODELS3D.filter((e) => e.kind === 'sketchfab' || e.kind === 'voyager');
@@ -26,7 +31,7 @@ describe('§AJ-2 a 注文票の一覧の節', () => {
     const rows = section.split('\n').filter((l) => l.startsWith('- '));
     expect(rows.length).toBe(embeddable.length);
     // 1 行 1 件・一覧の順・値は一覧のまま
-    expect(rows).toEqual(embeddable.map((e) => `- ${e.id}: ${e.title_ja}（${e.org}・${e.license.label}）— 札: ${e.topics.join('・')} — 出典の url: ${e.page_url}`));
+    expect(rows).toEqual(embeddable.map(row));
     for (const e of MODELS3D.filter((x) => x.kind === 'download')) expect(msg.includes(e.id)).toBe(false);
     // 節の後は空行 1 つで編集基準
     expect(section.endsWith('\n\n')).toBe(true);
@@ -34,26 +39,55 @@ describe('§AJ-2 a 注文票の一覧の節', () => {
 
   it('一覧が空（差し替え）の時は節が無く、従来の文（節を除いた文）と 1 文字も変わらない', async () => {
     const db = d1(migratedDb());
-    const withSection = await buildPhase1Message(db, 'brief', [3, 4]);
+    const withSection = await buildPhase1Message(db, 'brief', [3, 4], null, null, NONE);
     const empty = await buildPhase1Message(db, 'brief', [3, 4], null, null, []);
     expect(empty.includes(HEAD)).toBe(false);
     // 変更前の形を固定した対照（Astra MINOR）: 一覧が空なら注文票の直後が編集基準（builder 同士の比較に頼らない）
     expect(empty).toContain('# 注文票\nbrief\n\n# 編集基準');
-    expect(withSection.replace(models3dSectionLines().join('\n') + '\n', '')).toBe(empty);
-    // download だけの一覧も節を出さない
-    const onlyDownload = MODELS3D.filter((e) => e.kind === 'download');
-    expect(await buildPhase1Message(db, 'brief', [3, 4], null, null, onlyDownload)).toBe(empty);
+    expect(withSection.replace(models3dSectionLines(NONE).join('\n') + '\n', '')).toBe(empty);
     expect(models3dSectionLines([])).toEqual([]);
+  });
+
+  it('§AJ2-5 7: viewableModels3d(空集合) は download を含まない（→ download だけの一覧から作ると節は空）', async () => {
+    const db = d1(migratedDb());
+    const onlyDownload = MODELS3D.filter((e) => e.kind === 'download');
+    expect(onlyDownload.length).toBeGreaterThan(0);
+    expect(viewableModels3d(new Set(), onlyDownload)).toEqual([]);
     expect(embeddableModels3d(onlyDownload)).toEqual([]);
+    expect(NONE.some((e) => e.kind === 'download')).toBe(false);
+    expect(NONE).toEqual(embeddableModels3d());
+    const empty = await buildPhase1Message(db, 'brief', [3, 4], null, null, []);
+    expect(await buildPhase1Message(db, 'brief', [3, 4], null, null, viewableModels3d(new Set(), onlyDownload))).toBe(empty);
+  });
+
+  it('§AJ2-5 7: 渡した一覧はそのまま出る（models3dSectionLines は中で埋め込み判定をしない）', () => {
+    const onlyDownload = MODELS3D.filter((e) => e.kind === 'download');
+    const lines = models3dSectionLines(onlyDownload);
+    expect(lines[0]).toBe(HEAD);
+    expect(lines.filter((l) => l.startsWith('- '))).toEqual(onlyDownload.map(row));
+  });
+
+  it('§AJ2-5 6: 取り込み済みの download の行が一覧の順で出る・未取り込みは出ない・埋め込みの行は v1 と同じ並び', async () => {
+    const db = d1(migratedDb());
+    const hosted = viewableModels3d(new Set([ROVER]));
+    const msg = await buildPhase1Message(db, 'brief', [3], null, null, hosted);
+    const section = msg.slice(msg.indexOf(HEAD), msg.indexOf('# 編集基準'));
+    const rows = section.split('\n').filter((l) => l.startsWith('- '));
+    expect(rows).toEqual(MODELS3D.filter((e) => e.kind !== 'download' || e.id === ROVER).map(row));
+    expect(rows.filter((l) => !l.startsWith(`- ${ROVER}:`))).toEqual(NONE.map(row));
+    expect(msg).toContain(`- ${ROVER}: `);
+    for (const id of ['nasa-iss', 'dbcls-bodyparts3d']) expect(msg.includes(id)).toBe(false);
+    // 行の形は v1 と同じ（kind は書かない）
+    expect(rows.find((l) => l.startsWith(`- ${ROVER}:`))).not.toContain('download');
   });
 
   it('作り直しの区画（prev）がある時も、区画の後・編集基準の前に同じ節が付く', async () => {
     const db = d1(migratedDb());
-    const msg = await buildPhase1Message(db, 'brief', [3], { names: ['material.json'], reopenFree: [] });
+    const msg = await buildPhase1Message(db, 'brief', [3], { names: ['material.json'], reopenFree: [] }, null, NONE);
     const prevAt = msg.indexOf('# 前の版（作り直しの出発点）');
     expect(prevAt).toBeGreaterThan(0);
     expect(msg.indexOf(HEAD)).toBeGreaterThan(prevAt);
-    expect(msg).toContain(models3dSectionLines().join('\n') + '\n# 編集基準');
+    expect(msg).toContain(models3dSectionLines(NONE).join('\n') + '\n# 編集基準');
   });
 });
 

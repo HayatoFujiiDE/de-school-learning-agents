@@ -4,8 +4,11 @@ import type { Env } from '../src/env';
 import { MODELS3D } from '../src/generated/models3d-catalog';
 import worker from '../src/index';
 import { SKETCHFAB_EMBED_RE, VOYAGER_EMBED_RE } from '../src/models3d';
+import { d1, migratedDb } from './d1-shim';
 
-const get = (path: string, method = 'GET') => worker.fetch(new Request(`http://localhost${path}`, { method }), {} as unknown as Env, {} as ExecutionContext);
+// §AJ2-0: 一覧 API は D1（models3d_files）と R2 の head を読む。ここは取り込みの行が無い空の D1（= v1 と同じ応答）
+const emptyEnv = () => ({ DB: d1(migratedDb()), R2: { head: async () => null } }) as unknown as Env;
+const get = (path: string, method = 'GET') => worker.fetch(new Request(`http://localhost${path}`, { method }), emptyEnv(), {} as ExecutionContext);
 
 describe('§AJ-5 GET /api/library/models3d', () => {
   it('埋め込める件数を一覧の順に返し、download を含まない。形は { models: [{ id, title, org, kind, embed_url, page_url, license, attribution }] }', async () => {

@@ -609,6 +609,7 @@ button.sc-cid { text-decoration: underline; text-underline-offset: 2px; }
 /* §AJ-4: 立体モデル（公式の埋め込み。動画と同じ 16:9 で幅いっぱい） */
 .mp-model3d { margin: 4px 0 16px; }
 .mp-model3d iframe { display: block; width: 100%; max-width: 640px; aspect-ratio: 16 / 9; height: auto; border: 0; border-radius: 12px; background: #000; }
+.mp-model3d model-viewer { width: 100%; max-width: 640px; aspect-ratio: 16 / 9; height: auto; border-radius: 12px; background: #eeeeec; }
 .mp-model3d-cap { margin: 6px 0 0 !important; font-size: 0.85em; color: var(--mp-muted); }
 .mp-model3d-cap a { margin-left: 8px; }
 .mp-model3d-why { margin: 8px 0 0 !important; font-size: 0.93em; }

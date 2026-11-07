@@ -3,6 +3,8 @@
  * 書き込み操作は 予告（ダイアログ）→ 実行（二重送信防止）→ フィードバック（トースト）→ 反映（再取得）。失敗時は入力を消さない（§G-3）。 */
 (function () {
   'use strict';
+  // §AJ2-3: vendor の model-viewer（module・deferred なので admin.js が先に走る）が Draco の復号器を自前の置き場から読むように（外部の gstatic に出ない）
+  window.ModelViewerElement = { dracoDecoderLocation: '/admin/vendor/draco/' };
 
   var WORK_LABEL = { idle: '待機', queued: '順番待ち', making: '制作中', review: '確認待ち' };
   var PUBLISH_LABEL = { none: 'なし', available: '利用できる', stopped: '止めている' };
@@ -156,14 +158,14 @@
     });
   }
 
-  /** 書き込み操作の共通ループ: 予告 → 実行（ボタン無効化）→ トースト → 再取得。opts.busyText（実行中のボタン文言）・opts.fail（失敗トーストの後）は任意 */
+  /** 書き込み操作の共通ループ: 予告 → 実行（ボタン無効化）→ トースト → 再取得。opts.busyText（実行中のボタン文言）・opts.fail（失敗トーストの後）は任意。opts.success は文字列か応答から文を作る関数 */
   function action(btn, opts) {
     return confirmDialog(opts).then(function (d) {
       if (!d.ok) return null;
       var label = btn ? btn.textContent : '';
       if (btn) { btn.disabled = true; btn.textContent = opts.busyText || '実行中…'; }
       return Promise.resolve(opts.run(d.note)).then(function (res) {
-        toast(opts.success || '完了しました');
+        toast(typeof opts.success === 'function' ? opts.success(res) : (opts.success || '完了しました'));
         if (opts.after) opts.after(res);
         else route();
         return res;
@@ -560,6 +562,97 @@
       view.innerHTML = videosErrorHtml(e.message);
       var b = $('#video-retry');
       if (b) b.addEventListener('click', route);
+    });
+  }
+
+  // ---- 画面: 立体モデル（§AJ2-3。一覧の download を運営が提供元から取り込む）----
+  var M3D_KIND_LABEL = { sketchfab: 'Sketchfab（埋め込み）', voyager: 'Smithsonian Voyager（埋め込み）', download: 'GLB ファイル' };
+  var M3D_FETCH_CONFIRM = '提供元から GLB を取り込みます（24 MiB まで）';
+  function model3dMiB(bytes) { return (Number(bytes || 0) / 1048576).toFixed(1); }
+  /** 状態の文言（GET /api/models3d の 1 件から） */
+  function model3dStateText(m) {
+    var st = m && m.state;
+    if (st === 'embed') return '埋め込み';
+    if (st === 'hosted') return '取り込み済み（' + model3dMiB(m.bytes) + ' MiB・' + channelDate(m.fetched_at) + '）';
+    if (st === 'hosted_missing') return '取り込み済みだがファイルが無い（取り直してください）';
+    if (st === 'not_hosted') return '未取り込み';
+    if (st === 'unavailable') return '取り込めない（配布の url が無い）';
+    return String(st || '—');
+  }
+  /** 操作のボタンの文言（not_hosted は「取り込む」、hosted / hosted_missing は「取り直す」。他は無し） */
+  function model3dActionLabel(m) {
+    var st = m && m.state;
+    if (st === 'not_hosted') return '取り込む';
+    if (st === 'hosted' || st === 'hosted_missing') return '取り直す';
+    return '';
+  }
+  function models3dLoadingHtml() { return '<h1>立体モデル</h1><p class="loading" data-m3d-loading="1">読み込み中…</p>'; }
+  function models3dErrorHtml(msg) {
+    return '<h1>立体モデル</h1><div class="card" data-m3d-error="1"><p class="err">読み込めませんでした: ' + esc(msg) + '</p><p><button type="button" class="btn" id="m3d-retry">もう一度読み込む</button></p></div>';
+  }
+  function models3dListOf(d) { return (d && Array.isArray(d.models) ? d.models : []).filter(function (m) { return isObj(m) && typeof m.id === 'string'; }); }
+  /** #/models3d の本体（GET /api/models3d の応答から描く純関数）。題名は page_url（https:// の時だけ）へのリンク */
+  function models3dPageHtml(d) {
+    var list = models3dListOf(d);
+    var rows = list.map(function (m, i) {
+      var title = typeof m.page_url === 'string' && /^https:\/\//.test(m.page_url)
+        ? '<a href="' + esc(m.page_url) + '" target="_blank" rel="noopener noreferrer">' + esc(m.title) + '</a>' : esc(m.title);
+      var label = model3dActionLabel(m);
+      var btn = label ? '<button type="button" class="btn small" data-m3d-fetch="' + i + '">' + esc(label) + '</button>' : '';
+      return '<tr data-m3d-id="' + esc(m.id) + '" data-m3d-state="' + esc(m.state) + '"><td>' + title + '</td><td>' + esc(m.org) + '</td><td>' + esc(m.license) + '</td><td>' +
+        esc(M3D_KIND_LABEL[m.kind] || m.kind) + '</td><td>' + esc(model3dStateText(m)) + '</td><td>' + btn + '</td></tr>';
+    }).join('');
+    return '<h1>立体モデル</h1>' +
+      '<div class="card"><p class="muted">一覧（factory/models3d/catalog.json）の立体モデルです。GLB ファイルの件は、ここで取り込むと確認画面と学習者側で回して見られます（1 件 24 MiB まで）。</p>' +
+      (list.length ? '<div class="table-wrap"><table class="m3d-table"><thead><tr><th>題名</th><th>提供元</th><th>ライセンス</th><th>種類</th><th>状態</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+        : '<p class="muted" data-m3d-empty="1">一覧に立体モデルがありません。</p>') + '</div>';
+  }
+  /** 取り込みの成功の toast（unchanged は「変わっていません」） */
+  function model3dFetchToast(res) {
+    if (res && res.status === 'unchanged') return '変わっていません';
+    return '取り込みました（' + model3dMiB(res && res.bytes) + ' MiB）';
+  }
+  /** 取り込みの失敗の文（応答の error から。知らない error は fallback = 応答の error の文） */
+  function model3dFetchErrorText(body, fallback) {
+    var code = body && typeof body.error === 'string' ? body.error : '';
+    if (code === 'too_large') return '24 MiB を超えています';
+    if (code.indexOf('bad_glb:') === 0) return 'GLB の形が合いません（' + code.slice('bad_glb:'.length) + '）';
+    if (code.indexOf('fetch_failed:') === 0) return '提供元から取れませんでした（' + code.slice('fetch_failed:'.length) + '）';
+    return fallback || code || '失敗しました';
+  }
+  function viewModels3d(view) {
+    view.innerHTML = models3dLoadingHtml();
+    var here = location.hash;
+    api('GET', '/api/models3d').then(function (d) {
+      if (location.hash !== here) return;
+      var list = models3dListOf(d);
+      view.innerHTML = models3dPageHtml({ models: list });
+      Array.prototype.forEach.call(view.querySelectorAll('[data-m3d-fetch]'), function (b) {
+        var m = list[Number(b.getAttribute('data-m3d-fetch'))];
+        if (!m) return;
+        b.addEventListener('click', function () {
+          action(b, {
+            title: M3D_FETCH_CONFIRM,
+            body: m.title + '（' + m.org + '）',
+            okText: model3dActionLabel(m) || '取り込む', busyText: '取り込み中…',
+            run: function () {
+              return api('POST', '/api/models3d/' + encodeURIComponent(m.id) + '/fetch').then(null, function (e) {
+                var err = new Error(model3dFetchErrorText(e && e.body, e && e.message));
+                err.status = e && e.status;
+                throw err;
+              });
+            },
+            success: model3dFetchToast,
+            after: function () { if (location.hash === here) viewModels3d(view); },
+            fail: function () { if (location.hash === here) viewModels3d(view); }
+          });
+        });
+      });
+    }, function (e) {
+      if (location.hash !== here) return;
+      view.innerHTML = models3dErrorHtml(e.message);
+      var r = $('#m3d-retry');
+      if (r) r.addEventListener('click', route);
     });
   }
 
@@ -2706,6 +2799,14 @@
     var u = m && typeof m.page_url === 'string' ? m.page_url : '';
     return /^https:\/\//.test(u) ? '<a href="' + esc(u) + '" target="_blank" rel="noopener noreferrer">提供元で開く</a>' : '';
   }
+  // §AJ2-3: 取り込んだ GLB の配信の url（相対）の形（src/models3d-file.ts の MODEL3D_FILE_URL_RE と同じ）
+  var MODEL3D_FILE_URL_RE = /^\/api\/library\/models3d\/files\/[a-z0-9-]{3,40}\/[0-9a-f]{64}\.glb$/;
+  /** §AJ2-3: 取り込んだ立体モデル（kind download）の自前の表示。file_url の形が合わなければ「まだ取り込まれていません」。src は models3d_meta の値だけ */
+  function model3dViewerHtml(m, id) {
+    var u = m && typeof m.file_url === 'string' ? m.file_url : '';
+    if (!MODEL3D_FILE_URL_RE.test(u)) return '<p class="mp-missing">立体モデル ' + esc(id) + ' はまだ取り込まれていません（<a href="#/models3d">立体モデル</a> のページで取り込んでください）</p>';
+    return '<model-viewer src="' + esc(u) + '" alt="' + esc(m.title) + '" camera-controls touch-action="pan-y" loading="eager"></model-viewer>';
+  }
   /** §AJ-4: 子どもの画面の立体モデル 1 件（x = material の models3d の 1 件、meta = models3d_meta。値はすべてエスケープ） */
   function model3dPreviewHtml(x, meta, pa) {
     var id = typeof x.id === 'string' ? x.id : '';
@@ -2713,7 +2814,7 @@
     var body;
     if (!m) body = '<p class="mp-missing">立体モデル ' + esc(id) + ' は一覧に無いため、埋め込みません</p>';
     else {
-      body = (model3dEmbedHtml(m) || '<p class="mp-missing">立体モデルの埋め込みの形が正しくないため、埋め込みません</p>') +
+      body = (m.kind === 'download' ? model3dViewerHtml(m, id) : (model3dEmbedHtml(m) || '<p class="mp-missing">立体モデルの埋め込みの形が正しくないため、埋め込みません</p>')) +
         '<p class="mp-model3d-cap">' + esc(m.title) + '（' + esc(m.org) + '・' + esc(m.license) + '）' + model3dPageLink(m) + '</p>';
     }
     return '<div class="mp-model3d' + pa.cls + '" data-media="model3d" data-media-key="' + esc(id) + '"' + pa.attr + '>' + pa.btns + body +
@@ -3474,10 +3575,25 @@
           // 段落の付箋は表示中の変奏の分だけ。図・動かせるものは部品ごと（どの変奏でも同じ図が出る）
           o.stickies = (st.stickies || []).filter(function (s) { return s.part_index === pi && (s.target === 'media' || s.variant_path === vr.path); });
           el.innerHTML = previewBodyHtml(t, p, o);
+          bindModel3dErrors(el);
         }, function (e) {
           if (reviewCtx !== c || c.pvToken !== token) return;
           el.innerHTML = '<p class="err">' + esc(e.message) + '</p>';
         });
+      });
+    });
+  }
+  /** §AJ2-3: 描いた後の model-viewer に読み込みの失敗（error イベント）を登録し、要素の直後に「読み込めませんでした」を 1 回だけ足す */
+  function bindModel3dErrors(root) {
+    Array.prototype.forEach.call(root.querySelectorAll('.mp-model3d model-viewer'), function (mv) {
+      mv.addEventListener('error', function () {
+        if (mv.getAttribute('data-m3d-failed')) return;
+        mv.setAttribute('data-m3d-failed', '1');
+        var box = mv.closest ? mv.closest('.mp-model3d') : null;
+        var p = document.createElement('p');
+        p.className = 'mp-missing';
+        p.textContent = '立体モデル ' + ((box && box.getAttribute('data-media-key')) || '') + ' を読み込めませんでした（取り直してください）';
+        mv.parentNode.insertBefore(p, mv.nextSibling);
       });
     });
   }
@@ -4321,11 +4437,18 @@
     if (p[0] === 'proposals') return viewProposals(view, r.q);
     if (p[0] === 'images') return viewImages(view);
     if (p[0] === 'videos') return viewVideos(view);
+    if (p[0] === 'models3d') return viewModels3d(view);
     if (p[0] === 'retro') return viewRetro(view);
     // §T-11 お題の棚（topics.js。タブの解釈・描画・遅れた応答の破棄は topics.js 側）
     if (p[0] === 'topics' && window.FactoryTopics) return window.FactoryTopics.mount(view, { api: api, toast: toast, confirm: confirmDialog });
     view.innerHTML = '<p class="muted">ページが見つかりません。<a href="#/materials">素材へ</a></p>';
   }
+  // §AJ2-3: 立体モデルのページと子どもの画面の自前の表示の純関数（テストから呼ぶ。画面の動作には使わない）
+  window.FactoryAdminModels3d = {
+    MODEL3D_FILE_URL_RE: MODEL3D_FILE_URL_RE, model3dPreviewHtml: model3dPreviewHtml, model3dViewerHtml: model3dViewerHtml,
+    models3dPageHtml: models3dPageHtml, models3dLoadingHtml: models3dLoadingHtml, models3dErrorHtml: models3dErrorHtml,
+    model3dStateText: model3dStateText, model3dActionLabel: model3dActionLabel, model3dFetchToast: model3dFetchToast, model3dFetchErrorText: model3dFetchErrorText
+  };
   window.FactoryAdminVideos = { videosBandHtml: videosBandHtml, videosAdminHtml: videosAdminHtml, videosLoadingHtml: videosLoadingHtml, videosErrorHtml: videosErrorHtml };
   window.FactoryAdminImages = {
     HALT_TEXT: HALT_TEXT, haltText: haltText, imagesBandHtml: imagesBandHtml, imagesHtml: imagesHtml,
