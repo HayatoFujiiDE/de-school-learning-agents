@@ -460,10 +460,10 @@ describe('v4.1 回帰（Astra 2 回目の BLOCKING・NON-BLOCKING の再現）',
     expect(checksOf('j2').verbatim_incomplete).toBe(false);
   });
 
-  it('NON-BLOCKING: 見えない template の中だけの文 → clean（取り込みの実経路）', async () => {
+  it('v4.2: 見えない template の中だけの文も found（joined_all。除き方で一致を失わない側に倒す）', async () => {
     seedDraft();
     expect(await rec('jd', ingestPort(outputsWithApp(`<template>${P}</template>`), [[use('tu1', URL_X), result('tu1', PAGE_P)]]).port)).toBe('versioned');
-    expect(verb('jd')).toMatchObject({ status: 'clean', n: 0 });
+    expect(verb('jd')).toMatchObject({ status: 'found', n: 1 });
   });
 
   it('NON-BLOCKING: 途中の記録のまとめも先送りの回数に入る（3 回まで）。使い切ったら、まとめずに incomplete で版を作る', async () => {

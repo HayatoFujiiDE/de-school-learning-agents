@@ -38,7 +38,8 @@ export const VERBATIM_PAGES_PARTS_DIR = 'verbatim-pages.parts/';
 export const VERBATIM_PAGES_MAX_CHARS = 3_000_000;
 
 /** 本文の読み方: spaced = 区間・タグの境目に空白を入れる / joined = 何も入れずにつなぐ */
-export type VerbatimView = 'spaced' | 'joined';
+/** spaced = 区切りに空白 / joined = 区切りなし・見えない中身を除く / joined_all = 区切りなし・見えない中身も入れる（html / svg だけ。除き方の判定違いで一致を失わないため、除く読み方は足すだけにする。v4.2） */
+export type VerbatimView = 'spaced' | 'joined' | 'joined_all';
 
 export type VerbatimStatus = 'found' | 'incomplete' | 'clean';
 
@@ -145,6 +146,7 @@ function hidesContent(t: HtmlTagToken): boolean {
 export function visibleTextOfHtml(s: string, view: VerbatimView = 'spaced'): string | null {
   const html = String(s ?? '');
   if (view === 'spaced') return textOfHtml(html);
+  const excludeHidden = view === 'joined';
   const tokens = parseHtml(html);
   if (!tokens) return null;
   let out = '';
@@ -166,7 +168,7 @@ export function visibleTextOfHtml(s: string, view: VerbatimView = 'spaced'): str
       out += t.text;
       continue;
     }
-    if (t.type === 'start' && hidesContent(t) && !VOID_ELEMENTS.has(t.name) && !html.slice(t.start, t.end).endsWith('/>')) {
+    if (excludeHidden && t.type === 'start' && hidesContent(t) && !VOID_ELEMENTS.has(t.name) && !html.slice(t.start, t.end).endsWith('/>')) {
       hidden.push({ name: t.name, depth: 1 });
       continue;
     }
@@ -212,14 +214,19 @@ export function prepareBodies(texts: ReadonlyMap<string, string>, maxChars = VER
     const raw = texts.get(p) ?? '';
     const md = /\.md$/i.test(p);
     const spaced = md ? visibleTextOfMd(raw, 'spaced') : visibleTextOfHtml(raw, 'spaced');
+    const joinedAll = md ? null : visibleTextOfHtml(raw, 'joined_all');
+    // v4.2: 見えない中身を除く読み方（joined）は、除き方が決まらない時（閉じない見えない要素）でも joined_all が中身ごと見るので落とすだけ
     const joined = md ? visibleTextOfMd(raw, 'joined') : visibleTextOfHtml(raw, 'joined');
-    if (spaced === null || joined === null) {
+    if (spaced === null || (md ? joined === null : joinedAll === null)) {
       out.incomplete = true;
       continue;
     }
-    const ns = normalizeForMatch(spaced);
-    const nj = normalizeForMatch(joined);
-    const views: Array<[VerbatimView, string]> = nj === ns ? [['spaced', ns]] : [['spaced', ns], ['joined', nj]];
+    const views: Array<[VerbatimView, string]> = [['spaced', normalizeForMatch(spaced)]];
+    for (const [v, t] of [['joined', joined], ['joined_all', joinedAll]] as Array<[VerbatimView, string | null]>) {
+      if (t === null) continue;
+      const n = normalizeForMatch(t);
+      if (!views.some(([, x]) => x === n)) views.push([v, n]);
+    }
     for (const [view, text] of views) {
       let chars = Array.from(text);
       if (total + chars.length > maxChars) {
@@ -414,8 +421,8 @@ function unionHit(a: VerbatimHit, b: VerbatimHit): VerbatimHit {
   };
 }
 
-const viewOf = (h: VerbatimHit): VerbatimView => (h.view === 'joined' ? 'joined' : 'spaced');
-const VIEW_RANK: Record<VerbatimView, number> = { spaced: 0, joined: 1 };
+const viewOf = (h: VerbatimHit): VerbatimView => (h.view === 'joined' || h.view === 'joined_all' ? h.view : 'spaced');
+const VIEW_RANK: Record<VerbatimView, number> = { spaced: 0, joined: 1, joined_all: 2 };
 
 /**
  * 併合（件数で切らない）。同じ path・同じ読み方で区間が重なる hit は範囲の和をとって 1 件（url は先に見つけた方）。
@@ -485,7 +492,7 @@ export function isVerbState(x: unknown): x is VerbState {
       !!r &&
       typeof r === 'object' &&
       typeof r.path === 'string' &&
-      (r.view === 'spaced' || r.view === 'joined') &&
+      (r.view === 'spaced' || r.view === 'joined' || r.view === 'joined_all') &&
       isCount(r.start) &&
       isCount(r.length) &&
       typeof r.url === 'string' &&

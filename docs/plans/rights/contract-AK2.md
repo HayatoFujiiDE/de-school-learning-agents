@@ -10,6 +10,8 @@ v4（2026-11-08）: Astra 実装レビュー（high）の BLOCKING 3 件 → 司
 
 v4.1（2026-11-08）: Astra 実装レビュー（high）2 回目（最終）の BLOCKING 1 件・NON-BLOCKING 3 件 → 司令塔の裁定。(B) 見えない template を挟んで区切った丸写しを、spaced（境目に空白）と joined（template の中身までつなぐ）のどちらでも見落とした → **joined から見えない中身**（template の中身・`hidden` 属性の要素の中身・style 属性に `display:none` / `visibility:hidden` を含む要素の中身。空白と大小文字は無視）を除き、前後を区切りなしでつなぐ（template の中だけの文の誤検出も消える。spaced は §AK と共有の `textOfHtml` なので変えない）。NON-BLOCKING: 途中の記録 parts をまとめる処理も `carry_defers` の先送り（3 回まで）に入れ、使い切ったらまとめずに先へ進む（版は incomplete・記録は truncated）/ 途中の記録の `truncated: true` を引き継ぐ / part を書いた後・D1 の保存の前で止まって再開する順序のテストを足す。
 
+v4.2（2026-11-08 司令塔。自動のセキュリティ点検の指摘 2 件）: 見えない中身の判定（style の宣言の上書き・子での visibility:visible・暗黙の終了タグ）を誤ると、読み方 B が見える文まで除いて一致を失う。→ html / svg に 3 つ目の読み方 `joined_all`（区切りなし・見えない中身も入れる）を足し、見えない中身を除く読み方は**一致を足すだけ**にする（除き方の誤りで一致を失わない）。見えない要素が閉じない時も incomplete にせず joined を落とすだけ。template の中だけの文は joined_all で見つかる（安全側の誤検出として許す）。
+
 ## 実測した事実（repo。2026-11-07）
 
 - 出典照合（`src/checks/citations.ts`）は純関数で、取り込み（`src/jobs.ts` 1930 行付近）が session の events を古い順にページ単位で流し込む（`accumulateCitations(ev.acc, citeSources, p.data)`。ingest の 1 回の呼び出しで `MAX_PAGES` = 500 ページまで）。`fetches` に未対応の `web_fetch` の use を保存し、result を処理したら消す（ページをまたいでも対応できる）。`resultText(ev)` が result の本文（text block と document block）を返す。本文は保存しない（`CitationAcc` は URL 単位の旗だけ。`reconcile_state_json` に保存。state 全体の大きさには既存の 1,500,000 bytes の守りがある）。

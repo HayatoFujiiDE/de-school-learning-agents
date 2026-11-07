@@ -179,20 +179,33 @@ describe('v4 回帰（Astra high REVISE の BLOCKING 2・NON-BLOCKING の引用�
     const bodies = prepareBodies(new Map([[path, body]]));
     expect(bodies.incomplete).toBe(false);
     const r = scanPage(buildNeedles(bodies), bodies, `${L}${P}${R}`, 'u', []);
-    expect(r.hits.map((h) => [h.view, h.text.trim()])).toEqual([['joined', P]]);
+    // v4.2: joined_all（見えない中身も入れる）でも当たることがある。見えない中身を除く joined で必ず当たる
+    expect(r.hits.map((h) => [h.view, h.text.trim()])).toContainEqual(['joined', P]);
   });
-  it('v4.1 template の中だけの丸写しは対象外（どちらの読み方でも見えない）', () => {
+  it('v4.2 template の中だけの丸写しも joined_all で見つける（見えない中身の除き方の判定違いで一致を失わないため、安全側の誤検出として許す）', () => {
     const bodies = prepareBodies(new Map([['parts/p1/app.html', `<template>${P}</template>`]]));
-    expect(scanPage(buildNeedles(bodies), bodies, P, 'u', []).hits).toEqual([]);
+    expect(scanPage(buildNeedles(bodies), bodies, P, 'u', []).hits.map((h) => h.view)).toEqual(['joined_all']);
   });
   it('v4.1 hidden・display:none の中だけの文は、読み方 A（§AK と共有の textOfHtml。変えない）では見えるので 1 件のまま', () => {
     for (const body of [`<p hidden>${P}</p>`, `<div style="display:none">${P}</div>`]) {
       const bodies = prepareBodies(new Map([['parts/p1/app.html', body]]));
-      expect(scanPage(buildNeedles(bodies), bodies, P, 'u', []).hits.map((h) => h.view)).toEqual(['spaced']);
+      expect(scanPage(buildNeedles(bodies), bodies, P, 'u', []).hits.map((h) => h.view)).toContain('spaced');
     }
   });
-  it('v4.1 見えない要素が閉じていない（後ろが全部見えないことになる）→ 本文の検査は incomplete', () => {
-    expect(prepareBodies(new Map([['parts/p1/app.html', `<div hidden>${P}`]])).incomplete).toBe(true);
+  it('v4.2 見えない要素が閉じていない → joined は落とすが、spaced / joined_all が中身ごと見るので incomplete にせず見つける', () => {
+    const bodies = prepareBodies(new Map([['parts/p1/app.html', `<div hidden>${P}`]]));
+    expect(bodies.incomplete).toBe(false);
+    expect(scanPage(buildNeedles(bodies), bodies, P, 'u', []).hits.length).toBeGreaterThanOrEqual(1);
+  });
+  it('v4.2 見えない判定の誤り（後の宣言で display:block に戻す・子で visibility:visible に戻す）でも、joined_all が見える文ごと見つける', () => {
+    for (const body of [
+      `<span>${a}</span><span style="display:none;display:block">${b}</span><span>${c}</span>`,
+      `<span>${a}</span><b style="visibility:hidden"><i style="visibility:visible">${b}</i></b><span>${c}</span>`,
+    ]) {
+      const bodies = prepareBodies(new Map([['parts/p1/app.html', body]]));
+      const r = scanPage(buildNeedles(bodies), bodies, `${L}${P}${R}`, 'u', []);
+      expect(r.hits.map((h) => [h.view, h.text.trim()])).toContainEqual(['joined_all', P]);
+    }
   });
   it('script と style の中身は入れない・comment も入れない', () => {
     for (const body of [`<script>var s = "${P}";</script>`, `<style>/* ${P} */</style>`, `<!-- ${P} -->`]) {
