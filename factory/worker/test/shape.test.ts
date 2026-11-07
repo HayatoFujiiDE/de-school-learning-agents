@@ -1,0 +1,80 @@
+// shape.ts（契約 §AL-1）: material.json の形（schema_version 1 / 2）の分岐。純関数・例外を投げない
+import { describe, expect, it } from 'vitest';
+import { bodiesOf, schemaVersionOf, summariesOf } from '../src/checks/shape';
+import { goodMaterial, goodMaterialV2 } from './helpers';
+
+describe('schemaVersionOf', () => {
+  it('数値の 2 の時だけ 2、それ以外は 1', () => {
+    expect(schemaVersionOf(goodMaterialV2())).toBe(2);
+    expect(schemaVersionOf(goodMaterial())).toBe(1);
+    for (const v of [1, '2', 3, 2.5, null, undefined]) expect(schemaVersionOf({ schema_version: v }), String(v)).toBe(1);
+    for (const m of [{}, null, undefined, 'x', 2, [{ schema_version: 2 }]]) expect(schemaVersionOf(m), JSON.stringify(m)).toBe(1);
+  });
+});
+
+describe('bodiesOf', () => {
+  it('schema 1: variants の .md を出現順に、読み手係と同じ表示名で', () => {
+    expect(bodiesOf(goodMaterial())).toEqual([
+      { path: 'parts/p1/elementary-short.md', label: '小学生・短い', role: 'variant', partId: 'p1', audience: 'elementary', length: 'short', game: false },
+      { path: 'parts/p1/elementary-long.md', label: '小学生・長い', role: 'variant', partId: 'p1', audience: 'elementary', length: 'long', game: false },
+      { path: 'parts/p1/secondary-short.md', label: '中学生・短い', role: 'variant', partId: 'p1', audience: 'secondary', length: 'short', game: false },
+      { path: 'parts/p1/secondary-long.md', label: '中学生・長い', role: 'variant', partId: 'p1', audience: 'secondary', length: 'long', game: false },
+      { path: 'parts/p1/game.md', label: 'ゲーム版', role: 'variant', partId: 'p1', audience: 'elementary', length: 'short', game: true },
+    ]);
+  });
+
+  it('schema 1: .md 以外の変奏・同じ path の 2 件目は出さない。schema 1 の part の body / play は読まない', () => {
+    const m = goodMaterial();
+    const part = (m.parts as Array<Record<string, unknown>>)[0];
+    part.variants = [
+      { audience: 'elementary', length: 'short', path: 'parts/p1/a.svg' },
+      { audience: 'secondary', length: 'long', path: 'parts/p1/b.MD' },
+      { audience: 'elementary', length: 'long', path: 'parts/p1/b.MD' },
+    ];
+    part.body = 'parts/p1/body.md';
+    part.play = 'parts/p1/play.md';
+    expect(bodiesOf(m)).toEqual([
+      { path: 'parts/p1/b.MD', label: '中学生・長い', role: 'variant', partId: 'p1', audience: 'secondary', length: 'long', game: false },
+    ]);
+  });
+
+  it('schema 2: body（本文）→ play（遊びの形）。variants は読まない', () => {
+    expect(bodiesOf(goodMaterialV2())).toEqual([
+      { path: 'parts/p1/body.md', label: '本文', role: 'body', partId: 'p1' },
+      { path: 'parts/p1/play.md', label: '遊びの形', role: 'play', partId: 'p1' },
+    ]);
+    const m = goodMaterialV2();
+    const part = (m.parts as Array<Record<string, unknown>>)[0];
+    delete part.play;
+    part.variants = [{ audience: 'elementary', length: 'short', path: 'parts/p1/x.md' }];
+    expect(bodiesOf(m)).toEqual([{ path: 'parts/p1/body.md', label: '本文', role: 'body', partId: 'p1' }]);
+  });
+
+  it('壊れた入力（parts が配列でない・path が文字列でない・part が object でない）でも例外を投げず飛ばす', () => {
+    for (const m of [null, undefined, 'x', 1, [], {}, { parts: 'p' }, { parts: { p1: {} } }, { schema_version: 2, parts: null }]) {
+      expect(() => bodiesOf(m), JSON.stringify(m)).not.toThrow();
+      expect(bodiesOf(m), JSON.stringify(m)).toEqual([]);
+    }
+    const v1 = { schema_version: 1, parts: [null, 'p', 3, { id: 5, variants: 'x' }, { id: 'p1', variants: [null, { path: 3 }, { path: ['a.md'] }, { path: 'parts/p1/ok.md' }] }] };
+    expect(bodiesOf(v1)).toEqual([{ path: 'parts/p1/ok.md', label: '・', role: 'variant', partId: 'p1', game: false }]);
+    const v2 = { schema_version: 2, parts: [null, { id: 1, body: 3, play: null }, { body: 'parts/p2/body.md', play: ['x'] }] };
+    expect(bodiesOf(v2)).toEqual([{ path: 'parts/p2/body.md', label: '本文', role: 'body', partId: null }]);
+  });
+});
+
+describe('summariesOf', () => {
+  it('schema 1 は summary_elementary → summary_secondary、schema 2 は summary の 1 行', () => {
+    expect(summariesOf(goodMaterial())).toEqual([
+      { key: 'summary_elementary', text: 'レッドストーンで信号を運ぶ' },
+      { key: 'summary_secondary', text: '信号の伝わり方を図で見る' },
+    ]);
+    const v2 = goodMaterialV2();
+    expect(summariesOf(v2)).toEqual([{ key: 'summary', text: v2.summary }]);
+  });
+
+  it('文字列でないものは飛ばし、例外を投げない（schema 1 の summary・schema 2 の summary_elementary は見ない）', () => {
+    expect(summariesOf({ schema_version: 1, summary_elementary: 3, summary_secondary: 'b', summary: 'x' })).toEqual([{ key: 'summary_secondary', text: 'b' }]);
+    expect(summariesOf({ schema_version: 2, summary: null, summary_elementary: 'a' })).toEqual([]);
+    for (const m of [null, undefined, 'x', 1, []]) expect(summariesOf(m)).toEqual([]);
+  });
+});

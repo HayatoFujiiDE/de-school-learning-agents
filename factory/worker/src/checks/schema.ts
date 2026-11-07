@@ -21,6 +21,18 @@ export const MATERIAL_REQUIRED_KEYS = [
   'summary_secondary',
   'parts',
 ] as const;
+/** §AL-1: schema_version 2 の必須キー（summary_elementary / summary_secondary の代わりに summary と spark） */
+export const MATERIAL_REQUIRED_KEYS_V2 = [
+  'schema_version',
+  'slug',
+  'title',
+  'kinds',
+  'catalog_item_id',
+  'concept_codes',
+  'summary',
+  'spark',
+  'parts',
+] as const;
 
 export const AUDIENCES = ['elementary', 'secondary'] as const;
 export const LENGTHS = ['short', 'long'] as const;
@@ -313,6 +325,25 @@ export interface Part {
   tech_dependencies: string[];
   runtime_check: unknown;
   needs_supporter_check: boolean;
+  /** §AL-1: schema 2 だけ。本文 1 本（parts/<id>/ の .md）。schema 2 の part では variants は [] */
+  body?: string;
+  /** §AL-1: schema 2 だけ・任意。遊びの形（parts/<id>/ の .md） */
+  play?: string;
+  /** §AL-1: schema 2 だけ・任意。問いの種（claim_ids の実在は検査しない） */
+  questions_for_kids?: QuestionForKids[];
+  /** §AL-1: schema 2 だけ・任意。関心別の入口 */
+  interest_entries?: InterestEntry[];
+}
+/** §AL-1: parts[].questions_for_kids[] の 1 件 */
+export interface QuestionForKids {
+  id: string;
+  text: string;
+  claim_ids: string[];
+}
+/** §AL-1: parts[].interest_entries[] の 1 件 */
+export interface InterestEntry {
+  interest: string | null;
+  text: string;
 }
 export interface Material {
   schema_version: number;
@@ -321,8 +352,14 @@ export interface Material {
   kinds: number[];
   catalog_item_id: string | null;
   concept_codes: string[];
+  /** schema 2 では ''（利用側の型を変えないため。schema 2 の要約は summary） */
   summary_elementary: string;
+  /** schema 2 では ''（同上） */
   summary_secondary: string;
+  /** §AL-1: schema 2 だけ。子どもに見える要約 1 本 */
+  summary?: string;
+  /** §AL-1: schema 2 だけ。面白さの芯（子どもには見せない） */
+  spark?: string;
   conditions: unknown;
   license_summary: string | null;
   parts: Part[];
@@ -518,6 +555,70 @@ export function imageBytesMatch(path: string, bytes: Uint8Array): boolean {
 }
 
 /**
+ * §AL-1: schema 2 の part の本文・遊びの形・問いの種・関心別の入口の検査（純関数）。i は parts の添字、files は outputs の一式。
+ * - variants が**あれば** bad_type:parts[i].variants（schema 2 に古い形を混ぜない）
+ * - body は必須（無ければ missing_key:parts[i].body）。文字列でなければ bad_type、parts/<id>/ 配下の .md でなければ path_outside_part、
+ *   参照先が無ければ missing_ref。play は任意で同じ条件（null は bad_type）
+ * - questions_for_kids: 省略・空配列は通す。値があれば配列で、各要素は {id: string, text: string, claim_ids: string[]}（空配列は通す）。
+ *   claim_ids の id が claims.json にあるかは見ない（取り込みの赤印で扱う）
+ * - interest_entries: 省略は通す。値があれば配列で、各要素は {interest: string | null, text: string}（interest の省略は null とみなす）
+ */
+function checkPartV2(
+  p: Record<string, unknown>,
+  i: number,
+  files: Map<string, Uint8Array>,
+): { ok: true; value: Pick<Part, 'body' | 'play' | 'questions_for_kids' | 'interest_entries'> } | { ok: false; detail: string } {
+  const bad = (detail: string) => ({ ok: false as const, detail });
+  const partId = p.id as string;
+  if ('variants' in p) return bad(`bad_type:parts[${i}].variants`);
+  const mdRef = (key: 'body' | 'play'): { ok: true; path: string } | { ok: false; detail: string } => {
+    const v = p[key];
+    if (!isStr(v)) return bad(`bad_type:parts[${i}].${key}`);
+    if (!isPartPath(v, partId) || !v.endsWith('.md')) return bad(`path_outside_part:${v}`);
+    if (!files.has(v)) return bad(`missing_ref:${v}`);
+    return { ok: true, path: v };
+  };
+  const value: Pick<Part, 'body' | 'play' | 'questions_for_kids' | 'interest_entries'> = {};
+  if (!('body' in p)) return bad(`missing_key:parts[${i}].body`);
+  const body = mdRef('body');
+  if (!body.ok) return body;
+  value.body = body.path;
+  if ('play' in p) {
+    const play = mdRef('play');
+    if (!play.ok) return play;
+    value.play = play.path;
+  }
+  if ('questions_for_kids' in p) {
+    const qs = p.questions_for_kids;
+    if (!Array.isArray(qs)) return bad(`bad_type:parts[${i}].questions_for_kids`);
+    const out: QuestionForKids[] = [];
+    for (const [j, q] of qs.entries()) {
+      const at = `bad_type:parts[${i}].questions_for_kids[${j}]`;
+      if (!isPlainObj(q)) return bad(at);
+      if (!isStr(q.id)) return bad(`${at}.id`);
+      if (!isStr(q.text)) return bad(`${at}.text`);
+      if (!isStrArr(q.claim_ids)) return bad(`${at}.claim_ids`);
+      out.push({ id: q.id, text: q.text, claim_ids: [...q.claim_ids] });
+    }
+    value.questions_for_kids = out;
+  }
+  if ('interest_entries' in p) {
+    const es = p.interest_entries;
+    if (!Array.isArray(es)) return bad(`bad_type:parts[${i}].interest_entries`);
+    const out: InterestEntry[] = [];
+    for (const [j, e] of es.entries()) {
+      const at = `bad_type:parts[${i}].interest_entries[${j}]`;
+      if (!isPlainObj(e)) return bad(at);
+      if (!(e.interest === null || e.interest === undefined || isStr(e.interest))) return bad(`${at}.interest`);
+      if (!isStr(e.text)) return bad(`${at}.text`);
+      out.push({ interest: isStr(e.interest) ? e.interest : null, text: e.text });
+    }
+    value.interest_entries = out;
+  }
+  return { ok: true, value };
+}
+
+/**
  * opts.models3dCatalog（§AK-4 2）: checkModels3d に渡す一覧の Map（既定は空の Map = 立体モデルは全部 catalog で落ちる）。
  * 呼び出し側（取り込み）が offerableCatalogMap(await loadRightsGate(env)) を渡す
  */
@@ -536,13 +637,19 @@ export function validateOutputs(files: Map<string, Uint8Array>, opts: { models3d
   if (!mj.ok) return fail('json_invalid:material.json');
   const m = mj.value as Record<string, unknown>;
   if (!m || typeof m !== 'object' || Array.isArray(m)) return fail('json_invalid:material.json');
-  for (const k of MATERIAL_REQUIRED_KEYS) if (!(k in m)) return fail(`missing_key:material.${k}`);
-  if (m.schema_version !== 1) return fail('bad_type:material.schema_version');
+  // §AL-1: schema_version は数値の 1 か 2。値を先に確かめてから、その版の必須キーを見る（schema_version 1 の検査の順と結果は従来どおり）
+  if (!('schema_version' in m)) return fail('missing_key:material.schema_version');
+  if (m.schema_version !== 1 && m.schema_version !== 2) return fail('bad_type:material.schema_version');
+  const v2 = m.schema_version === 2;
+  for (const k of v2 ? MATERIAL_REQUIRED_KEYS_V2 : MATERIAL_REQUIRED_KEYS) if (!(k in m)) return fail(`missing_key:material.${k}`);
   if (!isStr(m.slug) || !isStr(m.title)) return fail('bad_type:material.slug_or_title');
   if (!Array.isArray(m.kinds) || !m.kinds.every(isKind)) return fail('bad_type:material.kinds');
   if (!(m.catalog_item_id === null || isStr(m.catalog_item_id))) return fail('bad_type:material.catalog_item_id');
   if (!isStrArr(m.concept_codes)) return fail('bad_type:material.concept_codes');
-  if (!isStr(m.summary_elementary) || !isStr(m.summary_secondary)) return fail('bad_type:material.summary');
+  if (v2) {
+    if (!isStr(m.summary)) return fail('bad_type:material.summary');
+    if (!isStr(m.spark)) return fail('bad_type:material.spark');
+  } else if (!isStr(m.summary_elementary) || !isStr(m.summary_secondary)) return fail('bad_type:material.summary');
   if (!Array.isArray(m.parts) || m.parts.length === 0) return fail('bad_type:material.parts');
 
   const parts: Part[] = [];
@@ -570,9 +677,15 @@ export function validateOutputs(files: Map<string, Uint8Array>, opts: { models3d
     const ep = p.entry_point as Record<string, unknown> | undefined;
     if (!ep || !(ENTRY_TYPES as readonly unknown[]).includes(ep.type) || !isStr(ep.text))
       return fail(`bad_type:parts[${i}].entry_point`);
-    if (!Array.isArray(p.variants)) return fail(`bad_type:parts[${i}].variants`);
     const variants: Variant[] = [];
-    for (const [j, vr] of (p.variants as unknown[]).entries()) {
+    /** §AL-1: schema 2 の part だけが持つ値（schema 1 の part では読まない） */
+    const v2Part: Pick<Part, 'body' | 'play' | 'questions_for_kids' | 'interest_entries'> = {};
+    if (v2) {
+      const r = checkPartV2(p, i, files);
+      if (!r.ok) return fail(r.detail);
+      Object.assign(v2Part, r.value);
+    } else if (!Array.isArray(p.variants)) return fail(`bad_type:parts[${i}].variants`);
+    for (const [j, vr] of (v2 ? [] : (p.variants as unknown[])).entries()) {
       const v = vr as Record<string, unknown>;
       if (!v || typeof v !== 'object') return fail(`bad_type:parts[${i}].variants[${j}]`);
       if (!(AUDIENCES as readonly unknown[]).includes(v.audience)) return fail(`bad_type:parts[${i}].variants[${j}].audience`);
@@ -590,10 +703,11 @@ export function validateOutputs(files: Map<string, Uint8Array>, opts: { models3d
         path: v.path,
       });
     }
-    for (const a of AUDIENCES)
-      for (const l of LENGTHS)
-        if (!variants.some((v) => !v.game && v.audience === a && v.length === l))
-          return fail(`missing_variant:${p.id}:${a}-${l}`);
+    if (!v2)
+      for (const a of AUDIENCES)
+        for (const l of LENGTHS)
+          if (!variants.some((v) => !v.game && v.audience === a && v.length === l))
+            return fail(`missing_variant:${p.id}:${a}-${l}`);
     const pfiles: PartFile[] = [];
     if (p.files !== undefined) {
       if (!Array.isArray(p.files)) return fail(`bad_type:parts[${i}].files`);
@@ -642,6 +756,7 @@ export function validateOutputs(files: Map<string, Uint8Array>, opts: { models3d
       // 型違い（オブジェクト以外）は null に落とす（§R-46）
       runtime_check: p.runtime_check && typeof p.runtime_check === 'object' && !Array.isArray(p.runtime_check) ? p.runtime_check : null,
       needs_supporter_check: p.needs_supporter_check === true,
+      ...v2Part,
     });
   }
 
@@ -720,8 +835,10 @@ export function validateOutputs(files: Map<string, Uint8Array>, opts: { models3d
     kinds: m.kinds as number[],
     catalog_item_id: (m.catalog_item_id as string | null) ?? null,
     concept_codes: m.concept_codes as string[],
-    summary_elementary: m.summary_elementary as string,
-    summary_secondary: m.summary_secondary as string,
+    // schema 2 は summary_elementary / summary_secondary を持たない。利用側の型（string）を変えないため '' を入れ、要約は summary に置く
+    summary_elementary: v2 ? '' : (m.summary_elementary as string),
+    summary_secondary: v2 ? '' : (m.summary_secondary as string),
+    ...(v2 ? { summary: m.summary as string, spark: m.spark as string } : {}),
     conditions: m.conditions ?? null,
     license_summary: isStr(m.license_summary) ? m.license_summary : null,
     parts,
@@ -739,11 +856,16 @@ export function validateOutputs(files: Map<string, Uint8Array>, opts: { models3d
   };
 }
 
-/** §E-4: claims.json, adapt-rules.md, variants[].path, files[].path（重複除去・昇順） */
+/**
+ * §E-4: claims.json, adapt-rules.md, variants[].path, files[].path（重複除去・昇順）。
+ * §AL-1: schema 2 の part は variants が [] で、本文の body と、あれば play を足す（schema 1 の part は body / play を持たないので従来どおり）
+ */
 export function computePublicPaths(material: Pick<Material, 'parts'>): string[] {
   const set = new Set<string>(['claims.json', 'adapt-rules.md']);
   for (const p of material.parts) {
     for (const v of p.variants) set.add(v.path);
+    if (isStr(p.body)) set.add(p.body);
+    if (isStr(p.play)) set.add(p.play);
     for (const f of p.files) set.add(f.path);
   }
   return [...set].sort();

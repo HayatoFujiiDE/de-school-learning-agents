@@ -1,6 +1,6 @@
 // 純関数: Files API の basename だけの一覧から論理パス（outputs 相対）を復元する（契約 §E-0、§B-4-d `versioned`、§R-41）。I/O を持たない。
 // - 最上位 6 ファイルは同名で対応する
-// - material.json の parts[].variants[].path / parts[].files[].path は basename で raw から引く
+// - material.json の parts[].variants[].path（schema 2 は parts[].body / play。§AL-2）/ parts[].files[].path は basename で raw から引く
 // - raw に同じ basename が 2 つ以上 / 別々の論理パスが同じ basename を指す → duplicate_basename:<name>（§E-0 (b): 素材全体で一意）
 // - imagePaths（§O-7 = 旧 §M-2-7 3。image_id を持つ files[] の論理パス）は raw から引かず Map に入れない（取り込みが image_requests と R2 から採る）。
 //   basename の一意の判定には入れる: raw に同じ basename がある / 別の論理パスと basename が同じ → duplicate_basename:<name>
@@ -9,6 +9,7 @@
 // 形の検査（parts が配列か・path が文字列か 等）はここでは寛容に読み飛ばし、validateOutputs（§E）に落とさせる。
 
 import { isSafeRelativePath } from './schema';
+import { bodiesOf, schemaVersionOf } from './shape';
 
 /** 最上位で同名対応するファイル（§E の木構造の 1 段目） */
 export const TOP_LEVEL_FILES = ['material.json', 'claims.json', 'sources.json', 'adapt-rules.md', 'selfcheck.md', 'questions.json'] as const;
@@ -21,9 +22,21 @@ export const basenameOf = (p: string): string => p.slice(p.lastIndexOf('/') + 1)
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
-/** material.json の parts[].variants[].path と parts[].files[].path を出現順に集める（形が違うものは黙って飛ばす） */
+/**
+ * material.json の本文と parts[].files[].path を出現順に集める（形が違うものは黙って飛ばす）。
+ * schema 1: part の順に variants[].path（.md 以外も）→ files[].path（従来どおり。bodiesOf は .md だけなので使わない）。
+ * schema 2（§AL-2）: bodiesOf（body → play）→ part の順に files[].path
+ */
 function referencedPaths(material: unknown): string[] {
   if (!isObj(material) || !Array.isArray(material.parts)) return [];
+  if (schemaVersionOf(material) === 2) {
+    const out = bodiesOf(material).map((b) => b.path);
+    for (const part of material.parts) {
+      if (!isObj(part) || !Array.isArray(part.files)) continue;
+      for (const item of part.files) if (isObj(item) && typeof item.path === 'string') out.push(item.path);
+    }
+    return out;
+  }
   const out: string[] = [];
   for (const part of material.parts) {
     if (!isObj(part)) continue;

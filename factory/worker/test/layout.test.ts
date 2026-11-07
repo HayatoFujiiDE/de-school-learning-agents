@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveOutputLayout } from '../src/checks/layout';
 import { validateOutputs } from '../src/checks/schema';
 import { goodFiles, goodMaterial } from './helpers';
+import { goodFilesV2, goodMaterialV2 } from './helpers';
 
 const basename = (p: string) => p.slice(p.lastIndexOf('/') + 1);
 /** 論理パスの一式を「本物の files.list が返す形」（basename だけ）にする */
@@ -140,5 +141,58 @@ describe('resolveOutputLayout', () => {
     if (!r.ok) return;
     expect(r.files.has('material.json')).toBe(false);
     expect(validateOutputs(new Map([...r.files].map(([l, b]) => [l, raw.get(b)!])))).toMatchObject({ ok: false, detail: 'missing_required:material.json' });
+  });
+});
+
+// §AL-2: schema_version 2 は parts[].body / play（bodiesOf）+ files[].path を論理パスに置く
+describe('resolveOutputLayout（schema_version 2）', () => {
+  it('body・play・files が basename で引かれ、validateOutputs を通る', () => {
+    const logical = goodFilesV2();
+    const raw = rawOf(logical);
+    const r = resolveOutputLayout([...raw.keys()], dec.decode(raw.get('material.json')!));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect([...r.files.keys()].sort()).toEqual([...logical.keys()].sort());
+    expect(r.files.get('parts/p1/body.md')).toBe('body.md');
+    expect(r.files.get('parts/p1/play.md')).toBe('play.md');
+    expect(r.files.get('parts/p1/figure-1.svg')).toBe('figure-1.svg');
+    expect(r.files.get('parts/p1/app.html')).toBe('app.html');
+    expect(r.unreferenced).toEqual([]);
+    expect(validateOutputs(new Map([...r.files].map(([l, b]) => [l, raw.get(b)!]))).ok).toBe(true);
+  });
+
+  it('schema 2 の variants は論理パスに置かない（validateOutputs の bad_type に落ちる）', () => {
+    const m = goodMaterialV2();
+    const p1 = (m.parts as Array<Record<string, unknown>>)[0];
+    p1.variants = [{ audience: 'elementary', length: 'short', interest: null, game: false, path: 'parts/p1/old.md' }];
+    const logical = goodFilesV2(m);
+    logical.set('parts/p1/old.md', enc.encode('古い形'));
+    const raw = rawOf(logical);
+    const r = resolveOutputLayout([...raw.keys()], JSON.stringify(m));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.files.has('parts/p1/old.md')).toBe(false);
+    expect(r.unreferenced).toEqual(['old.md']);
+    expect(validateOutputs(new Map([...r.files].map(([l, b]) => [l, raw.get(b)!])))).toMatchObject({ ok: false, detail: 'bad_type:parts[0].variants' });
+  });
+
+  it('body と files が同じ basename を別の論理パスで指したら duplicate_basename', () => {
+    const m = goodMaterialV2();
+    const p1 = (m.parts as Array<Record<string, unknown>>)[0];
+    const p2 = { ...p1, id: 'p2', body: 'parts/p2/p2-body.md', files: [{ path: 'parts/p2/body.md', role: 'note' }] };
+    delete (p2 as Record<string, unknown>).play;
+    const m2 = { ...m, parts: [p1, p2] };
+    const names = [...rawOf(goodFilesV2(m2)).keys(), 'p2-body.md'];
+    expect(resolveOutputLayout(names, JSON.stringify(m2))).toEqual({ ok: false, detail: 'duplicate_basename:body.md' });
+  });
+
+  it('body の参照先が raw に無ければ Map に入れない（validateOutputs の missing_ref に落ちる）', () => {
+    const raw = rawOf(goodFilesV2());
+    raw.delete('body.md');
+    const r = resolveOutputLayout([...raw.keys()], dec.decode(raw.get('material.json')!));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.files.has('parts/p1/body.md')).toBe(false);
+    expect(validateOutputs(new Map([...r.files].map(([l, b]) => [l, raw.get(b)!])))).toMatchObject({ ok: false, detail: 'missing_ref:parts/p1/body.md' });
   });
 });

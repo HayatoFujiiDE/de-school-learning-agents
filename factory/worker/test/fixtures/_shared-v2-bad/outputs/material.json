@@ -1,0 +1,39 @@
+{
+  "schema_version": 2,
+  "slug": "mc-redstone-basics",
+  "title": "レッドストーン回路のしくみ",
+  "kinds": [3, 4],
+  "catalog_item_id": "mc-redstone",
+  "concept_codes": [],
+  "summary": "レッドストーン信号の強さと距離の関係を説明できることが学習目標",
+  "spark": "信号はどこまでも進むのではなく 15 ブロックで力つきる。目に見えない強さが 1 つずつへっていると気づくと、回路の組み方が一気に分かる。",
+  "conditions": { "tools": ["Minecraft Java 版 26.3"], "place": "教室", "age_band": ["elementary", "secondary"], "supporter_check": false },
+  "license_summary": "出典は Minecraft Wiki（CC BY-NC-SA 3.0）",
+  "parts": [
+    {
+      "id": "p1",
+      "kind": 3,
+      "title": "信号の道",
+      "entry_point": { "type": "touch", "text": "粉を 20 個ならべて、レバーをたおしてみよう" },
+      "body": "parts/p1/body.md",
+      "play": "parts/p1/play.md",
+      "questions_for_kids": [
+        { "id": "q1", "text": "粉は何個目まで光るかな？", "claim_ids": ["c9"] }
+      ],
+      "interest_entries": [
+        { "interest": "minecraft", "text": "マイクラが好きなら、自分の家のドアを信号で開けるしかけにつなげてみよう" },
+        { "interest": "craft", "text": "ものづくりが好きなら、紙とクリップで信号の道の模型を作ってみよう" }
+      ],
+      "files": [
+        { "path": "parts/p1/figure-1.svg", "role": "figure" },
+        { "path": "parts/p1/app.html", "role": "app" }
+      ],
+      "videos": [],
+      "models3d": [],
+      "adjustable": ["例に出すブロックの種類", "ならべる粉の数"],
+      "tech_dependencies": ["svg", "html"],
+      "runtime_check": { "how": "app.html のスライダーを 16 にする", "expected": "ランプが消える" },
+      "needs_supporter_check": false
+    }
+  ]
+}

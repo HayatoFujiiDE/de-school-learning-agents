@@ -1,0 +1,4 @@
+{"sources":[
+  {"id":"s1","url":"https://minecraft.wiki/w/Redstone_Dust","title":"Redstone Dust – Minecraft Wiki","accessed_at":"2026-11-04","quoted_excerpt":"A redstone signal can travel up to 15 blocks along redstone dust","license":"CC BY-NC-SA 3.0","is_primary":true},
+  {"id":"s2","url":"https://minecraft.wiki/w/Redstone_Torch","title":"Redstone Torch – Minecraft Wiki","accessed_at":"2026-11-04","quoted_excerpt":"A redstone torch can be used as a NOT gate","license":"CC BY-NC-SA 3.0","is_primary":true}
+]}

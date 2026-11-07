@@ -1,0 +1,4 @@
+{"claims":[
+  {"id":"c1","text":"レッドストーン信号は粉の上を最大 15 ブロックまで伝わる","text_elementary":"レッドストーンの信号は、粉の上を 15 ブロックまで進む","status":"confirmed","source_ids":["s1"],"used_in":["p1"]},
+  {"id":"c2","text":"レッドストーンのたいまつは信号を反転させる","status":"confirmed","source_ids":["s2"],"used_in":["p1"]}
+]}

@@ -1,4 +1,6 @@
 // テスト用: 正しい成果物一式を作る
+import { readFileSync, readdirSync } from 'node:fs';
+
 export function goodMaterial(): Record<string, unknown> {
   const v = (audience: string, length: string, game = false, path?: string) => ({
     audience,
@@ -45,5 +47,32 @@ export function goodFiles(material: Record<string, unknown> = goodMaterial()): M
   for (const a of ['elementary', 'secondary']) for (const l of ['short', 'long']) put(`parts/p1/${a}-${l}.md`, `見てみよう [c1]`);
   put('parts/p1/game.md', 'クイズ');
   put('parts/p1/figure-1.svg', '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+  return m;
+}
+
+/** §AL-1: test/fixtures/<name>/outputs/ の一式（論理パス → bytes）。fixture を正本にして、コードと中身がずれないようにする */
+export function outputsFixture(name: string): Map<string, Uint8Array> {
+  const root = new URL(`./fixtures/${name}/outputs/`, import.meta.url);
+  const m = new Map<string, Uint8Array>();
+  const walk = (rel: string) => {
+    for (const e of readdirSync(new URL(rel, root), { withFileTypes: true })) {
+      const p = rel + e.name;
+      if (e.isDirectory()) walk(`${p}/`);
+      else m.set(p, new Uint8Array(readFileSync(new URL(p, root))));
+    }
+  };
+  walk('');
+  return m;
+}
+
+/** §AL-1: schema_version 2 の正しい material.json（test/fixtures/_shared-v2/outputs/material.json と同じ内容） */
+export function goodMaterialV2(): Record<string, unknown> {
+  return JSON.parse(new TextDecoder().decode(outputsFixture('_shared-v2').get('material.json')!)) as Record<string, unknown>;
+}
+
+/** §AL-1: schema_version 2 の正しい成果物一式（test/fixtures/_shared-v2/outputs/ と同じ内容。material.json だけ引数で差し替える） */
+export function goodFilesV2(material: Record<string, unknown> = goodMaterialV2()): Map<string, Uint8Array> {
+  const m = outputsFixture('_shared-v2');
+  m.set('material.json', new TextEncoder().encode(JSON.stringify(material)));
   return m;
 }
