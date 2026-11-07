@@ -8,8 +8,8 @@ const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 export const MINECRAFT_RE = /minecraft|マイクラ|マインクラフト/i;
 /** 版番号（§MC-1 2） */
 const VERSION_RE = /\b(\d{1,2}\.\d{1,2}(?:\.\d{1,2})?)\b/;
-const JAVA_RE = /java/i;
-const BEDROCK_RE = /bedrock|統合版|be\b/i;
+const JAVA_RE = /java(?!script)/i;
+const BEDROCK_RE = /bedrock|統合版|\bbe\b/i;
 
 /** 版が決まっている題材の動画の公開日の上限（§MC-0・§MC-1 4。3 年） */
 export const VERSION_BOUND_VIDEO_MAX_AGE_DAYS = 1095;
@@ -40,7 +40,7 @@ export function isVersionBoundMaterial(material: unknown): boolean {
 
 /**
  * 素材が宣言する版（§MC-1 2）: conditions.tools[] の文字列のうち、MINECRAFT_RE に合い版番号を含むものを順に見て、
- * /java/i なら java、/bedrock|統合版|be\b/i なら bedrock（最初に決まったもの）。どれも決まらない・tools が無い → null
+ * /java(?!script)/i なら java、/bedrock|統合版|\bbe\b/i なら bedrock（最初に決まったもの。JavaScript・maybe の be には当てない）。どれも決まらない・tools が無い → null
  */
 export function declaredEdition(material: unknown): DeclaredEdition | null {
   if (!isObj(material)) return null;

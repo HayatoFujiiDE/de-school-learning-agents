@@ -19,8 +19,8 @@
 
 1. `isVersionBoundMaterial(material)`: `catalog_item_id` が `mc-` で始まる、または title・slug・`conditions.tools[]` のどれかが `/minecraft|マイクラ|マインクラフト/i` に合う → true。material が読めない時は false。
 2. `declaredEdition(material)`: `conditions.tools[]` の文字列のうち、`/minecraft|マイクラ|マインクラフト/i` に合い、かつ `/\b(\d{1,2}\.\d{1,2}(?:\.\d{1,2})?)\b/` の版番号を含むものを探す。
-   - その文字列が `/java/i` に合う → `{ edition: 'java', version }`。
-   - `/bedrock|統合版|be\b/i` に合う → `{ edition: 'bedrock', version }`。
+   - その文字列が `/java(?!script)/i` に合う → `{ edition: 'java', version }`。
+   - `/bedrock|統合版|\bbe\b/i` に合う → `{ edition: 'bedrock', version }`。
    - どちらでもない・版番号が無い・tools が無い → `null`。
 3. **本文の版の 1 文（オーナー指示 2026-11-07「マイクラのコンテンツを作るときは必ずバージョンを記載」）**: 版が決まっている題材で `declaredEdition` が java の時、parts/ 配下の子ども向け本文（.md。短い・詳しい・小学生・中学生・game のすべて）の各ファイルに「Java 版」と宣言した版番号（例 `26.3`）の両方が書かれていること。取り込みの機械検査 `src/checks/childtext.ts` に kind `edition_text`（`{ path, kind: 'edition_text', sample: '' }`。無い本文ごとに 1 件。20 件の上限は既存のまま）を足し、`checks_json.child_text` に入れる。`declaredEdition` が null の版は本文を見ない（宣言の無さは MC-2 の `edition_missing` が拾う）。
 4. 定数: `VERSION_BOUND_VIDEO_MAX_AGE_DAYS = 1095`。`isVideoTooOld(published, now)`: `published` が `YYYY-MM-DD` で、now − published > 1095 日 → true。形が違えば false（「不明」は別に扱う）。
@@ -66,9 +66,9 @@
 3. 失敗の表:
    | 状態 × 落ちる場所 | 次に起きること | 収束 |
    |---|---|---|
-   | 却下の batch が通る前に落ちた | 依頼は taken のまま → 60 分で expired。出し直すと 2 からやり直す | 版は review のまま（二重却下なし） |
+   | 却下の batch が通る前に落ちた | 処理中の例外なら依頼は failed（§W のまま。taken は失効しない）。出し直すと 2 からやり直す | 版は review のまま（二重却下なし） |
    | 却下が通り queue の前に落ちた | 素材は idle。出し直すと 3 だけ走る | 版の却下は 1 回 |
-   | queue が通り結果の記録の前に落ちた | 依頼は expired。素材は queued（job が 1 つ） | 出し直すと `material_busy` で refused（二重 queue なし） |
+   | queue が通り結果の記録の前に落ちた | 依頼は failed か taken のまま。素材は queued（job が 1 つ） | 出し直すと `material_busy` で refused（二重 queue なし） |
    | 同じ素材に人が同時に差し戻した | 却下の CAS か queue の idle 条件で片方だけ通る | 1 job |
 4. `scripts/ops-request.sh redo <material_id> <注文票.md>`: uuid の形を `is_uuid` で検査、ファイルを python で読んで JSON にし、SQL の `'` を `''` に倍にして INSERT。32768 文字を超えたら送らない。`--wait` は他の mode と同じ。
 5. migration 0014: ops_requests の CHECK に `material_redo` を足す（0013 と同じ作り直し）。`test/d1-shim.ts` に足す。

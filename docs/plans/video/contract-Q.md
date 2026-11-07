@@ -399,7 +399,7 @@ Q-11 実装レビュー後の追記（2026-11-05・Astra high GO の non-blockin
    - 「動画は web_search の結果（題名・チャンネル名が出る）か、注文票に書かれた url から選ぶ」の行を直す: 候補は web_search の結果か注文票の url から選び、**使う前に `youtube_info` で題名とチャンネル名を調べる**。title と channel は、道具が返したとおりに書く。道具が ok を返さなかった動画は使わない。チャンネル名と題名から本人のアップと判断できない動画は使わない。
    - 「YouTube のページは web_fetch で開けないので、開こうとしない」は残す。
 8. **変えないもの**: 検証の時の公式の情報（§Q-11。版 × 動画ごとの記録と 5 回の上限）は別の数・別の記録のまま。`youtube_info` の結果は R2 に保存しない（検証の時に取り直す）。material.json の形・rubric・確認画面・migration・wrangler.jsonc・allowlist。
-9. **保証（有界）**: 道具が返すのは、YouTube の oEmbed が返した題名とチャンネル名（投稿者が書いた文）。本人のアップかどうかは職人の判断で、検証係と人が後で見る（§Q-11 のまま）。Worker が外へ出す要求は `OEMBED_ENDPOINT` への GET だけで、宛先は 2 で検査した id から Worker が組み立てる（職人が書いた url をそのまま fetch しない）。job ごとの外向きの呼び出しは 12 回以下。
+9. **保証（有界）**: 道具が返すのは、YouTube の oEmbed が返した題名とチャンネル名（投稿者が書いた文）と公開日（§MC-3。watch ページの `uploadDate`）。本人のアップかどうかは職人の判断で、検証係と人が後で見る（§Q-11 のまま）。Worker が外へ出す要求は `OEMBED_ENDPOINT` への GET と、oEmbed が ok の時の watch ページへの GET 1 回（§MC-3 2。2026-11-07 改訂）で、宛先はどちらも 2 で検査した id から Worker が組み立てる（職人が書いた url をそのまま fetch しない）。job ごとの外向きの呼び出しは 12 × 2 回以下。
 10. **反映の順**: Worker の deploy → 職人の定義の `ant apply` → 試しの session。逆の順だと、道具の呼び出しに「画像生成はまだ使えません」が返る（素材は壊れないが、動画は入らない）。
 11. **受け入れ（vitest。fake の port）**:
     - ok・not_found・restricted・unavailable・無効な入力（youtu.be・`&t=10`・前後の空白・別ホスト・文字列でない・12 文字の id）・上限（13 回目）で、4 のとおりの本文と is_error が送られる。無効な入力は数を使わず oEmbed を呼ばない。
