@@ -37,7 +37,8 @@ export interface TopicBody {
     safety: boolean;
     thumb_prompt: string | null;
   } | null;
-  sources: Array<{ id: string; url: string; name: string; quote: string }>;
+  /** for_learner（v2.9・任意）: 子どもが自分で開いて参考にできるページか。無い時は false 扱い（保存済みのお題も同じ） */
+  sources: Array<{ id: string; url: string; name: string; quote: string; for_learner?: boolean }>;
   tags: { interests: string[]; concept_codes: string[] };
 }
 
@@ -75,11 +76,11 @@ const TOP_KEYS = ['schema_version', 'kind', 'locale', 'title', 'lead', 'event_da
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const chars = (s: string): number => Array.from(s).length;
 
-/** ちょうどこのキーだけを持つオブジェクトか（足りない・余分は false） */
-function exactKeys(v: unknown, keys: readonly string[]): v is Record<string, unknown> {
+/** ちょうどこのキーだけを持つオブジェクトか（足りない・余分は false）。optional は、あっても無くてもよいキー（v2.9 の sources[].for_learner） */
+function exactKeys(v: unknown, keys: readonly string[], optional: readonly string[] = []): v is Record<string, unknown> {
   if (!isObj(v)) return false;
   const own = Object.keys(v);
-  return own.length === keys.length && keys.every((k) => Object.hasOwn(v, k));
+  return keys.every((k) => Object.hasOwn(v, k)) && own.every((k) => keys.includes(k) || optional.includes(k));
 }
 
 function okStr(v: unknown, max: number): v is string {
@@ -144,7 +145,8 @@ export function validateTopicBody(body: unknown, opts: ValidateOptions): string[
   if (!inRange(body.sources, 'sources')) r.add('sources_count');
   else {
     for (const s of body.sources) {
-      if (!exactKeys(s, ['id', 'url', 'name', 'quote']) || typeof s.id !== 'string' || !ID_RE.test(s.id)) {
+      // for_learner は任意（v2.9）。あれば boolean だけ（ほかの型は 'source'）。検査（check / judge）は for_learner を見ない
+      if (!exactKeys(s, ['id', 'url', 'name', 'quote'], ['for_learner']) || typeof s.id !== 'string' || !ID_RE.test(s.id) || (Object.hasOwn(s, 'for_learner') && typeof s.for_learner !== 'boolean')) {
         r.add('source');
         continue;
       }
@@ -384,6 +386,14 @@ const locSchema = { type: 'object', additionalProperties: false, required: ['s',
 const idSchema = { type: 'string' } as const;
 const idsSchema = { type: 'array', items: { type: 'string' } } as const;
 
+/**
+ * sources[].for_learner の決まり（v2.9。オーナーの指示 2026-11-07「出典はチェックの時には必要。ユーザー本文には必要ないけど」「参考になる資料ならユーザーにも見せたい」）。
+ * save_topics の schema の property の description と、生成の system 文の形の決まり（prompts.ts の shapeRules）の両方に入れる。
+ * prompts.ts は schema.ts を読むので、文はここに置く（逆向きに読むと循環する）
+ */
+export const FOR_LEARNER_RULE =
+  'for_learner は、子ども（小学生〜中学生）が自分で開いて読んで参考になるページだけ true にします（子ども向けの解説・博物館や公的機関のやさしい解説・図や写真の多い入門など）。報道・論文・専門の資料・有料の記事は false にします。迷ったら false にします。出典の決まり（開けたページだけ・quote は一字も変えずに写す）は true でも false でも同じです。';
+
 export const TOPIC_BODY_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -440,7 +450,16 @@ export const TOPIC_BODY_JSON_SCHEMA = {
         },
       ],
     },
-    sources: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['id', 'url', 'name', 'quote'], properties: { id: idSchema, url: { type: 'string' }, name: { type: 'string' }, quote: { type: 'string' } } } },
+    sources: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'url', 'name', 'quote'],
+        // for_learner は任意（v2.9）。決まりの文は property の description（prompts.ts の shapeRules にも同じ文）
+        properties: { id: idSchema, url: { type: 'string' }, name: { type: 'string' }, quote: { type: 'string' }, for_learner: { type: 'boolean', description: FOR_LEARNER_RULE } },
+      },
+    },
     tags: {
       type: 'object',
       additionalProperties: false,

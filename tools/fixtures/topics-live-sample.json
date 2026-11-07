@@ -104,7 +104,7 @@
             "make": null,
             "sources": [
               { "id": "s1", "url": "https://example.org/news-1", "name": "例の出典 1", "quote": "この引用はテストのための架空の文で、二十字をこえています。" },
-              { "id": "s2", "url": "https://example.org/news-2", "name": "例の出典 2", "quote": "この引用はテストのための架空の文で、二十字をこえています。" }
+              { "id": "s2", "url": "https://example.org/news-2", "name": "例の出典 2", "quote": "この引用はテストのための架空の文で、二十字をこえています。", "for_learner": true }
             ],
             "tags": { "interests": [], "concept_codes": [] }
           }
@@ -161,7 +161,7 @@
               "make_steps": [{ "s": "一歩目", "e": "いっぽめ" }, { "s": "二歩目", "e": "にほめ" }, { "s": "三歩目", "e": "さんぽめ" }] },
             "make": null,
             "sources": [
-              { "id": "s1", "url": "https://example.org/philo-1", "name": "例の出典 A", "quote": "この引用はテストのための架空の文で、二十字をこえています。" },
+              { "id": "s1", "url": "https://example.org/philo-1", "name": "例の出典 A", "quote": "この引用はテストのための架空の文で、二十字をこえています。", "for_learner": false },
               { "id": "s2", "url": "https://example.org/philo-2", "name": "例の出典 B", "quote": "この引用はテストのための架空の文で、二十字をこえています。" }
             ],
             "tags": { "interests": [], "concept_codes": [] }

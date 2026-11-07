@@ -8,6 +8,16 @@ const out = (o: Partial<CheckOutput> & { ids?: string[] } = {}): CheckOutput => 
 const rows = (r: Record<string, JudgeSourceRow['fetch_result']>): JudgeSourceRow[] => Object.entries(r).map(([source_id, fetch_result]) => ({ source_id, fetch_result }));
 
 describe('judgeCheck', () => {
+  it('for_learner が true の出典も同じ検査（contract-T v2.9。印で判定は変わらない）', () => {
+    const plain = newsBody(D);
+    const learner = { ...plain, sources: plain.sources.map((s) => ({ ...s, for_learner: true })) };
+    for (const fr of ['found', 'not_found', 'fetch_failed'] as const) {
+      const o = out({ sources: fr === 'found' ? [{ source_id: 's1', support: 'supported' }] : [] });
+      expect(judgeCheck(learner, rows({ s1: fr }), o, 'normal', { slotDay: D })).toEqual(judgeCheck(plain, rows({ s1: fr }), o, 'normal', { slotDay: D }));
+    }
+    expect(judgeCheck(learner, rows({ s1: 'not_found' }), out({ ids: [] }), 'normal', { slotDay: D }).verdict).toBe('red');
+    expect(judgeCheck(learner, rows({ s1: 'found' }), out({ sources: [{ source_id: 's1', support: 'supported' }] }), 'normal', { slotDay: D }).verdict).toBe('green');
+  });
   it('必須の出典 0 個 + flags あり → 赤（flagged）・sourcesOk は true・承認できる', () => {
     const j = judgeCheck(makeBody(), [], out({ flags: ['one_sided'] }), 'normal', { slotDay: D });
     expect(j.verdict).toBe('red');

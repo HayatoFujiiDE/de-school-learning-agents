@@ -420,7 +420,7 @@ circle: [{ id, ask: level|null, time }]
 - 変換（工場の `body` → AF-3 の形）。`kind` が news / talk / philo のものだけ（make は捨てて件数だけ数える）:
   - `id` = `'fx-' + topic_id`（`[A-Za-z0-9_-]` 以外は `-`）。同じ `lineage_id` は 1 本だけ（日付の新しい方、同じなら先に来た方。ストックは日付つきより古い扱い）。
   - `kind` / `heavy: needs_supporter === true` / `source: 'factory'` / `art: null` / `reason: null`。`date`: news は `event_day` から `['M 月 D 日', 'M 月 D 日']`、ほかは `null`。`title` / `lead` = `[s, e]`（s = 中、e = 小）。
-  - `facts`: `premises` を先に `{ text, src: null }`、続けて `facts` を `{ text, src }`。`src` は `source_ids` が 1 つなら文字列・2 つ以上なら配列・0 なら `null`（`views` も同じ）。`views`: `{ who: [name, name], stance, src }`。`asks`: `{ level, text }`。`stances`: `{ id, label }`。`sources`: `{ id, name, url, checked: 取り込んだ日 }`。`next`: `{ talk, makeTitle, makeSteps }`。
+  - `facts`: `premises` を先に `{ text, src: null }`、続けて `facts` を `{ text, src }`。`src` は `source_ids` が 1 つなら文字列・2 つ以上なら配列・0 なら `null`（`views` も同じ）。`views`: `{ who: [name, name], stance, src }`。`asks`: `{ level, text }`。`stances`: `{ id, label }`。`sources`: `{ id, name, url, checked: 取り込んだ日, learn: for_learner === true }`（`learn` は contract-T v2.9）。`next`: `{ talk, makeTitle, makeSteps }`。
 - 検査（変換した後の形。外れたお題は捨て、理由コードと件数だけ出す。本文は出さない）: 必須項目がそろう（`facts` は 1 つ以上）/ 文字列は空でなく 300 字以下 / `asks` はちょうど 3 で level が check・self・open 1 つずつ / `stances` 2〜4（id は重ならず `none` でない）/ `next.makeSteps` 3〜4 / `sources[].url` は `https://` で始まり `new URL()` で読める / `src` が指す id が `sources` にある / 子どもが読む文（title・lead・facts・views・asks・stances・next の中・小）に `tools/check.sh` の禁止語（点数・ランキング・順位・評価・成績・レベル）が無い（理由コード `forbidden`。司令塔の裁定 2026-11-06）。
 - 出力 `app-v3/js/topics-live.js` = 頭の 1 行コメント + `window.DES = window.DES || {};` + `window.DES.topicsLive = { pulledAt, base, topics: [...] };`。中身は `JSON.stringify` で作り、`<` と U+2028 / U+2029 を `\u` エスケープにする。書き込みは一時ファイル → rename。
 - 最後に 1 行: `PULL_TOPICS http=<n> ok=<n> topics=<n> kept=<n> dropped=<n> make_skipped=<n> wrote=<yes|no>`。
@@ -433,6 +433,7 @@ circle: [{ id, ask: level|null, time }]
 - 出所の印: `source: 'factory'` は「バディが作ったお題」の位置に「工場で作って確かめたお題」（小「こうじょうでつくって、たしかめたお題」）。
 - 「なぜ出したか」: `reason` が null の時はその行を出さない。「確かめた日」: お題の `sources[0].checked`（工場のお題は取り込んだ日）。
 - 出典は `https://` のものだけ `<a target="_blank" rel="noopener noreferrer">`、それ以外は名前だけ。文字はすべてテキストノードで入れる。
+- 出典の表示（contract-T v2.9。上の 1 行の出し方は「参考になる資料」の欄だけに使う）: 事実・考えの各行に「出典: …」を出さない。出典のうち `learn: true`（工場の `sources[].for_learner`。変換で `learn`、無い時は false）のものが 1 つ以上ある時だけ、詳細の下に「参考になる資料」の欄（名前のリンク）を出す。無い時は欄ごと出さない。「確かめた日」は残す。
 - 保存（`des3.odai`）にもう無い id が残っていても落ちない（AF-5 の normalize で捨てる）。
 
 **3. 検証**: `node tools/today-test.js`（`TODAY_TEST=PASS`。`--from-file tools/fixtures/topics-live-sample.json` で動かした `PULL_TOPICS` の行と書き出したファイルの中身も見る）/ `node tools/make-test.js`（`MAKE_TEST=PASS`）/ `sh tools/check.sh … today/<工場のお題の id>`（`CHECK_RESULT=PASS`）。

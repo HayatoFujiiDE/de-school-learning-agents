@@ -81,7 +81,8 @@ export function convertTopic(item, checked) {
     }),
     asks: arr(b.asks).map((a) => ({ level: isObj(a) ? a.level : null, text: isObj(a) ? pair(a.text) : null })),
     stances: arr(b.stances).map((s) => ({ id: isObj(s) ? s.id : null, label: isObj(s) ? pair(s.label) : null })),
-    sources: arr(b.sources).map((s) => ({ id: isObj(s) ? s.id : null, name: isObj(s) ? s.name : null, url: isObj(s) ? s.url : null, checked })),
+    // learn: 子どもの画面の「参考になる資料」に出すか（工場の sources[].for_learner。true の時だけ true、無い・ほかの値は false。contract-T v2.9）
+    sources: arr(b.sources).map((s) => ({ id: isObj(s) ? s.id : null, name: isObj(s) ? s.name : null, url: isObj(s) ? s.url : null, checked, learn: isObj(s) && s.for_learner === true })),
     next: isObj(b.next) ? { talk: pair(b.next.talk), makeTitle: pair(b.next.make_title), makeSteps: arr(b.next.make_steps).map(pair) } : null,
   };
 }

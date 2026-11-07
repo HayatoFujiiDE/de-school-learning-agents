@@ -31,7 +31,7 @@
   "next":   { "talk": {"s","e"}, "make_title": {"s","e"}, "make_steps": [{"s","e"}] } | null,
   "make":   { "category", "line": {"s","e"}, "first_step": {"s","e"}, "need": {"s","e"},
               "minutes": 10..120, "steps": [{"s","e"}], "safety": bool, "thumb_prompt": "..." | null } | null,
-  "sources":[{ "id", "url", "name", "quote" }],
+  "sources":[{ "id", "url", "name", "quote", "for_learner"? }],   // for_learner は任意の boolean（v2.9。無い時は false）
   "tags":   { "interests": ["minecraft"|"programming"|"craft"|"digital"|"media"|"drawing"|"basics"|"writing"], "concept_codes": [] } }
 ```
 
@@ -578,6 +578,17 @@ v2.7 を出した後、本番の philo の手動 run が `failed: no_valid_topic
 - **観測の列**: migration 0008 で `topic_runs.diag_json TEXT`（NULL 可・既存の行はそのまま）。run を閉じる全部の経路（done・`failed` の各コード・`save_failed`・`cost_cap`・`max_tokens`・`input_failed`。掃除の `abandoned` は除く）で、閉じる UPDATE と同じ文で書く（diag の組み立ての失敗は NULL にするだけで、閉じ方・台帳・CAS は変わらない）。形: `{ v:1, turns, nudged, calls:[{ turn, stop_reason, in, out, cache_w, cache_r, searches, fetches, fetch_errors:{code:n}, pending_server_tool, ms }], stop, save_called, offered, dropped_reasons:{code:n}, empty_reason }`。`stop` は続けずに止めた理由（`max_tokens` / `cost_cap` / `turn_limit` / `no_time` / `stop_<stop_reason>`。無ければ null）、`offered` は `save_topics` の topics の本数（max_tokens の時も数えるだけ）。本文・URL・検索語・ホスト名は入れない。calls は 4 件まで・文字列は既知の列挙値か `^[a-z_]{1,40}$`（ほかは `other`）・数の map の鍵は 20 まで（超えた分は `other`）・全体 4000 字まで（`src/topics/diag.ts`）。`GET /api/topics/runs` は `diag_json` を返さない（画面と API は変えない。司令塔は D1 で読む）。
 - **empty_reason**: `save_topics` の input schema に任意の `empty_reason`（enum: `no_sources_found` / `sources_not_openable` / `rules_not_met` / `out_of_time_or_budget` / `other`）を足す。「topics が空の時は 1 つ選ぶ」の決まりは、その property の `description` に置く（0 回目の params を v2.7 と同じに保つため、system 文と tool の説明は変えない）。topics が空でない時は無視。`validateTopicBody` などの検査は変えない。
 - 0 回目の params の v2.7 からの違いは、`max_tokens`（16000）と `save_topics` の schema の `empty_reason` だけ。台帳・CAS・queue・検査・続きの上限の振る舞いは変えない。
+
+## v2.9 の裁定（2026-11-07、オーナーの指示。出典は検査用、子どもには「参考になる資料」だけ見せる）
+
+オーナーの原文（2026-11-07）: 「出典はチェックの時には必要。ユーザー本文には必要ないけど」「参考になる資料ならユーザーにも見せたい」
+
+- **本文の形**: `sources[]` に任意の `for_learner: boolean` を足す（`validateTopicBody` は必須 4 つ + 任意 1 つを許す。あれば boolean だけで、ほかの型は `source`。ほかの未知のキーは今までどおり `source`）。保存済みのお題（`for_learner` なし）は false 扱い。`facts` / `views` の `source_ids` と検査に使う出典は変えない。
+- **生成のプロンプト**: 決まりの文（`schema.ts` の `FOR_LEARNER_RULE`。`prompts.ts` が読んで再び出す）を、`save_topics` の schema の `sources[].for_learner` の `description` と、system 文の形の決まり（`shapeRules`。`- sources の …` の 1 行）の両方に置く: 「for_learner は、子ども（小学生〜中学生）が自分で開いて読んで参考になるページだけ true にします（子ども向けの解説・博物館や公的機関のやさしい解説・図や写真の多い入門など）。報道・論文・専門の資料・有料の記事は false にします。迷ったら false にします。出典の決まり（開けたページだけ・quote は一字も変えずに写す）は true でも false でも同じです。」。`for_learner` は schema の `required` に入れない。出典の数・必須の決まり・T-4 の verbatim の本文は変えない。0 回目の params の v2.8 からの違いは、system 文の形の決まりの 1 行と schema の `for_learner` だけ。
+- **検査**: `for_learner` が true の出典も、ほかの出典と同じ検査をそのまま通す（`check.ts` / `judge.ts` は `for_learner` を見ない。追加の外部呼び出しはしない）。検査の厳しさ・出典の必須・本数は変えない。
+- **子どもへ渡す形**: 工場の公開の読み口（`/api/library/topics`）は `body` をそのまま返す。`tools/pull-topics.mjs` の変換で `sources[]` に `learn: for_learner === true` を足し、アプリの取り込み（`today-data.js` の `importLive`）は `learn: learn === true` だけを写す（無い・ほかの値は false。learn の値でお題は捨てない）。
+- **子どもの画面**（`app-v3/js/today.js`）: 事実・考えの各行の「出典: …」を出さない。「確かめた日」は「おとなが確かめた日」の意味で残す（出典の名前は出さない）。`learn` が true の出典が 1 つ以上ある時だけ、お題の詳細の下に「参考になる資料」（小「さんこうになるしりょう」）の欄を出す（名前のリンク。`https://` だけリンクで `target="_blank" rel="noopener noreferrer"`、それ以外は名前だけ）。無い時は欄ごと出さない。見本のお題は JAXA MMX の 2 つの出典だけ `learn: true`。
+- **運営画面**（`public/admin/topics.js`）: 出典は今までどおり全部出し、`for_learner` が true の出典に「子どもに見せる」の印を足す。
 
 ## T-14 d の記録（2026-11-06、本番の実測。D1 の集計）
 

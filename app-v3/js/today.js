@@ -353,13 +353,23 @@
     return { ok: M.addAct(st, r.act, save), id: r.id, created: true };
   }
 
+  // 参考になる資料（contract-T v2.9）: 出典のうち learn が true のものだけ（子どもが自分で開いて参考にできるページ）。
+  // href は https:// で始まる url だけ（それ以外は null = 名前だけ出す。§AF-9 の出典の規則と同じ）
+  function learnLinks(o) {
+    var l = o && Array.isArray(o.sources) ? o.sources : [];
+    return l.filter(function (s) { return isObj(s) && s.learn === true && typeof s.name === 'string' && s.name !== ''; }).map(function (s) {
+      return { id: s.id, name: s.name, href: /^https:\/\//.test(String(s.url)) ? s.url : null };
+    });
+  }
+
   var pure = {
     initial: initial, normalize: normalize, swap: swap, keep: keep, unkeep: unkeep, markEntry: markEntry, isStarted: isStarted,
     addFound: addFound, removeFound: removeFound, restoreFound: restoreFound, toggleHint: toggleHint, play: play, isKept: isKeptIn, FITS: FITS, ENTRIES: ENTRIES,
     swapKind: swapKind, markOpen: markOpen, isOpened: isOpened, pickAsk: pickAsk, putMark: putMark, removeMark: removeMark, restoreMark: restoreMark,
     toCircle: toCircle, fromCircle: fromCircle, inCircle: inCircle, KINDS: KINDS, LEVELS: LEVELS, OPENS: OPENS, LINE_MAX: LINE_MAX,
     // レビューへの裁定
-    restoredMarkId: restoredMarkId, saveOdai: saveOdai, addTalk: addTalk, openDEntry: openDEntry, dialogMake: dialogMake
+    restoredMarkId: restoredMarkId, saveOdai: saveOdai, addTalk: addTalk, openDEntry: openDEntry, dialogMake: dialogMake,
+    learnLinks: learnLinks
   };
   Object.keys(pure).forEach(function (k) { TD[k] = pure[k]; });
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
@@ -680,18 +690,20 @@
       }))
     ]);
   }
-  // 出典の名前（リンク）。href はお題の出典の URL で、https:// のものだけリンクにする（それ以外は名前だけ。§AF-9）
-  function srcEl(o, s) {
-    var links = [];
-    TDD.srcIds(s).forEach(function (sid) {
-      var x = TDD.sourceOf(o, sid);
-      if (!x) return;
-      if (links.length) links.push('・');
-      links.push(/^https:\/\//.test(String(x.url)) ? H('a', { class: 'td-src-link', href: x.url, target: '_blank', rel: 'noopener noreferrer' }, x.name) : H('span', { class: 'td-src-name' }, x.name));
-    });
-    return links.length ? H('span', { class: 'td-src-of' }, [T('td_src') + ': '].concat(links)) : null;
+  // contract-T v2.9: 事実・考えの各行に「出典: …」を出さない（出典は検査のためのもの。子どもには「参考になる資料」だけ見せる）。
+  // 参考になる資料の欄: learn が true の出典が 1 つ以上ある時だけ。https:// のものだけリンク（それ以外は名前だけ。§AF-9）
+  function learnSec(o) {
+    var l = learnLinks(o);
+    if (!l.length) return null;
+    return H('section', { class: 'td-learn', 'aria-labelledby': 'td-learn-h' }, [
+      H('h2', { id: 'td-learn-h' }, T('td_learn_h')),
+      H('ul', { class: 'td-learn-list' }, l.map(function (x) {
+        return H('li', null, [x.href ? H('a', { class: 'td-src-link', href: x.href, target: '_blank', rel: 'noopener noreferrer' }, x.name) : H('span', { class: 'td-src-name' }, x.name)]);
+      }))
+    ]);
   }
-  // 確かめた日 = お題の出典の checked（工場のお題は取り込んだ日。§AF-9）。日付の形でなければ出さない
+  // 確かめた日 = お題の出典の checked（工場のお題は取り込んだ日。§AF-9）。日付の形でなければ出さない。
+  // v2.9 からは「おとなが確かめた日」の意味で残す（出典の名前は出さない）
   function fmtChecked(o) {
     var m = o.sources.length ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(o.sources[0].checked)) : null;
     return m ? T('td_checked', { date: T('td_date_full', { y: +m[1], m: +m[2], d: +m[3] }) }) : '';
@@ -699,14 +711,14 @@
   function factsEl(o) {
     var hasSrc = o.facts.some(function (f) { return TDD.srcIds(f.src).length > 0; }), ck = hasSrc ? fmtChecked(o) : '';
     return [
-      H('ul', { class: 'td-facts' }, o.facts.map(function (f) { return H('li', null, [H('span', null, pick(f.text)), srcEl(o, f.src)]); })),
+      H('ul', { class: 'td-facts' }, o.facts.map(function (f) { return H('li', null, [H('span', null, pick(f.text))]); })),
       ck ? H('p', { class: 'td-checked' }, ck) : null
     ];
   }
   function viewsEl(o) {
     return [
       H('ul', { class: 'td-views' }, o.views.map(function (v) {
-        return H('li', { class: 'td-view' }, [H('strong', null, pick(v.who)), H('p', null, pick(v.stance)), srcEl(o, v.src)]);
+        return H('li', { class: 'td-view' }, [H('strong', null, pick(v.who)), H('p', null, pick(v.stance))]);
       })),
       H('p', { class: 'td-views-more' }, T('td_views_more'))
     ];
@@ -784,6 +796,8 @@
     var ms = marksSec(o, th);
     if (ms) kids.push(ms);
     if (isOpened(st, o.id)) kids.push(nextSec(o));
+    var ls = learnSec(o);
+    if (ls) kids.push(ls);
     main.appendChild(H('div', { class: 'today-page odai-detail is-talk', 'data-odai': o.id }, kids));
     if (u.shownDetail !== o.id) { u.shownDetail = o.id; var h = main.querySelector('h1'); if (h) h.focus(); }
   }

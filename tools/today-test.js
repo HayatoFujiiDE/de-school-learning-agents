@@ -588,6 +588,8 @@ t('AF-9 pull-topics --from-file: 件数の 1 行・書き出したファイル�
   eq(nw.next.makeSteps.length, 4, 'AF-9 変換: next.makeSteps');
   eq([tk.date, tk.facts, tk.views.map(function (v) { return [v.who, v.src]; }), tk.sources], [null, [{ text: ['前提の 1 文（中）', 'ぜんていの 1 文（小）'], src: null }], [[['A という考え', 'A という考え'], null], [['B という考え', 'B という考え'], null]], []], 'AF-9 変換: premises は出典なしの前提・who は [name, name]・src 0 は null');
   eq(ph.facts.map(function (f) { return [f.text[0], f.src]; }), [['前提（中）', null], ['事実（中）', 's2']], 'AF-9 変換: premises は facts の前');
+  // contract-T v2.9: 工場の sources[].for_learner → learn（true の時だけ true。無い・false は false）
+  eq([nw.sources.map(function (s) { return s.learn; }), ph.sources.map(function (s) { return s.learn; })], [[false, true], [false, false]], 'v2.9 変換: for_learner が true の出典だけ learn: true（無い・false は false）');
   eq([ph.stances.map(function (s) { return s.id; }), Object.keys(ph.next)], [['st1', 'st2', 'st3'], ['talk', 'makeTitle', 'makeSteps']], 'AF-9 変換: stances / next の形');
 });
 t('AF-9 pull-topics: --dry-run は書かない・全部失敗したら書かずに終了コード 1（前のファイルを壊さない）', function () {
@@ -611,6 +613,7 @@ t('AF-9 工場のお題がある時: 同じ kind の先頭に来る / 既存の�
   eq(K.getDialog('od-philo-ai').source, 'buddy', 'AF-9 既存のお題の出所は buddy のまま');
   var f = K.getDialog(LIVE_IDS[0]);
   ok(f.source === 'factory' && f.reason === null && f.art === null, 'AF-9 工場のお題の出所・reason・art');
+  eq([f.sources.map(function (s) { return s.learn; }), K.getDialog(LIVE_IDS[2]).sources.map(function (s) { return s.learn; })], [[false, true], [false, false]], 'v2.9 取り込み: learn はそのまま写る');
   ok(twoColor(K.cardArt(f)) && /^<svg class="mk-art/.test(K.cardArt(f)), 'AF-9 art null のお題は既定の 2 色線画');
   ok(K.cardArt(f) === K.drawArt('dk_news', {}) && K.cardArt(K.getDialog(LIVE_IDS[1])) === K.drawArt('dk_talk', {}) && K.cardArt(K.getDialog(LIVE_IDS[2])) === K.drawArt('dk_philo', {}), 'AF-9 既定の絵は kind ごと');
   ok(K.cardArt(K.getDialog('od-news-mmx')) === TDD.cardArt(TDD.getDialog('od-news-mmx')), 'AF-9 既存のお題の絵は変わらない');
@@ -651,6 +654,10 @@ t('AF-9 壊れたお題は捨てられて落ちない / 重なる id は捨て�
   eq([two.length, two[0].title], [1, good.title], 'AF-9 同じ id の 2 本目は捨てる');
   var ex = TDD.importLive([mut(function (x) { x.source = 'buddy'; x.extra = '<b>'; x.art = 'nope'; x.reason = null; })], TDD.dialogs)[0];
   eq([ex.source, 'extra' in ex, ex.art, ex.reason], ['factory', false, null, null], 'AF-9 出所は factory に固定・知らない項目と絵は写さない・reason null のまま');
+  // contract-T v2.9: learn は true の時だけ true（無い・文字列・1 は false）。learn の値でお題を捨てない
+  var lv = TDD.importLive([mut(function (x) { x.sources[0].learn = 'yes'; x.sources[1].learn = true; })], TDD.dialogs)[0];
+  var lv0 = TDD.importLive([mut(function (x) { delete x.sources[0].learn; x.sources[1].learn = 1; })], TDD.dialogs)[0];
+  eq([lv.sources.map(function (s) { return s.learn; }), lv0.sources.map(function (s) { return s.learn; })], [[false, true], [false, false]], 'v2.9 取り込み: learn は true だけ true・無い時は false');
   // 混ぜても、良いお題だけ残り、既存の 9 本は変わらない
   var D = loadApp('window.DES = window.DES || {}; window.DES.topicsLive = ' + JSON.stringify({ topics: [bads.asks2, good, bads.http, bads.noTitle] }) + ';');
   eq([D.todayData.live.map(function (x) { return x.id; }), D.todayData.dialogs.length], [[good.id], 10], 'AF-9 壊れたお題を混ぜても良いものだけ（落ちない）');
@@ -669,8 +676,10 @@ t('AF-9 画面: reason が無い時は「なぜ出したか」を出さない / 
   ok(/return o\.reason \? H\(/.test(w) && /: null; \}/.test(w), 'AF-9 whyEl は reason が無ければ null（空の行を出さない）');
   var dm = TDSRC.slice(TDSRC.indexOf('function dmarksEl('), TDSRC.indexOf('function dcard('));
   ok(/o\.source === 'factory'/.test(dm) && /td_src_factory/.test(dm), 'AF-9 工場のお題は「工場で作って確かめたお題」');
-  var se = TDSRC.slice(TDSRC.indexOf('function srcEl('), TDSRC.indexOf('function fmtChecked('));
-  ok(/\^https:\\\/\\\//.test(se) && /td-src-name/.test(se) && /rel: 'noopener noreferrer'/.test(se), 'AF-9 出典は https:// だけリンク（それ以外は名前だけ）');
+  // contract-T v2.9: 出典のリンクは「参考になる資料」の欄（learnSec）だけ。https:// の判定は純関数 learnLinks
+  var se = TDSRC.slice(TDSRC.indexOf('function learnSec('), TDSRC.indexOf('function fmtChecked('));
+  var ll = TDSRC.slice(TDSRC.indexOf('function learnLinks('), TDSRC.indexOf('var pure = {'));
+  ok(/\^https:\\\/\\\//.test(ll) && /td-src-name/.test(se) && /rel: 'noopener noreferrer'/.test(se) && TDSRC.indexOf('function srcEl(') < 0, 'AF-9 出典は https:// だけリンク（それ以外は名前だけ）');
   var I = fs.readFileSync(path.join(__dirname, '../app-v3/js/i18n.js'), 'utf8');
   ok(I.indexOf("td_src_factory: ['工場で作って確かめたお題', 'こうじょうでつくって、たしかめたお題']") > 0, 'AF-9 i18n の [中, 小]');
   var html = fs.readFileSync(path.join(__dirname, '../app-v3/index.html'), 'utf8');
@@ -702,6 +711,112 @@ t('AF-9 禁止語（check.sh と同じ語）を子どもが読む文に含むお
   fs.writeFileSync(f2, JSON.stringify({ responses: [resp] }));
   var r = runPull(['--from-file', f2, '--out', o2]);
   eq([r.rc, r.line, /drop forbidden=1/.test(r.out)], [0, 'PULL_TOPICS http=0 ok=1 topics=2 kept=1 dropped=1 make_skipped=0 wrote=yes', true], 'AF-9 禁止語入りは捨てる（スクリプト・理由コード forbidden）');
+});
+// ======================================================================
+// contract-T v2.9 出典は検査用。子どもには「参考になる資料」だけ見せる
+// ======================================================================
+t('v2.9 learnLinks: learn が true の出典だけ・https:// だけ href（それ以外は null = 名前だけ）', function () {
+  var o = { sources: [
+    { id: 'a', name: 'A', url: 'https://a.example.org/', learn: true }, { id: 'b', name: 'B', url: 'http://b.example.org/', learn: true },
+    { id: 'c', name: 'C', url: 'https://c.example.org/', learn: false }, { id: 'd', name: 'D', url: 'https://d.example.org/' },
+    { id: 'e', name: 'E', url: 'javascript:alert(1)', learn: true }, { id: 'f', name: 'F', url: 'https://f.example.org/', learn: 'true' }] };
+  eq(TD.learnLinks(o), [{ id: 'a', name: 'A', href: 'https://a.example.org/' }, { id: 'b', name: 'B', href: null }, { id: 'e', name: 'E', href: null }], 'v2.9 learnLinks の結果');
+  eq([TD.learnLinks({ sources: [] }), TD.learnLinks({}), TD.learnLinks(null)], [[], [], []], 'v2.9 learnLinks: 出典が無ければ空');
+});
+t('v2.9 見本のお題: 子どもが読める出典（JAXA の解説）だけ learn: true', function () {
+  TDD.dialogs.forEach(function (d) { ok(d.sources.every(function (s) { return typeof s.learn === 'boolean'; }), 'v2.9 ' + d.id + ' の出典の learn は boolean'); });
+  eq(TDD.dialogs.filter(function (d) { return d.sources.some(function (s) { return s.learn; }); }).map(function (d) { return [d.id, d.sources.filter(function (s) { return s.learn; }).map(function (s) { return s.url; })]; }),
+    [['od-news-mmx', ['https://www.mmx.jaxa.jp/mission/', 'https://www.mmx.jaxa.jp/science/']]], 'v2.9 learn: true は JAXA MMX の 2 つだけ');
+});
+// 画面（renderDialog）を、小さな偽物の DOM の上で描く（app.js の DES.h と同じ規則で要素を作る）
+function FText(v) { this.data = String(v); }
+Object.defineProperty(FText.prototype, 'textContent', { get: function () { return this.data; } });
+function FEl(tag) { this.tagName = tag; this.attrs = {}; this.childNodes = []; this.className = ''; }
+FEl.prototype.appendChild = function (n) { this.childNodes.push(n); return n; };
+FEl.prototype.setAttribute = function (k, v) { this.attrs[k] = String(v); };
+FEl.prototype.getAttribute = function (k) { return k in this.attrs ? this.attrs[k] : null; };
+FEl.prototype.focus = function () {};
+Object.defineProperty(FEl.prototype, 'textContent', {
+  get: function () { return this.childNodes.map(function (c) { return c.textContent; }).join(''); },
+  set: function (v) { this.childNodes = v === '' ? [] : [new FText(v)]; }
+});
+FEl.prototype.all = function () { var out = []; (function walk(e) { e.childNodes.forEach(function (c) { if (c instanceof FEl) { out.push(c); walk(c); } }); })(this); return out; };
+FEl.prototype.querySelector = function (sel) {
+  var m = /^\[([a-z-]+)="([^"]*)"\]$/.exec(sel);
+  return this.all().filter(function (e) { return m ? e.attrs[m[1]] === m[2] : e.tagName === sel; })[0] || null;
+};
+function fakeH(tag, attrs, kids) {
+  var el = new FEl(tag);
+  if (attrs) Object.keys(attrs).forEach(function (k) {
+    var v = attrs[k];
+    if (v == null || v === false) return;
+    if (k === 'class') el.className = v; else if (v === true) el.setAttribute(k, ''); else el.setAttribute(k, String(v));
+  });
+  (function add(x) {
+    if (x == null || x === false) return;
+    if (Array.isArray(x)) { x.forEach(add); return; }
+    el.appendChild(typeof x === 'string' || typeof x === 'number' ? new FText(x) : x);
+  })(kids);
+  return el;
+}
+function loadDom(liveSrc) {
+  var ctx = vm.createContext({ console: console });
+  ctx.window = ctx;
+  ctx.document = { documentElement: { getAttribute: function () { return 'js'; }, classList: { contains: function () { return false; } } } };
+  if (liveSrc != null) vm.runInContext(liveSrc, ctx, { filename: 'topics-live.js' });
+  ['i18n.js', 'make-data.js', 'today-data.js', 'today.js'].forEach(function (f) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../app-v3/js', f), 'utf8'), ctx, { filename: f });
+  });
+  var D = ctx.DES;
+  D.h = fakeH;
+  D.raw = function () { return new FEl('#raw'); };
+  D.icon = function () { return ''; };
+  D.app = { toast: function () {}, route: function () { return 'today'; } };
+  D.data = { today: '2026-11-07', now: '10:00' };
+  D.state = { mode: 'js', odai: D.today.initial(), activities: [] };
+  D.ui = { td: { open: {}, play: {}, own: null, dlg: null, shownDetail: null, missing: null, fresh: null, pendingFocus: null } };
+  return D;
+}
+function renderD(D, id, open) {
+  var main = new FEl('main');
+  D.ui.td.open[id] = open || null;
+  D.today.render(main, id);
+  return main;
+}
+function cls(root, c) { return root.all().filter(function (e) { return (' ' + e.className + ' ').indexOf(' ' + c + ' ') >= 0; }); }
+t('v2.9 画面: 事実・考えの各行に「出典:」を出さない / 確かめた日は残る', function () {
+  var D = loadDom(null);
+  ['od-news-mmx', 'od-news-bosai', 'od-philo-ai'].forEach(function (id) {
+    var mf = renderD(D, id, 'facts'), mv = renderD(D, id, 'views');
+    var lis = cls(mf, 'td-facts')[0].all().filter(function (e) { return e.tagName === 'li'; });
+    ok(lis.length === D.todayData.getDialog(id).facts.length && lis.every(function (li) { return li.textContent.indexOf('出典') < 0 && !li.all().some(function (e) { return e.tagName === 'a'; }); }), 'v2.9 ' + id + ' の前提の各行に「出典」もリンクも無い');
+    var vs = cls(mv, 'td-view');
+    ok(vs.length === D.todayData.getDialog(id).views.length && vs.every(function (li) { return li.textContent.indexOf('出典') < 0 && !li.all().some(function (e) { return e.tagName === 'a'; }); }), 'v2.9 ' + id + ' の考えの各行に「出典」もリンクも無い');
+    eq([cls(mf, 'td-src-of').length, cls(mv, 'td-src-of').length], [0, 0], 'v2.9 ' + id + ' に td-src-of が無い');
+  });
+  var ck = cls(renderD(D, 'od-news-mmx', 'facts'), 'td-checked').map(function (e) { return e.textContent; });
+  ok(ck.length === 1 && ck[0].indexOf('確かめた日: ') === 0 && ck[0].indexOf('2026') > 0 && ck[0].indexOf('JAXA') < 0, 'v2.9 確かめた日は残る（出典の名前は出さない）: ' + JSON.stringify(ck));
+});
+t('v2.9 画面: learn の出典がある時だけ「参考になる資料」（https だけリンク・新しいタブ）', function () {
+  var D = loadDom(null);
+  var m = renderD(D, 'od-news-mmx', null), sec = cls(m, 'td-learn');
+  eq(sec.length, 1, 'v2.9 od-news-mmx に「参考になる資料」の欄が 1 つ');
+  eq(sec[0] && sec[0].querySelector('h2').textContent, '参考になる資料', 'v2.9 欄の見出し');
+  var as = sec[0] ? sec[0].all().filter(function (e) { return e.tagName === 'a'; }) : [];
+  eq(as.map(function (a) { return [a.attrs.href, a.attrs.target, a.attrs.rel, a.textContent]; }),
+    [['https://www.mmx.jaxa.jp/mission/', '_blank', 'noopener noreferrer', 'JAXA 火星衛星探査計画 MMX（ミッション）'], ['https://www.mmx.jaxa.jp/science/', '_blank', 'noopener noreferrer', 'JAXA 火星衛星探査計画 MMX（サイエンス）']], 'v2.9 リンクの href・target・rel・名前');
+  eq([cls(renderD(D, 'od-news-bosai', null), 'td-learn').length, cls(renderD(D, 'od-philo-ai', 'facts'), 'td-learn').length], [0, 0], 'v2.9 learn の出典が無いお題には欄ごと出さない');
+  // https 以外はリンクにしない（名前だけ）
+  D.todayData.getDialog('od-news-mmx').sources[0].url = 'http://www.mmx.jaxa.jp/mission/';
+  var sec2 = cls(renderD(D, 'od-news-mmx', null), 'td-learn')[0], lis = sec2.all().filter(function (e) { return e.tagName === 'li'; });
+  eq(lis.map(function (li) { return li.all().map(function (e) { return e.tagName + '.' + e.className; }); }), [['span.td-src-name'], ['a.td-src-link']], 'v2.9 https 以外は名前だけ（span）・https はリンク');
+  eq(lis[0].textContent, 'JAXA 火星衛星探査計画 MMX（ミッション）', 'v2.9 名前だけの時も名前は出る');
+  // 工場のお題: for_learner が true の出典だけ
+  var DL = loadDom(fs.readFileSync(LIVE_OUT, 'utf8')), ml = renderD(DL, LIVE_IDS[0], 'facts'), sl = cls(ml, 'td-learn');
+  eq(sl.length === 1 ? sl[0].all().filter(function (e) { return e.tagName === 'a'; }).map(function (a) { return [a.attrs.href, a.textContent]; }) : null, [['https://example.org/news-2', '例の出典 2']], 'v2.9 工場のお題は for_learner の出典だけ欄に出る');
+  eq(cls(renderD(DL, LIVE_IDS[2], 'facts'), 'td-learn').length, 0, 'v2.9 工場のお題で for_learner が無い・false なら欄を出さない');
+  var I = fs.readFileSync(path.join(__dirname, '../app-v3/js/i18n.js'), 'utf8');
+  ok(I.indexOf("td_learn_h: ['参考になる資料', 'さんこうになるしりょう']") > 0, 'v2.9 i18n の [中, 小]');
 });
 try { fs.rmSync(TMPD, { recursive: true, force: true }); } catch (e) { /* 一時ディレクトリ */ }
 

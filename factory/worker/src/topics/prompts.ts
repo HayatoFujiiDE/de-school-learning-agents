@@ -2,7 +2,10 @@
 // 外から来た文（RSS・既存の題・親の本文・運営の一言・出典の抜き書き）は system 文に連結しない。user 文の中に、見出しを付けた別のブロックとして入れる。
 
 import { TOPIC_COUNTRY_LABEL, TOPIC_KIND_LABELS, TOPIC_LANGUAGE_LABEL, type TopicKind } from './locale';
-import { COUNTS, TEXT_LIMITS, TOPIC_INTERESTS } from './schema';
+import { COUNTS, FOR_LEARNER_RULE, TEXT_LIMITS, TOPIC_INTERESTS } from './schema';
+
+/** sources[].for_learner の決まり（v2.9）。文の正本は schema.ts（save_topics の schema の description と同じ文） */
+export { FOR_LEARNER_RULE };
 
 /** 生成の system 文（T-4 verbatim） */
 export const GEN_SYSTEM_TEMPLATE = `あなたは、子ども（小学生と中学生）が考え、話し合い、作るための「お題」を作る係です。{language} で書きます。対象の国は {country} です。
@@ -67,6 +70,8 @@ export function shapeRules(kinds: readonly TopicKind[]): string {
     `- 字数の上限（s と e のそれぞれ）: title ${L.title} / lead ${L.lead} / premises の text ${L.premise} / facts の text ${L.fact} / views の stance ${L.stance} / asks の text ${L.ask} / who.name ${L.whoName} / stances の label ${L.label} / next.talk ${L.nextTalk} / next.make_title ${L.makeTitle} / 手順（make_steps・steps）の 1 つ ${L.step} / make の line ${L.line}・first_step ${L.firstStep}・need ${L.need} / thumb_prompt ${L.thumbPrompt} / sources の name ${L.sourceName}。`,
     `- id（facts・views・stances・sources）は半角の英数字と _ と - だけで ${L.id} 字まで（例: f1・v1・st1・s1）。同じ種類の中で重ねません。`,
     '- sources の quote は 20〜200 字で、< > & を入れません。どこからも指されていない sources は入れません。source_ids には sources にある id だけを書き、同じ id を重ねません。',
+    // v2.9: 子どもに見せる出典の印（任意）。出典の数・必須の決まりは変えない
+    `- sources の ${FOR_LEARNER_RULE}`,
     '- facts と、who.type が person か org の views は、source_ids が 1 つ以上。who.type が position の views は source_ids を空にしてかまいません。views の side は a・b・c・d のどれか。',
     `- tags.interests は ${TOPIC_INTERESTS.join('・')} から選び、重ねません。tags.concept_codes は空の配列にします。`,
   ];

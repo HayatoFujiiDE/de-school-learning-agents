@@ -719,7 +719,8 @@
   TDD.KINDS = ['news', 'talk', 'philo'];
   TDD.LEVELS = ['check', 'self', 'open'];
   var CHECKED = '2026-11-06';
-  function src(id, name, url) { return { id: id, name: name, url: url, checked: CHECKED }; }
+  // learn: 子どもが自分で開いて参考にできるページ（「参考になる資料」に出す。contract-T v2.9）。迷ったら付けない
+  function src(id, name, url, learn) { return { id: id, name: name, url: url, checked: CHECKED, learn: learn === true }; }
   var MEXT_AI = ['文部科学省は 2024 年 12 月、学校での生成 AI の使い方のガイドライン（Ver.2.0）を公表した', 'もんぶかがくしょうは 2024 年 12 月、学校での生成 AI のつかい方のガイドライン（Ver.2.0）を出した'];
   var MEXT_SRC_NAME = '文部科学省 学校現場における生成 AI の利用について', MEXT_SRC_URL = 'https://www.mext.go.jp/a_menu/other/mext_02412.html';
   var DIALOGS = [
@@ -741,7 +742,7 @@
         { level: 'self', text: ['結果が出るまで 5 年かかる研究を、自分ならやってみたい？', '5 年かかるたびに、自分なら何をもっていく？'] },
         { level: 'open', text: ['すぐ役に立つか分からないことを調べるのに、大きなお金を使うのはよいこと？', 'とおい星のことをしらべるのは、何のため？'] }],
       stances: [{ id: 's1', label: ['よいと思う', 'よいと思う'] }, { id: 's2', label: ['場合による', 'ばあいによる'] }, { id: 's3', label: ['よくないと思う', 'よくないと思う'] }],
-      sources: [src('s1', 'JAXA 火星衛星探査計画 MMX（ミッション）', 'https://www.mmx.jaxa.jp/mission/'), src('s2', 'JAXA 火星衛星探査計画 MMX（サイエンス）', 'https://www.mmx.jaxa.jp/science/')],
+      sources: [src('s1', 'JAXA 火星衛星探査計画 MMX（ミッション）', 'https://www.mmx.jaxa.jp/mission/', true), src('s2', 'JAXA 火星衛星探査計画 MMX（サイエンス）', 'https://www.mmx.jaxa.jp/science/', true)],
       next: { talk: ['火星の月の 2 つの説、どっちがありそうか話したい', 'かせいの月の 2 つのせつ、どっちがありそうか話したい'],
         makeTitle: ['火星の月ができた 2 つの説を、コマ撮りで見せる', 'かせいの月ができた 2 つのせつを、コマどりで見せる'],
         makeSteps: [['粘土で火星と月を作る', 'ねんどでかせいと月をつくる'], ['捕獲説の動きを撮る', 'ほかくせつのうごきをとる'], ['巨大衝突説の動きを撮る', 'きょだいしょうとつせつのうごきをとる'], ['2 つを並べて見る', '2 つをならべて見る']] }
@@ -936,7 +937,7 @@
       // 出典の url は https:// だけ（それ以外のお題は捨てる）・確かめた日は YYYY-MM-DD
       if (!lObj(s) || !lStr(s.id) || sids.indexOf(s.id) >= 0 || !lStr(s.name) || typeof s.url !== 'string' || !/^https:\/\/[^\s"'<>]+$/.test(s.url) || !/^\d{4}-\d{2}-\d{2}$/.test(s.checked)) { bad = true; return null; }
       sids.push(s.id);
-      return { id: s.id, name: s.name, url: s.url, checked: s.checked };
+      return { id: s.id, name: s.name, url: s.url, checked: s.checked, learn: s.learn === true };
     });
     if (bad) return null;
     function ref(src) {

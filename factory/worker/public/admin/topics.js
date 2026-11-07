@@ -463,6 +463,8 @@
           h('div', { class: 'row' }, [
             pill(id, 'gray'), h('b', { text: String(r.name || bs.name || '') }),
             truthyFlag(r.required) ? pill('必須', 'orange') : null,
+            // v2.9: 子どもの画面の「参考になる資料」に出す出典（本文の sources[].for_learner が true）。出典は今までどおり全部出す
+            bs.for_learner === true ? h('span', { class: 'pill green', 'data-tp-learner': '1', text: '子どもに見せる' }) : null,
             r.fetch_result ? fetchPill(r.fetch_result) : null,
             r.evidence ? h('span', { class: 'muted', text: EVIDENCE_LABEL[r.evidence] || String(r.evidence) }) : null
           ]),

@@ -1,8 +1,8 @@
 // contract-T T-14 b1: validateTopicBody（T-1 の表の各行に通る例と落ちる例）と、system 文が契約の verbatim であること
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { CHECK_SYSTEM_TEMPLATE, DERIVE_RULES, GEN_SYSTEM_TEMPLATE, genSystem, genUserBlocks, KIND_RULES } from '../src/topics/prompts';
-import { addDays, isRealDate, normalizeTitle, requiredSourceIds, titleJaccard, validateTopicBody } from '../src/topics/schema';
+import { CHECK_SYSTEM_TEMPLATE, DERIVE_RULES, FOR_LEARNER_RULE, GEN_SYSTEM_TEMPLATE, genSystem, genUserBlocks, KIND_RULES } from '../src/topics/prompts';
+import { addDays, isRealDate, normalizeTitle, requiredSourceIds, titleJaccard, TOPIC_BODY_JSON_SCHEMA, validateTopicBody } from '../src/topics/schema';
 import { loc, makeBody, newsBody, philoBody, talkBody } from './topics-helpers';
 
 const D = '2026-11-07';
@@ -164,6 +164,30 @@ describe('validateTopicBody: sources', () => {
   });
 });
 
+describe('validateTopicBody: sources[].for_learner（contract-T v2.9）', () => {
+  it('無い・true・false は通る。boolean でなければ source。ほかの未知のキーは今までどおり source', () => {
+    const n = newsBody(D);
+    ok(n);
+    ok({ ...n, sources: [{ ...n.sources[0], for_learner: true }] });
+    ok({ ...n, sources: [{ ...n.sources[0], for_learner: false }] });
+    bad({ ...n, sources: [{ ...n.sources[0], for_learner: 'true' }] }, 'source');
+    bad({ ...n, sources: [{ ...n.sources[0], for_learner: 1 }] }, 'source');
+    bad({ ...n, sources: [{ ...n.sources[0], for_learner: null }] }, 'source');
+    bad({ ...n, sources: [{ ...n.sources[0], for_kids: true }] }, 'source');
+    const { quote: _q, ...noQuote } = n.sources[0];
+    bad({ ...n, sources: [{ ...noQuote, for_learner: true }] }, 'source');
+  });
+  it('for_learner が true でも出典の検査（url・quote・個数・必須）は同じ', () => {
+    const n = newsBody(D);
+    const L = (s: Record<string, unknown>) => ({ ...s, for_learner: true });
+    bad({ ...n, sources: [L({ ...n.sources[0], url: 'http://src.example.org/a' })] }, 'source_url');
+    bad({ ...n, sources: [L({ ...n.sources[0], quote: '短い' })] }, 'source_quote');
+    bad({ ...n, sources: [] }, 'sources_count');
+    bad({ ...philoBody(), sources: philoBody().sources.map((s) => L({ ...s })).slice(0, 1) }, 'unknown_source_ref');
+    expect([...requiredSourceIds({ ...philoBody(), sources: philoBody().sources.map((s) => ({ ...s, for_learner: true })) })].sort()).toEqual(['s1', 's2']);
+  });
+});
+
 describe('validateTopicBody: 型と未知のキー', () => {
   it('未知のキー（子どもの名前などの欄）・未知の kind・型違いは落ちる', () => {
     bad({ ...newsBody(D), child_name: 'たろう' }, 'unknown_key');
@@ -214,6 +238,18 @@ describe('system 文は契約 contract-T の verbatim', () => {
     expect(s).toContain('日本語 で書きます。対象の国は 日本 です。');
     expect(s).toContain('作る種類: ニュースから。本数: 最大 2 本。');
     expect(s).not.toMatch(/\{(language|country|kind_label|count|kind_rules)\}/);
+  });
+  it('for_learner の決まり（v2.9）: save_topics の schema の description と、生成・派生の system 文の形の決まりの両方にある', () => {
+    for (const w of ['for_learner', '小学生〜中学生', '自分で開いて読んで参考になるページだけ true', '報道・論文・専門の資料・有料の記事は false', '迷ったら false']) expect(FOR_LEARNER_RULE).toContain(w);
+    const items = (TOPIC_BODY_JSON_SCHEMA.properties.sources as unknown as { items: { required: string[]; properties: Record<string, { type: string; description?: string }> } }).items;
+    expect(items.properties.for_learner).toEqual({ type: 'boolean', description: FOR_LEARNER_RULE });
+    expect(items.required).toEqual(['id', 'url', 'name', 'quote']);
+    for (const s of [genSystem({ kind: 'news' }, 2), genSystem({ kind: 'philo' }, 2), genSystem({ derive: 'refresh', parentKind: 'talk' }, 1), genSystem({ derive: 'extend' }, 1)]) {
+      expect(s).toContain(`- sources の ${FOR_LEARNER_RULE}`);
+    }
+    // 出典の数・必須の決まりは変えない
+    expect(genSystem({ kind: 'news' }, 2)).toContain('premises 0 個・facts 2〜4 個・views 0〜3 個・stances 2〜4 個・sources 1〜6 個');
+    expect(genSystem({ kind: 'news' }, 2)).toContain('- facts と、who.type が person か org の views は、source_ids が 1 つ以上。');
   });
   it('形の決まり（v2.5）: 個数・字数は検査と同じ定数から system 文に入る。お題を出す日は user 文に入る', () => {
     const news = genSystem({ kind: 'news' }, 2);
