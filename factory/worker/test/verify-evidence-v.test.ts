@@ -33,7 +33,7 @@ import {
 } from '../src/verify';
 import { neutralizeInputText } from '../src/videos';
 import { d1, migratedDb, one, rows } from './d1-shim';
-import { goodMaterial } from './helpers';
+import { goodMaterial, goodMaterialV2 } from './helpers';
 
 const T0 = '2026-11-07T00:00:00.000Z';
 const PREFIX = 'materials/m1/j1/';
@@ -546,6 +546,32 @@ describe('契約 V-3 a (u2) presented_as と <child_texts>', () => {
       '動画 v1 見どころ: 回路が 光る',
       '</child_texts>',
     ]);
+  });
+});
+
+describe('§AL-6 <child_texts> に問いの種・関心別の入口', () => {
+  it('schema 2: 最初にやることの後に問いの種 2 行と入口 2 行（interest が無ければ「共通」）。schema 1 は増えない', () => {
+    const m = goodMaterialV2() as Record<string, any>;
+    const lines = childTextsBlocks(m, [])[1].split('\n');
+    const i = lines.findIndex((l) => l.includes('最初にやること'));
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(lines.slice(i + 1, i + 5)).toEqual([
+      '部品 p1 問いの種 q1: 粉は何個目まで光るかな？',
+      '部品 p1 問いの種 q2: たいまつを入れると、光り方はどう変わる？',
+      '部品 p1 関心別の入口（minecraft）: マイクラが好きなら、自分の家のドアを信号で開けるしかけにつなげてみよう',
+      '部品 p1 関心別の入口（craft）: ものづくりが好きなら、紙とクリップで信号の道の模型を作ってみよう',
+    ]);
+    delete m.parts[0].interest_entries[1].interest;
+    m.parts[0].questions_for_kids[0].text = `粉は\n何個目？ ${'あ'.repeat(600)}`;
+    const l2 = childTextsBlocks(m, [])[1].split('\n');
+    expect(l2[i + 1]).toBe(`部品 p1 問いの種 q1: ${`粉は 何個目？ ${'あ'.repeat(600)}`}`.slice(0, '部品 p1 問いの種 q1: '.length + 500));
+    expect(l2[i + 4]).toBe('部品 p1 関心別の入口（共通）: ものづくりが好きなら、紙とクリップで信号の道の模型を作ってみよう');
+    // schema 1 は問いの種・入口があっても行が増えない
+    const v1 = goodMaterial() as Record<string, any>;
+    const before = childTextsBlocks(v1, []);
+    v1.parts[0].questions_for_kids = [{ id: 'q1', text: 'とい' }];
+    v1.parts[0].interest_entries = [{ interest: 'x', text: '入口' }];
+    expect(childTextsBlocks(v1, [])).toEqual(before);
   });
 });
 

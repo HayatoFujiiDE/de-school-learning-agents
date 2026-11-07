@@ -95,3 +95,25 @@ describe('§AL-2: schema 2 の要約 1 本（summary）', () => {
     expect(checkForbidden({ ...base(), summary_elementary: '点数', summary: 'ふつうの文' }).forbidden).toEqual([]);
   });
 });
+
+describe('§AL-6: 問いの種・関心別の入口（buddy_texts）', () => {
+  const Q = 'material.json#parts[0].questions_for_kids[1].text';
+  it('buddy_texts の文に禁止語 → その path の 1 件（確認済み・[cN] は見ない）', () => {
+    const r = checkForbidden({
+      ...base(),
+      buddy_texts: [
+        { path: 'material.json#parts[0].questions_for_kids[0].text', text: '確認済み [c9] どう光る？' },
+        { path: Q, text: 'ランキングで一番になれる？' },
+      ],
+    });
+    expect(r.forbidden).toEqual([{ path: Q, word: 'ランキング', count: 1 }]);
+    expect(r.kakunin_zumi).toEqual([]);
+    expect(r.missing_claim_refs).toEqual([]);
+    expect(r.ok).toBe(false);
+  });
+
+  it('渡さなければ従来の結果', () => {
+    expect(checkForbidden(base())).toEqual(checkForbidden({ ...base(), buddy_texts: [] }));
+    expect(checkForbidden(base()).ok).toBe(true);
+  });
+});

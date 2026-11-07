@@ -13,7 +13,7 @@ import { loadRightsGate } from './rights-store';
 import type { Model3dEntry } from './generated/models3d-catalog';
 import { checkForbidden } from './checks/forbidden';
 import { bodyChars, checkChildText } from './checks/childtext';
-import { schemaVersionOf } from './checks/shape';
+import { buddyTextsOf, schemaVersionOf } from './checks/shape';
 import { PRIMARY_HOSTS } from './checks/hosts';
 import { basenameOf, duplicateBasename, resolveOutputLayout } from './checks/layout';
 import {
@@ -1978,6 +1978,8 @@ class Reconciler {
       summary_elementary: schema.material.summary_elementary,
       summary_secondary: schema.material.summary_secondary,
       ...(schemaVersion === 2 ? { summary: schema.material.summary ?? '' } : {}),
+      // §AL-6: schema 2 の問いの種・関心別の入口も禁止語を見る（schema 1 は渡さない: 従来どおり）
+      ...(schemaVersion === 2 ? { buddy_texts: buddyTextsOf(schema.material).map(({ path, text }) => ({ path, text })) } : {}),
       claims: schema.claims,
       sourceIds: schema.sources.map((s) => s.id),
     });

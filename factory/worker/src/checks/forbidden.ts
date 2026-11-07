@@ -34,6 +34,8 @@ export interface ForbiddenInput {
   summary_secondary: string;
   /** §AL-2: schema 2 の版の要約 1 本。渡された時は material.json#summary の 1 行だけを見る（schema 1 は渡さない: 従来の 2 行） */
   summary?: string;
+  /** §AL-6: schema 2 の問いの種・関心別の入口の文（path は material.json#parts[i].…text）。禁止語だけを見る（確認済み・[cN] は見ない）。渡されなければ従来どおり */
+  buddy_texts?: Array<{ path: string; text: string }>;
   claims: Array<{ id: string; source_ids: string[] }>;
   sourceIds: string[];
 }
@@ -77,7 +79,9 @@ export function checkForbidden(input: ForbiddenInput): ForbiddenResult {
           ['material.json#summary_secondary', input.summary_secondary ?? ''],
         ];
 
-  for (const [p, t] of [...targets, ...summaries]) {
+  const buddy: Array<[string, string]> = (input.buddy_texts ?? []).map((b) => [b.path, b.text]);
+
+  for (const [p, t] of [...targets, ...summaries, ...buddy]) {
     for (const w of FORBIDDEN_WORDS) {
       const c = count(t, w);
       if (c > 0) forbidden.push({ path: p, word: w, count: c });

@@ -10,7 +10,7 @@
 
 import { declaredEdition, isVersionBoundMaterial } from './edition';
 import { GOAL_WORDS } from './goalwords';
-import { bodiesOf, schemaVersionOf, summariesOf } from './shape';
+import { bodiesOf, buddyTextsOf, schemaVersionOf, summariesOf } from './shape';
 
 /** 子ども向けの文の検査の kind（契約 §AL-3。仕分けの網羅テストの材料） */
 export const CHILD_TEXT_KINDS = [
@@ -266,6 +266,11 @@ export function checkChildText(material: unknown, texts: ReadonlyMap<string, str
   for (const t of meta) {
     if (full()) return out;
     fileNames('material.json', oneSpace(t));
+  }
+  // §AL-6: schema 2 の問いの種・関心別の入口もバディ経由で子どもに届く文（goal_word の列挙は下の (3) のまま。meta には足さない）
+  for (const b of buddyTextsOf(material)) {
+    if (full()) return out;
+    fileNames('material.json', oneSpace(b.text));
   }
   if (!v2) return out.slice(0, CHILD_TEXT_MAX);
 

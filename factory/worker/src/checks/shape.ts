@@ -88,3 +88,49 @@ export function summariesOf(m: unknown): SummaryRef[] {
   }
   return out;
 }
+
+export interface BuddyTextRef {
+  path: string;
+  partId: string | null;
+  kind: 'question' | 'entry';
+  id: string | null;
+  text: string;
+}
+
+/**
+ * schema 2 の、バディに渡り子どもに届きうる文（§AL-1〜AL-3・AL-6: 問いの種と関心別の入口。spark は子どもに見せないので入れない）。
+ * parts の出現順に questions_for_kids[j]（id = q.id）→ interest_entries[j]（id = interest、null 可）。text が文字列のものだけ。schema 1 は []
+ */
+export function buddyTextsOf(m: unknown): BuddyTextRef[] {
+  if (!isObj(m) || !Array.isArray(m.parts) || schemaVersionOf(m) !== 2) return [];
+  const out: BuddyTextRef[] = [];
+  m.parts.forEach((part, i) => {
+    if (!isObj(part)) return;
+    const partId = typeof part.id === 'string' ? part.id : null;
+    if (Array.isArray(part.questions_for_kids)) {
+      part.questions_for_kids.forEach((q, j) => {
+        if (!isObj(q) || typeof q.text !== 'string') return;
+        out.push({
+          path: `material.json#parts[${i}].questions_for_kids[${j}].text`,
+          partId,
+          kind: 'question',
+          id: typeof q.id === 'string' ? q.id : null,
+          text: q.text,
+        });
+      });
+    }
+    if (Array.isArray(part.interest_entries)) {
+      part.interest_entries.forEach((e, j) => {
+        if (!isObj(e) || typeof e.text !== 'string') return;
+        out.push({
+          path: `material.json#parts[${i}].interest_entries[${j}].text`,
+          partId,
+          kind: 'entry',
+          id: typeof e.interest === 'string' ? e.interest : null,
+          text: e.text,
+        });
+      });
+    }
+  });
+  return out;
+}

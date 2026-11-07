@@ -287,3 +287,19 @@ describe('§AL-2 body_chars', () => {
     expect(bodyChars(null, texts({}))).toEqual([]);
   });
 });
+
+describe('§AL-6 問いの種・関心別の入口の file_name', () => {
+  it('schema 2 で問いの種の文にファイル名 → file_name が 1 件（path は material.json）', () => {
+    const m = v2();
+    m.parts[0].questions_for_kids[0].text = 'app.html を開いて、何個目まで光るかな？';
+    const hits = checkChildText(m, texts({ [BODY]: GOOD_BODY, [PLAY]: GOOD_PLAY }));
+    expect(hits).toEqual([{ path: 'material.json', kind: 'file_name', sample: expect.stringContaining('app.html') }]);
+  });
+
+  it('関心別の入口の文も見る', () => {
+    const m = v2();
+    m.parts[0].interest_entries[1].text = 'body.md を読んでから作ってみよう';
+    const hits = checkChildText(m, texts({ [BODY]: GOOD_BODY, [PLAY]: GOOD_PLAY }));
+    expect(hits).toEqual([{ path: 'material.json', kind: 'file_name', sample: expect.stringContaining('body.md') }]);
+  });
+});

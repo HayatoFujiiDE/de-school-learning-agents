@@ -14,7 +14,7 @@ import { todayCostCents } from './jobs';
 import { OEMBED_TIMEOUT_MS, type OEmbedPort, type OEmbedResult } from './youtube-oembed';
 import { versionModels3dOfMaterial } from './models3d';
 import { declaredEdition, isVersionBoundMaterial } from './checks/edition';
-import { summariesOf } from './checks/shape';
+import { buddyTextsOf, summariesOf } from './checks/shape';
 import {
   VIDEO_ENABLED_KEY,
   VIDEO_FALLBACK_ENABLED_KEY,
@@ -1620,6 +1620,14 @@ export function childTextsBlocks(material: unknown, videos: VersionVideo[]): str
     const ep = isRecord(p.entry_point) ? p.entry_point : null;
     if (typeof p.id !== 'string' || !ep || typeof ep.text !== 'string') continue;
     lines.push(`部品 ${cutValue(p.id)}「${cutValue(p.title)}」 最初にやること: ${cutValue(ep.text)}`);
+  }
+  // §AL-6: schema 2 の問いの種・関心別の入口（バディ経由で子どもに届く文。schema 1 は buddyTextsOf が [] なので行は増えない）
+  for (const b of buddyTextsOf(material)) {
+    lines.push(
+      b.kind === 'question'
+        ? `部品 ${cutValue(b.partId)} 問いの種 ${cutValue(b.id)}: ${cutValue(b.text)}`
+        : `部品 ${cutValue(b.partId)} 関心別の入口（${b.id === null ? '共通' : cutValue(b.id)}）: ${cutValue(b.text)}`,
+    );
   }
   for (const v of videos) lines.push(`動画 ${cutValue(v.id)} 見どころ: ${cutValue(v.why)}`);
   for (const d of versionModels3dOfMaterial(material)) lines.push(`立体モデル ${cutValue(d.id)} 見方: ${cutValue(d.why)}`);

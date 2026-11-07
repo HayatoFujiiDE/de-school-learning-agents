@@ -1,6 +1,6 @@
 // shape.ts（契約 §AL-1）: material.json の形（schema_version 1 / 2）の分岐。純関数・例外を投げない
 import { describe, expect, it } from 'vitest';
-import { bodiesOf, schemaVersionOf, summariesOf } from '../src/checks/shape';
+import { bodiesOf, buddyTextsOf, schemaVersionOf, summariesOf } from '../src/checks/shape';
 import { goodMaterial, goodMaterialV2 } from './helpers';
 
 describe('schemaVersionOf', () => {
@@ -76,5 +76,35 @@ describe('summariesOf', () => {
     expect(summariesOf({ schema_version: 1, summary_elementary: 3, summary_secondary: 'b', summary: 'x' })).toEqual([{ key: 'summary_secondary', text: 'b' }]);
     expect(summariesOf({ schema_version: 2, summary: null, summary_elementary: 'a' })).toEqual([]);
     for (const m of [null, undefined, 'x', 1, []]) expect(summariesOf(m)).toEqual([]);
+  });
+});
+
+describe('buddyTextsOf（§AL-6）', () => {
+  it('schema 2: parts の順に問いの種 → 関心別の入口。path は material.json#parts[i].….text', () => {
+    const v2 = goodMaterialV2() as Record<string, any>;
+    const p = v2.parts[0];
+    expect(buddyTextsOf(v2)).toEqual([
+      { path: 'material.json#parts[0].questions_for_kids[0].text', partId: p.id, kind: 'question', id: p.questions_for_kids[0].id, text: p.questions_for_kids[0].text },
+      { path: 'material.json#parts[0].questions_for_kids[1].text', partId: p.id, kind: 'question', id: p.questions_for_kids[1].id, text: p.questions_for_kids[1].text },
+      { path: 'material.json#parts[0].interest_entries[0].text', partId: p.id, kind: 'entry', id: p.interest_entries[0].interest, text: p.interest_entries[0].text },
+      { path: 'material.json#parts[0].interest_entries[1].text', partId: p.id, kind: 'entry', id: p.interest_entries[1].interest, text: p.interest_entries[1].text },
+    ]);
+  });
+
+  it('schema 1 は []', () => {
+    expect(buddyTextsOf(goodMaterial())).toEqual([]);
+    expect(buddyTextsOf({ parts: [{ id: 'p1', questions_for_kids: [{ id: 'q1', text: 'x' }] }] })).toEqual([]);
+  });
+
+  it('壊れた入力でも例外を投げず、text が文字列のものだけ（interest が無い入口は id null）', () => {
+    for (const m of [null, undefined, 'x', 1, [], { schema_version: 2 }, { schema_version: 2, parts: 'x' }]) expect(buddyTextsOf(m)).toEqual([]);
+    const m = {
+      schema_version: 2,
+      parts: [null, { id: 3, questions_for_kids: [null, { id: 'q1', text: 1 }, { text: 'とい' }], interest_entries: 'x' }, { id: 'p2', questions_for_kids: {}, interest_entries: [{ text: '入口' }, 'y'] }],
+    };
+    expect(buddyTextsOf(m)).toEqual([
+      { path: 'material.json#parts[1].questions_for_kids[2].text', partId: null, kind: 'question', id: null, text: 'とい' },
+      { path: 'material.json#parts[2].interest_entries[0].text', partId: 'p2', kind: 'entry', id: null, text: '入口' },
+    ]);
   });
 });
