@@ -34,8 +34,10 @@ export interface ForbiddenInput {
   summary_secondary: string;
   /** §AL-2: schema 2 の版の要約 1 本。渡された時は material.json#summary の 1 行だけを見る（schema 1 は渡さない: 従来の 2 行） */
   summary?: string;
-  /** §AL-6: schema 2 の問いの種・関心別の入口の文（path は material.json#parts[i].…text）。禁止語だけを見る（確認済み・[cN] は見ない）。渡されなければ従来どおり */
+  /** §AL-3・§AL-6: schema 2 の子ども向けの material.json の文（shape.childMetaTextsOf: part の title・entry_point.text・videos[].why・問いの種・関心別の入口。path は material.json#parts[i].…）。禁止語だけを見る（確認済み・[cN] は見ない）。渡されなければ従来どおり */
   buddy_texts?: Array<{ path: string; text: string }>;
+  /** §AL-1: schema 2 の問いの種（shape.questionsOf）。claim_ids の id が claims に無ければ missing_claim_refs に {path: material.json#questions.<id>, ref}。渡されなければ従来どおり */
+  questions?: Array<{ id: string; claim_ids: string[] }>;
   claims: Array<{ id: string; source_ids: string[] }>;
   sourceIds: string[];
 }
@@ -104,6 +106,18 @@ export function checkForbidden(input: ForbiddenInput): ForbiddenResult {
         const c = [...t.matchAll(new RegExp(re.source, re.flags))].length;
         if (c > 0) appHtml.push({ path: p, pattern: label, count: c });
       }
+    }
+  }
+
+  // §AL-1: 問いの種の claim_ids の不在 id（拒否しない。同じ問いの同じ id は 1 件。契約の claim_id は既存の形に合わせて ref）
+  const seenQ = new Set<string>();
+  for (const q of input.questions ?? []) {
+    const path = `material.json#questions.${q.id}`;
+    for (const ref of q.claim_ids) {
+      const key = JSON.stringify([path, ref]);
+      if (claimIds.has(ref) || seenQ.has(key)) continue;
+      seenQ.add(key);
+      missingClaimRefs.push({ path, ref });
     }
   }
 

@@ -13,7 +13,7 @@ import { loadRightsGate } from './rights-store';
 import type { Model3dEntry } from './generated/models3d-catalog';
 import { checkForbidden } from './checks/forbidden';
 import { bodyChars, checkChildText } from './checks/childtext';
-import { buddyTextsOf, schemaVersionOf } from './checks/shape';
+import { childMetaTextsOf, questionsOf, schemaVersionOf } from './checks/shape';
 import { PRIMARY_HOSTS } from './checks/hosts';
 import { basenameOf, duplicateBasename, resolveOutputLayout } from './checks/layout';
 import {
@@ -1978,8 +1978,9 @@ class Reconciler {
       summary_elementary: schema.material.summary_elementary,
       summary_secondary: schema.material.summary_secondary,
       ...(schemaVersion === 2 ? { summary: schema.material.summary ?? '' } : {}),
-      // §AL-6: schema 2 の問いの種・関心別の入口も禁止語を見る（schema 1 は渡さない: 従来どおり）
-      ...(schemaVersion === 2 ? { buddy_texts: buddyTextsOf(schema.material).map(({ path, text }) => ({ path, text })) } : {}),
+      // §AL-3・§AL-6: schema 2 の子ども向けの material.json の文（title・entry_point・videos.why・問いの種・入口）も禁止語を見る。
+      // §AL-1: 問いの種の claim_ids の不在 id を missing_claim_refs に足す（schema 1 は渡さない: 従来どおり）
+      ...(schemaVersion === 2 ? { buddy_texts: childMetaTextsOf(schema.material), questions: questionsOf(schema.material) } : {}),
       claims: schema.claims,
       sourceIds: schema.sources.map((s) => s.id),
     });

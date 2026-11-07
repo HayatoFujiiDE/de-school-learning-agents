@@ -1,6 +1,6 @@
 // shape.ts（契約 §AL-1）: material.json の形（schema_version 1 / 2）の分岐。純関数・例外を投げない
 import { describe, expect, it } from 'vitest';
-import { bodiesOf, buddyTextsOf, schemaVersionOf, summariesOf } from '../src/checks/shape';
+import { bodiesOf, buddyTextsOf, childMetaTextsOf, questionsOf, schemaVersionOf, summariesOf } from '../src/checks/shape';
 import { goodMaterial, goodMaterialV2 } from './helpers';
 
 describe('schemaVersionOf', () => {
@@ -106,5 +106,45 @@ describe('buddyTextsOf（§AL-6）', () => {
       { path: 'material.json#parts[1].questions_for_kids[2].text', partId: null, kind: 'question', id: null, text: 'とい' },
       { path: 'material.json#parts[2].interest_entries[0].text', partId: 'p2', kind: 'entry', id: null, text: '入口' },
     ]);
+  });
+});
+
+describe('childMetaTextsOf（§AL-3・§AL-6）', () => {
+  it('schema 2: part の title → entry_point.text → videos[].why（parts の順）の後に問いの種・入口（buddyTextsOf）', () => {
+    const v2 = goodMaterialV2() as Record<string, any>;
+    v2.parts[0].videos = [{ id: 'v1', why: '光る様子' }, { id: 'v2' }];
+    const p = v2.parts[0];
+    expect(childMetaTextsOf(v2)).toEqual([
+      { path: 'material.json#parts[0].title', text: p.title },
+      { path: 'material.json#parts[0].entry_point.text', text: p.entry_point.text },
+      { path: 'material.json#parts[0].videos[0].why', text: '光る様子' },
+      ...buddyTextsOf(v2).map(({ path, text }) => ({ path, text })),
+    ]);
+    expect(childMetaTextsOf(v2)).toHaveLength(7);
+  });
+
+  it('schema 1 は []', () => {
+    expect(childMetaTextsOf(goodMaterial())).toEqual([]);
+  });
+
+  it('壊れた入力でも例外を投げず、文字列だけ', () => {
+    for (const m of [null, undefined, 'x', 1, [], { schema_version: 2 }, { schema_version: 2, parts: 'x' }]) expect(childMetaTextsOf(m)).toEqual([]);
+    const m = { schema_version: 2, parts: [null, { title: 1, entry_point: 'x', videos: [null, { why: 2 }] }, { title: 'だい', entry_point: { text: 'はじめ' }, videos: 'x' }] };
+    expect(childMetaTextsOf(m)).toEqual([
+      { path: 'material.json#parts[2].title', text: 'だい' },
+      { path: 'material.json#parts[2].entry_point.text', text: 'はじめ' },
+    ]);
+  });
+});
+
+describe('questionsOf（§AL-1）', () => {
+  it('schema 2: 問いの id と claim_ids（文字列だけ）。schema 1・壊れた入力は []', () => {
+    expect(questionsOf(goodMaterialV2())).toEqual([
+      { partId: 'p1', id: 'q1', claim_ids: ['c1'] },
+      { partId: 'p1', id: 'q2', claim_ids: ['c2'] },
+    ]);
+    expect(questionsOf(goodMaterial())).toEqual([]);
+    for (const m of [null, 'x', { schema_version: 2 }, { schema_version: 2, parts: [null, { questions_for_kids: 'x' }] }]) expect(questionsOf(m)).toEqual([]);
+    expect(questionsOf({ schema_version: 2, parts: [{ questions_for_kids: [null, { id: 1, claim_ids: [] }, { id: 'q3' }, { id: 'q4', claim_ids: ['c1', 2] }] }] })).toEqual([{ partId: null, id: 'q4', claim_ids: ['c1'] }]);
   });
 });

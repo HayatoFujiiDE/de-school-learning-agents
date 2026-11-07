@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FORBIDDEN_WORDS, checkForbidden } from '../src/checks/forbidden';
+import { childMetaTextsOf, questionsOf } from '../src/checks/shape';
+import { goodMaterialV2, outputsFixture } from './helpers';
 
 const base = () => ({
   texts: new Map<string, string>([['parts/p1/elementary-short.md', 'みてみよう [c1]']]),
@@ -115,5 +117,38 @@ describe('§AL-6: 問いの種・関心別の入口（buddy_texts）', () => {
   it('渡さなければ従来の結果', () => {
     expect(checkForbidden(base())).toEqual(checkForbidden({ ...base(), buddy_texts: [] }));
     expect(checkForbidden(base()).ok).toBe(true);
+  });
+});
+
+describe('§AL-3: schema 2 の子ども向けの material.json の文（title・entry_point・videos.why）', () => {
+  it('entry_point.text / videos[].why / title の禁止語が path 付きで出る（childMetaTextsOf の path）', () => {
+    const m = goodMaterialV2() as Record<string, any>;
+    m.parts[0].entry_point.text = '成績を上げよう';
+    m.parts[0].videos = [{ id: 'v1', why: 'ランキングの動画' }];
+    m.parts[0].title = 'レベルの道';
+    const r = checkForbidden({ ...base(), buddy_texts: childMetaTextsOf(m) });
+    expect(r.forbidden).toEqual([
+      { path: 'material.json#parts[0].title', word: 'レベル', count: 1 },
+      { path: 'material.json#parts[0].entry_point.text', word: '成績', count: 1 },
+      { path: 'material.json#parts[0].videos[0].why', word: 'ランキング', count: 1 },
+    ]);
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe('§AL-1: 問いの種の claim_ids の不在 id → missing_claim_refs（拒否しない）', () => {
+  it('問いの claim_ids に無い id → 1 件（path は material.json#questions.q1、ref は c9）。同じ問いの同じ id は 1 件', () => {
+    const r = checkForbidden({ ...base(), questions: [{ id: 'q1', claim_ids: ['c9', 'c1', 'c9'] }] });
+    expect(r.missing_claim_refs).toEqual([{ path: 'material.json#questions.q1', ref: 'c9' }]);
+    expect(r.ok).toBe(false);
+  });
+  it('実在 id だけ → 0 件。渡さなければ従来の結果', () => {
+    expect(checkForbidden({ ...base(), questions: [{ id: 'q1', claim_ids: ['c1'] }, { id: 'q2', claim_ids: [] }] }).missing_claim_refs).toEqual([]);
+    expect(checkForbidden(base())).toEqual(checkForbidden({ ...base(), questions: [] }));
+  });
+  it('bad fixture（q1 → c9）: questionsOf を渡すと 1 件', () => {
+    const m = JSON.parse(new TextDecoder().decode(outputsFixture('_shared-v2-bad').get('material.json')!));
+    const r = checkForbidden({ ...base(), questions: questionsOf(m) });
+    expect(r.missing_claim_refs).toEqual([{ path: 'material.json#questions.q1', ref: 'c9' }]);
   });
 });

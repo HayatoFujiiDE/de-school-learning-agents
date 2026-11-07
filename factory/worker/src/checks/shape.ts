@@ -134,3 +134,39 @@ export function buddyTextsOf(m: unknown): BuddyTextRef[] {
   });
   return out;
 }
+
+/**
+ * schema 2 の子ども向けの material.json の文（契約 §AL-3 の goal_word と同じ列挙。禁止語の検査に通す）:
+ * 各 part の title・entry_point.text・videos[j].why（parts の出現順）の後に buddyTextsOf（問いの種・関心別の入口）。
+ * summary は別に渡す（summariesOf）。spark は子どもに見せないので入れない。text が文字列のものだけ。schema 1 は []。例外を投げない
+ */
+export function childMetaTextsOf(m: unknown): Array<{ path: string; text: string }> {
+  if (!isObj(m) || !Array.isArray(m.parts) || schemaVersionOf(m) !== 2) return [];
+  const out: Array<{ path: string; text: string }> = [];
+  m.parts.forEach((part, i) => {
+    if (!isObj(part)) return;
+    if (typeof part.title === 'string') out.push({ path: `material.json#parts[${i}].title`, text: part.title });
+    if (isObj(part.entry_point) && typeof part.entry_point.text === 'string') out.push({ path: `material.json#parts[${i}].entry_point.text`, text: part.entry_point.text });
+    if (Array.isArray(part.videos))
+      part.videos.forEach((v, j) => {
+        if (isObj(v) && typeof v.why === 'string') out.push({ path: `material.json#parts[${i}].videos[${j}].why`, text: v.why });
+      });
+  });
+  for (const b of buddyTextsOf(m)) out.push({ path: b.path, text: b.text });
+  return out;
+}
+
+/** schema 2 の問いの種の参照（契約 §AL-1: claim_ids の実在の検査用）。id が文字列で claim_ids が配列の問いだけ（claim_ids は文字列だけ残す）。schema 1 は []。例外を投げない */
+export function questionsOf(m: unknown): Array<{ partId: string | null; id: string; claim_ids: string[] }> {
+  if (!isObj(m) || !Array.isArray(m.parts) || schemaVersionOf(m) !== 2) return [];
+  const out: Array<{ partId: string | null; id: string; claim_ids: string[] }> = [];
+  for (const part of m.parts) {
+    if (!isObj(part) || !Array.isArray(part.questions_for_kids)) continue;
+    const partId = typeof part.id === 'string' ? part.id : null;
+    for (const q of part.questions_for_kids) {
+      if (!isObj(q) || typeof q.id !== 'string' || !Array.isArray(q.claim_ids)) continue;
+      out.push({ partId, id: q.id, claim_ids: q.claim_ids.filter((c): c is string => typeof c === 'string') });
+    }
+  }
+  return out;
+}

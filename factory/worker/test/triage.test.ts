@@ -718,6 +718,17 @@ describe('§AL-5 仕分け v2（child_text の新しい kind）', () => {
     expect([used.action, used.gate, used.return_note]).toEqual(['none', 'attention', null]);
   });
 
+  it('bad fixture の child_text + 問いの種の不在 id（missing_claim_refs）: autoRounds 0 → auto_return / 2 → none・attention は変わらない', () => {
+    const bad = goodMaterialV2Bad();
+    const childText = checkChildText(bad.m, bad.t);
+    const checks = { ...GREEN_CHECKS, child_text: childText, missing_claim_refs: [{ path: 'material.json#questions.q1', ref: 'c9' }] };
+    const t = v2Triage(childText, { material: bad.m, checks });
+    expect(t.items.find((i) => i.cause === 'missing_ref')).toMatchObject({ id: 'check:missing_ref:1', severity: 'fix', path: 'material.json', detail: 'c9' });
+    expect(t.action).toBe('auto_return');
+    const used = v2Triage(childText, { material: bad.m, checks, autoRounds: 2 });
+    expect([used.action, used.gate, used.return_note]).toEqual(['none', 'attention', null]);
+  });
+
   it('ITEM_TITLE の 9 件は契約 AL-5 と一字も違わない', () => {
     expect(Object.fromEntries(Object.keys(CONTRACT_TITLE_V2).map((k) => [k, ITEM_TITLE[k]]))).toEqual(CONTRACT_TITLE_V2);
   });
