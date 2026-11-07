@@ -70,3 +70,9 @@
 - 画像（§S-8-3 の書き足し）: この job が作った image_id は 8 枚まで、前の job の分も合わせた合計は 16 枚まで。元の画像が掃除で消えていても、親の版の R2 に同じ path があり、親の版の material.json の同じ path の行が同じ image_id を指していれば、親の版から写す。
 - 親の file_id が Files API から消えていると 1 回目の create が失敗するが、2 回目は resources なしで作るので進む（§S-8-1 のとおり）。
 - レビュー後（2026-11-06）: 取り込みは親の版の R2 の記録だけを読む（親の events を読まない・親の記録を書かない。作ってよいのは startJob だけ）。前の job の画像を受け付けるのは rework で parent_version_id がある job だけ（draft は今までどおり拒む）。carried の項目は、親の記録を実際に読めた時だけ付ける。
+
+## 不具合の直し（2026-11-07）
+
+- 本番の観測: §S-8 を入れてから、作り直しは 1 件も取り込めていなかった。0bbb62ca と 5bec54d0 の 2 件が `invalid_outputs`（`duplicate_basename:adapt-rules.md`）で failed になり、費用は 3.26 ドルと 2.70 ドル。files.list には、session に渡した前の版のファイル（resources）も出ていた。Files API はディレクトリを落とすので、職人が書き直したファイルと同じ名前で 2 件並ぶ。渡したファイルの created_at は、どれも session の作成より前だった（例: 02:10:18.722。session_created_at は 02:10:19.306、職人の最初のファイルは 02:10:28）。
+- 直し: 取り込みの files.list で、created_at が job の session_created_at より前のファイルは出力に数えない（`isBeforeSession`、jobs.ts）。どちらかの時刻が読めない時は、今までどおり数える。
+- 残した点: session_created_at は Worker の時計、files の created_at は API の時計で比べている。職人の最初のファイルは session の作成から数秒以上あとにできるので、時計のずれが 1 秒未満なら取り違えない。

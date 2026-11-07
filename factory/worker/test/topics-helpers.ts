@@ -194,6 +194,8 @@ export function genMessage(bodies: unknown[] | null, o: { fetches?: Array<{ url:
     content.push({ type: 'web_fetch_tool_result', tool_use_id: `srvtoolu_${i}`, content: { type: 'web_fetch_result', url: f.url, content: { type: 'document', source: { type: 'text', media_type: 'text/plain', data: f.text } } } });
   });
   if (bodies !== null) content.push({ type: 'tool_use', id: 'toolu_1', name: 'save_topics', input: { topics: bodies } });
+  // save_topics の無い end_turn は text を 1 つ持つ（v2.10: 空の end_turn は催促せず no_output。空の応答はテストで別に作る）
+  else content.push({ type: 'text', text: 'おわり' });
   return { id: 'msg_t', type: 'message', role: 'assistant', model: 'claude-sonnet-5-5', content, stop_reason: bodies === null ? 'end_turn' : 'tool_use', stop_sequence: null, usage: usage(o.input, o.output, o.searches) } as unknown as Message;
 }
 

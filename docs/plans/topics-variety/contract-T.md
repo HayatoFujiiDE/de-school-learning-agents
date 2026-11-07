@@ -590,6 +590,13 @@ v2.7 を出した後、本番の philo の手動 run が `failed: no_valid_topic
 - **子どもの画面**（`app-v3/js/today.js`）: 事実・考えの各行の「出典: …」を出さない。「確かめた日」は「おとなが確かめた日」の意味で残す（出典の名前は出さない）。`learn` が true の出典が 1 つ以上ある時だけ、お題の詳細の下に「参考になる資料」（小「さんこうになるしりょう」）の欄を出す（名前のリンク。`https://` だけリンクで `target="_blank" rel="noopener noreferrer"`、それ以外は名前だけ）。無い時は欄ごと出さない。見本のお題は JAXA MMX の 2 つの出典だけ `learn: true`。
 - **運営画面**（`public/admin/topics.js`）: 出典は今までどおり全部出し、`for_learner` が true の出典に「子どもに見せる」の印を足す。
 
+## v2.10 の裁定（2026-11-07、v2.7〜v2.8 のレビューで残した点）
+
+- **続きの呼び出しの失敗の精算**: turn ≥ 1 の呼び出しが課金なしと分からない失敗（5xx・タイムアウト・応答不明。`classifyCallError` の `noCharge: false`）で終わった時は、それまでの実額の合計 + 直前の 1 回の実額（失敗した呼び出しの見込み）で精算する（T-6「数えられない時は少なく数えない」）。応答のある 4xx（`noCharge: true`）は今までどおりそれまでの合計。超えた時の `topic_over_reserve` は今のまま。
+- **空の end_turn**: `stop_reason: end_turn` で content が空（block 0 個、または空白だけの text しか無い）の時は、空の assistant を積んで催促しない（Messages API は最後以外の assistant の空の content を 400 にする）。続けずに `failed: no_output`、`diag_json` の `stop` は `empty_end_turn`。
+- **run の終わりのログ**: `cents` は台帳に書いた額（0 回目の失敗で取り置きのまま残る時はその額、課金なしなら 0）。`turns` は失敗した呼び出しも数える（`diag_json` の `turns` は成功した呼び出しの数のまま）。
+- 0 回目の params・台帳の他の経路・CAS・queue・検査は変えない。
+
 ## T-14 d の記録（2026-11-06、本番の実測。D1 の集計）
 
 - 生成（news・手動）: 成功 1 回 = 13 セント・47 秒・2 本（捨てた本 0）。形で全部捨てた 1 回 = 18 セント・58 秒。400 で失敗した 7 回 = 0 セント（1 回は cron）。

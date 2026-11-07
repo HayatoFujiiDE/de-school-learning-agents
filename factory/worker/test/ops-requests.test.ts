@@ -182,3 +182,50 @@ describe('(f) queue に送れない時は取り消して failed', () => {
     expect([count(db, 'SELECT COUNT(*) AS n FROM topic_runs'), topicLedger().length]).toEqual([0, 0]);
   });
 });
+
+describe('§W-2 job_reingest: invalid_outputs で failed の job を running に戻す（session は作らない）', () => {
+  const JOB = '0bbb62ca-1128-46c5-8249-f694d2f40975';
+  const T0 = '2026-11-07T02:00:00.000Z';
+  const addReingest = (id: string, payload: unknown) => {
+    const t = new Date().toISOString();
+    db.prepare("INSERT INTO ops_requests (id, kind, payload_json, status, result_json, created_at, updated_at) VALUES (?, 'job_reingest', ?, 'pending', NULL, ?, ?)").run(id, JSON.stringify(payload), t, t);
+  };
+  const seedFailed = (error = 'invalid_outputs') => {
+    db.prepare("INSERT INTO materials (id, slug, title, kinds_json, work_status, publish_status, brief_md, created_at, updated_at) VALUES ('m1', 'm-1', 't', '[3]', 'idle', 'none', 'b', ?, ?)").run(T0, T0);
+    db.prepare(
+      `INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, session_id, brief_md, error, created_at, updated_at) VALUES (?, 'm1', 'rework', 'claude-opus-5-5', 'making', 'failed', 'sesn_1', 'b', ?, ?, ?)`,
+    ).run(JOB, error, T0, T0);
+  };
+  const jobStatus = () => (db.prepare('SELECT status FROM factory_jobs WHERE id = ?').get(JOB) as { status: string }).status;
+
+  it('取り込み直しできる job → running に戻り、依頼は done。お題の queue には何も送らない', async () => {
+    seedFailed();
+    addReingest('q1', { job_id: JOB });
+    const o = await opsTick(envWith());
+    expect(jobStatus()).toBe('running');
+    expect(req('q1').status).toBe('done');
+    expect(result('q1')).toEqual({ job_id: JOB, status: 'running' });
+    expect(sent).toHaveLength(0);
+    expect(o.request).toEqual({ id: 'q1', kind: 'job_reingest', status: 'done' });
+  });
+
+  it('invalid_outputs 以外の failed は断る（route と同じ述語）。job はそのまま', async () => {
+    seedFailed('budget_exceeded');
+    addReingest('q1', { job_id: JOB });
+    await opsTick(envWith());
+    expect(jobStatus()).toBe('failed');
+    expect(req('q1').status).toBe('failed');
+    expect(result('q1')).toEqual({ refused: 'not_reingestable' });
+  });
+
+  it('形の違う payload（uuid でない・余計な項目）は bad_payload', async () => {
+    seedFailed();
+    addReingest('q1', { job_id: "x'; DROP TABLE factory_jobs;--" });
+    await opsTick(envWith());
+    expect(result('q1')).toEqual({ error: 'bad_payload' });
+    addReingest('q2', { job_id: JOB, extra: 1 });
+    await opsTick(envWith());
+    expect(result('q2')).toEqual({ error: 'bad_payload' });
+    expect(jobStatus()).toBe('failed');
+  });
+});
