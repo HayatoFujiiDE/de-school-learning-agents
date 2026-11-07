@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // 実サイト app/ の開発・検証サーバー（contract-LS §LS-6）。Node 組込みだけ。127.0.0.1 だけで待つ。
-// node tools/live-serve.mjs [--port 4180] [--integ <dir>] [--fake-buddy]
+// node tools/live-serve.mjs [--port 4180] [--integ <dir>] [--fake-buddy] [--factory-proxy]
 //   /app/*   → <worktree>/app        /tools/* → <worktree>/tools        / → 302 /app/index.html#talk
 //   --integ  → /app-live/* と /basic-learning/* をその dir から配信（読むだけ。無ければ 404）
 //   --fake-buddy → /api/buddy/status と POST /api/buddy にテスト用の返事（実 Claude は呼ばない・key を読まない）。
 //                  POST /__fake/mode {mode:'ok'|'503'|'429'|'timeout'|'invalid'|'notconfigured'} で以後の応答を切り替える
+//   --factory-proxy → GET /api/library/* を工場（DES.factory.base と同じ host）へ同一 origin で中継する（読むだけ・2MB 上限。工場の CORS が付くまでの検証用。LS-18-26）
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -18,16 +19,32 @@ const INTEG_DEFAULT = path.basename(path.dirname(ROOT)) === '.worktrees'
   : path.join(ROOT, '.worktrees', 'basic-learning-integration');
 const types = { '.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.json':'application/json; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.webp':'image/webp','.mp3':'audio/mpeg','.mp4':'video/mp4','.vtt':'text/vtt; charset=utf-8','.pdf':'application/pdf','.txt':'text/plain; charset=utf-8' };
 const MODES = ['ok', '503', '429', 'timeout', 'invalid', 'notconfigured'];
+const FACTORY = 'https://de-school-factory.h-fujii.workers.dev';
+const PROXY_MAX = 2 * 1024 * 1024;
+// 工場の配信 API の読み取り中継（GET だけ。query はそのまま。応答は content-type と status を写す）
+async function proxyFactory(req, res) {
+  if (req.method !== 'GET') { res.writeHead(405, { Allow: 'GET' }).end(); return; }
+  const ac = new AbortController(), t = setTimeout(() => ac.abort(), 10000);
+  try {
+    const up = await fetch(FACTORY + req.url, { signal: ac.signal, redirect: 'error', headers: { accept: req.headers.accept || '*/*' } });
+    const buf = Buffer.from(await up.arrayBuffer());
+    if (buf.length > PROXY_MAX) { send(res, 502, 'Upstream too large'); return; }
+    res.writeHead(up.status, { 'Content-Type': up.headers.get('content-type') || 'application/octet-stream', 'Content-Length': buf.length });
+    res.end(buf);
+  } catch { send(res, 502, 'Upstream unavailable'); }
+  finally { clearTimeout(t); }
+}
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function parseArgs(argv) {
-  const o = { port: 4180, integ: INTEG_DEFAULT, fake: false };
+  const o = { port: 4180, integ: INTEG_DEFAULT, fake: false, factoryProxy: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--port') o.port = Number(argv[++i]);
     else if (a === '--integ') o.integ = path.resolve(String(argv[++i] || ''));
     else if (a === '--fake-buddy') o.fake = true;
-    else throw new Error('Usage: node tools/live-serve.mjs [--port 4180] [--integ <dir>] [--fake-buddy]');
+    else if (a === '--factory-proxy') o.factoryProxy = true;
+    else throw new Error('Usage: node tools/live-serve.mjs [--port 4180] [--integ <dir>] [--fake-buddy] [--factory-proxy]');
   }
   if (!Number.isInteger(o.port) || o.port < 1 || o.port > 65535) throw new Error('--port は 1〜65535');
   return o;
@@ -156,6 +173,7 @@ function createServer(opt) {
       try { name = decodeURIComponent(rawPath); } catch { send(res, 400, 'Bad request'); return; }
       if (name === '/') { res.writeHead(302, { Location: '/app/index.html#talk' }).end(); return; }
       if (opt.fake && (name === '/api/buddy' || name === '/api/buddy/status' || name === '/__fake/mode')) { await api(req, res, name); return; }
+      if (opt.factoryProxy && name.startsWith('/api/library/')) { await proxyFactory(req, res); return; }
       if (!['GET', 'HEAD'].includes(req.method)) { res.writeHead(405, { Allow: 'GET, HEAD' }).end(); return; }
       const mounts = [['/app/', path.join(ROOT, 'app')], ['/tools/', path.join(ROOT, 'tools')], ['/app-live/', path.join(opt.integ, 'app-live')], ['/basic-learning/', path.join(opt.integ, 'basic-learning')]];
       for (const [prefix, root] of mounts) {
@@ -174,5 +192,5 @@ const server = createServer(opt);
 server.on('error', error => { console.error('LIVE_SERVE=FAIL code=' + (error.code || 'UNKNOWN')); process.exitCode = 1; });
 server.listen(opt.port, '127.0.0.1', () => {
   const integ = fs.existsSync(path.join(opt.integ, 'app-live', 'state.mjs')) ? 'found' : 'missing';
-  console.log('LIVE_SERVE=http://127.0.0.1:' + opt.port + '/app/index.html#talk integ=' + integ + ' fake_buddy=' + (opt.fake ? 'on' : 'off'));
+  console.log('LIVE_SERVE=http://127.0.0.1:' + opt.port + '/app/index.html#talk integ=' + integ + ' fake_buddy=' + (opt.fake ? 'on' : 'off') + ' factory_proxy=' + (opt.factoryProxy ? 'on' : 'off'));
 });
