@@ -137,6 +137,30 @@ async function serveAdmin(request: Request, env: Env): Promise<Response> {
   return new Response(res.body, { status: res.status, headers });
 }
 
+/** 配信 API（/api/library/*）の振り分け。認証なし・GET だけ。知らない path は 404 */
+async function libraryRoute(path: string, env: Env, url: URL): Promise<Response> {
+  if (path === '/api/library/available') return await libraryAvailable(env);
+  if (path === '/api/library/topics') return await libraryTopics(env, url);
+  if (path === '/api/library/topics/stock') return await libraryTopicStock(env, url);
+  if (path === '/api/library/models3d') return await libraryModels3d(env, url.origin);
+  const mf = /^\/api\/library\/models3d\/files\/([a-z0-9-]{3,40})\/([0-9a-f]{64})\.glb$/.exec(path);
+  if (mf) return await libraryModel3dFile(env, mf[1], mf[2]);
+  const m = new RegExp(`^/api/library/files/${ID}/(.*)$`).exec(path);
+  if (m) return await libraryFile(env, m[1], m[2]);
+  return jsonError(404, 'not_found');
+}
+
+/**
+ * 配信 API の応答に access-control-allow-origin: * を付ける（別オリジンの学習者サイトがブラウザから直接読む。
+ * credentials 無しの単純 GET だけなので * で足り、OPTIONS は扱わない）。handler が既に付けていればそのまま
+ */
+function withPublicCors(res: Response): Response {
+  if (res.headers.has('access-control-allow-origin')) return res;
+  const headers = new Headers(res.headers);
+  headers.set('access-control-allow-origin', '*');
+  return new Response(res.body, { status: res.status, headers });
+}
+
 export default {
   async fetch(request: Request, env: Env, exec: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -147,18 +171,11 @@ export default {
         if (request.method !== 'POST') return jsonError(405, 'method_not_allowed');
         return await handleWebhook(request, env, exec);
       }
-      // 認証なし（公開・読み取り専用）
+      // 認証なし（公開・読み取り専用）。別オリジンの学習者サイトがブラウザから直接 fetch で読むので、
+      // 配信 API の応答（エラーを含む）には access-control-allow-origin: * を付ける（credentials 無し・単純 GET だけ。OPTIONS は扱わない）
       if (path.startsWith('/api/library/')) {
-        if (request.method !== 'GET') return jsonError(405, 'method_not_allowed');
-        if (path === '/api/library/available') return await libraryAvailable(env);
-        if (path === '/api/library/topics') return await libraryTopics(env, url);
-        if (path === '/api/library/topics/stock') return await libraryTopicStock(env, url);
-        if (path === '/api/library/models3d') return await libraryModels3d(env, url.origin);
-        const mf = /^\/api\/library\/models3d\/files\/([a-z0-9-]{3,40})\/([0-9a-f]{64})\.glb$/.exec(path);
-        if (mf) return await libraryModel3dFile(env, mf[1], mf[2]);
-        const m = new RegExp(`^/api/library/files/${ID}/(.*)$`).exec(path);
-        if (m) return await libraryFile(env, m[1], m[2]);
-        return jsonError(404, 'not_found');
+        if (request.method !== 'GET') return withPublicCors(jsonError(405, 'method_not_allowed'));
+        return withPublicCors(await libraryRoute(path, env, url));
       }
 
       const isAdmin = path === '/admin' || path.startsWith('/admin/');
