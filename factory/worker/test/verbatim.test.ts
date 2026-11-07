@@ -168,6 +168,32 @@ describe('v4 回帰（Astra high REVISE の BLOCKING 2・NON-BLOCKING の引用�
     expect(r.hits.length).toBe(1);
     expect(r.hits[0].text.trim()).toBe(P);
   });
+  it.each([
+    ['template を挟む（Astra 2 回目 BLOCKING の再現）', `<span>${a}</span><template>X</template><span>${b}</span><template>Y</template><span>${c}</span>`],
+    ['hidden 属性の要素を挟む', `<span>${a}</span><span hidden>X</span><span>${b}</span><div hidden="">Y<div>Z</div></div><span>${c}</span>`],
+    ['style の display:none（空白・大小文字は無視）を挟む', `<span>${a}</span><span style="color:red; Display : NONE">X</span><span>${b}</span><i style="DISPLAY:none">Y</i><span>${c}</span>`],
+    ['style の visibility:hidden を挟む', `<span>${a}</span><b style="visibility: Hidden">X</b><span>${b}</span><b style="visibility:hidden">Y</b><span>${c}</span>`],
+    ['svg の tspan の間に display:none の tspan', `<svg xmlns="http://www.w3.org/2000/svg"><text><tspan>${a}</tspan><tspan style="display:none">X</tspan><tspan>${b}</tspan><rect style="display:none"/><tspan>${c}</tspan></text></svg>`],
+  ])('v4.1 読み方 B は見えない中身を除いてつなぐ: %s → 1 件', (_name, body) => {
+    const path = body.startsWith('<svg') ? 'parts/p1/figure-1.svg' : 'parts/p1/app.html';
+    const bodies = prepareBodies(new Map([[path, body]]));
+    expect(bodies.incomplete).toBe(false);
+    const r = scanPage(buildNeedles(bodies), bodies, `${L}${P}${R}`, 'u', []);
+    expect(r.hits.map((h) => [h.view, h.text.trim()])).toEqual([['joined', P]]);
+  });
+  it('v4.1 template の中だけの丸写しは対象外（どちらの読み方でも見えない）', () => {
+    const bodies = prepareBodies(new Map([['parts/p1/app.html', `<template>${P}</template>`]]));
+    expect(scanPage(buildNeedles(bodies), bodies, P, 'u', []).hits).toEqual([]);
+  });
+  it('v4.1 hidden・display:none の中だけの文は、読み方 A（§AK と共有の textOfHtml。変えない）では見えるので 1 件のまま', () => {
+    for (const body of [`<p hidden>${P}</p>`, `<div style="display:none">${P}</div>`]) {
+      const bodies = prepareBodies(new Map([['parts/p1/app.html', body]]));
+      expect(scanPage(buildNeedles(bodies), bodies, P, 'u', []).hits.map((h) => h.view)).toEqual(['spaced']);
+    }
+  });
+  it('v4.1 見えない要素が閉じていない（後ろが全部見えないことになる）→ 本文の検査は incomplete', () => {
+    expect(prepareBodies(new Map([['parts/p1/app.html', `<div hidden>${P}`]])).incomplete).toBe(true);
+  });
   it('script と style の中身は入れない・comment も入れない', () => {
     for (const body of [`<script>var s = "${P}";</script>`, `<style>/* ${P} */</style>`, `<!-- ${P} -->`]) {
       const bodies = prepareBodies(new Map([['parts/p1/app.html', body]]));

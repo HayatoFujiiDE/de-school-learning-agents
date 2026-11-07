@@ -6,7 +6,7 @@
 // ページの文は D1 の state と checks には保存しない。R2 の版の場所の verbatim-pages.json（作り直しで照らし直すためだけ）に置く（v4 裁定 1）。
 // ページの文・本文は信頼できない入力なので、ここでは比較にしか使わない（ログに出さない）。
 
-import { decodeEntities, parseHtml, textOfHtml } from '../rights-check';
+import { decodeEntities, parseHtml, textOfHtml, type HtmlTagToken } from '../rights-check';
 
 /** 一致とみなす最短の長さ（字） */
 export const VERBATIM_MIN_LEN = 100;
@@ -123,12 +123,24 @@ export function visibleTextOfMd(md: string, view: VerbatimView = 'spaced'): stri
 
 /** joined の読み方で中身を入れる生テキスト要素（script・style 以外。textarea は parseHtml が text の token にする） */
 const JOINED_RAW = new Set(['xmp', 'iframe', 'noembed', 'noframes', 'noscript', 'title']);
+/** 終了タグを持たない要素（中身が無いので、見えない印が付いていても区間を開かない） */
+const VOID_ELEMENTS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
+
+/** v4.1: 見えない中身を持つ開始タグか（template・hidden 属性・style 属性の display:none / visibility:hidden。空白と大小文字は無視） */
+function hidesContent(t: HtmlTagToken): boolean {
+  if (t.name === 'template' || t.attrs.has('hidden')) return true;
+  const style = (t.attrs.get('style') ?? '').replace(/\s+/g, '').toLowerCase();
+  return style.includes('display:none') || style.includes('visibility:hidden');
+}
 
 /**
  * html / svg の見える文。閉じていない構造は null（fail-closed）。
  * view = 'spaced'（既定）: §AK の textOfHtml（script・style・コメント・タグを落とし、タグの境目は空白 1 つ・template の中は入れない）。
  * 'joined': text の token を区切りなしでつなぐ（隣り合う span / tspan が描画でつながるのと合わせる）。生テキスト要素は script と style 以外を
- * 中身ごと入れる（xmp・noscript・iframe・noembed・noframes・title。title は実体を復号）。comment は入れない
+ * 中身ごと入れる（xmp・noscript・iframe・noembed・noframes・title。title は実体を復号）。comment は入れない。
+ * v4.1: 見えない中身（template・hidden 属性・style 属性の display:none / visibility:hidden の要素の中）は除き、前後を区切りなしでつなぐ。
+ * 見えない要素は同じ名前の開始・終了タグを数えて閉じる。閉じないまま終わったら null（後ろが全部見えないことになり、決まらない = fail-closed）。
+ * class・外部 CSS・JavaScript で見えなくした文は範囲外（AK2-0.8）
  */
 export function visibleTextOfHtml(s: string, view: VerbatimView = 'spaced'): string | null {
   const html = String(s ?? '');
@@ -136,10 +148,26 @@ export function visibleTextOfHtml(s: string, view: VerbatimView = 'spaced'): str
   const tokens = parseHtml(html);
   if (!tokens) return null;
   let out = '';
+  // 見えない区間: その要素の名前と、同じ名前の入れ子の深さ（内側から閉じる）
+  const hidden: Array<{ name: string; depth: number }> = [];
   for (let k = 0; k < tokens.length; k++) {
     const t = tokens[k];
+    if (hidden.length > 0) {
+      const top = hidden[hidden.length - 1];
+      if (t.type === 'start' && !VOID_ELEMENTS.has(t.name) && !html.slice(t.start, t.end).endsWith('/>')) {
+        if (t.name === top.name) top.depth++;
+        else if (hidesContent(t)) hidden.push({ name: t.name, depth: 1 });
+      } else if (t.type === 'end' && t.name === top.name && --top.depth === 0) {
+        hidden.pop();
+      }
+      continue;
+    }
     if (t.type === 'text') {
       out += t.text;
+      continue;
+    }
+    if (t.type === 'start' && hidesContent(t) && !VOID_ELEMENTS.has(t.name) && !html.slice(t.start, t.end).endsWith('/>')) {
+      hidden.push({ name: t.name, depth: 1 });
       continue;
     }
     if (t.type === 'start' && JOINED_RAW.has(t.name)) {
@@ -151,7 +179,7 @@ export function visibleTextOfHtml(s: string, view: VerbatimView = 'spaced'): str
       }
     }
   }
-  return out;
+  return hidden.length > 0 ? null : out;
 }
 
 /** 本文の 1 つの読み方（正規化した見える文） */

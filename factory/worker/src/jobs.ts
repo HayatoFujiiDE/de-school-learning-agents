@@ -2043,9 +2043,28 @@ class Reconciler {
     const recordPages: VerbatimPage[] = [];
     let recordLost = ev.verb.lost;
     for (let n = 0; n < ev.verb.parts; n++) {
+      // v4.1: まとめる処理も時間の残りを見る。足りなければ先送り（作り直しの親の記録と同じ carry_defers の数え方で 3 回まで）。
+      // 使い切ったら、まとめずに先へ進む（この版の記録は truncated・版は incomplete。取り込みはずっと先送りにしない）
+      if (Date.now() > this.deadline - CARRY_MIN_REMAINING_MS) {
+        const defers = Number.isInteger(state.carry_defers) ? state.carry_defers! : 0;
+        if (defers < CARRY_DEFER_MAX) {
+          state = { ...state, carry_defers: defers + 1 };
+          await this.writeState(job, null, state);
+          throw new OutOfTime();
+        }
+        recordLost = true;
+        verbIncomplete = true;
+        break;
+      }
       const part = await this.readPagesObject(`${prefix}${VERBATIM_PAGES_PARTS_DIR}${n}.json`, false);
-      if (part.kind === 'ok') recordPages.push(...part.file.pages);
-      else {
+      if (part.kind === 'ok') {
+        recordPages.push(...part.file.pages);
+        // v4.1: 途中の記録の truncated を引き継ぐ（入れられなかった文がある = この版の記録も truncated・版は incomplete）
+        if (part.file.truncated) {
+          recordLost = true;
+          verbIncomplete = true;
+        }
+      } else {
         recordLost = true;
         verbIncomplete = true;
       }

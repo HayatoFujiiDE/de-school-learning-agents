@@ -8,7 +8,7 @@ import type { Env } from '../src/env';
 import { reconcileJob } from '../src/jobs';
 import { SOURCE_CAPTURES_FILE } from '../src/verify';
 import { d1, migratedDb, one, rows } from './d1-shim';
-import { goodFiles } from './helpers';
+import { goodFiles, goodMaterial } from './helpers';
 
 const DAY = 86_400_000;
 const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
@@ -431,6 +431,104 @@ describe('v4 回帰（Astra high REVISE の BLOCKING 1・3 の再現）: 作り�
     seedChild(vc, 'jg');
     expect(await rec('jg', ingestPort(outputsWith(COPY)).port)).toBe('versioned');
     expect(verb('jg')).toMatchObject({ status: 'found', n: 1 });
+  });
+});
+
+describe('v4.1 回帰（Astra 2 回目の BLOCKING・NON-BLOCKING の再現）', () => {
+  const uniq = (n: number, base = 0x4e00): string => Array.from({ length: n }, (_, k) => String.fromCodePoint(base + k)).join('');
+  const P = uniq(150);
+  const [a, b, c] = [P.slice(0, 50), P.slice(50, 100), P.slice(100)];
+  /** 本文の app.html を html にした出力 */
+  function outputsWithApp(html: string) {
+    const m = goodMaterial();
+    (m.parts as Array<{ files: unknown[] }>)[0].files.push({ path: 'parts/p1/app.html', role: 'app' });
+    const files = goodFiles(m);
+    files.set(BODY_PATH, enc.encode('見てみよう [c1]\n\n自分で書いた文です。\n'));
+    files.set('parts/p1/app.html', enc.encode(`<!doctype html><html><body>${html}</body></html>`));
+    return files;
+  }
+  const PAGE_P = `前置き${P}終わり`;
+
+  it('BLOCKING: template を挟んだ丸写し（取り込みの実経路）→ found。template なしの対照も found', async () => {
+    seedDraft('j1');
+    expect(await rec('j1', ingestPort(outputsWithApp(`<span>${a}</span><span>${b}</span><span>${c}</span>`), [[use('tu1', URL_X), result('tu1', PAGE_P)]]).port)).toBe('versioned');
+    expect(verb('j1')).toMatchObject({ status: 'found', n: 1 });
+    seedDraft('j2');
+    const html = `<span>${a}</span><template>X</template><span>${b}</span><template>Y</template><span>${c}</span>`;
+    expect(await rec('j2', ingestPort(outputsWithApp(html), [[use('tu1', URL_X), result('tu1', PAGE_P)]]).port)).toBe('versioned');
+    expect(verb('j2')).toMatchObject({ status: 'found', n: 1 });
+    expect(checksOf('j2').verbatim_incomplete).toBe(false);
+  });
+
+  it('NON-BLOCKING: 見えない template の中だけの文 → clean（取り込みの実経路）', async () => {
+    seedDraft();
+    expect(await rec('jd', ingestPort(outputsWithApp(`<template>${P}</template>`), [[use('tu1', URL_X), result('tu1', PAGE_P)]]).port)).toBe('versioned');
+    expect(verb('jd')).toMatchObject({ status: 'clean', n: 0 });
+  });
+
+  it('NON-BLOCKING: 途中の記録のまとめも先送りの回数に入る（3 回まで）。使い切ったら、まとめずに incomplete で版を作る', async () => {
+    seedDraft();
+    const p = ingestPort(outputsWith(COPY), [[use('tu1', URL_X), result('tu1', PAGE)]]);
+    const defers = () => JSON.parse(String(one(db, "SELECT reconcile_state_json FROM factory_jobs WHERE id = 'jd'").reconcile_state_json)).carry_defers;
+    for (let i = 1; i <= 3; i++) {
+      expect(await rec('jd', p.port, 12_000)).toBe('deferred');
+      expect(defers()).toBe(i);
+    }
+    expect(await rec('jd', p.port, 12_000)).toBe('versioned');
+    expect(checksOf('jd')).toMatchObject({ verbatim_status: 'found', verbatim_incomplete: true });
+    expect(JSON.parse(new TextDecoder().decode(r2.get('materials/m1/jd/verbatim-pages.json')!)).truncated).toBe(true);
+  });
+
+  it('NON-BLOCKING: 途中の記録の truncated:true を引き継ぐ（まとめた記録も truncated・版は incomplete）', async () => {
+    seedDraft();
+    const p = ingestPort(outputsWith('自分で書いた文です。'), [[use('tu1', URL_X), result('tu1', PAGE)], [use('tu2', URL_X)]], { failOnce: 1 });
+    expect(await rec('jd', p.port)).toBe('error');
+    const key = 'materials/m1/jd/verbatim-pages.parts/0.json';
+    expect(r2.has(key)).toBe(true);
+    r2.set(key, enc.encode(JSON.stringify({ v: 1, pages: [], truncated: true })));
+    expect(await rec('jd', p.port)).toBe('versioned');
+    expect(checksOf('jd')).toMatchObject({ verbatim_status: 'incomplete', verbatim_incomplete: true });
+    expect(JSON.parse(new TextDecoder().decode(r2.get('materials/m1/jd/verbatim-pages.json')!)).truncated).toBe(true);
+  });
+
+  it('part を書いた後・D1 に続き位置を保存する前で止まる → 再開すると同じ番号の part を上書きし、二重にも欠けにもならない', async () => {
+    seedDraft();
+    const PAGE2 = `別のページ。${uniq(130, 0x7000)}おわり`;
+    const putKeys: string[] = [];
+    const put0 = env.R2.put.bind(env.R2);
+    let armed = false;
+    (env.R2 as unknown as { put: (k: string, v: Uint8Array | string) => Promise<void> }).put = async (k, v) => {
+      await put0(k, v as never);
+      if (k.includes('verbatim-pages.parts/')) {
+        putKeys.push(k.slice(k.lastIndexOf('/') + 1));
+        if (putKeys.length === 1) armed = true; // 最初の part を書いた直後の D1 の保存を 1 回だけ失敗させる
+      }
+    };
+    const prep0 = env.DB.prepare.bind(env.DB);
+    (env.DB as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+      if (armed && /reconcile_state_json = \?/.test(sql)) {
+        armed = false;
+        throw new Error('d1 save failed');
+      }
+      return prep0(sql);
+    };
+    const p = ingestPort(outputsWith(COPY), [[use('tu1', URL_X), result('tu1', PAGE)], [use('tu2', URL_X), result('tu2', PAGE2)]]);
+    expect(await rec('jd', p.port)).toBe('error');
+    expect(putKeys).toEqual(['0.json']);
+    const st = JSON.parse(String(one(db, "SELECT reconcile_state_json FROM factory_jobs WHERE id = 'jd'").reconcile_state_json));
+    expect(st.ev?.verb?.parts ?? 0).toBe(0); // 続き位置は保存されていない
+    expect(await rec('jd', p.port)).toBe('versioned');
+    expect(putKeys).toEqual(['0.json', '0.json', '1.json']); // 同じ番号に置き直し、次の番号へ進む
+    expect(verb('jd')).toEqual({ status: 'found', total: 1, pages: 2, n: 1 });
+    const file = JSON.parse(new TextDecoder().decode(r2.get('materials/m1/jd/verbatim-pages.json')!));
+    expect(file).toEqual({
+      v: 1,
+      pages: [
+        { url: URL_X, text: normalizeForMatch(PAGE) },
+        { url: URL_X, text: normalizeForMatch(PAGE2) },
+      ],
+      truncated: false,
+    });
   });
 });
 
