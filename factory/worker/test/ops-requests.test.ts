@@ -337,3 +337,74 @@ describe('§W-3 version_reverify: review の版の検証を pending に戻す（
     ).toThrow(/CHECK constraint failed/);
   });
 });
+
+describe('§W-4 tip_retire: 自動で入った active の工夫だけをやめる（理由コードだけ）', () => {
+  const JOB = '0bbb62ca-1128-46c5-8249-f694d2f40975';
+  const TIP = '7d3f1c2a-0b5e-4c8d-9a61-2f4e8b9c0d11';
+  const T0 = '2026-11-07T02:00:00.000Z';
+  const addRetire = (id: string, payload: unknown) => {
+    const t = new Date().toISOString();
+    const raw = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    db.prepare("INSERT INTO ops_requests (id, kind, payload_json, status, result_json, created_at, updated_at) VALUES (?, 'tip_retire', ?, 'pending', NULL, ?, ?)").run(id, raw, t, t);
+  };
+  const seedTip = (o: { status?: string; decidedBy?: string | null } = {}) => {
+    db.prepare("INSERT INTO materials (id, slug, title, kinds_json, work_status, publish_status, brief_md, created_at, updated_at) VALUES ('m1', 'm-1', 't', '[3]', 'idle', 'none', 'b', ?, ?)").run(T0, T0);
+    db.prepare(
+      `INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, session_id, brief_md, error, created_at, updated_at) VALUES (?, 'm1', 'rework', 'claude-opus-5-5', 'making', 'done', 'sesn_1', 'b', NULL, ?, ?)`,
+    ).run(JOB, T0, T0);
+    db.prepare(
+      `INSERT INTO retro_tips (id, job_id, target, text, reason, expected_saving_cents, quality_risk, status, decided_by, activated_at, created_at, updated_at)
+       VALUES (?, ?, 'maker_note', '工夫の本文', '理由', 10, 'none', ?, ?, ?, ?, ?)`,
+    ).run(TIP, JOB, o.status ?? 'active', o.decidedBy === undefined ? 'auto' : o.decidedBy, T0, T0, T0);
+  };
+  const tip = () => db.prepare('SELECT status, retire_reason, retired_at FROM retro_tips WHERE id = ?').get(TIP) as { status: string; retire_reason: string | null; retired_at: string | null };
+
+  it('(a) 自動で入った active → retired・retire_reason は ops:factory_fault。依頼は done。お題の queue には何も送らない', async () => {
+    seedTip();
+    addRetire('q1', { tip_id: TIP, reason: 'factory_fault' });
+    const o = await opsTick(envWith());
+    expect(tip().status).toBe('retired');
+    expect(tip().retire_reason).toBe('ops:factory_fault');
+    expect(tip().retired_at).not.toBeNull();
+    expect(req('q1').status).toBe('done');
+    expect(result('q1')).toEqual({ tip_id: TIP, status: 'retired' });
+    expect(sent).toHaveLength(0);
+    expect(o.request).toEqual({ id: 'q1', kind: 'tip_retire', status: 'done' });
+  });
+
+  it('(b) 人が入れた工夫は止めない → refused: not_auto。工夫はそのまま', async () => {
+    seedTip({ decidedBy: 'human' });
+    addRetire('q1', { tip_id: TIP, reason: 'factory_fault' });
+    await opsTick(envWith());
+    expect(tip().status).toBe('active');
+    expect(result('q1')).toEqual({ refused: 'not_auto' });
+  });
+
+  it('(c) active でない → refused: not_active・無い id → refused: not_found', async () => {
+    seedTip({ status: 'proposed', decidedBy: null });
+    addRetire('q1', { tip_id: TIP, reason: 'factory_fault' });
+    await opsTick(envWith());
+    expect(tip().status).toBe('proposed');
+    expect(result('q1')).toEqual({ refused: 'not_active' });
+    addRetire('q2', { tip_id: '00000000-0000-4000-8000-000000000000', reason: 'factory_fault' });
+    await opsTick(envWith());
+    expect(result('q2')).toEqual({ refused: 'not_found' });
+  });
+
+  it('(d) 形の違う payload（uuid でない・知らない理由・自由文・余計な項目・JSON でない）は bad_payload。工夫はそのまま', async () => {
+    seedTip();
+    const bad = [
+      { tip_id: "x'; DROP TABLE retro_tips;--", reason: 'factory_fault' },
+      { tip_id: TIP, reason: 'なんとなく' },
+      { tip_id: TIP },
+      { tip_id: TIP, reason: 'factory_fault', note: 'x' },
+      'not json',
+    ];
+    for (let i = 0; i < bad.length; i++) {
+      addRetire(`b${i}`, bad[i]);
+      await opsTick(envWith());
+      expect(result(`b${i}`)).toEqual({ error: 'bad_payload' });
+    }
+    expect(tip().status).toBe('active');
+  });
+});

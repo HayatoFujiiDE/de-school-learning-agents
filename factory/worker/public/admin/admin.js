@@ -4134,7 +4134,7 @@
     }
     if (e.type === 'retired') {
       return '<li class="retro-ev" data-retro-ev="retired">' + at + '<p>' + pill('工夫をやめた', 'gray') + '</p>' + text +
-        '<p class="muted">理由: ' + esc(e.retire_reason === 'human' ? '人がやめました' : e.retire_reason || '—') + '</p></li>';
+        '<p class="muted">理由: ' + esc(e.retire_reason === 'human' ? '人がやめました' : e.retire_reason === 'ops:factory_fault' ? '工場の不具合で起きた失敗から出た工夫だったので、司令塔がやめました' : e.retire_reason || '—') + '</p></li>';
     }
     if (e.type === 'rejected') {
       return '<li class="retro-ev" data-retro-ev="rejected">' + at + '<p>' + pill('提案を見送った', 'gray') + ' ' + esc(RETRO_TARGET_LABEL[e.target] || e.target) + '</p>' + text + '</li>';
