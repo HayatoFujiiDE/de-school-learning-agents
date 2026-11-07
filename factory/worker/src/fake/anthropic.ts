@@ -46,7 +46,7 @@ interface Call {
   batch_id?: string;
   custom_id?: string;
   /** 検証係の batch（§L-2）だけ: 1 件目の user 文の claims_json と、送った assistant turn の数 */
-  verify?: { claims_text: string; assistant_turns: number; figures?: string[]; videos?: string[] };
+  verify?: { claims_text: string; assistant_turns: number; figures?: string[]; videos?: string[]; apps?: string[] };
   /** smoke の制御 /__fake/session-append（§O-8 smoke）だけ: 足すファイル（本文は記録に持つ）・status・list_cost・識別子 */
   append?: { key: string; files: Array<{ filename: string; content: string }>; status?: string; list_cost?: string };
   /** お題の呼び出し（contract-T）だけ: 呼び出しごとに渡った再送の回数と締め切りの有無 */
@@ -286,6 +286,20 @@ function fakeShownVideos(text: string): string[] {
   return out;
 }
 
+/** 契約 V-3 e: 入力の <apps> の節（行がちょうど `<apps>` から `</apps>` まで）の `- {path}（` の path。節が無ければ []。fake の検証係だけが読む */
+function fakeShownApps(text: string): string[] {
+  const lines = text.split('\n');
+  const i = lines.indexOf('<apps>');
+  if (i < 0) return [];
+  const out: string[] = [];
+  for (const line of lines.slice(i + 1)) {
+    if (line === '</apps>') break;
+    const m = /^- (.+?)（/.exec(line);
+    if (m && !out.includes(m[1])) out.push(m[1]);
+  }
+  return out;
+}
+
 function extractTagged(text: string, tag: string): string | null {
   const m = new RegExp(`<${tag}>\\n?([\\s\\S]*?)\\n?</${tag}>`).exec(text);
   return m ? m[1] : null;
@@ -401,7 +415,7 @@ export function createFakePort(env: Env): FactoryPort {
           container: typeof params.container === 'string' ? params.container : null,
         },
       });
-      return verifierReply(params.model, extractTagged(content, 'claims_json') ?? '{"claims":[]}', params.messages.filter((m) => m.role === 'assistant').length, fakeShownFigures(content), fakeShownVideos(content));
+      return verifierReply(params.model, extractTagged(content, 'claims_json') ?? '{"claims":[]}', params.messages.filter((m) => m.role === 'assistant').length, fakeShownFigures(content), fakeShownVideos(content), fakeShownApps(content));
     },
     // ---- 入口（§K-8）----
     async xaiResponses(req) {
@@ -439,6 +453,7 @@ export function createFakePort(env: Env): FactoryPort {
             assistant_turns: r.params.messages.filter((m) => m.role === 'assistant').length,
             figures: fakeShownFigures(first),
             videos: fakeShownVideos(first),
+            apps: fakeShownApps(first),
           },
         });
         const now = new Date();
@@ -488,7 +503,7 @@ export function createFakePort(env: Env): FactoryPort {
         if (Number(k.fake_results_bytes ?? 0) > (o?.maxBytes ?? BATCH_RESULTS_MAX_BYTES)) return [];
         const rt = typeof k.fake_batch_result === 'string' ? k.fake_batch_result : 'succeeded';
         if (rt !== 'succeeded') return [{ custom_id: c.custom_id ?? '', result: { type: rt } } as unknown as MessageBatchIndividualResponse];
-        const message = verifierReply(VERIFIER_FAKE_MODEL, c.verify.claims_text, c.verify.assistant_turns, c.verify.figures ?? [], c.verify.videos ?? []);
+        const message = verifierReply(VERIFIER_FAKE_MODEL, c.verify.claims_text, c.verify.assistant_turns, c.verify.figures ?? [], c.verify.videos ?? [], c.verify.apps ?? []);
         return [{ custom_id: c.custom_id ?? '', result: { type: 'succeeded', message } } as unknown as MessageBatchIndividualResponse];
       }
       // 振り返り係（§S-4）: custom_id が振り返りの job_id（job_retros の submitted の行）なら retro の fixture を返す（本番のコードは分けない）
@@ -588,15 +603,19 @@ function fakeKeys(claimsText: string): Record<string, unknown> {
  * 検証係の応答（同期の messages.create と Batch の results で共通）。
  * claims.json の各 claim に fixture 専用キー fake_verdict があればそれを、無ければ confirmed を返す。
  * 最上位の fake_pause_turns: n があれば、assistant の turn が n 未満の間は container 付きの pause_turn を返す。
- * figures は入力の図の一覧のうち渡された図（§O-12）、videos は記録を入れた動画（§Q-3 4）。すべて ok を返す
+ * figures は入力の図の一覧のうち渡された図（§O-12）、videos は記録を入れた動画（§Q-3 4）。すべて ok を返す。
+ * 契約 V-3 e: 各 verdict に presented_as（claim の fake_presented_as があればそれ、無ければ fact）、apps は入力の <apps> の path ごとに
+ * 最上位の fake_apps: {path: verdict} の値（無ければ ok）
  */
-function verifierReply(model: string, claimsText: string, assistantTurns: number, figures: string[] = [], videos: string[] = []): Message {
-  let claims: Array<{ id: string; fake_verdict?: string }> = [];
+function verifierReply(model: string, claimsText: string, assistantTurns: number, figures: string[] = [], videos: string[] = [], apps: string[] = []): Message {
+  let claims: Array<{ id: string; fake_verdict?: string; fake_presented_as?: string }> = [];
   let pauseTurns = 0;
+  let appVerdicts: Record<string, unknown> = {};
   try {
-    const parsed = JSON.parse(claimsText) as { claims?: Array<{ id: string; fake_verdict?: string }>; fake_pause_turns?: number };
+    const parsed = JSON.parse(claimsText) as { claims?: Array<{ id: string; fake_verdict?: string; fake_presented_as?: string }>; fake_pause_turns?: number; fake_apps?: unknown };
     claims = parsed.claims ?? [];
     pauseTurns = Number(parsed.fake_pause_turns ?? 0);
+    if (parsed.fake_apps && typeof parsed.fake_apps === 'object' && !Array.isArray(parsed.fake_apps)) appVerdicts = parsed.fake_apps as Record<string, unknown>;
   } catch {
     claims = [];
   }
@@ -619,6 +638,7 @@ function verifierReply(model: string, claimsText: string, assistantTurns: number
     verdict: c.fake_verdict ?? 'confirmed',
     reason: 'fake: 出典の本文で確かめた',
     opened_urls: [],
+    presented_as: c.fake_presented_as ?? 'fact',
   }));
   return {
     id: `msg_fake_${crypto.randomUUID().slice(0, 8)}`,
@@ -626,7 +646,7 @@ function verifierReply(model: string, claimsText: string, assistantTurns: number
     role: 'assistant',
     model,
     container: pauseTurns > 0 ? fakeContainer : null,
-    content: [{ type: 'tool_use', id: 'toolu_fake_1', name: 'report_verdicts', input: { verdicts, overall_note: 'fake', figures: figures.map((path) => ({ path, verdict: 'ok', reason: 'fake: 図を確かめた' })), analogy_gaps: [], videos: videos.map((id) => ({ id, verdict: 'ok', reason: 'fake: 動画の記録を確かめた' })) }, caller: { type: 'direct' } }],
+    content: [{ type: 'tool_use', id: 'toolu_fake_1', name: 'report_verdicts', input: { verdicts, overall_note: 'fake', figures: figures.map((path) => ({ path, verdict: 'ok', reason: 'fake: 図を確かめた' })), analogy_gaps: [], videos: videos.map((id) => ({ id, verdict: 'ok', reason: 'fake: 動画の記録を確かめた' })), apps: apps.map((path) => ({ path, verdict: typeof appVerdicts[path] === 'string' ? appVerdicts[path] : 'ok', reason: 'fake: 動かせるものを確かめた' })) }, caller: { type: 'direct' } }],
     stop_reason: 'tool_use',
     stop_sequence: null,
     usage: { input_tokens: 12000, output_tokens: 800, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },

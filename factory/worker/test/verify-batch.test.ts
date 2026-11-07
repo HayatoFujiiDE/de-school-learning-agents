@@ -118,7 +118,7 @@ function reportMsg(usage: Record<string, number> = USAGE, ids = ['c1', 'c2']): M
         type: 'tool_use',
         id: 'toolu_1',
         name: 'report_verdicts',
-        input: { verdicts: ids.map((claim_id) => ({ claim_id, verdict: 'confirmed', reason: 'ok', opened_urls: [URL_OK] })), overall_note: 'n' },
+        input: { verdicts: ids.map((claim_id) => ({ claim_id, verdict: 'confirmed', reason: 'ok', opened_urls: [URL_OK] })), overall_note: 'n', apps: [] },
       },
     ],
     stop_reason: 'tool_use',
@@ -285,7 +285,7 @@ describe('§L-7 (l2) Batch 検証の状態遷移', () => {
     expect(vs[0]).toMatchObject({ attempt: 1, claims_total: 2, confirmed: 2, cost_cents: 8 });  // 35,800 × 2 = 71,600 μUSD → 8 ¢
     const result = JSON.parse(String(vs[0].result_json)) as { meta: Record<string, unknown>; verdicts: unknown[] };
     // §P b 5: この stub の events は読めない（listEventsPage: no）→ 記録なしの出典 1 件
-    expect(result.meta).toEqual({ mode: 'batch', turns: 2, fetch_errors: { url_not_accessible: 1, max_uses_exceeded: 1 }, fetched_ok: [URL_OK], captures: { used: 0, missing: 1, truncated: 0 } });
+    expect(result.meta).toEqual({ mode: 'batch', turns: 2, fetch_errors: { url_not_accessible: 1, max_uses_exceeded: 1 }, fetched_ok: [URL_OK], captures: { used: 0, missing: 1, truncated: 0 }, evidence_v: 2 });
   });
 
   it('2 回続けて回収段を回しても記帳は 1 行・batch は 1 件（2 つの cron が同じ ended batch を見ても片方だけ collecting を取る）', async () => {
