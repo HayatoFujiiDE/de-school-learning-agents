@@ -1,12 +1,16 @@
 // cron の triageStep・autoPublishStep（契約 V-7・V-11 u7）と人の reverify を node:sqlite の実 DB で確かめる。
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../src/env';
-import { reverify } from '../src/routes/review';
-import { AUTO_PUBLISH_EMAIL, AUTO_TRIAGE_EMAIL, applyTriage, autoPublishStep, autoRoundsOf, computeTriage, triageStep, type TriageApplyRow } from '../src/triage-step';
+import type { FactoryPort } from '../src/anthropic';
+import { decide, reverify } from '../src/routes/review';
+import { AUTO_PUBLISH_EMAIL, AUTO_RETURN_APPEND, AUTO_TRIAGE_EMAIL, applyTriage, autoPublishStep, autoRoundsOf, computeTriage, triageStep, type TriageApplyRow } from '../src/triage-step';
 import { one, rows } from './d1-shim';
 import { CH, WATCH, addVerification, ctx, fixable, good, material, seed, setSetting, world, type V, type World } from './review-auto-helpers';
 
 const FAR = () => Date.now() + 10 * 60_000;
+/** 契約 V-12 a の文（verbatim） */
+const AUTO_RETURN_APPEND_TEXT =
+  '（機械の仕分けからのお願い）この差し戻しは人ではなく機械の仕分けによるものです。質問（questions）は出さず、迷う点は注文票とこの差し戻し理由から最も妥当な方を自分で選んで作り、選んだことと理由を selfcheck.md に 1 行で書いてください。それでも質問を出した時は、あなたの既定案（default）がそのまま回答として返ります。';
 let w: World;
 let env: Env;
 
@@ -35,6 +39,9 @@ describe('triageStep（契約 V-7 b）', () => {
     expect(jobs).toHaveLength(1);
     expect(jobs[0]).toMatchObject({ model: 'claude-opus-5-5', status: 'queued', session_id: null, parent_version_id: 'v1', budget_cents: 1000 });
     expect(String(jobs[0].brief_md)).toContain('## 差し戻し理由（v1）\n自動の差し戻し（1 回目。機械の確認で、直す所が見つかりました）。');
+    // 契約 V-12 a: 自動の差し戻しの brief には「質問しない」のお願いが ## 追記 として入る
+    expect(AUTO_RETURN_APPEND).toBe(AUTO_RETURN_APPEND_TEXT);
+    expect(String(jobs[0].brief_md)).toContain(`\n## 追記\n${AUTO_RETURN_APPEND_TEXT}`);
     expect(one(w.db, "SELECT work_status FROM materials WHERE id = 'm1'").work_status).toBe('queued');
     expect(count('SELECT COUNT(*) AS n FROM standards_log')).toBe(0);
     expect(rows(w.db, "SELECT decision, reviewer_email, checklist_json, machine_gate FROM review_decisions WHERE material_version_id = 'v1'")).toEqual([
@@ -225,6 +232,24 @@ describe('triageStep（契約 V-7 b）', () => {
     w.db.prepare("UPDATE material_versions SET verification_status = 'failed', verification_token = 'x', triaged_verification_id = 'w' WHERE id = 'v1'").run();
     expect((await reverify(ctx(w, 'POST'), 'v1')).status).toBe(200);
     expect(vcol('v1', 'verification_status, verification_token, triaged_verification_id')).toEqual({ verification_status: 'pending', verification_token: null, triaged_verification_id: null });
+  });
+
+  it('人の差し戻し（routes/review.ts）の brief には AUTO_RETURN_APPEND が入らない（オーナーの追記だけが ## 追記 に入る）', async () => {
+    seed(w, good('m1', 'v1'));
+    seed(w, good('m2', 'v2'));
+    const human = async (vid: string, extra: Record<string, unknown>) => {
+      const c = ctx(w, 'POST', { decision: 'return', note: '図を直して', ...extra });
+      c.port = async () => ({}) as FactoryPort; // startJob は FACTORY_AGENT_ID が無いので port を呼ばずに 503
+      expect((await decide(c, vid)).status).toBe(200);
+      return String(one(w.db, "SELECT brief_md FROM factory_jobs WHERE kind = 'rework' AND parent_version_id = ?", vid).brief_md);
+    };
+    const b1 = await human('v1', {});
+    expect(b1).toContain('## 差し戻し理由（v1）\n図を直して');
+    expect(b1).not.toContain('## 追記');
+    expect(b1).not.toContain(AUTO_RETURN_APPEND_TEXT);
+    const b2 = await human('v2', { brief_append: '色を明るく' });
+    expect(b2).toContain('## 追記\n色を明るく');
+    expect(b2).not.toContain(AUTO_RETURN_APPEND_TEXT);
   });
 });
 

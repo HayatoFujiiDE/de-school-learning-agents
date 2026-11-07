@@ -742,7 +742,8 @@ export function sanitizeQuestions(raw: unknown): Question[] {
   return out;
 }
 
-const ANSWER_BUDGET_MS = 25_000;
+/** answerJob 1 回の締め切り（開始から）。自動回答の段（auto-answer.ts）は残り時間がこれ + 5 秒無ければ始めない */
+export const ANSWER_BUDGET_MS = 25_000;
 
 /** answer の排他（answer_token）を他の呼び出しに取られた */
 class LostAnswerClaim extends Error {

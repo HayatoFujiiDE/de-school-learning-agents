@@ -515,6 +515,15 @@ f. 操作のループ（ui-interaction-completeness）
 
 配備: 採点表と編集基準は Worker に同梱される（`scripts/sync-claude-assets.sh`）。職人の定義は `ant apply`（ふじさんの操作）で反映する。
 
+## V-12 自動の差し戻しの作り直しで職人が質問した時（2026-11-07 追加。ふじさんの「承認を待たず進める」の指示で司令塔が裁定）
+
+- 目的: 機械の仕分けが差し戻した作り直し（`review_decisions.reviewer_email = 'system:auto-triage'`）で職人が質問（needs_answer）すると人待ちになり、V-7 の「人に出す前に自動で直す」が止まる。人の差し戻しの質問は今までどおり人が答える。
+- a. 自動の差し戻しの brief には `## 追記` として `AUTO_RETURN_APPEND`（`src/triage-step.ts`。「質問は出さず、迷う点は自分で選んで selfcheck.md に書く。質問を出した時は既定案が回答として返る」）を付ける。人の差し戻しの brief は変えない。
+- b. 自動回答の段 `autoAnswerStep`（`src/auto-answer.ts`。cron の回収の直後・読み手係の前）: `paused` なら何もしない。候補は「needs_answer・answer_state が none か saved・rework で parent_version_id あり・親の版の return の decision が system:auto-triage」の job を古い順に 1 tick 2 件まで。全部の質問に `default`（空でなく、接頭辞を含めて 4,000 字以内）がある時だけ、`answerJob` に `（自動回答・職人の既定案のとおり）` + default を渡す（人の回答と同じ経路: standards_log に残り、session に「運営からの回答」として届く）。default が欠ける質問が 1 つでもあれば何もしない（人が答える）。
+- c. 有限化: job ごとの自動回答の試行は 3 回まで（`reconcile_state_json.auto_answer.attempts`。CAS で +1 してから呼ぶ。`paused` と no_default では増やさない）。送信に失敗して saved に戻った回答は次の tick で送り直す（3 回で止まり、残りは人の操作）。1 回の呼び出しに `ANSWER_BUDGET_MS`（25 秒）+ 5 秒の残り時間が無ければ始めない。
+- d. 見える所: 管理画面の job ページの質問と回答（standards_log）に接頭辞つきで残る。cron のログ `{ at: 'auto_answer', job_id, result }`（本文は出さない）。
+- e. 守ること: 回答の中身は職人自身の `default` だけ（機械が文を作らない）。人の差し戻しの job には触らない。`answerJob` の述語（needs_answer・answer_state・answer_token）はそのまま使い、別の経路で状態を書かない。
+
 ## V-11 受け入れ（vitest・smoke。fake で）
 
 - (u1) 抜粋: 同じ URL を 3 つの出典が別の引用で使う記録（30,000 字 × 13 出典ぶん）で、全出典が `excerpt` になり、各抜粋が自分の引用を含む / 引用が記録に無い出典は冒頭の印 / 61 件目は omitted / 60 出典・引用が各 1,000 字でも抜粋の本文の合計が 120,000 字以下 / `available` が小さい時は後ろから omitted、全部だめなら節なし / `C` の式の境界（n=1・n=60）/ YouTube の出典は今のまま / 写した取得記録（§S-8）でも抜粋になる / `usedIds` が動画の主張の確かめ（§Q-9.11）で今と同じ意味で使われる / meta に `evidence_v: 2`（同期・Batch の両方。古い plan の回収では付かない）/ system の差し替えた 3 行と最後の指示文（図 × 動画 × 動かせるもの の 8 通り）が文字列として一致し、ほかの行が変わっていない。
@@ -528,3 +537,4 @@ f. 操作のループ（ui-interaction-completeness）
 - (u9) 画面: gate の 3 通り・見てほしい所 0 件 / N 件で描画 / 項目の OK・直してもらうで「公開する」の可否と理由の文が変わる / blocking の項目に「このまま出す」が無い / 検証の id か読み手係の世代が変わると項目の状態が戻る / 送信の payload（省略する項目・trust_channels・reader_gen）/ 太字と番号つきの一覧が出る / 「さわってみよう」の見出し / 印 OFF で番号の印・札が出ない / 一覧の 3 区画とスイッチ / キー N・P・O。smoke は数える DOM を新しい画面に合わせて直す。
 - (u9 追加) 読み手チェック待ちの版で「公開する」が押せて理由が「公開できます（読み手チェックはまだです）」/ 400 `channel_trust_required` で項目へ動く・`checks_pending` で読み直す / 検証 failed の帯の文。
 - (u10) 既存のテストは、意味が変わった所（§L-3 の自動 OK・画面の DOM・取得記録の入れ方）を新しい決まりに合わせて直し、それ以外は緑のまま。migration 0009 のテスト（既存の行・索引の定義）。tsc・vitest・smoke・check-no-fake の verdict を報告する。
+- (u11) 自動回答（V-12）: 自動の差し戻しの job が needs_answer で全質問に default あり → 1 tick で answerJob が呼ばれ running / making・standards_log に接頭辞つきの回答・`auto_answer.attempts` が 1・ログ / 人の差し戻しの job は触らない / default の無い質問が 1 つでもあれば no_default で触らない（attempts 不変）/ `paused` なら何もしない（attempts 不変）/ attempts 3 で cap / 送信の失敗で saved に戻り、次の tick で送り直し、3 回で止まる / 残り時間が 30 秒未満なら始めない / 1 tick 2 件 / 自動の差し戻しの brief に `## 追記` の `AUTO_RETURN_APPEND` が入り、人の差し戻しの brief は変わらない。

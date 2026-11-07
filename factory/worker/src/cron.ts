@@ -1,5 +1,5 @@
 // 10 分ごとの照合・起動・検証（契約 §B-5）。scheduled handler は最長 15 分。
-// 順（契約 V-7 g）: 起動 → 取り込み → 読み手係 → 検証 → 仕分け → 自動公開 → 画像 → 入口 → …
+// 順（契約 V-7 g）: 起動 → 取り込み → 自動回答（V-12） → 読み手係 → 検証 → 仕分け → 自動公開 → 画像 → 入口 → …
 
 import { getFeedFetch, getGeminiPort, getOEmbedPort, getPort, getTopicFetch } from './anthropic';
 import { all, getSetting, isoPlus, nowIso, setSetting, stmt, tokyoDay } from './db';
@@ -11,6 +11,7 @@ import { runScout, scoutDueOn } from './scout';
 import { getJob, markWebhookProcessed, reconcileJob, recoverCreating, startJob, type JobRow } from './jobs';
 import { runVerificationStep } from './verify';
 import { autoPublishStep, triageStep } from './triage-step';
+import { autoAnswerStep } from './auto-answer';
 import { readerStep } from './reader';
 import { topicsTick } from './topics/tick';
 import { opsTick } from './ops';
@@ -69,6 +70,13 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
     out.reconciled = results;
   } catch (e) {
     out.reconcile_error = e instanceof Error ? e.name : 'error';
+  }
+
+  // 2-a. 自動回答（契約 V-12。自動の差し戻しの作り直しで職人が質問した時、既定案で答える）
+  try {
+    out.auto_answer = await autoAnswerStep(env, port, { deadline: cronStart + CRON_LIMIT_MS - INTAKE_END_MARGIN_MS });
+  } catch (e) {
+    out.auto_answer_error = e instanceof Error ? e.name : 'error';
   }
 
   // 2-b. 読み手係（契約 V-4 a・V-7 g。取り込みの段の直後・検証の段の前。取る前の条件（一時停止・残り 270 秒）は readerStep が見る）
