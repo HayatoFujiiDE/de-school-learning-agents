@@ -257,14 +257,17 @@
   }
 
   // ---- 状況（上部帯）----
-  // 3 行の 1 枚: 行 1 = 稼働・今日の費用・今すぐ（常時。ボタンが乗る）/ 行 2 = 注意（0 件なら描かない）/ 行 3 = 今月の内訳（常時）。
+  // 仕事ごとの枠 4 つを横に並べる（1100px 以上で 1 段・狭い時は 2×2）: 制作 / お金 / お題集め（提案箱へ）/ 画像・動画。
+  // 各枠 = 見出し → 中身 → その仕事のボタン。その仕事の注意は枠の中の下に出し、注意がある枠は左の線を赤 / 黄にする。同じ注意を 2 つの枠に出さない。
   // 帯の中の金額は全部 $（fmtCents）。上限は整数ドルなら小数を落とす。¢ は #/images・#/videos の画面にだけ残す。
   /** 定期処理（cron）の最終からの経過の閾値（分）。ここ 1 か所だけで決める */
   var CRON_LATE_MIN = 20, CRON_STALE_MIN = 60;
   /** 今日の費用のメーターの段階（上限に対する割合。判定は >=） */
   var COST_NEAR = 0.8;
+  /** 枠の順と見出し（key は注意の行き先の名前） */
+  var STATUS_CARDS = [['run', '制作'], ['money', 'お金'], ['intake', 'お題集め（提案箱へ）'], ['media', '画像・動画']];
   var statusTimer = null; // 相対時間を 1 分ごとに直す単一のタイマー（loadStatus のたびに clear → set）
-  var statusLast = null; // { s, alerts }: タイマーが描き直しに使う最後の /api/status の応答と、描いた注意行
+  var statusLast = null; // { s, alerts: { <枠>: html } }: タイマーが描き直しに使う最後の /api/status の応答と、枠ごとに描いた注意
   /** 上限の表示: 整数ドルなら小数を落とす（$200）。0 / 未定義は — */
   function fmtCap(c) {
     var v = Number(c);
@@ -297,91 +300,131 @@
     return '<span class="meter" role="meter" aria-label="今日の費用（上限に対する割合）" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + esc(Math.min(100, Math.round(pct))) + '" data-meter="' + lv + '">' +
       '<span class="meter-fill m-' + lv + ' w' + step + '"></span></span>';
   }
-  /** 注意行の 1 件 */
-  function alertItem(level, html) { return { level: level, html: html }; }
+  /** 注意の 1 件。card = 出す枠（STATUS_CARDS の key）。1 件は 1 つの枠にだけ出す */
+  function alertItem(card, level, html) { return { card: card, level: level, html: html }; }
   function alertLi(a) { return '<li class="sa-item sa-' + a.level + '">' + a.html + '</li>'; }
   function goLink(href, text) { return ' <a class="sa-go" href="' + href + '">' + esc(text) + ' ›</a>'; }
-  /** 注意行に出す件（純関数）。赤を先に、同じ色の中は並べた順 */
+  /** 注意の全件（純関数）。赤を先に、同じ色の中は並べた順。各件は card の枠にだけ出る */
   function statusAlerts(s, nowMs) {
     var out = [];
-    if (s.paused) out.push(alertItem('red', '停止中です。新しい制作と検証は始まりません' + (s.paused_note ? '（メモ: ' + esc(s.paused_note) + '）' : '')));
-    var dl = capLevel(s.today_cents, s.daily_cap_cents), money = '（' + fmtUsed(s.today_cents) + ' / ' + fmtCap(s.daily_cap_cents) + '）';
-    if (dl === 'over') out.push(alertItem('red', '今日の費用が上限に達しました' + money + '。新しい制作は日付が変わるまで始まりません'));
-    else if (dl === 'near') out.push(alertItem('yellow', '今日の費用が上限に近づいています' + money));
+    // 制作: 停止中・定期処理の遅れ / 停止・職人 未設定（今日の上限で新しい制作が始まらないことはお金の枠に出す）
+    if (s.paused) out.push(alertItem('run', 'red', '停止中です。新しい制作と検証は始まりません' + (s.paused_note ? '（メモ: ' + esc(s.paused_note) + '）' : '')));
     var ca = cronAge(s.last_cron_at, nowMs), last = s.last_cron_at ? '（最終 ' + esc(fmtTime(s.last_cron_at)) + '）' : '（記録がありません）';
-    if (ca.level === 'stale') out.push(alertItem('red', '定期処理が 1 時間以上動いていません' + last));
-    else if (ca.level === 'late') out.push(alertItem('yellow', '定期処理が遅れています' + last));
-    if (!s.agent_configured) out.push(alertItem('red', '職人（agent）が設定されていません'));
+    if (ca.level === 'stale') out.push(alertItem('run', 'red', '定期処理が 1 時間以上動いていません' + last));
+    else if (ca.level === 'late') out.push(alertItem('run', 'yellow', '定期処理が遅れています' + last));
+    if (!s.agent_configured) out.push(alertItem('run', 'red', '職人（agent）が設定されていません'));
+    // お金: 今日の上限 80% / 100%
+    var dl = capLevel(s.today_cents, s.daily_cap_cents), money = '（' + fmtUsed(s.today_cents) + ' / ' + fmtCap(s.daily_cap_cents) + '）';
+    if (dl === 'over') out.push(alertItem('money', 'red', '今日の費用が上限に達しました' + money + '。新しい制作は日付が変わるまで始まりません'));
+    else if (dl === 'near') out.push(alertItem('money', 'yellow', '今日の費用が上限に近づいています' + money));
+    // お題集め: 収集・会議の失敗 / 失効（→ 提案箱）・月の上限 80% 以上
     var sc = s.scout || {}, mt = s.meeting || {};
-    if (sc.last_status === 'failed') out.push(alertItem('red', '収集の最後の実行が' + esc(RUN_LABEL.failed) + 'しました（' + esc(fmtTime(sc.last_run_at)) + '）' + goLink('#/proposals', '提案箱を見る')));
-    if (mt.last_status === 'failed' || mt.last_status === 'expired') out.push(alertItem('red', '会議の最後の実行が' + esc(RUN_LABEL[mt.last_status]) + 'しました（' + esc(fmtTime(mt.last_at)) + '）' + goLink('#/proposals', '提案箱を見る')));
-    out = out.concat(imagesAlerts(s.images, nowMs));
+    if (sc.last_status === 'failed') out.push(alertItem('intake', 'red', '収集が' + esc(RUN_LABEL.failed) + 'しました（' + esc(fmtTime(sc.last_run_at)) + '）' + goLink('#/proposals', '提案箱を見る')));
+    if (mt.last_status === 'failed' || mt.last_status === 'expired') out.push(alertItem('intake', 'red', '会議が' + esc(RUN_LABEL[mt.last_status]) + 'しました（' + esc(fmtTime(mt.last_at)) + '）' + goLink('#/proposals', '提案箱を見る')));
     [['収集', sc], ['会議', mt]].forEach(function (p) {
       var lv = capLevel(p[1].month_cents, p[1].month_cap_cents);
-      if (lv === 'near' || lv === 'over') out.push(alertItem('yellow', '今月の' + p[0] + 'の費用が上限' + (lv === 'over' ? 'に達しました' : 'に近づいています') + '（' + fmtUsed(p[1].month_cents) + ' / ' + fmtCap(p[1].month_cap_cents) + '）'));
+      if (lv === 'near' || lv === 'over') out.push(alertItem('intake', 'yellow', '今月の' + p[0] + 'の費用が上限' + (lv === 'over' ? 'に達しました' : 'に近づいています') + '（' + fmtUsed(p[1].month_cents) + ' / ' + fmtCap(p[1].month_cap_cents) + '）'));
     });
+    // 画像・動画: 画像の停止・予備の鍵・画像の月の上限 80% 以上
+    out = out.concat(imagesAlerts(s.images, nowMs));
     return out.filter(function (a) { return a.level === 'red'; }).concat(out.filter(function (a) { return a.level !== 'red'; }));
   }
-  /** 行 2（注意）。0 件なら空文字（行ごと描かない）。赤が 1 件でもあれば赤地 */
-  function statusAlertsHtml(s, nowMs) {
-    var list = statusAlerts(s, nowMs);
-    if (!list.length) return '';
-    var red = list.some(function (a) { return a.level === 'red'; });
-    return '<div class="status-alerts ' + (red ? 'sa-box-red' : 'sa-box-yellow') + '" data-status-alerts="' + (red ? 'red' : 'yellow') + '">' +
-      '<b class="sa-title">注意 ' + list.length + ' 件</b><ul class="sa-list">' + list.map(alertLi).join('') + '</ul></div>';
+  /** 注意の全件を枠ごとに分ける: { run: [...], money: [...], intake: [...], media: [...] } */
+  function alertsByCard(s, nowMs) {
+    var all = statusAlerts(s, nowMs), by = {};
+    STATUS_CARDS.forEach(function (c) { by[c[0]] = all.filter(function (a) { return a.card === c[0]; }); });
+    return by;
   }
-  /** 行 1（稼働・今日の費用・今すぐ） */
-  function statusMainHtml(s, nowMs) {
+  /** 枠の注意の中身（0 件なら空文字） */
+  function cardAlertsHtml(list) { return list.length ? '<ul class="sa-list">' + list.map(alertLi).join('') + '</ul>' : ''; }
+  /** 枠のクラス: 赤が 1 件でもあれば sb-red、黄だけなら sb-yellow */
+  function cardClass(list) {
+    var red = list.some(function (a) { return a.level === 'red'; });
+    return 'sb-card' + (red ? ' sb-red' : list.length ? ' sb-yellow' : '');
+  }
+  /** 枠 1 つ: 見出し（右端にその仕事のボタンを置ける）→ 中身 → 注意（aria-live はこの容器） */
+  function statusCardHtml(key, title, headRight, body, list) {
+    return '<div class="' + cardClass(list) + '" id="status-card-' + key + '" data-card="' + key + '">' +
+      '<div class="sb-head"><span class="sb-title">' + esc(title) + '</span>' + headRight + '</div>' +
+      '<div class="sb-body">' + body + '</div>' +
+      '<div class="sb-alerts" id="status-alerts-' + key + '" aria-live="polite">' + cardAlertsHtml(list) + '</div></div>';
+  }
+  /** 制作の枠の中身: 稼働・制作中 / 順番待ち・定期処理の相対時間 */
+  function runBodyHtml(s, nowMs) {
     var ca = cronAge(s.last_cron_at, nowMs);
+    return '<div class="sb-line"><span class="sb-state"><span class="dot ' + (s.paused ? 'red' : 'green') + '" aria-hidden="true"></span><b>' + (s.paused ? '停止中' : '動いています') + '</b></span></div>' +
+      '<div class="sb-line"><span class="item">制作中 <b>' + esc(s.running_jobs) + '</b> / ' + esc(s.max_concurrent) + '</span><span class="sb-sep" aria-hidden="true">・</span>' +
+        '<span class="item">順番待ち <b>' + esc(s.queued_jobs) + '</b></span></div>' +
+      '<div class="sb-line"><span class="item" title="定期処理の最終 ' + esc(fmtTime(s.last_cron_at)) + '">定期処理 <span id="cron-rel" class="cron-rel ' + ca.level + '" data-cron-rel="1">' + esc(ca.text) + '</span></span></div>';
+  }
+  /** お金の枠の中身: 今日のメーター・今月の額（上限は各枠にあるので額だけ。合計は出さない） */
+  function moneyBodyHtml(s) {
+    var sc = s.scout || {}, mt = s.meeting || {}, im = s.images && typeof s.images === 'object' ? s.images : null;
+    return '<div class="sb-line sb-money"><span class="sb-label">今日</span><span class="sb-vals">' + costMeterHtml(s.today_cents, s.daily_cap_cents) +
+        '<span class="sb-num"><b>' + fmtUsed(s.today_cents) + '</b> / ' + fmtCap(s.daily_cap_cents) + '</span></span></div>' +
+      '<div class="sb-line sb-money"><span class="sb-label">今月</span><span class="sb-vals"><span class="item">収集 ' + fmtUsed(sc.month_cents || 0) + '</span>' +
+        '<span class="item">会議 ' + fmtUsed(mt.month_cents || 0) + '</span>' +
+        (im ? '<span class="item">画像 ' + fmtUsed(im.month_cents) + '</span>' : '') + '</span></div>';
+  }
+  /** お題集めの 1 行: 名前・最終の状態（未実行は muted 文字・失敗系は赤 pill）・今月 $x / $上限・[今すぐ] */
+  function intakeRowHtml(name, o, at, bad, btn) {
+    var label = o.last_status ? (RUN_LABEL[o.last_status] || o.last_status) : '';
+    var title = at ? ' title="最終 ' + esc(fmtTime(at)) + '"' : '';
+    var st = !o.last_status ? '<span class="sb-st muted">未実行</span>'
+      : bad ? '<span class="sb-st"' + title + '>' + pill(label, 'red') + '</span>'
+      : '<span class="sb-st muted"' + title + '>' + esc(label) + '</span>';
+    return '<div class="sb-line sb-intake"><span class="sb-name">' + name + '</span>' + st +
+      '<span class="sb-num">' + fmtUsed(o.month_cents || 0) + ' / ' + fmtCap(o.month_cap_cents) + '</span>' + btn + '</div>';
+  }
+  /** お題集めの枠の中身: 収集の行・会議の行（ボタンの文言・busy 文・disabled 条件・id は今のまま） */
+  function intakeBodyHtml(s) {
     var sc = s.scout || {}, mt = s.meeting || {};
     var scoutBusy = !!sc.running, meetBusy = !!mt.pending_batch;
     var pausedTitle = ' title="停止中は実行できません"';
-    return '<div class="status-main">' +
-      '<div class="sm-sec sm-run">' +
-        '<span class="sm-state"><span class="dot ' + (s.paused ? 'red' : 'green') + '" aria-hidden="true"></span><b>' + (s.paused ? '停止中' : '動いています') + '</b></span>' +
-        '<span class="item">制作中 <b>' + esc(s.running_jobs) + '</b> / ' + esc(s.max_concurrent) + '</span>' +
-        '<span class="item">順番待ち <b>' + esc(s.queued_jobs) + '</b></span>' +
-        '<span class="item" title="定期処理の最終 ' + esc(fmtTime(s.last_cron_at)) + '">定期処理 <span id="cron-rel" class="cron-rel ' + ca.level + '" data-cron-rel="1">' + esc(ca.text) + '</span></span>' +
-        '<button type="button" class="btn small' + (s.paused ? ' primary' : '') + '" id="pause-btn">' + (s.paused ? '再開' : '止める') + '</button>' +
-      '</div>' +
-      '<div class="sm-sec sm-cost"><span class="sm-label">今日の費用</span>' + costMeterHtml(s.today_cents, s.daily_cap_cents) +
-        '<span class="sm-num"><b>' + fmtUsed(s.today_cents) + '</b> / ' + fmtCap(s.daily_cap_cents) + '</span></div>' +
-      '<div class="sm-sec sm-now">' +
-        '<button type="button" class="btn small" id="scout-btn"' + (scoutBusy || s.paused ? ' disabled' : '') + (s.paused ? pausedTitle : '') + '>' + (scoutBusy ? '収集中…' : '収集を今すぐ') + '</button>' +
-        '<button type="button" class="btn small" id="meeting-btn"' + (meetBusy || s.paused ? ' disabled' : '') + (s.paused ? pausedTitle : '') + '>' + (meetBusy ? '結果待ち' : '会議を今すぐ') + '</button>' +
-      '</div></div>';
+    return intakeRowHtml('収集', sc, sc.last_run_at, sc.last_status === 'failed',
+        '<button type="button" class="btn small" id="scout-btn"' + (scoutBusy || s.paused ? ' disabled' : '') + (s.paused ? pausedTitle : '') + '>' + (scoutBusy ? '収集中…' : '収集を今すぐ') + '</button>') +
+      intakeRowHtml('会議', mt, mt.last_at, mt.last_status === 'failed' || mt.last_status === 'expired',
+        '<button type="button" class="btn small" id="meeting-btn"' + (meetBusy || s.paused ? ' disabled' : '') + (s.paused ? pausedTitle : '') + '>' + (meetBusy ? '結果待ち' : '会議を今すぐ') + '</button>');
   }
-  /** 行 3（今月の内訳）の収集・会議の 1 項目。最終が失敗なら赤 pill */
-  function intakeMonthItem(name, o, bad) {
-    return '<span class="item">' + name + ' ' + fmtUsed(o.month_cents || 0) + ' / ' + fmtCap(o.month_cap_cents) +
-      (bad ? ' ' + pill(RUN_LABEL[o.last_status] || o.last_status, 'red') : '') + '</span>';
+  /** 画像・動画の枠の中身。images / videos が無い応答（古い Worker）ではその行を出さない */
+  function mediaBodyHtml(s) {
+    var img = imagesMonthHtml(s.images), vid = videosBandHtml(s.videos);
+    if (!img && !vid) return '<div class="sb-line muted">—</div>';
+    return (img ? '<div class="sb-line">' + img + '</div>' : '') + (vid ? '<div class="sb-line">' + vid + '</div>' : '');
   }
-  /** 行 3（今月の内訳）。images / videos が無い応答（古い Worker）ではその項目を出さない */
-  function statusMonthHtml(s) {
-    var sc = s.scout || {}, mt = s.meeting || {};
-    return '<div class="status-month"><span class="sm-label">今月</span>' +
-      intakeMonthItem('収集', sc, sc.last_status === 'failed') +
-      intakeMonthItem('会議', mt, mt.last_status === 'failed' || mt.last_status === 'expired') +
-      imagesMonthHtml(s.images) + videosBandHtml(s.videos) + '</div>';
-  }
-  /** #status の中身全部（純関数）。注意行の容器（#status-alerts）は常に置き、aria-live はこの容器だけ */
+  /** #status の中身全部（純関数）。注意の容器（#status-alerts-<枠>）は 0 件でも置く */
   function statusBandHtml(s, nowMs) {
     var now = typeof nowMs === 'number' ? nowMs : Date.now();
-    return statusMainHtml(s, now) +
-      '<div id="status-alerts" class="status-alerts-slot" aria-live="polite">' + statusAlertsHtml(s, now) + '</div>' +
-      statusMonthHtml(s);
+    var by = alertsByCard(s, now);
+    var pause = '<button type="button" class="btn small' + (s.paused ? ' primary' : '') + '" id="pause-btn">' + (s.paused ? '再開' : '止める') + '</button>';
+    return '<div class="status-band">' +
+      statusCardHtml('run', '制作', pause, runBodyHtml(s, now), by.run) +
+      statusCardHtml('money', 'お金', '', moneyBodyHtml(s), by.money) +
+      statusCardHtml('intake', 'お題集め（提案箱へ）', '', intakeBodyHtml(s), by.intake) +
+      statusCardHtml('media', '画像・動画', '', mediaBodyHtml(s), by.media) +
+      '</div>';
   }
-  /** 1 分ごと: 相対時間の文字と色、注意行（中身が変わった時だけ。読み上げを毎分起こさない）を直す */
+  /** 枠ごとに描いた注意の中身（タイマーが「変わったか」を比べる元） */
+  function alertsHtmlByCard(s, nowMs) {
+    var by = alertsByCard(s, nowMs), out = {};
+    STATUS_CARDS.forEach(function (c) { out[c[0]] = cardAlertsHtml(by[c[0]]); });
+    return out;
+  }
+  /** 1 分ごと: 相対時間の文字と色、各枠の注意と枠の色（中身が変わった枠だけ。読み上げを毎分起こさない）を直す */
   function tickStatus() {
     if (!statusLast) return;
     var now = Date.now(), s = statusLast.s;
     var rel = $('#cron-rel');
     if (rel) { var ca = cronAge(s.last_cron_at, now); rel.textContent = ca.text; rel.className = 'cron-rel ' + ca.level; }
-    var box = $('#status-alerts');
-    if (box) {
-      var h = statusAlertsHtml(s, now);
-      if (h !== statusLast.alerts) { box.innerHTML = h; statusLast.alerts = h; }
-    }
+    var by = alertsByCard(s, now);
+    STATUS_CARDS.forEach(function (c) {
+      var k = c[0], h = cardAlertsHtml(by[k]);
+      if (h === statusLast.alerts[k]) return;
+      var box = $('#status-alerts-' + k), card = $('#status-card-' + k);
+      if (box) box.innerHTML = h;
+      if (card) card.className = cardClass(by[k]);
+      statusLast.alerts[k] = h;
+    });
   }
   function loadStatus() {
     var el = $('#status');
@@ -389,7 +432,7 @@
       var now = Date.now();
       el.innerHTML = statusBandHtml(s, now);
       clearInterval(statusTimer);
-      statusLast = { s: s, alerts: statusAlertsHtml(s, now) };
+      statusLast = { s: s, alerts: alertsHtmlByCard(s, now) };
       statusTimer = setInterval(tickStatus, 60000);
       bindIntakeButtons(s);
       var btn = $('#pause-btn');
@@ -411,7 +454,7 @@
     });
   }
 
-  // ---- 状況欄: 収集・会議（§K-7）。ボタンは行 1、今月の額は行 3 ----
+  // ---- 状況欄: 収集・会議（§K-7）。ボタンと今月の額はお題集めの枠 ----
   function bindIntakeButtons(s) {
     var sb = $('#scout-btn');
     if (sb) sb.addEventListener('click', function () {
@@ -473,31 +516,31 @@
     // 未来の日時（端末の時計のずれ）は 7 日以内に数えない（Astra レビューの指摘）
     return isFinite(ts) && nowMs - ts >= 0 && nowMs - ts <= BACKUP_RECENT_MS;
   }
-  /** 状況帯の行 3 の画像の項目（§O-5 e）。images が無い応答（古い Worker）では何も出さない。#/images へのリンクはここの 1 本 */
+  /** 状況帯の「画像・動画」の枠の画像の生成の行（§O-5 e）。images が無い応答（古い Worker）では何も出さない。#/images へのリンクはここの 1 本 */
   function imagesMonthHtml(im) {
     if (!im || typeof im !== 'object') return '';
-    return '<a class="item" href="#/images" data-img-band="1" title="予約額で数えた記帳。OpenAI の実際の請求とは違うことがあります">画像 ' +
+    return '<a class="item" href="#/images" data-img-band="1" title="予約額で数えた記帳。OpenAI の実際の請求とは違うことがあります">画像の生成 ' +
       fmtUsed(im.month_cents) + ' / ' + fmtCap(im.month_cap_cents) + '（概算）</a>';
   }
-  /** 状況帯の行 2（注意）の画像の件（純関数）。停止中は赤（行き先リンク付き）・予備の鍵を 7 日以内に使った は黄・月の上限 80% 以上は黄。
-   * #/images へのリンクは注意の中で 1 本まで（行 3 と合わせて 2 本まで）: 停止中なら停止の行が持ち、予備の鍵の行はリンクにしない */
+  /** 状況帯の「画像・動画」の枠の注意の件（純関数）。停止中は赤（行き先リンク付き）・予備の鍵を 7 日以内に使った は黄・月の上限 80% 以上は黄。
+   * #/images へのリンクは注意の中で 1 本まで（画像の生成の行と合わせて 2 本まで）: 停止中なら停止の行が持ち、予備の鍵の行はリンクにしない */
   function imagesAlerts(im, nowMs) {
     if (!im || typeof im !== 'object') return [];
     var now = typeof nowMs === 'number' ? nowMs : Date.now();
     var out = [];
-    if (im.halted) out.push(alertItem('red', '<span class="item" data-img-halted="1">画像の生成を止めています（' + esc(haltText(im.halted)) + '）</span>' + goLink('#/images', '画像の停止を見る')));
+    if (im.halted) out.push(alertItem('media', 'red', '<span class="item" data-img-halted="1">画像の生成を止めています（' + esc(haltText(im.halted)) + '）</span>' + goLink('#/images', '画像の停止を見る')));
     if (backupUsedRecently(im.backup_last_used_at, now)) {
       var mark = pill('画像: 予備の鍵を使いました（' + fmtTime(im.backup_last_used_at) + '）', 'orange');
-      out.push(alertItem('yellow', im.halted
+      out.push(alertItem('media', 'yellow', im.halted
         ? '<span class="item" data-img-backup-band="1">' + mark + '</span>'
         : '<a class="item" href="#/images" data-img-backup-band="1">' + mark + ' <span class="sa-go">画像の生成を見る ›</span></a>'));
     }
     var lv = capLevel(im.month_cents, im.month_cap_cents);
-    if (lv === 'near' || lv === 'over') out.push(alertItem('yellow', '今月の画像の記帳が上限' + (lv === 'over' ? 'に達しました' : 'に近づいています') + '（' + fmtUsed(im.month_cents) + ' / ' + fmtCap(im.month_cap_cents) + '）'));
+    if (lv === 'near' || lv === 'over') out.push(alertItem('media', 'yellow', '今月の画像の記帳が上限' + (lv === 'over' ? 'に達しました' : 'に近づいています') + '（' + fmtUsed(im.month_cents) + ' / ' + fmtCap(im.month_cap_cents) + '）'));
     return out;
   }
   function imagesAlertHtml(im, nowMs) { return imagesAlerts(im, nowMs).map(alertLi).join(''); }
-  /** 状況帯の画像の部分（行 3 の項目 + 行 2 の件）。images が無い応答では何も出さない。nowMs はテストの時だけ渡す */
+  /** 状況帯の画像の部分（画像の生成の行 + 注意の件）。images が無い応答では何も出さない。nowMs はテストの時だけ渡す */
   function imagesBandHtml(im, nowMs) {
     if (!im || typeof im !== 'object') return '';
     return imagesMonthHtml(im) + imagesAlertHtml(im, nowMs);
@@ -4599,7 +4642,7 @@
   // 状況帯（上部）の純関数（テストから呼ぶ）
   window.FactoryAdminStatus = {
     CRON_LATE_MIN: CRON_LATE_MIN, CRON_STALE_MIN: CRON_STALE_MIN, cronAge: cronAge, capLevel: capLevel, fmtCap: fmtCap, costMeterHtml: costMeterHtml,
-    statusAlerts: statusAlerts, statusAlertsHtml: statusAlertsHtml, statusMainHtml: statusMainHtml, statusMonthHtml: statusMonthHtml, statusBandHtml: statusBandHtml
+    STATUS_CARDS: STATUS_CARDS, statusAlerts: statusAlerts, statusBandHtml: statusBandHtml
   };
   window.FactoryAdminVideos = { videosBandHtml: videosBandHtml, videosAdminHtml: videosAdminHtml, videosLoadingHtml: videosLoadingHtml, videosErrorHtml: videosErrorHtml };
   window.FactoryAdminImages = {

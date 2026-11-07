@@ -25,7 +25,7 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 // §AJ2-3: FACTORY_PREVIEW_GLB=<手元の .glb のパス> がある時だけ、作り物の版の探査車（vm3d-0001 の d3）の配信の url でそのファイルを返す（GLB は repo に入れない）
 const PREVIEW_GLB = process.env.FACTORY_PREVIEW_GLB || '';
 
-// 上部の状況帯（/api/status）の作り物は 2 通り: normal（通常）/ alert（停止中・今日の上限超え・定期処理 48 分前・画像の停止・予備の鍵）。
+// 上部の状況帯（/api/status）の作り物は 2 通り: normal（通常）/ alert（停止中・今日の上限超え・定期処理 48 分前・収集の失敗と月の上限 85%・画像の停止・予備の鍵）。
 // 選び方: ページの url の ?status=alert（fetch の Referer から読む）か、環境変数 FACTORY_PREVIEW_STATUS=alert。時刻は応答のたびに今から作る。
 function statusVariant(req) {
   try {
@@ -46,7 +46,7 @@ function statusFixture(variant) {
   if (variant !== 'alert') return base;
   return {
     ...base, paused: true, paused_note: '費用の確認のため止めています', today_cents: 21040, last_cron_at: ago(48),
-    scout: { ...base.scout, month_cents: 1700 },
+    scout: { ...base.scout, last_status: 'failed', month_cents: 1700 },
     images: { ...base.images, halted: 'manual', month_cents: 8400, backup_last_used_at: ago(60 * 26) },
   };
 }
