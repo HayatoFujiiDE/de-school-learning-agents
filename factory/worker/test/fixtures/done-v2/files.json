@@ -1,0 +1,48 @@
+{
+  "initial": [
+    {
+      "filename": "questions.json",
+      "fixture": "done-v2/outputs/questions.json"
+    }
+  ],
+  "after": {
+    "user.define_outcome": [
+      {
+        "filename": "adapt-rules.md",
+        "fixture": "_shared-v2/outputs/adapt-rules.md"
+      },
+      {
+        "filename": "claims.json",
+        "fixture": "_shared-v2/outputs/claims.json"
+      },
+      {
+        "filename": "material.json",
+        "fixture": "_shared-v2/outputs/material.json"
+      },
+      {
+        "filename": "parts/p1/app.html",
+        "fixture": "_shared-v2/outputs/parts/p1/app.html"
+      },
+      {
+        "filename": "parts/p1/body.md",
+        "fixture": "_shared-v2/outputs/parts/p1/body.md"
+      },
+      {
+        "filename": "parts/p1/figure-1.svg",
+        "fixture": "_shared-v2/outputs/parts/p1/figure-1.svg"
+      },
+      {
+        "filename": "parts/p1/play.md",
+        "fixture": "_shared-v2/outputs/parts/p1/play.md"
+      },
+      {
+        "filename": "selfcheck.md",
+        "fixture": "_shared-v2/outputs/selfcheck.md"
+      },
+      {
+        "filename": "sources.json",
+        "fixture": "_shared-v2/outputs/sources.json"
+      }
+    ]
+  }
+}

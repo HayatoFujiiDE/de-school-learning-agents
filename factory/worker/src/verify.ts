@@ -14,6 +14,7 @@ import { todayCostCents } from './jobs';
 import { OEMBED_TIMEOUT_MS, type OEmbedPort, type OEmbedResult } from './youtube-oembed';
 import { versionModels3dOfMaterial } from './models3d';
 import { declaredEdition, isVersionBoundMaterial } from './checks/edition';
+import { summariesOf } from './checks/shape';
 import {
   VIDEO_ENABLED_KEY,
   VIDEO_FALLBACK_ENABLED_KEY,
@@ -1613,6 +1614,8 @@ export function childTextsBlocks(material: unknown, videos: VersionVideo[]): str
   const lines: string[] = [];
   if (typeof m.summary_elementary === 'string') lines.push(`要約（小学生）: ${cutValue(m.summary_elementary)}`);
   if (typeof m.summary_secondary === 'string') lines.push(`要約（中学生）: ${cutValue(m.summary_secondary)}`);
+  // §AL-6: schema 2 の要約は summary の 1 本（schema 1 の 2 行は上のまま）
+  for (const s of summariesOf(material)) if (s.key === 'summary') lines.push(`要約: ${cutValue(s.text)}`);
   for (const p of materialParts(material)) {
     const ep = isRecord(p.entry_point) ? p.entry_point : null;
     if (typeof p.id !== 'string' || !ep || typeof ep.text !== 'string') continue;

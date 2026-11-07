@@ -9,6 +9,7 @@ import { model3dEntryOf, model3dViewOf } from '../models3d';
 import { MODEL3D_CATALOG_ID_RE, R2_KEY, SHA256_HEX_RE } from '../models3d-file';
 import { assetKey, offerableModels3d, rightsModes, subjectSha256 } from '../rights';
 import { loadRightsGate, rightsRecordOf } from '../rights-store';
+import { schemaVersionOf } from '../checks/shape';
 
 const HTML_CSP = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:";
 const SVG_CSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'";
@@ -80,6 +81,11 @@ export async function libraryAvailable(env: Env): Promise<Response> {
     const url = (p: string) => `/api/library/files/${vid}/${p}`;
     const mj = parseJsonField<Record<string, unknown>>(r.material_json, {});
     const parts = Array.isArray(mj.parts) ? (mj.parts as Array<Record<string, unknown>>) : [];
+    // §AL-6: schema 2 は本文 1 本（body）+ 遊びの形（play）。variants と summary_elementary / summary_secondary は出さない
+    const schema = schemaVersionOf(mj);
+    const v2 = schema === 2;
+    const v2Str = (x: unknown) => (v2 && typeof x === 'string' ? x : null);
+    const v2Arr = (x: unknown) => (v2 && Array.isArray(x) ? x : []);
     return {
       material_id: r.material_id,
       slug: r.slug,
@@ -89,14 +95,17 @@ export async function libraryAvailable(env: Env): Promise<Response> {
       kinds: parseJsonField(r.kinds_json, []),
       catalog_item_id: r.catalog_item_id,
       concept_codes: parseJsonField(r.concept_codes_json, []),
-      summary_elementary: mj.summary_elementary ?? null,
-      summary_secondary: mj.summary_secondary ?? null,
+      schema_version: schema,
+      summary_elementary: v2 ? null : (mj.summary_elementary ?? null),
+      summary_secondary: v2 ? null : (mj.summary_secondary ?? null),
+      summary: v2Str(mj.summary),
+      spark: v2Str(mj.spark),
       parts: parts.map((p) => ({
         id: p.id,
         kind: p.kind,
         title: p.title,
         entry_point: p.entry_point ?? null,
-        variants: (Array.isArray(p.variants) ? (p.variants as Array<Record<string, unknown>>) : []).map((v) => ({
+        variants: (!v2 && Array.isArray(p.variants) ? (p.variants as Array<Record<string, unknown>>) : []).map((v) => ({
           audience: v.audience,
           length: v.length,
           interest: v.interest ?? null,
@@ -104,6 +113,10 @@ export async function libraryAvailable(env: Env): Promise<Response> {
           url: url(String(v.path)),
         })),
         files: (Array.isArray(p.files) ? (p.files as Array<Record<string, unknown>>) : []).map((f) => ({ role: f.role ?? 'file', url: url(String(f.path)) })),
+        body_url: v2 && typeof p.body === 'string' ? url(p.body) : null,
+        play_url: v2 && typeof p.play === 'string' ? url(p.play) : null,
+        questions_for_kids: v2Arr(p.questions_for_kids),
+        interest_entries: v2Arr(p.interest_entries),
         adjustable: Array.isArray(p.adjustable) ? p.adjustable : [],
         needs_supporter_check: p.needs_supporter_check === true,
       })),

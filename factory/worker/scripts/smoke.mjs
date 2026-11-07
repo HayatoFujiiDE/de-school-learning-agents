@@ -591,6 +591,9 @@ async function main() {
     check('no_personal_data !== true → 400', r2.status === 400 && r2.json?.error === 'personal_data_confirmation_required', `status=${r2.status}`);
   }
 
+  // ---- §AL-9 素材の形 v2（done-v2）: 取り込み → 読み手 → 検証 → 仕分け → 承認 → 配信（body_url と parts/p1/body.md）----
+  await materialV2Smoke();
+
   // ---- 入口（§K-8）----
   await intakeSmoke();
 
@@ -599,6 +602,44 @@ async function main() {
 
   console.log(`SMOKE_RESULT=${failed === 0 ? 'PASS' : 'FAIL'}`);
   process.exit(failed === 0 ? 0 : 1);
+}
+
+/** §AL-9: schema 2 の版を 1 本通し、/api/library/available の schema_version・body_url・questions_for_kids と、body_url の本文の 200 を数える */
+async function materialV2Smoke() {
+  await setScenario('done-v2');
+  const v = await makeVersion('done-v2', 'v2');
+  check('(AL-9) done-v2 の取り込み → job done + 版あり', v.job?.status === 'done' && !!v.versionId, `status=${v.job?.status} err=${v.job?.error ?? '-'} c=${v.c?.status}`);
+  if (!v.versionId) return;
+  const d = await cronUntil(v.versionId, settled);
+  check(
+    '(AL-9) done-v2 の読み手係 done・検証 done・仕分け none（確認待ち）',
+    d?.version?.status === 'review' && d?.reader?.status === 'done' && d?.version?.verification_status === 'done' && d?.triage?.action === 'none',
+    `status=${d?.version?.status} reader=${d?.reader?.status} vs=${d?.version?.verification_status} gate=${d?.triage?.gate} action=${d?.triage?.action}`,
+  );
+  const r = await api('POST', `/api/review/${v.versionId}/decision`, approveBody(d, { note: 'smoke v2' }));
+  check('(AL-9) done-v2 の承認 → 200', r.status === 200, `status=${r.status} err=${r.json?.error} msg=${r.json?.message ?? ''}`);
+  const lib = await api('GET', '/api/library/available');
+  const item = lib.json?.materials?.find((m) => m.material_id === v.materialId && m.version_id === v.versionId);
+  const p1 = item?.parts?.find((p) => p.id === 'p1');
+  const bodyUrl = p1?.body_url ?? null;
+  check(
+    '(AL-9) /api/library/available に schema_version 2・body_url（parts/p1/body.md）・questions_for_kids 2 件・variants []',
+    lib.status === 200 &&
+      item?.schema_version === 2 &&
+      bodyUrl === `/api/library/files/${v.versionId}/parts/p1/body.md` &&
+      Array.isArray(p1?.questions_for_kids) &&
+      p1.questions_for_kids.length === 2 &&
+      Array.isArray(p1?.variants) &&
+      p1.variants.length === 0,
+    `status=${lib.status} found=${!!item} schema=${item?.schema_version} body_url=${bodyUrl ? 'set' : 'null'} q=${p1?.questions_for_kids?.length} variants=${p1?.variants?.length}`,
+  );
+  const md = bodyUrl ? await fetch(BASE + bodyUrl) : null;
+  const text = md ? await md.text() : '';
+  check(
+    '(AL-9) GET <body_url>（parts/p1/body.md）→ 200 text/markdown で本文が返る',
+    md?.status === 200 && /text\/markdown/.test(md.headers.get('content-type') ?? '') && text.length > 0,
+    `status=${md?.status ?? 'none'} chars=${text.length}`,
+  );
 }
 
 /**

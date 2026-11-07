@@ -1,0 +1,12 @@
+{
+  "initial": {
+    "status": "idle",
+    "list_cost": "8"
+  },
+  "after": {
+    "user.define_outcome": {
+      "status": "idle",
+      "list_cost": "180"
+    }
+  }
+}
