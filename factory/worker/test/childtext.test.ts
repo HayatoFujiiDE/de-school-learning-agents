@@ -74,6 +74,18 @@ describe('raw_markup（契約 V-5 (a)〜(h)。.md だけ）', () => {
     expect(checkChildText(m, texts({}))).toEqual([]);
   });
 
+  it('空白 100 個の後にファイル名がある行でも sample は空でなくファイル名を含む（探索と切り出しを同じ文で行う）', () => {
+    const [h] = checkChildText(mat(), texts({ [ES]: `${' '.repeat(100)}claims.json を開く` }));
+    expect(h).toMatchObject({ path: ES, kind: 'file_name' });
+    expect(h.sample).toContain('claims.json');
+    expect(h.sample.length).toBeLessThanOrEqual(40);
+    const m = mat();
+    m.summary_elementary = `${' '.repeat(100)}\n\n figure-1.svg を見る`;
+    const [s] = checkChildText(m, texts({}));
+    expect(s).toMatchObject({ path: 'material.json', kind: 'file_name' });
+    expect(s.sample).toContain('figure-1.svg');
+  });
+
   it('sample は当たった所の前後を含む 40 字以内', () => {
     const line = `${'あ'.repeat(50)}<b>${'い'.repeat(50)}`;
     const [h] = one(line);

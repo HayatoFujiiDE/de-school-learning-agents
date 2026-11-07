@@ -28,6 +28,9 @@ export const READER_CALL_TIMEOUT_MS = 120_000;
 export const READER_MAX_TOKENS = 6000;
 /** 入力（user の 1 メッセージ）の合計の上限（字） */
 export const READER_INPUT_MAX_CHARS = 80_000;
+/** <material> の節（開始・終了の行を含む）の上限（字）。超える分は末尾を切り捨てて READER_MATERIAL_CUT_MARK を足す（契約 V-4 c の裁定） */
+export const READER_MATERIAL_MAX_CHARS = 20_000;
+export const READER_MATERIAL_CUT_MARK = '（以下省略）';
 export const READER_TOOL_NAME = 'report_reading';
 /** settings: '0' の時は report_reading に strict を付けない（契約 V-4 b の逃げ道） */
 export const READER_STRICT_KEY = 'reader_strict';
@@ -140,7 +143,10 @@ function supporterLabel(m: Record<string, unknown>, parts: unknown[]): string {
 
 const joinList = (v: unknown): string => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').map((x) => oneLine(x)).filter(Boolean).join('、') : '');
 
-/** <material> の節（契約 V-4 c）。値は 1 行にして切る */
+/**
+ * <material> の節（契約 V-4 c）。値は 1 行にして切る。節（<material> と </material> の行を含む）が 20,000 字を超える時は、
+ * 中身の末尾を切り捨てて「（以下省略）」を足す（切った後の節は 20,000 字以内。変奏はその残りに入る）
+ */
 export function materialSection(material: unknown): string {
   const m = isObj(material) ? material : {};
   const parts = Array.isArray(m.parts) ? m.parts : [];
@@ -172,7 +178,15 @@ export function materialSection(material: unknown): string {
     const vids = Array.isArray(p.videos) ? p.videos.filter(isObj) : [];
     lines.push(vids.length > 0 ? `- 動画: ${vids.length} 本（${vids.map((v) => `${val(v.title, 200)}。見どころ: ${val(v.why, 400)}`).join('／')}）` : '- 動画: 0 本');
   }
-  return ['<material>', ...lines, '</material>'].join('\n');
+  const open = '<material>\n';
+  const close = '\n</material>';
+  const body = lines.join('\n');
+  if (open.length + body.length + close.length <= READER_MATERIAL_MAX_CHARS) return `${open}${body}${close}`;
+  const room = READER_MATERIAL_MAX_CHARS - open.length - close.length - READER_MATERIAL_CUT_MARK.length;
+  let cut = body.slice(0, Math.max(0, room));
+  // サロゲートペアの片割れを残さない
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  return `${open}${cut}${READER_MATERIAL_CUT_MARK}${close}`;
 }
 
 export interface ReaderInput {
@@ -185,7 +199,8 @@ export interface ReaderInput {
 
 /**
  * 入力（user の 1 メッセージ）を作る。変奏は part の順 → variants の順の .md。read が null を返した変奏は not_read。
- * 80,000 字を超える所からは入れずに not_read（切り詰めない）。read が例外を投げたらそのまま投げる（呼ぶ側で「入力を作る途中の失敗」）
+ * 変奏は、入力の合計の上限 80,000 字から前置き・<material> の節（20,000 字まで）・終わりの行を引いた残りに入る分だけ入れ、
+ * 入らない所からは not_read（切り詰めない）。read が例外を投げたらそのまま投げる（呼ぶ側で「入力を作る途中の失敗」）
  */
 export async function buildReaderInput(material: unknown, read: (path: string) => Promise<string | null>): Promise<ReaderInput> {
   const m = isObj(material) ? material : {};

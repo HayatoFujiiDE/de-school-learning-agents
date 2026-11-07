@@ -25,7 +25,7 @@ export type PublishSwitchArgs =
       reader_guard?: ReaderGuard;
       /** 契約 V-7 c: 判定で「確認済み」として頼ったチャンネルが今も trusted_channels にある */
       trusted_keys?: readonly string[];
-      /** 契約 V-7 c: 機械の承認だけ。settings auto_publish が '1' */
+      /** 契約 V-7 c: 機械の承認だけ。settings auto_publish が '1' で、paused が '1' でない（人の承認には付けない） */
       require_auto_publish?: boolean;
       /** 契約 V-7 e: 人の承認で確認済みにするチャンネル（仕分けの video_channel_new の項目の key だけ） */
       trust_channels?: ReadonlyArray<{ channel_key: string; channel_name: string }>;
@@ -85,7 +85,11 @@ export function buildPublishSwitch(a: PublishSwitchArgs, c: BuildCtx): Stmt[] {
         extra.push(`EXISTS (SELECT 1 FROM trusted_channels tc WHERE tc.channel_key = ?)`);
         extraParams.push(k);
       }
-      if (a.require_auto_publish) extra.push(`(SELECT value FROM settings WHERE key = 'auto_publish') = '1'`);
+      if (a.require_auto_publish) {
+        extra.push(`(SELECT value FROM settings WHERE key = 'auto_publish') = '1'`);
+        // 入口の後に一時停止されても、コミットの時点で一時停止中なら機械は承認しない（契約 V-7 c・d）
+        extra.push(`COALESCE((SELECT value FROM settings WHERE key = 'paused'), '0') <> '1'`);
+      }
       const P = `EXISTS (${P_APPROVE})${extra.map((e) => ` AND ${e}`).join('')}`;
       const p = [a.version_id, a.material_id, a.verification_id, ...extraParams];
       const out: Stmt[] = [

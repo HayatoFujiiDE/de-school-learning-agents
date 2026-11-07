@@ -23,9 +23,11 @@ const FILE_NAME_RE = /[A-Za-z0-9][A-Za-z0-9_-]*\.(?:html|svg|png|webp|md|json)/g
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const isStr = (v: unknown): v is string => typeof v === 'string';
 
-/** 当たった所（i から len 字）の前後を含む 40 字以内（1 行にする） */
-function sampleAt(text: string, i: number, len: number): string {
-  const one = text.replace(/\s+/g, ' ');
+/** 空白の連続を 1 つにした文（一致の探索と sample の切り出しは、どちらもこの文で行う。位置がずれて sample が空にならないように） */
+const oneSpace = (t: string): string => t.replace(/\s+/g, ' ');
+
+/** 当たった所（one の i から len 字）の前後を含む 40 字以内。one は oneSpace を通した文 */
+function sampleAt(one: string, i: number, len: number): string {
   const n = Math.min(len, CHILD_TEXT_SAMPLE_CHARS);
   const start = Math.max(0, i - Math.floor((CHILD_TEXT_SAMPLE_CHARS - n) / 2));
   return one.slice(start, start + CHILD_TEXT_SAMPLE_CHARS);
@@ -117,6 +119,7 @@ export function checkChildText(material: unknown, texts: ReadonlyMap<string, str
   const full = () => out.length >= CHILD_TEXT_MAX;
   const seenName = new Set<string>();
 
+  // text は oneSpace を通した文（探索と切り出しを同じ文で行う）
   const fileNames = (path: string, text: string) => {
     for (const m of text.matchAll(FILE_NAME_RE)) {
       if (full()) return;
@@ -140,8 +143,9 @@ export function checkChildText(material: unknown, texts: ReadonlyMap<string, str
       seenPath.add(path);
       const body = texts.get(path);
       if (!isStr(body)) continue;
-      for (const line of stripMarkdownForCheck(body).split('\n')) {
+      for (const raw of stripMarkdownForCheck(body).split('\n')) {
         if (full()) return out;
+        const line = oneSpace(raw);
         fileNames(path, line);
         if (full()) return out;
         const hit = rawMarkupHit(line);
@@ -162,7 +166,7 @@ export function checkChildText(material: unknown, texts: ReadonlyMap<string, str
   }
   for (const t of meta) {
     if (full()) return out;
-    fileNames('material.json', t);
+    fileNames('material.json', oneSpace(t));
   }
   return out.slice(0, CHILD_TEXT_MAX);
 }

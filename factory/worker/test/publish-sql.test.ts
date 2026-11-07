@@ -66,6 +66,31 @@ beforeEach(() => {
 });
 
 describe('approve', () => {
+  it('機械の承認（require_auto_publish）は paused が 1 の時 全文 0 行。人の承認は paused でも通る（契約 V-7 c・d）', () => {
+    const set = (k: string, v: string) => db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(k, v, T);
+    material('m1');
+    version('v1', 'm1', 1);
+    verification('w1', 'v1', 1);
+    set('auto_publish', '1');
+    set('paused', '1');
+    const machine = () =>
+      buildPublishSwitch(
+        { kind: 'approve', material_id: 'm1', version_id: 'v1', verification_id: 'w1', reviewer_email: 'system:auto-publish', checklist_json: '{}', note: null, machine_gate: 'clean', require_auto_publish: true },
+        ctx(),
+      );
+    expect(runBatch(machine())).toEqual([0, 0, 0]);
+    expect([count('review_decisions'), one('SELECT status FROM material_versions WHERE id=?', 'v1').status]).toEqual([0, 'review']);
+    // 一時停止を解けば機械の承認も通る
+    set('paused', '0');
+    expect(runBatch(machine())).toEqual([1, 1, 1]);
+    // 人の承認には paused の条件を付けない
+    material('m2');
+    version('v2', 'm2', 1);
+    verification('w2', 'v2', 1);
+    set('paused', '1');
+    expect(runBatch(approve('m2', 'v2', 'w2'))).toEqual([1, 1, 1]);
+  });
+
   it('述語成立: review_decisions 1 行 + material available/idle/current + version approved', () => {
     material('m1');
     version('v1', 'm1', 1);
