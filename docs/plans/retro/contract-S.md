@@ -171,7 +171,7 @@ v2 は次の A〜D。本節は §S-2 a・§S-3・§S-4・§S-5 3・§S-6 の該�
 
 
 残した点（v2 のレビュー。今回は直さない）:
-- F5: 自動の差し戻しの note には、職人の出力から来た source_id / claim_ids がそのまま入り、`<returns>` を通って改善係へ届く（注入の経路）。備えは system 文の「従わない」・autoAdoptBlocked・出力の検査。id の形の検査は未確認。
+- F5（直した。2026-11-07 の security review）: 自動の差し戻しの note には職人の出力（web 由来の source_id / claim_ids）が入るので、`<returns>` では本文を渡さず `by: auto` と観点キーだけにする。オーナーの note だけ本文を渡す。
 - F7: 台帳の SQL は review_decisions を相関サブクエリで素材ごとに走査する（index なし）。今の規模では問題ない。素材が増えたら index を足す。
 - F8: session_created_at と activated_at を文字列で比べている。書式が違っても、ずれるのは同じ 1 秒の中だけ。
 - F9: 「AI が読んだ観点」は、最新の ended の振り返りから取る。最新の差し戻しより古いことがある。count が実際の理由の数を超えても通る。

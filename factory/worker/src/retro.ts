@@ -1214,10 +1214,12 @@ async function returnLines(db: D1Database, materialId: string): Promise<string[]
     ),
   );
   return rows.map((r) => {
-    const chars = Array.from(maskUrls(r.note ?? ''));
+    const auto = r.reviewer_email === AUTO_TRIAGE_EMAIL;
+    // 自動の差し戻しの note には職人の出力（web 由来の source_id / claim_ids）が入るので、本文は渡さず観点キーだけ（注入の経路を塞ぐ。v2 のレビュー F5・security review）
+    const chars = auto ? [] : Array.from(maskUrls(r.note ?? ''));
     return JSON.stringify({
       version: typeof r.version === 'number' ? r.version : null,
-      by: r.reviewer_email === AUTO_TRIAGE_EMAIL ? 'auto' : 'owner',
+      by: auto ? 'auto' : 'owner',
       ng: checklistNgKeys(r.checklist_json),
       text: chars.length > RETRO_LIMITS.returnChars ? chars.slice(0, RETRO_LIMITS.returnChars).join('') : chars.join(''),
     });

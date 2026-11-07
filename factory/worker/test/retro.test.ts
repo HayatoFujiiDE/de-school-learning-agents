@@ -1578,7 +1578,7 @@ describe('contract-S v2 追加 A: 差し戻し理由の本文を <returns> で�
     return text.slice(a + '<returns>\n'.length, b).split('\n').filter(Boolean).map((l) => JSON.parse(l) as { version: number | null; by: string; ng: string[]; text: string });
   };
 
-  it('この素材の差し戻し理由を新しい順に 3 件・1 件 1,500 字まで・自動は by: auto。URL は [URL]。教材の本文・題・素材の id・メールは入らない', async () => {
+  it('この素材の差し戻し理由を新しい順に 3 件・1 件 1,500 字まで・自動は by: auto で本文なし。URL は [URL]。教材の本文・題・素材の id・メールは入らない', async () => {
     raw.prepare("INSERT INTO materials (id, slug, title, kinds_json, work_status, brief_md, created_at, updated_at) VALUES ('mat-x', 'sx', '教材の題_ないしょ', '[3]', 'idle', '教材の本文_ないしょ', ?, ?)").run(SINCE, SINCE);
     seedMaterial(raw, 'mat-y');
     seedJob(raw, { id: 'x0', material: 'mat-x', brief: '注文の本文_ないしょ' });
@@ -1596,8 +1596,9 @@ describe('contract-S v2 追加 A: 差し戻し理由の本文を <returns> で�
     const rs = returnsOf(text);
     expect(rs.map((r) => r.by)).toEqual(['owner', 'auto', 'owner']);
     expect(rs[0]).toEqual({ version: rs[0].version, by: 'owner', ng: ['unclassified'], text: '三番目' });
-    expect(Array.from(rs[1].text)).toHaveLength(1500);
-    expect(rs[1].text.startsWith('自動の理由 長')).toBe(true);
+    // 自動の差し戻しは本文を渡さない（職人の出力由来の id が入るため。F5・security review）
+    expect(rs[1].text).toBe('');
+    expect(text.includes('自動の理由')).toBe(false);
     expect(rs[2].text).toBe('二番目 [URL] と [URL] も見て');
     expect(rs[2].ng).toEqual(['content_and_evidence']);
     expect(text.indexOf('<job>')).toBeLessThan(text.indexOf('<returns>'));
@@ -1609,6 +1610,16 @@ describe('contract-S v2 追加 A: 差し戻し理由の本文を <returns> で�
     seedMaterial(raw, 'mat-z');
     seedJob(raw, { id: 'z0', material: 'mat-z' });
     expect(returnsOf((await buildRetroInput(env.DB, 'z0', '{}')).text)).toEqual([]);
+  });
+
+  it('オーナーの差し戻し理由は 1,500 字で切る', async () => {
+    seedMaterial(raw, 'mat-l');
+    seedJob(raw, { id: 'l0', material: 'mat-l' });
+    seedVersion(raw, 'l0', { material: 'mat-l' });
+    seedDecision(raw, 'l0', { material: 'mat-l', note: '長'.repeat(2000), at: '2026-11-06T01:00:00.000Z', email: 'owner@example.com' });
+    const rs = returnsOf((await buildRetroInput(env.DB, 'l0', '{}')).text);
+    expect(rs[0].by).toBe('owner');
+    expect(Array.from(rs[0].text)).toHaveLength(1500);
   });
 
   it('60,000 字に当たった時は recent を先に削り、returns は残す', async () => {
