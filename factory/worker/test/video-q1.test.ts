@@ -149,36 +149,41 @@ describe('§Q-1 schema: parts[].videos[]', () => {
   });
 });
 
-describe('§Q-9.6 triage: 動画のある版の「利用条件」は自動 OK にしない', () => {
-  const input = (material: unknown): TriageInput => ({
+// 契約 V-6（§Q-9.6 の「動画のある版は人が見る」に優先）: 動画のある版の「利用条件」は、公式の情報が取れて確認済みのチャンネルの時だけ自動 OK
+describe('契約 V-6 triage: 動画のある版の「利用条件」', () => {
+  const input = (material: unknown, o: Partial<TriageInput> = {}): TriageInput => ({
     claims: { claims: [{ id: 'c1', source_ids: ['s1'] }] },
     report: { id: 'w1', result: { verdicts: [{ claim_id: 'c1', verdict: 'confirmed', opened_urls: [] }], overall_note: '' } },
     sources: [{ source_id: 's1', url: 'https://minecraft.wiki/w/x', license: 'CC BY-NC-SA 3.0', url_was_fetched: 1, quote_found: 1 }],
     checks: { forbidden: [], app_html: [], kakunin_zumi: [], missing_source_refs: [], missing_claim_refs: [] },
     material,
     autoReverified: 0,
-    autoDerived: false,
+    ...o,
   });
+  const legacy3 = (a: Record<string, string>) => ({ content_and_evidence: a.content_and_evidence, terms_of_use: a.terms_of_use, artifact_behavior: a.artifact_behavior });
   const withVideos = (vs: unknown) => {
     const m = goodMaterial();
     (m.parts as Obj[])[0].videos = vs;
     return m;
   };
 
-  it('videos のない版はこれまでどおり 3 項目とも ok', () => {
-    expect(triageVersion(input(goodMaterial())).auto).toEqual({ content_and_evidence: 'ok', terms_of_use: 'ok', artifact_behavior: 'ok' });
+  it('videos のない版は機械の 3 項目が ok', () => {
+    expect(legacy3(triageVersion(input(goodMaterial())).auto)).toEqual({ content_and_evidence: 'ok', terms_of_use: 'ok', artifact_behavior: 'ok' });
     expect(triageVersion(input(withVideos([]))).auto.terms_of_use).toBe('ok');
   });
 
-  it('videos が 1 本でもあれば terms_of_use は review（他の 2 項目は変わらない）。要確認の数にも入る', () => {
+  it('videos が 1 本あり公式の情報が取れていなければ terms_of_use は review（video_meta_unknown の ask。他の 2 項目は変わらない）', () => {
     const t = triageVersion(input(withVideos([video()])));
-    expect(t.auto).toEqual({ content_and_evidence: 'ok', terms_of_use: 'review', artifact_behavior: 'ok' });
-    expect(t.needs_review).toBe(1);
+    expect(legacy3(t.auto)).toEqual({ content_and_evidence: 'ok', terms_of_use: 'review', artifact_behavior: 'ok' });
+    expect(t.items.filter((i) => i.key === 'terms_of_use').map((i) => [i.cause, i.severity])).toEqual([['video_meta_unknown', 'ask']]);
     expect(t.action).toBe('none');
   });
 
-  it('videos が配列でない値も review（安全側）', () => {
-    expect(triageVersion(input(withVideos({}))).auto.terms_of_use).toBe('review');
+  it('公式の情報が取れて、チャンネルが確認済みなら terms_of_use は ok（trusted_keys にその key）', () => {
+    const meta = [{ video_id: 'v1', outcome: 'ok', author_name: 'X', author_url: 'https://www.youtube.com/@x', channel_match: 'match' }];
+    const t = triageVersion(input(withVideos([video()]), { videoMeta: meta, trustedChannels: ['https://www.youtube.com/@x'] }));
+    expect(t.auto.terms_of_use).toBe('ok');
+    expect(t.trusted_keys).toEqual(['https://www.youtube.com/@x']);
   });
 });
 

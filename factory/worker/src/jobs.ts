@@ -8,6 +8,7 @@ import { PortError, type CallOpts, type FactoryPort, type FileMeta } from './ant
 import { accumulateCitations, applyCarry, finishCitations, isCitationAcc, newCitationAcc, type CitationAcc } from './checks/citations';
 import { versionVideosOf } from './videos';
 import { checkForbidden } from './checks/forbidden';
+import { checkChildText } from './checks/childtext';
 import { basenameOf, duplicateBasename, resolveOutputLayout } from './checks/layout';
 import {
   MAX_FILE_BYTES,
@@ -1878,7 +1879,8 @@ class Reconciler {
     });
     const digest = await crypto.subtle.digest('SHA-256', contentDigestInput(files));
     const sha = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-    const checks = { schema: 'ok', citations: cit.summary, ...forb, unreferenced_files: layout.unreferenced };
+    // 契約 V-5: 子ども向け本文の機械検査（取り込みは止めない）
+    const checks = { schema: 'ok', citations: cit.summary, ...forb, unreferenced_files: layout.unreferenced, child_text: checkChildText(schema.material, texts) };
 
     const now = nowIso();
     const versionId = crypto.randomUUID();

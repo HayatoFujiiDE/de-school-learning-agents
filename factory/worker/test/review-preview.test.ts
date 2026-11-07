@@ -15,7 +15,9 @@ const fixture = (): Obj => JSON.parse(JSON.stringify(FIX));
 const n = (h: string, re: RegExp) => (h.match(re) || []).length;
 
 describe('作り物のデータ（fixture）', () => {
-  it('triage は triageVersion の結果と同じ（autoDerived = 自動の処置なし）', () => {
+  // 契約 V-6: triage の形は v2 になった。この fixture（§L-8 の画面の作り物）の triage は §L-3 の形のままなので、
+  // 互換で残した groups・ok_counts・verification_id だけを突き合わせる（作り物のデータの新しい形への直しは画面の担当）
+  it('triage の groups・ok_counts は triageVersion の結果と同じ', () => {
     const d = fixture();
     const t = triageVersion({
       claims: { claims: d.claims.map((c: Obj) => ({ id: c.id, text: c.text, status: c.status, source_ids: c.source_ids, used_in: c.used_in })) },
@@ -26,7 +28,8 @@ describe('作り物のデータ（fixture）', () => {
       autoReverified: 0,
       autoDerived: true,
     });
-    expect(d.triage).toEqual(JSON.parse(JSON.stringify(t)));
+    const pick = (x: Obj) => ({ verification_id: x.verification_id, groups: x.groups, ok_counts: x.ok_counts });
+    expect(pick(d.triage)).toEqual(JSON.parse(JSON.stringify(pick(t))));
   });
 });
 

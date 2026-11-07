@@ -1,4 +1,5 @@
 // 10 分ごとの照合・起動・検証（契約 §B-5）。scheduled handler は最長 15 分。
+// 順（契約 V-7 g）: 起動 → 取り込み → 読み手係 → 検証 → 仕分け → 自動公開 → 画像 → 入口 → …
 
 import { getFeedFetch, getGeminiPort, getOEmbedPort, getPort, getTopicFetch } from './anthropic';
 import { all, getSetting, isoPlus, nowIso, setSetting, stmt, tokyoDay } from './db';
@@ -9,7 +10,8 @@ import { retroTick } from './retro';
 import { runScout, scoutDueOn } from './scout';
 import { getJob, markWebhookProcessed, reconcileJob, recoverCreating, startJob, type JobRow } from './jobs';
 import { runVerificationStep } from './verify';
-import { triageStep } from './triage-step';
+import { autoPublishStep, triageStep } from './triage-step';
+import { readerStep } from './reader';
 import { topicsTick } from './topics/tick';
 
 // cron 経由の reconcile は開始から 10 分を締め切りにする（scheduled handler は最長 15 分。検証の時間を残す）
@@ -68,6 +70,13 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
     out.reconcile_error = e instanceof Error ? e.name : 'error';
   }
 
+  // 2-b. 読み手係（契約 V-4 a・V-7 g。取り込みの段の直後・検証の段の前。取る前の条件（一時停止・残り 270 秒）は readerStep が見る）
+  try {
+    out.reader = await readerStep(env, port, { deadline: cronStart + CRON_LIMIT_MS - INTAKE_END_MARGIN_MS });
+  } catch (e) {
+    out.reader_error = e instanceof Error ? e.name : 'error';
+  }
+
   // 3. 検証（1 件）
   try {
     // §Q-3 1: 動画の記録の port（鍵が無ければ呼ばない。settings video_gen_enabled が '1' の時だけ呼ぶ §Q-9.5）
@@ -86,6 +95,13 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
     out.triage = await triageStep(env, { deadline: cronStart + CRON_LIMIT_MS - INTAKE_END_MARGIN_MS });
   } catch (e) {
     out.triage_error = e instanceof Error ? e.name : 'error';
+  }
+
+  // 3-b2. 自動公開（契約 V-7 d・g。仕分けの後。settings auto_publish が '1' で一時停止でない時だけ動く）
+  try {
+    out.auto_publish = await autoPublishStep(env, { deadline: cronStart + CRON_LIMIT_MS - INTAKE_END_MARGIN_MS });
+  } catch (e) {
+    out.auto_publish_error = e instanceof Error ? e.name : 'error';
   }
 
   // 3-c. 画像の回収（§O-4 d。3-b の直後。締め切り = min(開始 + 60 秒, cron の締め切り)。停止中・一時停止中も行う。生成はしない）

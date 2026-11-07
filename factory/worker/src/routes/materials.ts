@@ -176,7 +176,8 @@ export async function getMaterialDetail(c: RouteCtx, id: string): Promise<Respon
   const decisions = await all<Record<string, unknown>>(
     db,
     stmt(
-      'SELECT id, material_version_id, decision, checklist_json, note, reviewer_email, content_sha256_at_decision, created_at FROM review_decisions WHERE material_id = ? ORDER BY created_at DESC',
+      // 契約 V-8: 判断した時の仕分けの gate（machine_gate）も返す
+      'SELECT id, material_version_id, decision, checklist_json, note, reviewer_email, content_sha256_at_decision, created_at, machine_gate FROM review_decisions WHERE material_id = ? ORDER BY created_at DESC',
       id,
     ),
   );

@@ -77,6 +77,10 @@ export interface Env {
   TOPIC_CHECK_MODEL?: string;
   /** 振り返り係（§S-0）の月の上限（セント）。wrangler.jsonc には置かない（無い時は cfg() の既定 300） */
   RETRO_MONTHLY_CENTS?: string;
+  /** 続けて行う自動の差し戻しの上限（契約 V-0 G4・V-6 a。整数 0〜5 に丸める。数でなければ 2）。wrangler.jsonc に既定値 "2" */
+  AUTO_RETURN_MAX?: string;
+  /** 読み手係のモデル（契約 V-4 b。既定 claude-opus-5-5） */
+  READER_MODEL?: string;
 
   // secrets
   ANTHROPIC_API_KEY?: string;
@@ -148,6 +152,8 @@ export const cfg = (env: Env) => ({
   topicCheckModel: (env.TOPIC_CHECK_MODEL || env.TOPIC_GEN_MODEL || TOPIC_DEFAULT_MODEL).trim(),
   // §S-0
   retroMonthlyCents: intVar(env.RETRO_MONTHLY_CENTS, 300),
+  // 契約 V-4 b（AUTO_RETURN_MAX の丸めは checks/triage.ts の clampAutoReturnMax。仕分けの入力に生の値を渡す）
+  readerModel: (env.READER_MODEL || 'claude-opus-5-5').trim(),
 });
 
 /** お題の生成・検査の既定のモデル（contract-T T-4: 会議 MEETING_MODEL と同じ Sonnet 5.5 の id） */

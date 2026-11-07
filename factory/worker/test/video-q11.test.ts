@@ -1015,7 +1015,8 @@ describe('§Q-11 9・12 引用と triage', () => {
       checks: GREEN_CHECKS,
       material: material(videos),
       autoReverified: 0,
-      autoDerived: false,
+      // 契約 V-6: 読み手係が済んだ版（gate が pending にならない）
+      reader: { status: 'done', token: 'rt1', result: { findings: [], learning: { verdict: 'ok', reason: '' }, conditions: { verdict: 'ok', reason: '' }, summary: '', not_read: [] } },
     };
   }
   const VIDEO_ROW = src('s9', watchUrl(YT1), { url_was_fetched: 0, quote_found: 0 });
@@ -1065,12 +1066,14 @@ describe('§Q-11 9・12 引用と triage', () => {
         [VIDEO_ROW, src('s1', URL_A, { quote_found: 0 })],
       ),
     );
-    expect(t.reasons).toEqual(['quote_mismatch_many']);
+    // 契約 V-6 f: 割合の項目は fix（needs_fix も立つ）。gate が pending でない（読み手係 done）時に auto_return
+    expect(t.reasons).toEqual(['quote_mismatch_many', 'needs_fix']);
     expect(t.action).toBe('auto_return');
     const lines = String(t.return_note).split('\n');
-    expect(lines[0]).toBe('自動の差し戻し（検証の結果: 引用が本文と一致しない出典が 1 件中 1 件ありました）。');
-    expect(lines[1]).toContain(`開けなかったページは出典に使わない。${RETURN_VIDEO_PHRASE}主張には必ず出典 id を付け`);
-    expect(t.return_note).not.toContain('出典 s9');
+    expect(lines[0]).toBe('自動の差し戻し（1 回目。機械の確認で、直す所が見つかりました）。');
+    expect(lines.some((l) => l.includes(`開けなかったページは出典に使わない。${RETURN_VIDEO_PHRASE}主張には必ず出典 id を付け`))).toBe(true);
+    expect(lines).toContain('- 〔内容と根拠〕引用が本文と一致しない出典が多い。1 件 / 全 1 件');
+    expect(t.return_note).not.toContain('s9');
   });
 
   it('triage の groups: 動画 1 本・claim 1 件が未確認の版で、原因に maker_url_not_fetched・quote_mismatch が出ない', () => {

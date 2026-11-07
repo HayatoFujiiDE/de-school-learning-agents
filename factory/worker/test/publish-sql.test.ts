@@ -1,12 +1,11 @@
 // publishSwitch と確認の決定（return / reject）の batch を node:sqlite（Node 24 同梱）の実 DB で順に実行し、
 // 述語成立時は全文が行を変え、非成立時は全文 0 行（片方だけ commit されない）ことを確かめる（契約 §B-2, §H (j)）。
-import { readFileSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { buildPublishSwitch, buildReject, buildReturn } from '../src/publish';
 import type { Stmt } from '../src/db';
+import { migratedDb } from './d1-shim';
 
-const SCHEMA = readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8');
 const T = '2026-11-04T00:00:00.000Z';
 let db: DatabaseSync;
 let seq = 0;
@@ -62,8 +61,8 @@ const approve = (mid: string, vid: string, wid: string) =>
   );
 
 beforeEach(() => {
-  db = new DatabaseSync(':memory:');
-  db.exec(SCHEMA);
+  // 契約 V-1: review_decisions.machine_gate など 0008 までの列を使うので、全部の migration を当てた DB で確かめる
+  db = migratedDb();
 });
 
 describe('approve', () => {

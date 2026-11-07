@@ -122,7 +122,7 @@ export async function getFloor(c: RouteCtx): Promise<Response> {
     let autoOk: number | null = null;
     if (q.v_id && q.v_status === 'review') {
       const t = await computeTriage(
-        db,
+        c.env,
         {
           id: q.v_id,
           material_id: q.m_id,

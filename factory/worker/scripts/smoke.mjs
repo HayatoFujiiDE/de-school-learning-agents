@@ -99,6 +99,25 @@ async function cronUntil(versionId, pred, max = 15) {
   return d;
 }
 
+/**
+ * 契約 V-7: 機械の確認が落ち着いた（検証 done・読み手係も済んで gate が pending でない・自動の処置（再検証・差し戻し）が決まっていない）か、
+ * もう確認待ちでない（自動の差し戻しで rejected 等）。cron の読み手係 → 検証 → 仕分けの段を回して待つ時の条件
+ */
+const settled = (d) =>
+  (!!d?.version && d.version.status !== 'review') ||
+  (d?.version?.verification_status === 'done' && !!d?.triage && d.triage.gate !== 'pending' && d.triage.action === 'none');
+
+/** 承認の body（契約 V-7 e: 画面が読んだ読み手係の世代 reader_gen と、初めてのチャンネルを確認済みにする trust_channels を添える） */
+const approveBody = (d, extra = {}) => ({
+  decision: 'approve',
+  checklist: ALL_OK,
+  note: '',
+  verification_id: d?.verification_id,
+  reader_gen: d?.reader?.gen ?? null,
+  trust_channels: (d?.triage?.items ?? []).filter((i) => i.cause === 'video_channel_new' && i.channel_key).map((i) => i.channel_key),
+  ...extra,
+});
+
 const ALL_OK = Object.fromEntries(
   ['content_and_evidence', 'explanation_and_expression', 'relation_to_learning', 'conditions_of_use', 'artifact_behavior', 'terms_of_use'].map((k) => [k, { result: 'ok', note: '' }]),
 );
@@ -208,8 +227,33 @@ async function main() {
   }
 
   // ---- (c) cron で検証 → 承認 → 配信 → stop → rollback ----
-  let aD = await cronUntil(aVid, (d) => d.version?.verification_status === 'done');
+  let aD = await cronUntil(aVid, settled);
   check('(c) cron で検証 done', aD?.version?.verification_status === 'done' && !!aD?.verification_id, `vs=${aD?.version?.verification_status}`);
+  // ---- 契約 V-4: 読み手係（fake は既定で「問題なし」）が cron で済み、確認画面の API に結果と世代が出る ----
+  {
+    const all = (await api('GET', '/__fake/calls')).json?.calls ?? [];
+    const rc = all.filter((c) => c.op === 'messages.create' && c.params?.kind === 'reader');
+    check(
+      '(V-4) 読み手係が cron で 1 回呼ばれ（Opus・report_reading strict・tool_choice auto・再送なし）、版の reader が done・gen あり・findings 空',
+      rc.length >= 1 &&
+        rc[0].params?.tools?.some((t) => t.name === 'report_reading' && t.strict === true) &&
+        rc[0].params?.tool_choice?.type === 'auto' &&
+        rc[0].opts?.max_retries === 0 &&
+        aD?.reader?.status === 'done' &&
+        typeof aD?.reader?.gen === 'string' &&
+        Array.isArray(aD?.reader?.findings) &&
+        aD.reader.findings.length === 0,
+      `calls=${rc.length} reader=${aD?.reader?.status}/${aD?.reader?.gen ? 'gen' : 'none'}`,
+    );
+    const t = aD?.triage;
+    check(
+      '(V-6) triage v2: gate・pending_on・items・6 項目の auto・counts・trusted_gen が載り、gate は pending でない・処置なし',
+      !!t && ['clean', 'attention'].includes(t.gate) && Array.isArray(t.pending_on) && t.pending_on.length === 0 && Array.isArray(t.items) && Object.keys(t.auto ?? {}).length === 6 && typeof t.counts?.fix === 'number' && typeof t.trusted_gen === 'string' && t.action === 'none',
+      `gate=${t?.gate} action=${t?.action} items=${(t?.items ?? []).map((i) => i.cause).join(',')}`,
+    );
+    const st = await api('GET', '/api/review/stats');
+    check('(V-8) GET /api/review/stats 200・自動公開は既定で切', st.status === 200 && st.json?.auto_publish === false && typeof st.json?.streak === 'number', `status=${st.status}`);
+  }
   {
     const fakeMsgs = (await calls('')).length; // 呼び出し記録が読めること
     const all = (await api('GET', '/__fake/calls')).json?.calls ?? [];
@@ -225,7 +269,9 @@ async function main() {
     );
   }
   await reviewScreenSmoke(aD);
-  let r = await api('POST', `/api/review/${aVid}/decision`, { decision: 'approve', checklist: ALL_OK, note: 'smoke', verification_id: aD?.verification_id });
+  let r = await api('POST', `/api/review/${aVid}/decision`, approveBody(aD, { reader_gen: 'stale-gen' }));
+  check('(V-7 e) 読み手係の世代が違う承認 → 409 stale_reader', r.status === 409 && r.json?.error === 'stale_reader', `status=${r.status} err=${r.json?.error}`);
+  r = await api('POST', `/api/review/${aVid}/decision`, approveBody(aD, { note: 'smoke' }));
   check('(c) 6 項目を埋めて承認 → 200', r.status === 200, `status=${r.status} err=${r.json?.error} msg=${r.json?.message ?? ''}`);
   let lib = await api('GET', '/api/library/available');
   check('(c) /api/library/available に出る + no-store', lib.status === 200 && lib.json?.materials?.some((m) => m.material_id === aMid && m.version_id === aVid) && /no-store/.test(lib.headers.get('cache-control') ?? ''), `status=${lib.status}`);
@@ -287,31 +333,33 @@ async function main() {
   const aMat2 = (await api('GET', `/api/materials/${aMid}`)).json;
   const v2 = aMat2?.versions?.find((v) => v.version === 2);
   check('(c) 改善 job の版 v2 が review、配信中の v1 は配信のまま', v2?.status === 'review' && aMat2?.material?.publish_status === 'available' && aMat2?.material?.current_version_id === aVid, `v2=${v2?.status} pub=${aMat2?.material?.publish_status}`);
-  let v2D = await cronUntil(v2?.id, (d) => d.version?.verification_status === 'done');
+  let v2D = await cronUntil(v2?.id, settled);
   const oldVid = v2D?.verification_id;
-  check('(n) v2 の検証 attempt 1 done', v2D?.version?.verification_status === 'done' && v2D?.verification?.attempt === 1, `vs=${v2D?.version?.verification_status} att=${v2D?.verification?.attempt}`);
+  // 古い入力の検証（evidence_v なし）で動かせるものがある版は、機械が 1 回だけ再検証する（契約 V-6 f）ので attempt は 1 か 2
+  const prevHist = v2D?.verification_history ?? [];
+  check('(n) v2 の検証 done', v2D?.version?.verification_status === 'done' && v2D?.verification?.attempt >= 1 && prevHist.length === v2D?.verification?.attempt, `vs=${v2D?.version?.verification_status} att=${v2D?.verification?.attempt}`);
 
   // ---- (n) reverify ----
   r = await api('POST', `/api/review/${v2?.id}/reverify`);
   check('(n) reverify → 200 pending', r.status === 200 && r.json?.verification_status === 'pending', `status=${r.status} err=${r.json?.error}`);
-  v2D = await cronUntil(v2?.id, (d) => d.version?.verification_status === 'done');
+  v2D = await cronUntil(v2?.id, settled);
   {
     const hist = v2D?.verification_history ?? [];
+    const n = prevHist.length;
     check(
-      '(n) 2 回目の検証 done・履歴 2 行（attempt 1, 2）・verification_id が新しい',
+      '(n) もう 1 回の検証 done・履歴が 1 行増える・verification_id が新しい',
       v2D?.version?.verification_status === 'done' &&
-        hist.length === 2 &&
-        hist[0].attempt === 1 &&
-        hist[1].attempt === 2 &&
-        hist[0].id === oldVid &&
-        hist[1].id === v2D?.verification_id &&
+        hist.length === n + 1 &&
+        hist.every((h, i) => h.attempt === i + 1) &&
+        hist[n - 1]?.id === oldVid &&
+        hist[n]?.id === v2D?.verification_id &&
         v2D.verification_id !== oldVid,
       `vs=${v2D?.version?.verification_status} hist=${JSON.stringify(hist.map((h) => h.attempt))}`,
     );
   }
-  r = await api('POST', `/api/review/${v2?.id}/decision`, { decision: 'approve', checklist: ALL_OK, note: '', verification_id: oldVid });
+  r = await api('POST', `/api/review/${v2?.id}/decision`, approveBody(v2D, { verification_id: oldVid }));
   check('(n) 古い verification_id の approve → 409', r.status === 409, `status=${r.status} err=${r.json?.error}`);
-  r = await api('POST', `/api/review/${v2?.id}/decision`, { decision: 'approve', checklist: ALL_OK, note: '', verification_id: v2D?.verification_id });
+  r = await api('POST', `/api/review/${v2?.id}/decision`, approveBody(v2D));
   check('(c) v2 を承認 → 200', r.status === 200, `status=${r.status} err=${r.json?.error}`);
   lib = await api('GET', '/api/library/available');
   check('(c) 配信は v2 に切り替わる', lib.json?.materials?.find((m) => m.material_id === aMid)?.version_id === v2?.id, '');
@@ -333,14 +381,33 @@ async function main() {
   check('(c) rollback（v1）→ 200 で配信に戻る', r.status === 200 && lib.json?.materials?.find((m) => m.material_id === aMid)?.version_id === aVid, `status=${r.status} err=${r.json?.error}`);
 
   // ---- (i-2) done-contradicted ----
+  // 契約 V-6・V-7: contradicted は機械が直させる所（fix・blocking）。回数（AUTO_RETURN_MAX 既定 2）が残っているので、cron が人に出す前に自動で差し戻す
   const ic = await makeVersion('done-contradicted', 'i');
-  const icD = await cronUntil(ic.versionId, (d) => d.version?.verification_status === 'done');
-  r = await api('POST', `/api/review/${ic.versionId}/decision`, { decision: 'approve', checklist: ALL_OK, note: '', verification_id: icD?.verification_id });
-  check('(i) contradicted を含む版の approve → 400 has_contradicted_claims', r.status === 400 && r.json?.error === 'has_contradicted_claims', `status=${r.status} err=${r.json?.error} vs=${icD?.version?.verification_status}`);
-  // 差し戻し → rework job が queued/running で作られる
-  r = await api('POST', `/api/review/${ic.versionId}/decision`, { decision: 'return', checklist: ALL_OK, note: 'c2 の根拠を見直してください', brief_append: '' });
-  const icMat = (await api('GET', `/api/materials/${ic.materialId}`)).json;
-  check('(i) 差し戻し → 版 rejected + rework job + review_decisions(return)', r.status === 200 && icMat?.versions?.[0]?.status === 'rejected' && icMat?.jobs?.some((x) => x.kind === 'rework') && icMat?.review_decisions?.some((d) => d.decision === 'return'), `status=${r.status} err=${r.json?.error}`);
+  const icD = await cronUntil(ic.versionId, (d) => d.version?.status !== 'review');
+  {
+    const icMat = (await api('GET', `/api/materials/${ic.materialId}`)).json;
+    const auto = icMat?.review_decisions?.find((d) => d.decision === 'return' && d.reviewer_email === 'system:auto-triage');
+    check(
+      '(i) contradicted を含む版は cron が自動で差し戻す（版 rejected・rework job・review_decisions(return, system:auto-triage, machine_gate attention)）',
+      icD?.version?.status === 'rejected' && icMat?.jobs?.some((x) => x.kind === 'rework') && !!auto && auto.machine_gate === 'attention' && String(auto.note ?? '').startsWith('自動の差し戻し（1 回目。'),
+      `status=${icD?.version?.status} auto=${!!auto} gate=${auto?.machine_gate}`,
+    );
+    r = await api('POST', `/api/review/${ic.versionId}/decision`, approveBody(icD));
+    check('(i) 自動で差し戻した版の approve → 409 not_in_review', r.status === 409 && r.json?.error === 'not_in_review', `status=${r.status} err=${r.json?.error}`);
+  }
+  // 人の差し戻し → rework job が queued/running で作られる（検証の前でも差し戻せる）
+  {
+    await setScenario('questions-empty-then-done');
+    const ih = await makeVersion('questions-empty-then-done', 'ih');
+    r = await api('POST', `/api/review/${ih.versionId}/decision`, { decision: 'return', checklist: ALL_OK, note: 'c2 の根拠を見直してください', brief_append: '' });
+    const ihMat = (await api('GET', `/api/materials/${ih.materialId}`)).json;
+    const ret = ihMat?.review_decisions?.find((d) => d.decision === 'return');
+    check(
+      '(i) 差し戻し → 版 rejected + rework job + review_decisions(return。machine_gate pending)',
+      r.status === 200 && ihMat?.versions?.[0]?.status === 'rejected' && ihMat?.jobs?.some((x) => x.kind === 'rework') && ret?.reviewer_email !== 'system:auto-triage' && ret?.machine_gate === 'pending',
+      `status=${r.status} err=${r.json?.error} gate=${ret?.machine_gate}`,
+    );
+  }
 
   // ---- 検証係の pause_turn 継続（container を引き継ぐ）----
   {
@@ -1000,8 +1067,8 @@ async function imageCases(opened) {
     // (i2) 承認前は配信しない
     const pre = await fetch(`${BASE}/api/library/files/${aVid}/parts/p1/p1-gen-1.png`);
     await pre.arrayBuffer();
-    const d = await cronUntil(aVid, (x) => x.version?.verification_status === 'done');
-    const ap = await api('POST', `/api/review/${aVid}/decision`, { decision: 'approve', checklist: ALL_OK, note: 'smoke image', verification_id: d?.verification_id });
+    const d = await cronUntil(aVid, settled);
+    const ap = await api('POST', `/api/review/${aVid}/decision`, approveBody(d, { note: 'smoke image' }));
     const lib = await fetch(`${BASE}/api/library/files/${aVid}/parts/p1/p1-gen-1.png`);
     const libBuf = await lib.arrayBuffer();
     check(
