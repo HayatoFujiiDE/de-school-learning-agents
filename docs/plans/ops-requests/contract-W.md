@@ -55,3 +55,9 @@
 - 理由: §S-8 の取り込みの不具合（7bfa689 で修正）で failed になった 2 件を改善係が職人の失敗と読み、工夫が 2 つ自動で入った。本番の記録を直接書き換える操作は許可の判定で止まるため、オーナーの承認（2026-11-07「A」）で依頼箱に足した。§S v2 D 2（自動でやめない）は改善係の LLM の判断の話で、本節は司令塔が原因を確かめた上で止める経路。
 - 費用: 外部費用なし（D1 の 1 行の更新だけ）。1 tick 1 件・60 分で失効。
 
+## §W-5 作り直し（material_redo。2026-11-07 追加。正本は `docs/plans/minecraft-facts/contract-MC.md` §MC-4）
+
+- kind `material_redo`、payload `{ material_id, brief_md }`（uuid の形・brief は 1〜32768 文字。余計な項目は bad_payload）。migration 0014 で CHECK を広げた。
+- review の版を route の reject と同じ `buildReject`（reviewer_email `system:ops-redo`・machine_gate は `computeTriage` の gate）で却下し、idle なら `queueJobForMaterial` で draft を 1 件 queue。queued / making は却下せず `{ refused: 'material_busy' }` で done。失敗の表は §MC-4 3。
+- 道具: `scripts/ops-request.sh redo <material_id> <注文票.md> [--wait]`（注文票の中身は画面・ログ・result に出さない）。費用は draft 1 件分（job の予算と日次の上限は通常の注文と同じ）。
+
