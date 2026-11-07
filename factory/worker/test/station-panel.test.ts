@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 interface FloorUi {
   STATION_PANEL: Record<string, unknown>;
-  stationPanelHtml(id: string, floor: unknown, status: unknown): string;
+  stationPanelHtml(id: string, floor: unknown, status: unknown, extra?: unknown): string;
   floorQueueHtml(queue: unknown, opts: unknown): string;
   floorBandHtml(att: unknown, errAt: string | null, more?: unknown): string;
 }
@@ -43,6 +43,8 @@ const status = (o: Record<string, unknown> = {}) => ({
   topics: { enabled: true, needs_review: { heavy: 1, source: 2, other: 0 }, month_cents: 312, month_cap_cents: 3000, today: { empty: 0, stopped: 1 }, tomorrow: { empty: 2, stopped: 0 } },
   ...o,
 });
+/** GET /api/review/stats の応答（src/routes/review.ts の reviewStats の形） */
+const STATS = (o: Record<string, unknown> = {}) => ({ auto_publish: false, clean: { approve: 12, return: 1, reject: 0 }, streak: 9, auto_published: 0, ...o });
 /** パネルの段（data-sp）の並び */
 const sections = (html: string) => [...html.matchAll(/data-sp="(\w+)"/g)].map((m) => m[1]);
 
@@ -76,13 +78,14 @@ describe('stationPanelHtml: 12 の係すべて', () => {
     expect(sections(F.floorQueueHtml([], { filter: 'maker', floor: floor(), panel: false }))).toEqual(['items']);
   });
 
-  it('ボタンは入口に #scout-btn が 1 個・会議に #meeting-btn が 1 個だけ。ほかの係にボタンは ✕ だけ', () => {
+  it('ボタンは入口に #scout-btn が 1 個・会議に #meeting-btn が 1 個・確認する人に #sp-autopub が 1 個だけ。ほかの係にボタンは ✕ だけ', () => {
     for (const id of ALL) {
-      const h = F.stationPanelHtml(id, floor(), status());
+      const h = F.stationPanelHtml(id, floor(), status(), { reviewStats: STATS() });
       const buttons = n(h, /<button/g);
       expect([id, n(h, /id="scout-btn"/g)]).toEqual([id, id === 'intake' ? 1 : 0]);
       expect([id, n(h, /id="meeting-btn"/g)]).toEqual([id, id === 'meeting' ? 1 : 0]);
-      expect([id, buttons]).toEqual([id, id === 'intake' || id === 'meeting' ? 2 : 1]);
+      expect([id, n(h, /id="sp-autopub"/g)]).toEqual([id, id === 'reviewer' ? 1 : 0]);
+      expect([id, buttons]).toEqual([id, id === 'intake' || id === 'meeting' || id === 'reviewer' ? 2 : 1]);
     }
     const it = F.stationPanelHtml('intake', floor(), status());
     expect(it).toContain('id="scout-btn">収集を今すぐ</button>');
@@ -108,8 +111,8 @@ describe('stationPanelHtml: 12 の係すべて', () => {
     expect(F.stationPanelHtml('maker', floor(), null)).toContain('読み込み中…');
     // floor も未着なら floor の事実も読み込み中
     expect(F.stationPanelHtml('library', null, null)).toContain('読み込み中…');
-    // 全部届けば読み込み中は無い
-    for (const id of ALL) expect([id, F.stationPanelHtml(id, floor(), status()).includes('読み込み中')]).toEqual([id, false]);
+    // 全部届けば読み込み中は無い（確認する人は /api/review/stats も）
+    for (const id of ALL) expect([id, F.stationPanelHtml(id, floor(), status(), { reviewStats: STATS() }).includes('読み込み中')]).toEqual([id, false]);
   });
 
   it('係ごとの事実と入口', () => {
@@ -128,7 +131,6 @@ describe('stationPanelHtml: 12 の係すべて', () => {
     expect(h('verifier')).toContain('href="#/videos"');
     expect(h('verifier')).toContain('有効');
     expect(h('reviewer')).toContain('class="btn primary small sp-link" href="#/review"');
-    expect(h('reviewer')).not.toContain('自動公開'); // /api/floor・/api/status から取れないので出さない
     for (const href of ['#/materials', '#/materials?publish=available', '#/models3d', '#/images']) expect(h('library')).toContain(`href="${href}"`);
     expect(h('library')).toContain('12 本');
     expect(h('retro')).toContain('data-retro-floor="1"');
@@ -157,6 +159,49 @@ describe('stationPanelHtml: 12 の係すべて', () => {
       const x = F.stationPanelHtml(id, floor({ retro: { last_retro_at: EVIL } }), bad);
       expect([id, x.includes('<img')]).toEqual([id, false]);
     }
+  });
+});
+
+describe('確認する人のパネルの自動公開（§N-8）', () => {
+  const rv = (st: unknown, busy = false) => F.stationPanelHtml('reviewer', floor(), status(), { reviewStats: st, reviewBusy: busy });
+  it('④操作に #sp-autopub（#/review の #rl-autopub と同じスイッチの形・同じ文言）。OFF / ON / 切り替え中', () => {
+    const off = rv(STATS());
+    expect(off).toContain('<div class="sp-actions" data-sp="actions"><button type="button" class="rl-switch" id="sp-autopub" aria-pressed="false"><span class="rl-knob" aria-hidden="true"></span><span class="rl-switch-t">全部通った教材は自動で公開する</span><span class="rl-switch-s">OFF</span></button></div>');
+    expect(rv(STATS({ auto_publish: true }))).toContain('class="rl-switch on" id="sp-autopub" aria-pressed="true">');
+    expect(rv(STATS({ auto_publish: true }))).toContain('<span class="rl-switch-s">ON</span>');
+    const busy = rv(STATS({ auto_publish: true }), true);
+    expect(busy).toContain('id="sp-autopub" aria-pressed="true" disabled>');
+    expect(busy).toContain('切り替え中…');
+    // スイッチの HTML は #/review の rlStatsHtml と同じ関数で作る（id だけ違う）
+    const R = win.FactoryAdminReview as { rlStatsHtml(s: unknown, busy?: boolean): string };
+    const sw = /<button type="button" class="rl-switch[^]*?<\/button>/.exec(R.rlStatsHtml(STATS()))![0];
+    expect(off).toContain(sw.replace('id="rl-autopub"', 'id="sp-autopub"'));
+  });
+  it('事実に「全部通った教材への判断（公開・直す・却下・続けて公開）」。stats の値は数だけ（外の文字は出さない）', () => {
+    const h = rv(STATS());
+    expect(h).toContain('<span class="sp-k">全部通った教材への判断</span><b class="sp-v">公開 12・直す 1・却下 0（続けて公開 9）</b>');
+    expect(sections(h)).toEqual(['head', 'role', 'facts', 'actions', 'links']);
+    const evil = rv({ auto_publish: false, clean: { approve: EVIL, return: 1, reject: 0 }, streak: EVIL });
+    expect(evil).not.toContain('<img');
+    expect(evil).toContain('公開 0・直す 1・却下 0（続けて公開 0）');
+  });
+  it('stats が未着（null）なら スイッチと判断の数は「読み込み中…」（押せない）・読めなかった時は理由（esc）と「もう一度読み込む」', () => {
+    const loading = rv(null);
+    expect(loading).toMatch(/<button type="button" class="rl-switch" id="sp-autopub" disabled data-sp-loading="1">/);
+    expect(n(loading, /data-sp-loading="1"/g)).toBe(2); // 判断の数・スイッチ
+    expect(F.stationPanelHtml('reviewer', floor(), status())).toContain('id="sp-autopub" disabled data-sp-loading="1"'); // extra なし = 未着
+    const err = rv(EVIL);
+    expect(err).not.toContain('<img');
+    expect(err).toContain('自動公開の状態を読めませんでした: &lt;img');
+    expect(n(err, /id="sp-autopub-retry"/g)).toBe(1);
+    expect(n(err, /id="sp-autopub"/g)).toBe(0);
+    expect(err).not.toContain('全部通った教材への判断');
+  });
+  it('確認ダイアログと API は #/review と 1 か所で共有（switchAutoPublish）。文言の複製が無い', () => {
+    const code = readFileSync(new URL('../public/admin/admin.js', import.meta.url), 'utf8');
+    expect(n(code, /'機械の確認が全部通った教材を、人を通さずに公開します。/g)).toBe(1);
+    expect(n(code, /'\/api\/review\/auto-publish'/g)).toBe(1);
+    expect(n(code, /switchAutoPublish\(/g)).toBe(3); // 定義 1・#/review 1・パネル 1
   });
 });
 

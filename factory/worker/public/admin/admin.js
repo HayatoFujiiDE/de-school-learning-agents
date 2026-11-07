@@ -257,17 +257,20 @@
   }
 
   // ---- 状況（上部帯）----
-  // 仕事ごとの枠 4 つを横に並べる（1100px 以上で 1 段・狭い時は 2×2）: 制作 / お金 / 入口（収集・会議）/ 画像・動画。
-  // 各枠 = 見出し → 中身 → その仕事のボタン。その仕事の注意は枠の中の下に出し、注意がある枠は左の線を赤 / 黄にする。同じ注意を 2 つの枠に出さない。
+  // 仕事ごとの枠 3 つを横に並べる（1100px 以上で 1 段・狭い時は 1 列。§N-8）: 制作 / お金 / 注意。
+  // 入口（収集・会議）と画像・動画の中身は工場の係のパネル（§N-7）にあるので帯には置かない。
+  // 注意は全部「注意」の枠に 1 列（赤が先・黄が後）。各行の末尾に、その原因の係のパネルを開くリンク（#/?st=<係>）。行き先の無い注意（停止中・定期処理・職人 未設定・今日の上限）はリンクなし。
   // 帯の中の金額は全部 $（fmtCents）。上限は整数ドルなら小数を落とす。¢ は #/images・#/videos の画面にだけ残す。
   /** 定期処理（cron）の最終からの経過の閾値（分）。ここ 1 か所だけで決める */
   var CRON_LATE_MIN = 20, CRON_STALE_MIN = 60;
   /** 今日の費用のメーターの段階（上限に対する割合。判定は >=） */
   var COST_NEAR = 0.8;
-  /** 枠の順と見出し（key は注意の行き先の名前） */
-  var STATUS_CARDS = [['run', '制作'], ['money', 'お金'], ['intake', '入口（収集・会議）'], ['media', '画像・動画']];
+  /** 枠の順と見出し */
+  var STATUS_CARDS = [['run', '制作'], ['money', 'お金'], ['alerts', '注意']];
+  /** 注意の行き先（係の id → リンクの文）。ここに無い係にはリンクを付けない */
+  var ALERT_GO_TEXT = { intake: '入口の係を開く', meeting: '会議の係を開く', maker: '職人の係を開く', verifier: '検証係を開く', topics: 'お題係を開く' };
   var statusTimer = null; // 相対時間を 1 分ごとに直す単一のタイマー（loadStatus のたびに clear → set）
-  var statusLast = null; // { s, alerts: { <枠>: html } }: タイマーが描き直しに使う最後の /api/status の応答と、枠ごとに描いた注意
+  var statusLast = null; // { s, alerts: html }: タイマーが描き直しに使う最後の /api/status の応答と、描いた注意の中身
   /** 上限の表示: 整数ドルなら小数を落とす（$200）。0 / 未定義は — */
   function fmtCap(c) {
     var v = Number(c);
@@ -300,56 +303,74 @@
     return '<span class="meter" role="meter" aria-label="今日の費用（上限に対する割合）" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + esc(Math.min(100, Math.round(pct))) + '" data-meter="' + lv + '">' +
       '<span class="meter-fill m-' + lv + ' w' + step + '"></span></span>';
   }
-  /** 注意の 1 件。card = 出す枠（STATUS_CARDS の key）。1 件は 1 つの枠にだけ出す */
-  function alertItem(card, level, html) { return { card: card, level: level, html: html }; }
-  function alertLi(a) { return '<li class="sa-item sa-' + a.level + '">' + a.html + '</li>'; }
+  /** 注意の 1 件。st = 行き先の係（ALERT_GO_TEXT の key。行き先なしは null）、kind = 種類（画像の注意の互換の描き方に使う） */
+  function alertItem(st, level, html, kind) { return { st: st || null, level: level, html: html, kind: kind || '' }; }
+  /** 行き先のリンク（係のパネルを開く #/?st=<係>）。行き先なしは空文字 */
+  function alertGoHtml(st) {
+    if (!st || !Object.prototype.hasOwnProperty.call(ALERT_GO_TEXT, st)) return '';
+    return ' <a class="sa-go" href="#/?st=' + st + '" data-sa-go="' + st + '">' + esc(ALERT_GO_TEXT[st]) + ' ›</a>';
+  }
+  function alertLi(a) { return '<li class="sa-item sa-' + a.level + '">' + a.html + alertGoHtml(a.st) + '</li>'; }
   function goLink(href, text) { return ' <a class="sa-go" href="' + href + '">' + esc(text) + ' ›</a>'; }
-  /** 注意の全件（純関数）。赤を先に、同じ色の中は並べた順。各件は card の枠にだけ出る */
+  /** お題係（status.topics）から出せる注意: 最後の作成が失敗（赤）/ 24 時間以内に失敗あり（黄）・今月の上限 80% 以上（黄） */
+  function topicsAlerts(tp) {
+    if (!tp || typeof tp !== 'object') return [];
+    var out = [], lr = tp.last_run && typeof tp.last_run === 'object' ? tp.last_run : null, f24 = Number(tp.failed_24h || 0);
+    if (lr && lr.status === 'failed') out.push(alertItem('topics', 'red', 'お題の作成が失敗しました（' + esc(fmtTime(lr.updated_at || lr.created_at)) + '）'));
+    else if (f24 > 0) out.push(alertItem('topics', 'yellow', 'お題の作成が 24 時間以内に ' + esc(f24) + ' 回失敗しています'));
+    var lv = capLevel(tp.month_cents, tp.month_cap_cents);
+    if (lv === 'near' || lv === 'over') out.push(alertItem('topics', 'yellow', '今月のお題の費用が上限' + (lv === 'over' ? 'に達しました' : 'に近づいています') + '（' + fmtUsed(tp.month_cents) + ' / ' + fmtCap(tp.month_cap_cents) + '）'));
+    return out;
+  }
+  /** 注意の全件（純関数）。赤を先に、同じ色の中は並べた順 */
   function statusAlerts(s, nowMs) {
     var out = [];
-    // 制作: 停止中・定期処理の遅れ / 停止・職人 未設定（今日の上限で新しい制作が始まらないことはお金の枠に出す）
-    if (s.paused) out.push(alertItem('run', 'red', '停止中です。新しい制作と検証は始まりません' + (s.paused_note ? '（メモ: ' + esc(s.paused_note) + '）' : '')));
+    // 制作（行き先なし）: 停止中・定期処理の遅れ / 停止・職人 未設定・今日の上限 80% / 100%
+    if (s.paused) out.push(alertItem(null, 'red', '停止中です。新しい制作と検証は始まりません' + (s.paused_note ? '（メモ: ' + esc(s.paused_note) + '）' : '')));
     var ca = cronAge(s.last_cron_at, nowMs), last = s.last_cron_at ? '（最終 ' + esc(fmtTime(s.last_cron_at)) + '）' : '（記録がありません）';
-    if (ca.level === 'stale') out.push(alertItem('run', 'red', '定期処理が 1 時間以上動いていません' + last));
-    else if (ca.level === 'late') out.push(alertItem('run', 'yellow', '定期処理が遅れています' + last));
-    if (!s.agent_configured) out.push(alertItem('run', 'red', '職人（agent）が設定されていません'));
-    // お金: 今日の上限 80% / 100%
+    if (ca.level === 'stale') out.push(alertItem(null, 'red', '定期処理が 1 時間以上動いていません' + last));
+    else if (ca.level === 'late') out.push(alertItem(null, 'yellow', '定期処理が遅れています' + last));
+    if (!s.agent_configured) out.push(alertItem(null, 'red', '職人（agent）が設定されていません'));
     var dl = capLevel(s.today_cents, s.daily_cap_cents), money = '（' + fmtUsed(s.today_cents) + ' / ' + fmtCap(s.daily_cap_cents) + '）';
-    if (dl === 'over') out.push(alertItem('money', 'red', '今日の費用が上限に達しました' + money + '。新しい制作は日付が変わるまで始まりません'));
-    else if (dl === 'near') out.push(alertItem('money', 'yellow', '今日の費用が上限に近づいています' + money));
-    // 入口: 収集・会議の失敗 / 失効（→ 提案箱）・月の上限 80% 以上
+    if (dl === 'over') out.push(alertItem(null, 'red', '今日の費用が上限に達しました' + money + '。新しい制作は日付が変わるまで始まりません'));
+    else if (dl === 'near') out.push(alertItem(null, 'yellow', '今日の費用が上限に近づいています' + money));
+    // 収集 → 入口の係・会議 → 会議の係: 失敗 / 失効・月の上限 80% 以上
     var sc = s.scout || {}, mt = s.meeting || {};
-    if (sc.last_status === 'failed') out.push(alertItem('intake', 'red', '収集が' + esc(RUN_LABEL.failed) + 'しました（' + esc(fmtTime(sc.last_run_at)) + '）' + goLink('#/proposals', '提案箱を見る')));
-    if (mt.last_status === 'failed' || mt.last_status === 'expired') out.push(alertItem('intake', 'red', '会議が' + esc(RUN_LABEL[mt.last_status]) + 'しました（' + esc(fmtTime(mt.last_at)) + '）' + goLink('#/proposals', '提案箱を見る')));
-    [['収集', sc], ['会議', mt]].forEach(function (p) {
+    if (sc.last_status === 'failed') out.push(alertItem('intake', 'red', '収集が' + esc(RUN_LABEL.failed) + 'しました（' + esc(fmtTime(sc.last_run_at)) + '）'));
+    if (mt.last_status === 'failed' || mt.last_status === 'expired') out.push(alertItem('meeting', 'red', '会議が' + esc(RUN_LABEL[mt.last_status]) + 'しました（' + esc(fmtTime(mt.last_at)) + '）'));
+    [['収集', sc, 'intake'], ['会議', mt, 'meeting']].forEach(function (p) {
       var lv = capLevel(p[1].month_cents, p[1].month_cap_cents);
-      if (lv === 'near' || lv === 'over') out.push(alertItem('intake', 'yellow', '今月の' + p[0] + 'の費用が上限' + (lv === 'over' ? 'に達しました' : 'に近づいています') + '（' + fmtUsed(p[1].month_cents) + ' / ' + fmtCap(p[1].month_cap_cents) + '）'));
+      if (lv === 'near' || lv === 'over') out.push(alertItem(p[2], 'yellow', '今月の' + p[0] + 'の費用が上限' + (lv === 'over' ? 'に達しました' : 'に近づいています') + '（' + fmtUsed(p[1].month_cents) + ' / ' + fmtCap(p[1].month_cap_cents) + '）'));
     });
-    // 画像・動画: 画像の停止・予備の鍵・画像の月の上限 80% 以上
+    // 画像 → 職人の係: 画像の停止・予備の鍵・画像の月の上限 80% 以上（動画の注意は今は無い。出す時は verifier）
     out = out.concat(imagesAlerts(s.images, nowMs));
+    // お題 → お題係
+    out = out.concat(topicsAlerts(s.topics));
     return out.filter(function (a) { return a.level === 'red'; }).concat(out.filter(function (a) { return a.level !== 'red'; }));
   }
-  /** 注意の全件を枠ごとに分ける: { run: [...], money: [...], intake: [...], media: [...] } */
-  function alertsByCard(s, nowMs) {
-    var all = statusAlerts(s, nowMs), by = {};
-    STATUS_CARDS.forEach(function (c) { by[c[0]] = all.filter(function (a) { return a.card === c[0]; }); });
-    return by;
+  /** 注意の枠の中身: 0 件は「注意はありません」の 1 行（枠は残して 3 枠の形を保つ） */
+  function alertsBodyHtml(list) {
+    return list.length ? '<ul class="sa-list">' + list.map(alertLi).join('') + '</ul>' : '<p class="sa-none muted">注意はありません</p>';
   }
-  /** 枠の注意の中身（0 件なら空文字） */
-  function cardAlertsHtml(list) { return list.length ? '<ul class="sa-list">' + list.map(alertLi).join('') + '</ul>' : ''; }
-  /** 枠のクラス: 赤が 1 件でもあれば sb-red、黄だけなら sb-yellow */
-  function cardClass(list) {
+  /** 注意の枠のクラス: 赤が 1 件でもあれば sb-red、黄だけなら sb-yellow */
+  function alertsCardClass(list) {
     var red = list.some(function (a) { return a.level === 'red'; });
-    return 'sb-card' + (red ? ' sb-red' : list.length ? ' sb-yellow' : '');
+    return 'sb-card sb-note' + (red ? ' sb-red' : list.length ? ' sb-yellow' : '');
   }
-  /** 枠 1 つ: 見出し（右端にその仕事のボタンを置ける）→ 中身 → 注意（aria-live はこの容器） */
-  function statusCardHtml(key, title, headRight, body, list) {
-    return '<div class="' + cardClass(list) + '" id="status-card-' + key + '" data-card="' + key + '">' +
+  function alertsCountText(list) { return list.length ? list.length + ' 件' : ''; }
+  /** 枠 1 つ: 見出し（右端にその仕事のボタンを置ける）→ 中身 */
+  function statusCardHtml(key, title, headRight, body) {
+    return '<div class="sb-card" id="status-card-' + key + '" data-card="' + key + '">' +
       '<div class="sb-head"><span class="sb-title">' + esc(title) + '</span>' + headRight + '</div>' +
-      '<div class="sb-body">' + body + '</div>' +
-      '<div class="sb-alerts" id="status-alerts-' + key + '" aria-live="polite">' + cardAlertsHtml(list) + '</div></div>';
+      '<div class="sb-body">' + body + '</div></div>';
   }
-  /** 制作の枠の中身: 稼働・制作中 / 順番待ち・定期処理の相対時間 */
+  /** 注意の枠: 見出し（件数）→ 注意の 1 列（aria-live はこの容器だけ） */
+  function alertsCardHtml(list) {
+    return '<div class="' + alertsCardClass(list) + '" id="status-card-alerts" data-card="alerts">' +
+      '<div class="sb-head"><span class="sb-title">注意</span><span class="sb-count" id="status-alerts-n">' + alertsCountText(list) + '</span></div>' +
+      '<div class="sb-alerts" id="status-alerts" aria-live="polite">' + alertsBodyHtml(list) + '</div></div>';
+  }
+  /** 制作の枠の中身: 稼働・制作中 / 順番待ち・定期処理の相対時間（注意は注意の枠へ） */
   function runBodyHtml(s, nowMs) {
     var ca = cronAge(s.last_cron_at, nowMs);
     return '<div class="sb-line"><span class="sb-state"><span class="dot ' + (s.paused ? 'red' : 'green') + '" aria-hidden="true"></span><b>' + (s.paused ? '停止中' : '動いています') + '</b></span></div>' +
@@ -357,30 +378,18 @@
         '<span class="item">順番待ち <b>' + esc(s.queued_jobs) + '</b></span></div>' +
       '<div class="sb-line"><span class="item" title="定期処理の最終 ' + esc(fmtTime(s.last_cron_at)) + '">定期処理 <span id="cron-rel" class="cron-rel ' + ca.level + '" data-cron-rel="1">' + esc(ca.text) + '</span></span></div>';
   }
-  /** お金の枠の中身: 今日のメーター・今月の額（上限は各枠にあるので額だけ。合計は出さない） */
+  /** お金の枠の画像の額（今月・#/images へのリンク・smoke (i12) の印 data-img-band）。images が無い応答（古い Worker）では出さない */
+  function moneyImageHtml(im) {
+    if (!im || typeof im !== 'object') return '';
+    return '<a class="item" href="#/images" data-img-band="1" title="予約額で数えた記帳。OpenAI の実際の請求とは違うことがあります">画像 ' + fmtUsed(im.month_cents) + '（概算）</a>';
+  }
+  /** お金の枠の中身: 今日のメーター・今月の額（上限は各係のパネルにあるので額だけ。合計は出さない） */
   function moneyBodyHtml(s) {
-    var sc = s.scout || {}, mt = s.meeting || {}, im = s.images && typeof s.images === 'object' ? s.images : null;
+    var sc = s.scout || {}, mt = s.meeting || {};
     return '<div class="sb-line sb-money"><span class="sb-label">今日</span><span class="sb-vals">' + costMeterHtml(s.today_cents, s.daily_cap_cents) +
         '<span class="sb-num"><b>' + fmtUsed(s.today_cents) + '</b> / ' + fmtCap(s.daily_cap_cents) + '</span></span></div>' +
       '<div class="sb-line sb-money"><span class="sb-label">今月</span><span class="sb-vals"><span class="item">収集 ' + fmtUsed(sc.month_cents || 0) + '</span>' +
-        '<span class="item">会議 ' + fmtUsed(mt.month_cents || 0) + '</span>' +
-        (im ? '<span class="item">画像 ' + fmtUsed(im.month_cents) + '</span>' : '') + '</span></div>';
-  }
-  /** 入口の 1 行: 名前・最終の状態（未実行は muted 文字・失敗系は赤 pill）・今月 $x / $上限（§N-7: [今すぐ] は工場の係のパネルへ移した） */
-  function intakeRowHtml(name, o, at, bad) {
-    var label = o.last_status ? (RUN_LABEL[o.last_status] || o.last_status) : '';
-    var title = at ? ' title="最終 ' + esc(fmtTime(at)) + '"' : '';
-    var st = !o.last_status ? '<span class="sb-st muted">未実行</span>'
-      : bad ? '<span class="sb-st"' + title + '>' + pill(label, 'red') + '</span>'
-      : '<span class="sb-st muted"' + title + '>' + esc(label) + '</span>';
-    return '<div class="sb-line sb-intake"><span class="sb-name">' + name + '</span>' + st +
-      '<span class="sb-num">' + fmtUsed(o.month_cents || 0) + ' / ' + fmtCap(o.month_cap_cents) + '</span></div>';
-  }
-  /** 入口の枠の中身: 収集の行・会議の行（表示だけ。収集・会議を今すぐのボタンは工場の入口 / 会議のパネル §N-7） */
-  function intakeBodyHtml(s) {
-    var sc = s.scout || {}, mt = s.meeting || {};
-    return intakeRowHtml('収集', sc, sc.last_run_at, sc.last_status === 'failed') +
-      intakeRowHtml('会議', mt, mt.last_at, mt.last_status === 'failed' || mt.last_status === 'expired');
+        '<span class="item">会議 ' + fmtUsed(mt.month_cents || 0) + '</span>' + moneyImageHtml(s.images) + '</span></div>';
   }
   /** 収集・会議の「今すぐ」ボタン（工場の入口 / 会議のパネル §N-7。文言・busy 文・disabled 条件・id は状況帯にあった時のまま）。s = /api/status（未着なら null） */
   function scoutBtnHtml(s) {
@@ -393,45 +402,29 @@
     var busy = !!(s.meeting || {}).pending_batch;
     return '<button type="button" class="btn small primary" id="meeting-btn"' + (busy || s.paused ? ' disabled' : '') + (s.paused ? ' title="停止中は実行できません"' : '') + '>' + (busy ? '結果待ち' : '会議を今すぐ') + '</button>';
   }
-  /** 画像・動画の枠の中身。images / videos が無い応答（古い Worker）ではその行を出さない */
-  function mediaBodyHtml(s) {
-    var img = imagesMonthHtml(s.images), vid = videosBandHtml(s.videos);
-    if (!img && !vid) return '<div class="sb-line muted">—</div>';
-    return (img ? '<div class="sb-line">' + img + '</div>' : '') + (vid ? '<div class="sb-line">' + vid + '</div>' : '');
-  }
-  /** #status の中身全部（純関数）。注意の容器（#status-alerts-<枠>）は 0 件でも置く */
+  /** #status の中身全部（純関数）。注意の枠は 0 件でも置く */
   function statusBandHtml(s, nowMs) {
     var now = typeof nowMs === 'number' ? nowMs : Date.now();
-    var by = alertsByCard(s, now);
     var pause = '<button type="button" class="btn small' + (s.paused ? ' primary' : '') + '" id="pause-btn">' + (s.paused ? '再開' : '止める') + '</button>';
     return '<div class="status-band">' +
-      statusCardHtml('run', '制作', pause, runBodyHtml(s, now), by.run) +
-      statusCardHtml('money', 'お金', '', moneyBodyHtml(s), by.money) +
-      statusCardHtml('intake', '入口（収集・会議）', '<a class="sb-go-floor" href="#/?st=intake">工場の入口を開く ›</a>', intakeBodyHtml(s), by.intake) +
-      statusCardHtml('media', '画像・動画', '', mediaBodyHtml(s), by.media) +
+      statusCardHtml('run', '制作', pause, runBodyHtml(s, now)) +
+      statusCardHtml('money', 'お金', '', moneyBodyHtml(s)) +
+      alertsCardHtml(statusAlerts(s, now)) +
       '</div>';
   }
-  /** 枠ごとに描いた注意の中身（タイマーが「変わったか」を比べる元） */
-  function alertsHtmlByCard(s, nowMs) {
-    var by = alertsByCard(s, nowMs), out = {};
-    STATUS_CARDS.forEach(function (c) { out[c[0]] = cardAlertsHtml(by[c[0]]); });
-    return out;
-  }
-  /** 1 分ごと: 相対時間の文字と色、各枠の注意と枠の色（中身が変わった枠だけ。読み上げを毎分起こさない）を直す */
+  /** 1 分ごと: 相対時間の文字と色、注意の中身と枠の色・件数（中身が変わった時だけ。読み上げを毎分起こさない）を直す */
   function tickStatus() {
     if (!statusLast) return;
     var now = Date.now(), s = statusLast.s;
     var rel = $('#cron-rel');
     if (rel) { var ca = cronAge(s.last_cron_at, now); rel.textContent = ca.text; rel.className = 'cron-rel ' + ca.level; }
-    var by = alertsByCard(s, now);
-    STATUS_CARDS.forEach(function (c) {
-      var k = c[0], h = cardAlertsHtml(by[k]);
-      if (h === statusLast.alerts[k]) return;
-      var box = $('#status-alerts-' + k), card = $('#status-card-' + k);
-      if (box) box.innerHTML = h;
-      if (card) card.className = cardClass(by[k]);
-      statusLast.alerts[k] = h;
-    });
+    var list = statusAlerts(s, now), h = alertsBodyHtml(list);
+    if (h === statusLast.alerts) return;
+    var box = $('#status-alerts'), card = $('#status-card-alerts'), cnt = $('#status-alerts-n');
+    if (box) box.innerHTML = h;
+    if (card) card.className = alertsCardClass(list);
+    if (cnt) cnt.textContent = alertsCountText(list);
+    statusLast.alerts = h;
   }
   function loadStatus() {
     var el = $('#status');
@@ -439,7 +432,7 @@
       var now = Date.now();
       el.innerHTML = statusBandHtml(s, now);
       clearInterval(statusTimer);
-      statusLast = { s: s, alerts: alertsHtmlByCard(s, now) };
+      statusLast = { s: s, alerts: alertsBodyHtml(statusAlerts(s, now)) };
       statusTimer = setInterval(tickStatus, 60000);
       onFloorStatus(); // 工場にいる時: お題係の札・あなたの番・係のパネル（§N-7）を status の値で描き直す
       var btn = $('#pause-btn');
@@ -461,7 +454,7 @@
     });
   }
 
-  // ---- 収集・会議（§K-7）。ボタンは工場の入口 / 会議のパネル（§N-7）。今月の額は状況帯の入口の枠 ----
+  // ---- 収集・会議（§K-7）。ボタンは工場の入口 / 会議のパネル（§N-7）。今月の額は状況帯のお金の枠と各パネル（§N-8） ----
   /** 工場にいる時はパネルを閉じないように工場と状況だけ取り直す（route() は工場を作り直して選択が外れる）。ほかの画面では今までどおり route() */
   function afterIntakeAction() {
     if (floor.active) { fetchFloor(); loadStatus(); } else route();
@@ -530,31 +523,40 @@
     // 未来の日時（端末の時計のずれ）は 7 日以内に数えない（Astra レビューの指摘）
     return isFinite(ts) && nowMs - ts >= 0 && nowMs - ts <= BACKUP_RECENT_MS;
   }
-  /** 状況帯の「画像・動画」の枠の画像の生成の行（§O-5 e）。images が無い応答（古い Worker）では何も出さない。#/images へのリンクはここの 1 本 */
+  /** 旧い状況帯（§O-5 e・§N-8 より前）の画像の生成の行。今の帯はお金の枠の moneyImageHtml。互換のため純関数だけ残す（imagesBandHtml が使う） */
   function imagesMonthHtml(im) {
     if (!im || typeof im !== 'object') return '';
     return '<a class="item" href="#/images" data-img-band="1" title="予約額で数えた記帳。OpenAI の実際の請求とは違うことがあります">画像の生成 ' +
       fmtUsed(im.month_cents) + ' / ' + fmtCap(im.month_cap_cents) + '（概算）</a>';
   }
-  /** 状況帯の「画像・動画」の枠の注意の件（純関数）。停止中は赤（行き先リンク付き）・予備の鍵を 7 日以内に使った は黄・月の上限 80% 以上は黄。
-   * #/images へのリンクは注意の中で 1 本まで（画像の生成の行と合わせて 2 本まで）: 停止中なら停止の行が持ち、予備の鍵の行はリンクにしない */
+  /** 画像の注意の件（純関数。行き先は職人の係 = st 'maker'）。停止中は赤・予備の鍵を 7 日以内に使った は黄・月の上限 80% 以上は黄。
+   * 印 data-img-halted / data-img-backup-band は行の中の span（smoke (i12) とテストが数える）。kind と mark は imagesAlertHtml（互換）の描き方に使う */
   function imagesAlerts(im, nowMs) {
     if (!im || typeof im !== 'object') return [];
     var now = typeof nowMs === 'number' ? nowMs : Date.now();
     var out = [];
-    if (im.halted) out.push(alertItem('media', 'red', '<span class="item" data-img-halted="1">画像の生成を止めています（' + esc(haltText(im.halted)) + '）</span>' + goLink('#/images', '画像の停止を見る')));
+    if (im.halted) out.push(alertItem('maker', 'red', '<span class="item" data-img-halted="1">画像の生成を止めています（' + esc(haltText(im.halted)) + '）</span>', 'halted'));
     if (backupUsedRecently(im.backup_last_used_at, now)) {
       var mark = pill('画像: 予備の鍵を使いました（' + fmtTime(im.backup_last_used_at) + '）', 'orange');
-      out.push(alertItem('media', 'yellow', im.halted
-        ? '<span class="item" data-img-backup-band="1">' + mark + '</span>'
-        : '<a class="item" href="#/images" data-img-backup-band="1">' + mark + ' <span class="sa-go">画像の生成を見る ›</span></a>'));
+      var b = alertItem('maker', 'yellow', '<span class="item" data-img-backup-band="1">' + mark + '</span>', 'backup');
+      b.mark = mark;
+      out.push(b);
     }
     var lv = capLevel(im.month_cents, im.month_cap_cents);
-    if (lv === 'near' || lv === 'over') out.push(alertItem('media', 'yellow', '今月の画像の記帳が上限' + (lv === 'over' ? 'に達しました' : 'に近づいています') + '（' + fmtUsed(im.month_cents) + ' / ' + fmtCap(im.month_cap_cents) + '）'));
+    if (lv === 'near' || lv === 'over') out.push(alertItem('maker', 'yellow', '今月の画像の記帳が上限' + (lv === 'over' ? 'に達しました' : 'に近づいています') + '（' + fmtUsed(im.month_cents) + ' / ' + fmtCap(im.month_cap_cents) + '）', 'cap'));
     return out;
   }
-  function imagesAlertHtml(im, nowMs) { return imagesAlerts(im, nowMs).map(alertLi).join(''); }
-  /** 状況帯の画像の部分（画像の生成の行 + 注意の件）。images が無い応答では何も出さない。nowMs はテストの時だけ渡す */
+  /** 旧い状況帯の画像の注意（互換のため純関数だけ残す。今の帯は statusAlerts の行に係のパネルへのリンクを付ける）。
+   * #/images へのリンクは注意の中で 1 本まで（画像の生成の行と合わせて 2 本まで）: 停止中なら停止の行が持ち、予備の鍵の行はリンクにしない */
+  function imagesAlertHtml(im, nowMs) {
+    return imagesAlerts(im, nowMs).map(function (a) {
+      var html = a.kind === 'halted' ? a.html + goLink('#/images', '画像の停止を見る')
+        : a.kind === 'backup' && !im.halted ? '<a class="item" href="#/images" data-img-backup-band="1">' + a.mark + ' <span class="sa-go">画像の生成を見る ›</span></a>'
+        : a.html;
+      return '<li class="sa-item sa-' + a.level + '">' + html + '</li>';
+    }).join('');
+  }
+  /** 旧い状況帯の画像の部分（画像の生成の行 + 注意の件。互換のため純関数だけ残す）。images が無い応答では何も出さない。nowMs はテストの時だけ渡す */
   function imagesBandHtml(im, nowMs) {
     if (!im || typeof im !== 'object') return '';
     return imagesMonthHtml(im) + imagesAlertHtml(im, nowMs);
@@ -649,7 +651,7 @@
   // ---- 画面: 動画の確認（Gemini。§Q-9.5）----
   /** probe の clip_accepted の意味（src/routes/videos.ts の PROBE_CLIP_ACCEPTED_LABEL と同じ文） */
   var PROBE_CLIP_ACCEPTED_LABEL = 'API が区間つきの要求を受けて本文を返したか（中身が区間どおりかは司令塔が text_head で判断）';
-  /** 状況帯の 1 行。videos が無い応答（古い Worker）では何も出さない */
+  /** 旧い状況帯の動画の確認の行（§N-8 で帯から外した。動画の確認の有効 / 無効は検証係のパネル。互換のため純関数だけ残す）。videos が無い応答（古い Worker）では何も出さない */
   function videosBandHtml(vi) {
     if (!vi || typeof vi !== 'object') return '';
     return '<a class="item" href="#/videos" data-video-band="1">動画の確認 ' + (vi.enabled ? pill('有効', 'green') : pill('無効', 'gray')) + '</a>';
@@ -1021,7 +1023,9 @@
   var floor = { active: false, gen: 0, timer: null, inflight: null, data: null, prev: null, errAt: null, bandHtml: null, filter: null, open: {}, prevSt: null,
     menuOpen: false, userScrolled: false, autoScrollAt: 0, resizeObs: null,
     // 係のパネル（§N-7）: panelHtml = いま #station-panel に入れている HTML（同じなら差し替えない）、panelHold = 送信中・ダイアログ中の数（0 より大きい間は差し替えない）
-    panelHtml: null, panelHold: 0 };
+    panelHtml: null, panelHold: 0,
+    // 確認する人のパネルの自動公開（§N-8）: reviewStats = GET /api/review/stats（null = 読み込み中・文字列 = 読めなかった理由）。パネルを開いた時に 1 回・押した後に取り直す（15 秒ごとには取らない）
+    reviewStats: null, reviewBusy: false };
 
   function floorScene() { return window.FactoryFloorScene || null; }
   function hhmm(d) { var p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(d.getHours()) + ':' + p(d.getMinutes()); }
@@ -1401,9 +1405,70 @@
   }
   function setFloorFilter(id) {
     floor.filter = id && floor.filter !== id ? id : null;
+    onStationPanelOpen();
     renderFilterChip();
     if (floor.data) { renderScene(floor.data); renderQueue(floor.data, false); }
     renderStationPanel(true);
+  }
+  /** パネルを開いた時に 1 回だけ取るもの（確認する人: 自動公開の状態 §N-8） */
+  function onStationPanelOpen() {
+    if (floor.filter === 'reviewer') loadPanelReviewStats(false);
+  }
+  /** 確認する人のパネルの /api/review/stats を取り直す。届いたら（失敗も）描き直す。refocus = 押した後（スイッチにフォーカスを戻す） */
+  function loadPanelReviewStats(refocus) {
+    var gen = floor.gen;
+    if (!floor.reviewBusy) floor.reviewStats = null; // 押した後の取り直しの間は「切り替え中…」のまま
+    api('GET', '/api/review/stats').then(function (st) {
+      if (gen !== floor.gen) return;
+      floor.reviewStats = isObj(st) ? st : '応答の形が違います';
+    }, function (e) {
+      if (gen !== floor.gen) return;
+      floor.reviewStats = e.message || '失敗しました';
+    }).then(function () {
+      if (gen !== floor.gen) return;
+      floor.reviewBusy = false;
+      renderStationPanel(false);
+      var sw = refocus ? $('#sp-autopub') : null;
+      if (sw) sw.focus();
+    });
+  }
+  /** 確認する人のパネルのスイッチ（押すと #/review と同じ確認ダイアログ・同じ文言。switchAutoPublish を共有）と、読めなかった時の読み直し */
+  function bindReviewerPanel() {
+    var sw = $('#sp-autopub');
+    if (sw && !sw.disabled) sw.addEventListener('click', function () {
+      var st = floor.reviewStats;
+      if (!isObj(st) || floor.reviewBusy) return;
+      holdStationPanel(switchAutoPublish(st.auto_publish !== true, {
+        start: function () { floor.reviewBusy = true; renderStationPanel(true); },
+        end: function () { loadPanelReviewStats(true); },
+        cancel: function () { var b = $('#sp-autopub'); if (b) b.focus(); }
+      }));
+    });
+    var rt = $('#sp-autopub-retry');
+    if (rt) rt.addEventListener('click', function () { loadPanelReviewStats(false); renderStationPanel(true); });
+  }
+  /** 係のパネルを窓に入れる（状況帯の注意の行き先・#/?st= で開いた時。パネルは場面の下にあるので） */
+  function scrollToStationPanel() {
+    var box = $('#station-panel');
+    if (box && !box.hidden && typeof box.scrollIntoView === 'function') box.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+  /** 状況帯の注意の行き先の href（#/?st=<係>）から係の id を取る。形が違えば null */
+  function stationGoId(href) {
+    var m = /^#\/\?st=([a-z]+)$/.exec(String(href || ''));
+    return m ? m[1] : null;
+  }
+  /**
+   * #/?st=<係> のリンクを押した時（§N-8）。hash が今と違えば hashchange → route() が工場を作り直してパネルを開く（viewFloor の q.st）ので何もしない。
+   * 工場にいて hash が同じ（前に同じリンクで開いて ✕ で閉じた等）時は hashchange が起きないので、ここでそのパネルを開く（開いていれば閉じずに窓へ送るだけ）
+   */
+  function onStationGo(e) {
+    var a = e.target && e.target.closest ? e.target.closest('a[href^="#/?st="]') : null;
+    if (!a || !floor.active || a.getAttribute('href') !== location.hash) return;
+    var id = stationGoId(a.getAttribute('href'));
+    if (!isStationId(id)) return;
+    e.preventDefault();
+    if (floor.filter !== id) setFloorFilter(id); // setFloorFilter は同じ id で閉じるので、違う時だけ呼ぶ
+    scrollToStationPanel();
   }
   /** 工場の描画で使う最後の /api/status の応答（未着・失敗なら null） */
   function floorStatus() { return statusLast ? statusLast.s : null; }
@@ -1428,7 +1493,7 @@
   function renderStationPanel(force) {
     var box = $('#station-panel');
     if (!box) return;
-    var html = floor.filter ? stationPanelHtml(floor.filter, floor.data, floorStatus()) : '';
+    var html = floor.filter ? stationPanelHtml(floor.filter, floor.data, floorStatus(), { reviewStats: floor.reviewStats, reviewBusy: floor.reviewBusy }) : '';
     if (html === floor.panelHtml) return;
     var dlg = $('#dlg');
     if (!force && (floor.panelHold > 0 || (dlg && dlg.open))) return;
@@ -1437,6 +1502,7 @@
     box.hidden = !html;
     var st = floorStatus();
     if (html && st) bindIntakeButtons(st, holdStationPanel);
+    if (html) bindReviewerPanel();
   }
 
   // ---- 制作キュー（§N-3 5. の中身・リンク、§N-6-5 の見た目）----
@@ -1546,6 +1612,12 @@
     return spFact(label, esc(fmtUsed(o.month_cents || 0) + ' / ' + fmtCap(o.month_cap_cents)), lv === 'over' ? 'sp-red' : lv === 'near' ? 'sp-yellow' : '');
   }
   function spLink(href, text, primary) { return { href: href, text: text, primary: !!primary }; }
+  /** 確認する人のパネルの自動公開のスイッチ（§N-8。#/review の #rl-autopub と同じ見た目・同じ API）。st = /api/review/stats（null = 読み込み中・文字列 = 読めなかった） */
+  function spAutoPubHtml(st, busy) {
+    if (st === null || st === undefined) return '<button type="button" class="rl-switch" id="sp-autopub" disabled data-sp-loading="1"><span class="rl-knob" aria-hidden="true"></span><span class="rl-switch-t">自動公開の状態を' + esc(SP_LOADING) + '</span></button>';
+    if (!isObj(st)) return '<span class="err sp-err">自動公開の状態を読めませんでした: ' + esc(st) + '</span><button type="button" class="btn small" id="sp-autopub-retry">もう一度読み込む</button>';
+    return autoPubSwitchHtml('sp-autopub', st.auto_publish === true, busy);
+  }
   var STATION_PANEL = {
     intake: {
       name: '入口', role: '外の記事や子どもの声から素材の種を集め、提案箱に入れます。',
@@ -1635,13 +1707,20 @@
     },
     reviewer: {
       name: '確認する人', role: 'あなたが子どもの画面で素材を確かめ、公開するか直してもらうかを決めます。',
-      facts: function (fl) {
-        var rv = spStation(fl, 'reviewer');
+      // x = { reviewStats: GET /api/review/stats の応答（null = 読み込み中・文字列 = 読めなかった理由）, reviewBusy }（§N-8。パネルを開いた時に 1 回取る）
+      facts: function (fl, s, x) {
+        var rv = spStation(fl, 'reviewer'), st = x && x.reviewStats;
+        var num = function (v) { return typeof v === 'number' && isFinite(v) ? v : 0; };
+        var c = isObj(st) && isObj(st.clean) ? st.clean : null;
         return [
           spFact('確認待ち', rv ? esc(spNum(rv.waiting)) + ' 件' : null, rv && spNum(rv.waiting) > 0 ? 'sp-yellow' : ''),
-          spFact('要確認', rv ? esc(spNum(rv.needs_review_total)) + ' 件' : null)
+          spFact('要確認', rv ? esc(spNum(rv.needs_review_total)) + ' 件' : null),
+          st === null || st === undefined ? spFact('全部通った教材への判断', null)
+            : c ? spFact('全部通った教材への判断', esc('公開 ' + num(c.approve) + '・直す ' + num(c['return']) + '・却下 ' + num(c.reject) + '（続けて公開 ' + num(st.streak) + '）'))
+            : null
         ];
       },
+      actions: function (fl, s, x) { return [spAutoPubHtml(x && x.reviewStats, !!(x && x.reviewBusy))]; },
       links: [spLink('#/review', '確認待ちを開く', true)]
     },
     library: {
@@ -1704,20 +1783,22 @@
     return '<span class="sp-pill ' + esc(x.kind) + '" data-sp-pill="' + esc(x.kind) + '">' + esc(x.text) + (x.text2 ? '・' + esc(x.text2) : '') + '</span>';
   }
   /**
-   * 係のパネル（純関数。§N-7）。id = 持ち場 id、floorData = GET /api/floor（未着は null）、statusData = GET /api/status（未着は null）。
-   * 知らない id は空文字。操作のボタンは入口の #scout-btn・会議の #meeting-btn だけ
+   * 係のパネル（純関数。§N-7）。id = 持ち場 id、floorData = GET /api/floor（未着は null）、statusData = GET /api/status（未着は null）、
+   * extra = 係ごとの追加のデータ（確認する人: { reviewStats, reviewBusy }。§N-8）。知らない id は空文字。
+   * 操作のボタンは入口の #scout-btn・会議の #meeting-btn・確認する人の自動公開のスイッチ #sp-autopub だけ
    */
-  function stationPanelHtml(id, floorData, statusData) {
+  function stationPanelHtml(id, floorData, statusData, extra) {
     var P = Object.prototype.hasOwnProperty.call(STATION_PANEL, id) ? STATION_PANEL[id] : null;
     if (!P) return '';
     var fl = floorData && typeof floorData === 'object' && floorData.stations ? floorData : null;
     var s = statusData && typeof statusData === 'object' ? statusData : null;
+    var x = extra && typeof extra === 'object' ? extra : {};
     var name = P.name;
-    var facts = (P.facts(fl, s) || []).filter(Boolean).map(function (f) {
+    var facts = (P.facts(fl, s, x) || []).filter(Boolean).map(function (f) {
       if (f.value === null || f.value === undefined) return '<li class="sp-fact sp-loading" data-sp-loading="1"><span class="sp-k">' + esc(f.label) + '</span><span class="sp-v muted">' + esc(SP_LOADING) + '</span></li>';
       return '<li class="sp-fact' + (f.cls ? ' ' + f.cls : '') + '"><span class="sp-k">' + esc(f.label) + '</span><b class="sp-v">' + f.value + '</b></li>';
     });
-    var acts = P.actions ? P.actions(fl, s) : [];
+    var acts = P.actions ? P.actions(fl, s, x) : [];
     var links = (P.links || []).map(function (l) {
       return '<a class="' + (l.primary ? 'btn primary small sp-link' : 'sp-link') + '" href="' + esc(l.href) + '">' + esc(l.text) + ' ›</a>';
     });
@@ -1931,6 +2012,9 @@
     floor.autoScrollAt = 0;
     floor.panelHtml = null;
     floor.panelHold = 0;
+    floor.reviewStats = null;
+    floor.reviewBusy = false;
+    onStationPanelOpen();
     document.body.classList.add('floor-wide');
     view.innerHTML = '<div class="floor-view">' +
       '<div id="floor-band" class="floor-band" aria-live="polite"><span class="muted">読み込み中…</span></div>' +
@@ -1943,6 +2027,7 @@
     buildScene($('#scene'));
     renderFilterChip();
     renderStationPanel(true);
+    if (floor.filter) scrollToStationPanel(); // #/?st= で開いた時（状況帯の注意の行き先など）はパネルを窓に入れる
     var fv = view.querySelector('.floor-view');
     fv.addEventListener('click', onFloorClick);
     fv.addEventListener('keydown', onFloorKey);
@@ -4534,10 +4619,35 @@
     var a = num(c.approve), r = num(c['return']), x = num(c.reject);
     var line = '機械が『全部通った』とした教材で、ふじさんの判断は ' + (a + r + x ? '公開 ' + a + ' 本・直してもらう ' + r + ' 本・却下 ' + x + ' 本（直近 ' + num(s.streak) + ' 本つづけて公開）' : 'まだありません');
     var on = s.auto_publish === true;
-    return '<p class="rl-stats-line">' + esc(line) + '</p><div class="rl-auto">' +
-      '<button type="button" class="rl-switch' + (on ? ' on' : '') + '" id="rl-autopub" aria-pressed="' + (on ? 'true' : 'false') + '"' + (busy ? ' disabled' : '') + '>' +
-        '<span class="rl-knob" aria-hidden="true"></span><span class="rl-switch-t">全部通った教材は自動で公開する</span><span class="rl-switch-s">' + (busy ? '切り替え中…' : on ? 'ON' : 'OFF') + '</span></button>' +
+    return '<p class="rl-stats-line">' + esc(line) + '</p><div class="rl-auto">' + autoPubSwitchHtml('rl-autopub', on, busy) +
       (on ? '<span class="muted" data-rl-autopub-n="1">自動で公開した教材 ' + num(s.auto_published) + ' 本</span>' : '') + '</div>';
+  }
+  /** 自動公開のスイッチ（#/review の #rl-autopub と工場の確認する人のパネルの #sp-autopub で共有。§N-8） */
+  function autoPubSwitchHtml(id, on, busy) {
+    return '<button type="button" class="rl-switch' + (on ? ' on' : '') + '" id="' + id + '" aria-pressed="' + (on ? 'true' : 'false') + '"' + (busy ? ' disabled' : '') + '>' +
+      '<span class="rl-knob" aria-hidden="true"></span><span class="rl-switch-t">全部通った教材は自動で公開する</span><span class="rl-switch-s">' + (busy ? '切り替え中…' : on ? 'ON' : 'OFF') + '</span></button>';
+  }
+  /**
+   * 自動公開の切り替え（#/review と確認する人のパネルで共有。§V-8 の API・確認ダイアログ・トーストの文はここ 1 か所）。
+   * on = 切り替えた後の状態。ON にする時だけ確認ダイアログ。h = { start(): 送信の直前, end(): 送信が終わった後（成功・失敗とも。読み直しはここで）, cancel(): ダイアログで やめる }。
+   * 返す promise は全部終わった時（キャンセルも）に解ける
+   */
+  function switchAutoPublish(on, h) {
+    var go = function () {
+      if (h.start) h.start();
+      return api('POST', '/api/review/auto-publish', { on: on }).then(function (res) {
+        toast(res && res.auto_publish ? '全部通った教材を自動で公開するようにしました' : '自動で公開するのをやめました（全部通った教材も確認待ちに並びます）');
+        if (h.end) h.end();
+      }, function (e) {
+        toast(e.message || '切り替えられませんでした', true);
+        if (h.end) h.end();
+      });
+    };
+    if (!on) return go();
+    return confirmDialog({ title: '全部通った教材を自動で公開します', body: '機械の確認が全部通った教材を、人を通さずに公開します。見てほしい所がある教材は、これまでどおり確認待ちに出ます。', okText: 'ON にする' }).then(function (r) {
+      if (r.ok) return go();
+      if (h.cancel) h.cancel();
+    });
   }
   function loadRlStats(here, refocus) {
     var box = $('#rl-stats');
@@ -4548,19 +4658,11 @@
       var sw = $('#rl-autopub');
       if (refocus) sw.focus();
       sw.addEventListener('click', function () {
-        var on = s.auto_publish !== true;
-        var go = function () {
-          box.innerHTML = rlStatsHtml(s, true);
-          api('POST', '/api/review/auto-publish', { on: on }).then(function (res) {
-            toast(res && res.auto_publish ? '全部通った教材を自動で公開するようにしました' : '自動で公開するのをやめました（全部通った教材も確認待ちに並びます）');
-            loadRlStats(here, true);
-          }, function (e) {
-            toast(e.message || '切り替えられませんでした', true);
-            loadRlStats(here, true);
-          });
-        };
-        if (!on) { go(); return; }
-        confirmDialog({ title: '全部通った教材を自動で公開します', body: '機械の確認が全部通った教材を、人を通さずに公開します。見てほしい所がある教材は、これまでどおり確認待ちに出ます。', okText: 'ON にする' }).then(function (r) { if (r.ok) go(); else sw.focus(); });
+        switchAutoPublish(s.auto_publish !== true, {
+          start: function () { box.innerHTML = rlStatsHtml(s, true); },
+          end: function () { loadRlStats(here, true); },
+          cancel: function () { sw.focus(); }
+        });
       });
     }, function (e) {
       if (location.hash !== here || !$('#rl-stats')) return;
@@ -4947,10 +5049,10 @@
     models3dPageHtml: models3dPageHtml, models3dLoadingHtml: models3dLoadingHtml, models3dErrorHtml: models3dErrorHtml,
     model3dStateText: model3dStateText, model3dActionLabel: model3dActionLabel, model3dFetchToast: model3dFetchToast, model3dFetchErrorText: model3dFetchErrorText
   };
-  // 状況帯（上部）の純関数（テストから呼ぶ）
+  // 状況帯（上部。§N-8 の 3 枠）の純関数（テストから呼ぶ）
   window.FactoryAdminStatus = {
     CRON_LATE_MIN: CRON_LATE_MIN, CRON_STALE_MIN: CRON_STALE_MIN, cronAge: cronAge, capLevel: capLevel, fmtCap: fmtCap, costMeterHtml: costMeterHtml,
-    STATUS_CARDS: STATUS_CARDS, statusAlerts: statusAlerts, statusBandHtml: statusBandHtml
+    STATUS_CARDS: STATUS_CARDS, ALERT_GO_TEXT: ALERT_GO_TEXT, statusAlerts: statusAlerts, statusBandHtml: statusBandHtml, stationGoId: stationGoId
   };
   window.FactoryAdminVideos = { videosBandHtml: videosBandHtml, videosAdminHtml: videosAdminHtml, videosLoadingHtml: videosLoadingHtml, videosErrorHtml: videosErrorHtml };
   window.FactoryAdminImages = {
@@ -4963,6 +5065,7 @@
   document.addEventListener('keydown', onReviewKey);
   document.addEventListener('visibilitychange', onFloorVisibility);
   document.addEventListener('click', onNavMoreDoc);
+  document.addEventListener('click', onStationGo);
   document.addEventListener('keydown', onNavMoreDoc);
   route();
 })();
