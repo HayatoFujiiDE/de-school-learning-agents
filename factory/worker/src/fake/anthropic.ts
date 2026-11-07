@@ -46,7 +46,7 @@ interface Call {
   batch_id?: string;
   custom_id?: string;
   /** 検証係の batch（§L-2）だけ: 1 件目の user 文の claims_json と、送った assistant turn の数 */
-  verify?: { claims_text: string; assistant_turns: number; figures?: string[]; videos?: string[]; apps?: string[] };
+  verify?: { claims_text: string; assistant_turns: number; figures?: string[]; videos?: string[]; apps?: string[]; figure_checks?: Record<string, number> };
   /** smoke の制御 /__fake/session-append（§O-8 smoke）だけ: 足すファイル（本文は記録に持つ）・status・list_cost・識別子 */
   append?: { key: string; files: Array<{ filename: string; content: string }>; status?: string; list_cost?: string };
   /** お題の呼び出し（contract-T）だけ: 呼び出しごとに渡った再送の回数と締め切りの有無 */
@@ -279,6 +279,32 @@ function fakeShownFigures(text: string): string[] {
   return out;
 }
 
+/**
+ * §O-13-3 1: 図の一覧の行の `、絵の主張=[1] …[k] …、参照=` から、渡された図ごとの絵の主張の件数（`[1] `・`[2] ` と続く番号の数。なしは 0）。
+ * fake の検証係だけが読む（checks を 1..N の ok で返す）
+ */
+function fakeFigureChecks(text: string): Record<string, number> {
+  const i = text.indexOf('# 図・画像（');
+  const out: Record<string, number> = {};
+  if (i < 0) return out;
+  for (const line of text.slice(i).split('\n').slice(1)) {
+    if (!line.startsWith('- ')) break;
+    if (line.includes('（容量のため画像は渡していません')) continue;
+    const rest = line.slice(2);
+    const j = rest.indexOf(': ');
+    const path = j < 0 ? rest : rest.slice(0, j);
+    const at = rest.indexOf('、絵の主張=');
+    let n = 0;
+    if (at >= 0) {
+      const end = rest.lastIndexOf('、参照=');
+      const seg = rest.slice(at, end > at ? end : undefined);
+      while (seg.includes(`[${n + 1}] `)) n++;
+    }
+    out[path] = n;
+  }
+  return out;
+}
+
 /** §Q-3 4: 入力の <video_notes> で記録を入れた動画（見出しの行。本文の ## は無害化されて行頭に来ない）。fake の検証係だけが読む */
 function fakeShownVideos(text: string): string[] {
   const out: string[] = [];
@@ -417,7 +443,7 @@ export function createFakePort(env: Env): FactoryPort {
           container: typeof params.container === 'string' ? params.container : null,
         },
       });
-      return verifierReply(params.model, extractTagged(content, 'claims_json') ?? '{"claims":[]}', params.messages.filter((m) => m.role === 'assistant').length, fakeShownFigures(content), fakeShownVideos(content), fakeShownApps(content));
+      return verifierReply(params.model, extractTagged(content, 'claims_json') ?? '{"claims":[]}', params.messages.filter((m) => m.role === 'assistant').length, fakeShownFigures(content), fakeShownVideos(content), fakeShownApps(content), fakeFigureChecks(content));
     },
     // ---- 入口（§K-8）----
     async xaiResponses(req) {
@@ -456,6 +482,7 @@ export function createFakePort(env: Env): FactoryPort {
             figures: fakeShownFigures(first),
             videos: fakeShownVideos(first),
             apps: fakeShownApps(first),
+            figure_checks: fakeFigureChecks(first),
           },
         });
         const now = new Date();
@@ -505,7 +532,7 @@ export function createFakePort(env: Env): FactoryPort {
         if (Number(k.fake_results_bytes ?? 0) > (o?.maxBytes ?? BATCH_RESULTS_MAX_BYTES)) return [];
         const rt = typeof k.fake_batch_result === 'string' ? k.fake_batch_result : 'succeeded';
         if (rt !== 'succeeded') return [{ custom_id: c.custom_id ?? '', result: { type: rt } } as unknown as MessageBatchIndividualResponse];
-        const message = verifierReply(VERIFIER_FAKE_MODEL, c.verify.claims_text, c.verify.assistant_turns, c.verify.figures ?? [], c.verify.videos ?? [], c.verify.apps ?? []);
+        const message = verifierReply(VERIFIER_FAKE_MODEL, c.verify.claims_text, c.verify.assistant_turns, c.verify.figures ?? [], c.verify.videos ?? [], c.verify.apps ?? [], c.verify.figure_checks ?? {});
         return [{ custom_id: c.custom_id ?? '', result: { type: 'succeeded', message } } as unknown as MessageBatchIndividualResponse];
       }
       // 振り返り係（§S-4）: custom_id が振り返りの job_id（job_retros の submitted の行）なら retro の fixture を返す（本番のコードは分けない）
@@ -660,7 +687,15 @@ function fakeKeys(claimsText: string): Record<string, unknown> {
  * 契約 V-3 e: 各 verdict に presented_as（claim の fake_presented_as があればそれ、無ければ fact）、apps は入力の <apps> の path ごとに
  * 最上位の fake_apps: {path: verdict} の値（無ければ ok）
  */
-function verifierReply(model: string, claimsText: string, assistantTurns: number, figures: string[] = [], videos: string[] = [], apps: string[] = []): Message {
+function verifierReply(
+  model: string,
+  claimsText: string,
+  assistantTurns: number,
+  figures: string[] = [],
+  videos: string[] = [],
+  apps: string[] = [],
+  figureChecks: Record<string, number> = {},
+): Message {
   let claims: Array<{ id: string; fake_verdict?: string; fake_presented_as?: string }> = [];
   let pauseTurns = 0;
   let appVerdicts: Record<string, unknown> = {};
@@ -699,7 +734,7 @@ function verifierReply(model: string, claimsText: string, assistantTurns: number
     role: 'assistant',
     model,
     container: pauseTurns > 0 ? fakeContainer : null,
-    content: [{ type: 'tool_use', id: 'toolu_fake_1', name: 'report_verdicts', input: { verdicts, overall_note: 'fake', figures: figures.map((path) => ({ path, verdict: 'ok', reason: 'fake: 図を確かめた' })), analogy_gaps: [], videos: videos.map((id) => ({ id, verdict: 'ok', reason: 'fake: 動画の記録を確かめた' })), apps: apps.map((path) => ({ path, verdict: typeof appVerdicts[path] === 'string' ? appVerdicts[path] : 'ok', reason: 'fake: 動かせるものを確かめた' })) }, caller: { type: 'direct' } }],
+    content: [{ type: 'tool_use', id: 'toolu_fake_1', name: 'report_verdicts', input: { verdicts, overall_note: 'fake', figures: figures.map((path) => ({ path, verdict: 'ok', reason: 'fake: 図を確かめた', checks: Array.from({ length: figureChecks[path] ?? 0 }, (_, k) => ({ n: k + 1, result: 'ok', note: '' })) })), analogy_gaps: [], videos: videos.map((id) => ({ id, verdict: 'ok', reason: 'fake: 動画の記録を確かめた' })), apps: apps.map((path) => ({ path, verdict: typeof appVerdicts[path] === 'string' ? appVerdicts[path] : 'ok', reason: 'fake: 動かせるものを確かめた' })) }, caller: { type: 'direct' } }],
     stop_reason: 'tool_use',
     stop_sequence: null,
     usage: { input_tokens: 12000, output_tokens: 800, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },

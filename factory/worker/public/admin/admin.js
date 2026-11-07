@@ -2090,6 +2090,30 @@
     return '<p class="thumb-fig" data-fig-verdict="' + esc(f.verdict) + '">' + pill(t[0], t[1]) + '</p>' +
       (f.reason ? '<p class="thumb-cap" data-fig-reason="1">' + esc(f.reason) + '</p>' : '');
   }
+  // §O-13-5: 絵の主張の結果の印 [印, 色の class, 読み上げの文]（checks が無い旧い結果・not_seen・検証前は none = 未検査）
+  var FIG_CLAIM_MARK = { ok: ['✓', 'fc-ok', '合う'], wrong: ['✗', 'fc-wrong', '問題'], unclear: ['？', 'fc-unclear', '確かめきれない'], none: ['－', 'fc-none', '未検査'] };
+  /** figures_meta（版の material_json の絵の主張と参照。無い時は {}） */
+  function figuresMetaOf(d) {
+    var m = d && d.figures_meta;
+    return isObj(m) ? m : {};
+  }
+  /** サムネイルの下（判定の pill の下）の「絵の主張」の一覧（§O-13-5）。meta = figures_meta の 1 図、f = verification.figures の 1 図（無ければ null） */
+  function figClaimsHtml(meta, f) {
+    var shows = meta && Array.isArray(meta.shows) ? meta.shows.filter(isObj) : [];
+    if (!shows.length) return '';
+    var byN = {};
+    if (f && f.verdict !== 'not_seen' && Array.isArray(f.checks)) f.checks.forEach(function (c) { if (isObj(c) && typeof c.n === 'number' && !Object.prototype.hasOwnProperty.call(byN, c.n)) byN[c.n] = c; });
+    var ref = typeof meta.reference_url === 'string' && /^https:\/\//i.test(meta.reference_url) ? meta.reference_url : '';
+    return '<div class="fig-claims" data-fig-claims="' + shows.length + '"><p class="thumb-cap"><b>絵の主張</b></p><ul>' + shows.map(function (x, i) {
+      var c = Object.prototype.hasOwnProperty.call(byN, i + 1) ? byN[i + 1] : null;
+      var key = c && Object.prototype.hasOwnProperty.call(FIG_CLAIM_MARK, c.result) && c.result !== 'none' ? c.result : 'none';
+      var mk = FIG_CLAIM_MARK[key];
+      var note = c && typeof c.note === 'string' && c.note ? ' <span class="muted">' + esc(c.note) + '</span>' : '';
+      return '<li data-fig-claim="' + esc(key) + '"><span class="fc-mark ' + mk[1] + '" title="' + esc(mk[2]) + '">' + esc(mk[0]) + '</span> ' +
+        esc(typeof x.text === 'string' ? x.text : '') + note + '</li>';
+    }).join('') + '</ul>' +
+      (ref ? '<p class="thumb-cap"><a data-fig-ref="1" href="' + esc(ref) + '" target="_blank" rel="noopener noreferrer">参照を開く</a></p>' : '') + '</div>';
+  }
   var ACTIVE_JOB = ['queued', 'creating', 'running', 'needs_answer', 'budget_reached'];
   var DECISION_LABEL = { approve: '承認', 'return': '差し戻し', reject: '却下' };
   var AUTO_REVIEWER = 'system:auto-triage';
@@ -2491,14 +2515,16 @@
     var figs = figuresOf(d), figBy = {};
     (figs || []).forEach(function (f) { if (f && typeof f.path === 'string') figBy[f.path] = f; });
     var vids = videosOf(d.version.material);
+    var metaBy = figuresMetaOf(d);
     return '<div class="rv-figs"><span class="muted">図・画像 ' + imgs.length + ' 枚' + (vids.length ? '・動画 ' + vids.length + ' 本' : '') +
       (figs ? '（検証係の判定はサムネイルの下）' : '（この版の検証係は図を見ていません）') + '</span>' +
       (imgs.length ? '<div class="thumbs">' + imgs.map(function (p) {
         var a = '<a href="' + esc(base + p) + '" target="_blank" rel="noopener noreferrer" title="' + esc(p) + '"><img class="thumb" alt="' + esc(p) + '" src="' + esc(base + p) + '"></a>';
         var g = Object.prototype.hasOwnProperty.call(gen, p) ? gen[p] : null;
         var f = Object.prototype.hasOwnProperty.call(figBy, p) ? figBy[p] : null;
-        if (!g && !f) return a;
-        return '<div class="thumb-gen"' + (g ? ' data-gen="1"' : '') + '>' + a + (g ? '<p class="thumb-cap">' + esc(genCaption(g)) + '</p>' : '') + figVerdictHtml(f) + '</div>';
+        var meta = Object.prototype.hasOwnProperty.call(metaBy, p) ? metaBy[p] : null;
+        if (!g && !f && !meta) return a;
+        return '<div class="thumb-gen"' + (g ? ' data-gen="1"' : '') + '>' + a + (g ? '<p class="thumb-cap">' + esc(genCaption(g)) + '</p>' : '') + figVerdictHtml(f) + figClaimsHtml(meta, f) + '</div>';
       }).join('') + '</div>' : '') + '</div>';
   }
   /** 「利用条件」の補足の動画のチャンネル（チャンネル名・公式の情報・本人のアップと言える理由。§Q-11 8） */
@@ -3951,6 +3977,7 @@
     inlineMd: inlineMd, mdBlocks: mdBlocks, pickVariant: pickVariant, previewBodyHtml: previewBodyHtml, previewFrameHtml: previewFrameHtml, kindName: kindName,
     defaultPv: defaultPv,
     // 付箋
+    figClaimsHtml: figClaimsHtml, figsBlockHtml: figsBlockHtml,
     stickyLine: stickyLine, stickyNoteText: stickyNoteText, stickyListHtml: stickyListHtml, STICK_KINDS: STICK_KINDS, appendLines: appendLines,
     STICK_FIG_KINDS: STICK_FIG_KINDS, STICK_APP_KINDS: STICK_APP_KINDS, STICK_VIDEO_KINDS: STICK_VIDEO_KINDS,
     noteWithoutStickyLines: noteWithoutStickyLines, decisionNote: decisionNote, inInputOf: inInputOf, claimParaSelectors: claimParaSelectors, stickyKeyAction: stickyKeyAction, stripCites: stripCites

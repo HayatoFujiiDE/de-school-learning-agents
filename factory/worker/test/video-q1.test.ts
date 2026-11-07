@@ -340,8 +340,8 @@ describe('§Q-2 allowlist と rubric（生成ファイルに反映済み）', ()
     expect(ALLOWLIST.hosts).toContain('*.youtube.com');
     expect(ALLOWLIST.hosts.some((h) => /googlevideo|ytimg|youtu\.be/.test(h))).toBe(false);
     expect([...ALLOWLIST.domains, ...ALLOWLIST.hosts].some((h) => h.includes('youtu.be'))).toBe(false);
-    const src = JSON.parse(readFileSync(new URL('../../claude/allowlist.json', import.meta.url), 'utf8')) as { domains: string[]; hosts: string[] };
-    expect(ALLOWLIST).toEqual({ domains: src.domains, hosts: src.hosts });
+    const src = JSON.parse(readFileSync(new URL('../../claude/allowlist.json', import.meta.url), 'utf8')) as { domains: string[]; primary_hosts: string[]; hosts: string[] };
+    expect(ALLOWLIST).toEqual({ domains: src.domains, primary_hosts: src.primary_hosts, hosts: src.hosts });
   });
 
   it('rubric common.md の 13 が videos の形式（why・rights_note・出典の行）を見る', () => {

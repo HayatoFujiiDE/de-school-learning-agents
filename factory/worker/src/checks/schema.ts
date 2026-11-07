@@ -1,5 +1,7 @@
 // 純関数: material.json / claims.json / sources.json の検証と公開 manifest の算出（契約 §E）。I/O を持たない。
-// ここで失敗したものだけが invalid_outputs（必須キー欠落・参照先不在・parts 外参照・JSON 不正・サイズ超過・画像の先頭バイト不一致 §M-2・動画の形 §Q-1）。
+// ここで失敗したものだけが invalid_outputs（必須キー欠落・参照先不在・parts 外参照・JSON 不正・サイズ超過・画像の先頭バイト不一致 §M-2・動画の形 §Q-1・絵の主張の形 §O-13-2 1）。
+
+import { urlHostMatches } from './hosts';
 
 export const REQUIRED_FILES = ['material.json', 'claims.json', 'sources.json', 'adapt-rules.md', 'selfcheck.md'] as const;
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -38,6 +40,16 @@ export interface PartFile {
   image_id?: string;
   /** 絵の説明（120 字まで。型違い・長すぎは null。§R-46 と同じく安全側の既定） */
   alt?: string | null;
+  /** §O-13-1 1: 絵の主張（image_id のある行だけ。2〜6 件） */
+  shows?: FigureShow[];
+  /** §O-13-1 3: 参照（https の URL。image_id のある行だけ） */
+  reference_url?: string;
+}
+
+/** §O-13-1 1: 絵の主張の 1 文と、その出典 id（sources.json の id） */
+export interface FigureShow {
+  text: string;
+  source_ids: string[];
 }
 
 /** image_requests.id の形（§O-6 b） */
@@ -63,6 +75,162 @@ export function checkImageRef(f: Record<string, unknown>): { ok: true; ref: Imag
     return { ok: false, detail: `bad_image_ref:${path}` };
   const alt = typeof f.alt === 'string' && [...f.alt].length <= IMAGE_ALT_MAX_CHARS ? f.alt : null;
   return { ok: true, ref: { path, image_id: f.image_id, alt } };
+}
+
+/** §O-13-2 1: 絵の主張の形の上限 */
+export const SHOWS_MIN = 2;
+export const SHOWS_MAX = 6;
+export const SHOW_TEXT_MAX = 200;
+export const SHOW_SOURCE_IDS_MAX = 5;
+export const SHOW_SOURCE_ID_MAX = 40;
+/** 素材全体の絵の主張の合計の上限（検証係の入力の増分を抑える。§O-13-3 7） */
+export const SHOWS_TOTAL_MAX = 48;
+export const REFERENCE_URL_MAX = 2000;
+
+const cpLen = (s: string) => [...s].length;
+
+/**
+ * §O-13-2 1: files[] の行の shows / reference_url の形の検査（純関数）。hasImageId = その行に image_id がある（checkImageRef が通った）。
+ * image_id の無い行に shows か reference_url があれば、または形が違えば { ok: false }（呼び出し側が bad_image_shows:<path> にする）。
+ * 無い時は { ok: true, shows: null, reference_url: null }
+ */
+export function checkImageShows(
+  f: Record<string, unknown>,
+  hasImageId: boolean,
+): { ok: true; shows: FigureShow[] | null; reference_url: string | null } | { ok: false } {
+  const hasShows = 'shows' in f;
+  const hasRef = 'reference_url' in f;
+  if (!hasShows && !hasRef) return { ok: true, shows: null, reference_url: null };
+  if (!hasImageId) return { ok: false };
+  let shows: FigureShow[] | null = null;
+  if (hasShows) {
+    const raw = f.shows;
+    if (!Array.isArray(raw) || raw.length < SHOWS_MIN || raw.length > SHOWS_MAX) return { ok: false };
+    shows = [];
+    for (const x of raw) {
+      if (!isPlainObj(x)) return { ok: false };
+      const t = x.text;
+      if (typeof t !== 'string' || t.trim() === '' || cpLen(t) > SHOW_TEXT_MAX) return { ok: false };
+      const ids = x.source_ids;
+      if (!Array.isArray(ids) || ids.length < 1 || ids.length > SHOW_SOURCE_IDS_MAX) return { ok: false };
+      if (!ids.every((id) => typeof id === 'string' && cpLen(id) >= 1 && cpLen(id) <= SHOW_SOURCE_ID_MAX)) return { ok: false };
+      if (new Set(ids).size !== ids.length) return { ok: false };
+      shows.push({ text: t, source_ids: [...(ids as string[])] });
+    }
+  }
+  let ref: string | null = null;
+  if (hasRef) {
+    const u = f.reference_url;
+    if (typeof u !== 'string' || cpLen(u) > REFERENCE_URL_MAX) return { ok: false };
+    let parsed: URL;
+    try {
+      parsed = new URL(u);
+    } catch {
+      return { ok: false };
+    }
+    if (parsed.protocol !== 'https:' || !parsed.hostname) return { ok: false };
+    ref = u;
+  }
+  return { ok: true, shows, reference_url: ref };
+}
+
+/** §O-13-3 1・§O-13-5: 図の絵の主張と参照（版の material.json の image_id のある行から） */
+export interface FigureShowsMeta {
+  shows: FigureShow[];
+  reference_url: string | null;
+}
+
+/**
+ * 版の material.json（parse 済み・信頼できない値）の files[] のうち、image_id があり shows か reference_url がある行の path → 絵の主張と参照。
+ * 検証係の図の一覧と確認画面が使う（I/O なし）。形は取り込みが確かめた（checkImageShows）が、ここでも同じ検査を通らない行は飛ばす。path は最初の行だけ
+ */
+export function figureShowsMetaOf(material: unknown): Map<string, FigureShowsMeta> {
+  const out = new Map<string, FigureShowsMeta>();
+  if (!isPlainObj(material) || !Array.isArray(material.parts)) return out;
+  const seen = new Set<string>();
+  for (const part of material.parts) {
+    if (!isPlainObj(part) || !Array.isArray(part.files)) continue;
+    for (const f of part.files) {
+      if (!isPlainObj(f) || typeof f.path !== 'string' || typeof f.image_id !== 'string' || seen.has(f.path)) continue;
+      seen.add(f.path);
+      const r = checkImageShows(f, true);
+      if (!r.ok || (!r.shows && r.reference_url === null)) continue;
+      out.set(f.path, { shows: r.shows ?? [], reference_url: r.reference_url });
+    }
+  }
+  return out;
+}
+
+/** §O-13-2 2〜5: checks_json に入れる絵の主張の検査の結果（取り込みは止めない） */
+export interface FigureShowsChecks {
+  figure_shows_missing: string[];
+  figure_shows_refs: Array<{ path: string; n: number; source_ids: string[] }>;
+  figure_shows_no_primary: Array<{ path: string; n: number }>;
+  figure_shows_removed: Array<{ path: string; texts: string[] }>;
+}
+
+/** 親の版の material.json（信頼できない値）から、image_id のある行の path → {image_id, texts}（最初の行だけ）。読めなければ null */
+function parentShowsOf(materialJsonText: string): Map<string, { image_id: string; texts: string[] }> | null {
+  let m: unknown;
+  try {
+    m = JSON.parse(materialJsonText);
+  } catch {
+    return null;
+  }
+  if (!isPlainObj(m)) return null;
+  const out = new Map<string, { image_id: string; texts: string[] }>();
+  for (const part of Array.isArray(m.parts) ? m.parts : []) {
+    if (!isPlainObj(part) || !Array.isArray(part.files)) continue;
+    for (const f of part.files) {
+      if (!isPlainObj(f) || typeof f.path !== 'string' || typeof f.image_id !== 'string' || out.has(f.path)) continue;
+      const texts = Array.isArray(f.shows)
+        ? (f.shows as unknown[]).flatMap((x) => (isPlainObj(x) && typeof x.text === 'string' && x.text.trim() !== '' ? [x.text.trim()] : []))
+        : [];
+      out.set(f.path, { image_id: f.image_id, texts });
+    }
+  }
+  return out;
+}
+
+/**
+ * §O-13-2 2〜5（純関数。I/O は呼び出し側）: 取り込んだ素材の絵の主張を検査する。
+ * - accuracyByImageId: image_requests の accuracy（scientific の画像が「対象画像」）
+ * - primaryHosts: 一次とみなす発行主体（allowlist.json の primary_hosts）。sources.json の url の hostname を hostMatches で照らす（is_primary は使わない）
+ * - parentMaterialJson: 作り直しの親の版の material_json（undefined / null = 比べない）。JSON として読めなければ比べず parentUnreadable
+ * path は最初の行だけを見る（同じ path の重複した参照は同じ image_id であることを取り込みが確かめている）
+ */
+export function checkFigureShows(
+  material: Pick<Material, 'parts'>,
+  sources: ReadonlyArray<Pick<Source, 'id' | 'url'>>,
+  o: { accuracyByImageId: ReadonlyMap<string, string>; primaryHosts: readonly string[]; parentMaterialJson?: string | null },
+): { checks: FigureShowsChecks; parentUnreadable: boolean } {
+  const checks: FigureShowsChecks = { figure_shows_missing: [], figure_shows_refs: [], figure_shows_no_primary: [], figure_shows_removed: [] };
+  const urlById = new Map<string, string>();
+  for (const s of sources) if (!urlById.has(s.id)) urlById.set(s.id, s.url);
+  const parent = typeof o.parentMaterialJson === 'string' ? parentShowsOf(o.parentMaterialJson) : null;
+  const parentUnreadable = typeof o.parentMaterialJson === 'string' && parent === null;
+  const seen = new Set<string>();
+  for (const part of material.parts) {
+    for (const f of part.files) {
+      if (!f.image_id || seen.has(f.path)) continue;
+      seen.add(f.path);
+      const shows = f.shows ?? null;
+      if (!shows && o.accuracyByImageId.get(f.image_id) === 'scientific') checks.figure_shows_missing.push(f.path);
+      for (const [i, sh] of (shows ?? []).entries()) {
+        const n = i + 1;
+        const missing = sh.source_ids.filter((id) => !urlById.has(id));
+        if (missing.length) checks.figure_shows_refs.push({ path: f.path, n, source_ids: missing });
+        if (!sh.source_ids.some((id) => urlHostMatches(urlById.get(id), o.primaryHosts))) checks.figure_shows_no_primary.push({ path: f.path, n });
+      }
+      const prev = parent?.get(f.path);
+      if (prev && prev.image_id === f.image_id) {
+        const now = new Set((shows ?? []).map((x) => x.text.trim()));
+        const removed = [...new Set(prev.texts)].filter((t) => !now.has(t));
+        if (removed.length) checks.figure_shows_removed.push({ path: f.path, texts: removed });
+      }
+    }
+  }
+  return { checks, parentUnreadable };
 }
 
 /**
@@ -317,6 +485,8 @@ export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
   const techDeps = new Set<string>();
   /** §Q-1: videos は sources.json を読んだ後に検査する（出典の行との一致を見るため） */
   const rawVideos: Array<{ id: string; videos: unknown[] | null }> = [];
+  /** §O-13-2 1: 素材全体の絵の主張の合計 */
+  let showsTotal = 0;
   for (const [i, raw] of (m.parts as unknown[]).entries()) {
     const p = raw as Record<string, unknown>;
     if (!p || typeof p !== 'object') return fail(`bad_type:parts[${i}]`);
@@ -364,12 +534,19 @@ export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
         if (!isPartFilePath(f.path, p.id)) return fail(`path_outside_part:${f.path}`);
         const ref = checkImageRef(f);
         if (!ref.ok) return fail(ref.detail);
+        // §O-13-2 1: 絵の主張・参照の形（bad_image_ref と同じく取り込みで弾く）。素材全体の合計は SHOWS_TOTAL_MAX まで
+        const sh = checkImageShows(f, ref.ref !== null);
+        if (!sh.ok) return fail(`bad_image_shows:${f.path}`);
+        showsTotal += sh.shows?.length ?? 0;
+        if (showsTotal > SHOWS_TOTAL_MAX) return fail(`bad_image_shows:${f.path}`);
         if (!files.has(f.path)) return fail(`missing_ref:${f.path}`);
         if (!imageBytesMatch(f.path, files.get(f.path)!)) return fail(`bad_image:${f.path}`);
         pfiles.push({
           path: f.path,
           role: isStr(f.role) ? f.role : 'file',
           ...(ref.ref ? { image_id: ref.ref.image_id, alt: ref.ref.alt } : {}),
+          ...(sh.shows ? { shows: sh.shows } : {}),
+          ...(sh.reference_url !== null ? { reference_url: sh.reference_url } : {}),
         });
       }
     }

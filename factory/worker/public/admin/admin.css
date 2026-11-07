@@ -99,6 +99,9 @@ pre { white-space: pre-wrap; word-break: break-word; background: var(--paper); p
 .thumb-gen .thumb { width: 160px; }
 .thumb-cap { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); word-break: break-word; }
 .thumb-fig { margin: 0; }
+.fig-claims ul, .mk-more .fig-claims ul { margin: 2px 0 0; padding: 0; list-style: none; font-size: 12px; line-height: 1.5; word-break: break-word; }
+.fc-mark { display: inline-block; min-width: 1.2em; font-weight: 700; text-align: center; }
+.fc-ok { color: var(--green); } .fc-wrong { color: var(--red); } .fc-unclear { color: #8a5a00; } .fc-none { color: var(--muted); }
 /* ---- 画像の生成（§O-5 e）---- */
 .img-table td { vertical-align: middle; }
 .img-over { color: var(--red); font-weight: 700; }

@@ -99,7 +99,7 @@ function seedTwoPngOneSvg() {
 }
 const THREE = ['parts/p1/a.png', 'parts/p1/b.png', 'parts/p1/fig.svg'];
 
-const figs = (paths: string[], verdict = 'ok') => paths.map((path) => ({ path, verdict, reason: `${path} を見た` }));
+const figs = (paths: string[], verdict = 'ok') => paths.map((path) => ({ path, verdict, reason: `${path} を見た`, checks: [] }));
 function reportMsg(figures: unknown): Message {
   // 契約 V-3 b: 計画に apps がある時は応答に必須（この版は app なし）
   const input: Record<string, unknown> = { verdicts: [{ claim_id: 'c1', verdict: 'confirmed', reason: 'ok', opened_urls: [] }], overall_note: 'n', apps: [] };
@@ -205,9 +205,9 @@ describe('§O-12 e2 report の figures は見せた集合と完全一致', () =>
     const { out } = await runSync(reportMsg([...figs(['parts/p1/fig.svg'], 'problem'), ...figs(['parts/p1/b.png'], 'unclear'), ...figs(['parts/p1/a.png'])]));
     expect(out).toBe('done');
     expect(savedFigures()).toEqual([
-      { path: 'parts/p1/a.png', verdict: 'ok', reason: 'parts/p1/a.png を見た' },
-      { path: 'parts/p1/b.png', verdict: 'unclear', reason: 'parts/p1/b.png を見た' },
-      { path: 'parts/p1/fig.svg', verdict: 'problem', reason: 'parts/p1/fig.svg を見た' },
+      { path: 'parts/p1/a.png', verdict: 'ok', verdict_raw: 'ok', reason: 'parts/p1/a.png を見た', checks: [] },
+      { path: 'parts/p1/b.png', verdict: 'unclear', verdict_raw: 'unclear', reason: 'parts/p1/b.png を見た', checks: [] },
+      { path: 'parts/p1/fig.svg', verdict: 'problem', verdict_raw: 'problem', reason: 'parts/p1/fig.svg を見た', checks: [] },
     ]);
     // 列（confirmed 等の数）は変えない
     expect(verifs()[0]).toMatchObject({ claims_total: 1, confirmed: 1 });
@@ -217,7 +217,7 @@ describe('§O-12 e2 report の figures は見せた集合と完全一致', () =>
     ['1 件欠け', figs(THREE.slice(0, 2))],
     ['余分', figs([...THREE, 'parts/p1/zzz.png'])],
     ['重複', figs([...THREE, 'parts/p1/a.png'])],
-    ['enum 外', [...figs(THREE.slice(0, 2)), { path: 'parts/p1/fig.svg', verdict: 'not_seen', reason: '' }]],
+    ['enum 外', [...figs(THREE.slice(0, 2)), { path: 'parts/p1/fig.svg', verdict: 'not_seen', verdict_raw: 'not_seen', reason: '', checks: [] }]],
     ['figures 無し', undefined],
   ])('%s → 失敗（claim_set_mismatch）', async (_n, f) => {
     seedTwoPngOneSvg();
@@ -253,10 +253,10 @@ describe('§O-12 e3 png の合計が 10 MiB を超える版', () => {
     expect(imageBlocks(blocks).reduce((n, b) => n + Buffer.from(b.source!.data, 'base64').byteLength, 0)).toBeLessThanOrEqual(10 * MiB);
     expect(listingLines(blocks)).toEqual(['- parts/p1/a.png', `- parts/p1/b.png${NOT_SEEN}`, '- parts/p1/c.png', '- parts/p1/fig.svg']);
     expect(savedFigures()).toEqual([
-      { path: 'parts/p1/a.png', verdict: 'ok', reason: 'parts/p1/a.png を見た' },
-      { path: 'parts/p1/b.png', verdict: 'not_seen', reason: '' },
-      { path: 'parts/p1/c.png', verdict: 'ok', reason: 'parts/p1/c.png を見た' },
-      { path: 'parts/p1/fig.svg', verdict: 'ok', reason: 'parts/p1/fig.svg を見た' },
+      { path: 'parts/p1/a.png', verdict: 'ok', verdict_raw: 'ok', reason: 'parts/p1/a.png を見た', checks: [] },
+      { path: 'parts/p1/b.png', verdict: 'not_seen', verdict_raw: 'not_seen', reason: '', checks: [] },
+      { path: 'parts/p1/c.png', verdict: 'ok', verdict_raw: 'ok', reason: 'parts/p1/c.png を見た', checks: [] },
+      { path: 'parts/p1/fig.svg', verdict: 'ok', verdict_raw: 'ok', reason: 'parts/p1/fig.svg を見た', checks: [] },
     ]);
   });
 
@@ -336,7 +336,7 @@ describe('§O-12 e6 review API の verification.figures', () => {
     seedTwoPngOneSvg();
     expect((await runSync(reportMsg(figs(THREE, 'problem')))).out).toBe('done');
     const b1 = (await (await reviewDetail(ctx(), 'v1')).json()) as { verification: { figures: unknown } };
-    expect(b1.verification.figures).toEqual(figs(THREE, 'problem'));
+    expect(b1.verification.figures).toEqual(figs(THREE, 'problem').map((f) => ({ ...f, verdict_raw: 'problem' })));
     db.prepare(
       `INSERT INTO verifications (id, material_version_id, attempt, model, claims_total, confirmed, hypothesis, unverified, contradicted, result_json, created_at)
        VALUES ('w-old', 'v1', 2, 'claude-opus-5-5', 1, 1, 0, 0, 0, ?, ?)`,
@@ -447,6 +447,8 @@ describe('§P Astra R2: Batch の回収は提出時の plan.json から図の集
       apps: [],
       evidence_v: 2,
       strict: true,
+      // §O-13-3 4: 見せた図ごとの絵の主張の件数（この版に絵の主張は無い）
+      figure_checks: { 'parts/p1/a.png': 0, 'parts/p1/c.png': 0, 'parts/p1/fig.svg': 0 },
     });
     stub.s.status = 'ended';
     expect(await runVerificationStep(env, port, { deadline: Date.now() + 120_000 })).toContain('collect=done');

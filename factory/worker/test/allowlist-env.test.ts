@@ -17,7 +17,7 @@ const yamlHosts = (): string[] => {
   }
   return out;
 };
-const raw = JSON.parse(readFileSync(root + 'allowlist.json', 'utf8')) as { domains: string[]; hosts: string[] };
+const raw = JSON.parse(readFileSync(root + 'allowlist.json', 'utf8')) as { domains: string[]; primary_hosts: string[]; hosts: string[] };
 
 describe('allowlist と作業場の整合', () => {
   it('職人の domains はすべて作業場の hosts に bare で入っている', () => {
@@ -27,6 +27,6 @@ describe('allowlist と作業場の整合', () => {
     expect(yamlHosts()).toEqual(raw.hosts);
   });
   it('生成物の ALLOWLIST は allowlist.json と同じ（sync 漏れの検出）', () => {
-    expect(ALLOWLIST).toEqual({ domains: raw.domains, hosts: raw.hosts });
+    expect(ALLOWLIST).toEqual({ domains: raw.domains, primary_hosts: raw.primary_hosts, hosts: raw.hosts });
   });
 });
