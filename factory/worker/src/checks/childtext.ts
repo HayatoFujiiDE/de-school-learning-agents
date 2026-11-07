@@ -3,11 +3,27 @@
 // file_name: この版のファイル名（variants / files の path の最後の / より後ろ）か最上位のファイル名が文に出ている。
 // raw_markup（.md だけ）: 教材の記法 v1（見出し #〜#### / 段落 / - / 1. / **…** / コード / リンク）で整形されない記号が行に残っている。
 // edition_text（.md だけ。§MC-1 3）: 版が決まっている題材で Java 版を宣言した版の変奏の本文に、「Java 版 <宣言した版番号>」の並びが無い（path ごとに 1 件・sample は空）。
+// §AL-3（schema 2 の版だけ）: 本文は bodiesOf の .md（body と、あれば play）、要約は summariesOf（summary 1 本）。次の kind を足す（schema 1 の版には出さない）:
+//   goal_word（子ども向けの文に目標語）/ body_too_long（本文の散文 > BODY_MAX_CHARS）/ body_too_short（印を除いた生の本文 < BODY_MIN_CHARS）/
+//   questions_missing（問いの種が 2 件未満か claim_ids が空の問い）/ first_paragraph_not_action（本文の最初の段落に動作の語尾が無い）
 // material・本文は職人が書いた信頼できない値なので、形が違う所は黙って飛ばす（例外を投げない）。
 
 import { declaredEdition, isVersionBoundMaterial } from './edition';
+import { GOAL_WORDS } from './goalwords';
+import { bodiesOf, schemaVersionOf, summariesOf } from './shape';
 
-export type ChildTextKind = 'file_name' | 'raw_markup' | 'edition_text';
+/** 子ども向けの文の検査の kind（契約 §AL-3。仕分けの網羅テストの材料） */
+export const CHILD_TEXT_KINDS = [
+  'file_name',
+  'raw_markup',
+  'edition_text',
+  'goal_word',
+  'body_too_long',
+  'body_too_short',
+  'questions_missing',
+  'first_paragraph_not_action',
+] as const;
+export type ChildTextKind = (typeof CHILD_TEXT_KINDS)[number];
 export interface ChildTextHit {
   path: string;
   kind: ChildTextKind;
@@ -20,6 +36,13 @@ export const CHILD_TEXT_MAX = 20;
 export const CHILD_TEXT_SAMPLE_CHARS = 40;
 /** 最上位のファイル名（この版の名前に加えて当てる） */
 export const TOP_LEVEL_FILE_NAMES = ['material.json', 'claims.json', 'sources.json', 'adapt-rules.md', 'selfcheck.md', 'questions.json'] as const;
+
+/** §AL-3: 本文（parts[].body）の散文（stripMarkdownForCheck 後）の code point 数の上限（職人には 1000 字以内と言う。10% の余裕） */
+export const BODY_MAX_CHARS = 1100;
+/** §AL-3: 本文（parts[].body）の生の本文（claim 印 [cN] だけ除く。コードを含む）の code point 数の下限 */
+export const BODY_MIN_CHARS = 150;
+/** §AL-3: 最初の段落に 1 つは欲しい動作の語尾 */
+export const FIRST_ACTION_RE = /(て|で)(みよう|みて|みましょう|ごらん)|しよう|しましょう|やってみ|さわって|開いて|置いて|押して|動かして|作って|数えて|見つけて|たどって|見て/;
 
 const FILE_NAME_RE = /[A-Za-z0-9][A-Za-z0-9_-]*\.(?:html|svg|png|webp|md|json)/gi;
 
@@ -113,7 +136,42 @@ function versionFileNames(material: unknown): Set<string> {
       }
     }
   }
+  // §AL-3: 本文の .md（schema 2 の body / play）もこの版のファイル名（schema 1 の変奏は上の variants で入っている）
+  for (const b of bodiesOf(material)) names.add(b.path.slice(b.path.lastIndexOf('/') + 1).toLowerCase());
   return names;
+}
+
+/** code point 数 */
+const cpLen = (t: string): number => [...t].length;
+/** 先頭 n code point */
+const cpHead = (t: string, n: number): string => [...t].slice(0, n).join('');
+
+/**
+ * 本文（stripMarkdownForCheck 後）の最初の段落（見出し行・箇条書き・囲みコード（空行になっている）を飛ばした、最初の空行でない行の連なり）。
+ * 空白の連続は 1 つにする。段落が無ければ ''
+ */
+function firstParagraph(stripped: string): string {
+  const out: string[] = [];
+  for (const line of stripped.split('\n')) {
+    const blank = line.trim() === '';
+    const skip = /^\s*#/.test(line) || /^\s*(?:[-*+]|\d+[.)])\s/.test(line);
+    if (out.length > 0 && (blank || skip)) break;
+    if (blank || skip) continue;
+    out.push(line);
+  }
+  return oneSpace(out.join(' ')).trim();
+}
+
+/** 本文の .md（schema 2 の parts[].body）の散文の code point 数（契約 §AL-2 checks_json.body_chars。観測用）。schema 1 は空 */
+export function bodyChars(material: unknown, texts: ReadonlyMap<string, string>): Array<{ path: string; chars: number }> {
+  if (schemaVersionOf(material) !== 2) return [];
+  const out: Array<{ path: string; chars: number }> = [];
+  for (const b of bodiesOf(material)) {
+    if (b.role !== 'body' || !b.path.toLowerCase().endsWith('.md')) continue;
+    const body = texts.get(b.path);
+    if (isStr(body)) out.push({ path: b.path, chars: cpLen(stripMarkdownForCheck(body)) });
+  }
+  return out;
 }
 
 /**
@@ -128,11 +186,14 @@ function hasJavaVersionText(text: string, version: string): boolean {
 export function checkChildText(material: unknown, texts: ReadonlyMap<string, string>): ChildTextHit[] {
   const out: ChildTextHit[] = [];
   const names = versionFileNames(material);
+  // §AL-3: 新しい kind は schema 2 の版だけ
+  const v2 = schemaVersionOf(material) === 2;
   // §MC-1 3: 版が決まっている題材で Java 版を宣言した時だけ本文の版の 1 文を見る（宣言が無い・統合版・版が決まっていない題材は見ない）
   const declared = isVersionBoundMaterial(material) ? declaredEdition(material) : null;
   const javaVersion = declared?.edition === 'java' ? declared.version : null;
   const full = () => out.length >= CHILD_TEXT_MAX;
   const seenName = new Set<string>();
+  const seenGoal = new Set<string>();
 
   // text は oneSpace を通した文（探索と切り出しを同じ文で行う）
   const fileNames = (path: string, text: string) => {
@@ -146,39 +207,56 @@ export function checkChildText(material: unknown, texts: ReadonlyMap<string, str
       out.push({ path, kind: 'file_name', sample: sampleAt(text, m.index ?? 0, m[0].length) });
     }
   };
+  // §AL-3 goal_word: 目標語の部分一致（path と語の組で 1 件）。text は oneSpace を通した文
+  const goalWords = (path: string, text: string) => {
+    for (const w of GOAL_WORDS) {
+      if (full()) return;
+      const i = text.indexOf(w);
+      if (i === -1) continue;
+      const key = JSON.stringify([path, w]);
+      if (seenGoal.has(key)) continue;
+      seenGoal.add(key);
+      out.push({ path, kind: 'goal_word', sample: sampleAt(text, i, w.length) });
+    }
+  };
 
   const parts = isObj(material) && Array.isArray(material.parts) ? material.parts : [];
-  // (1) 変奏の .md（part の順 → variants の順）
-  const seenPath = new Set<string>();
-  for (const p of parts) {
-    if (!isObj(p) || !Array.isArray(p.variants)) continue;
-    for (const v of p.variants) {
-      const path = isObj(v) ? v.path : null;
-      if (!isStr(path) || !path.toLowerCase().endsWith('.md') || seenPath.has(path)) continue;
-      seenPath.add(path);
-      const body = texts.get(path);
-      if (!isStr(body)) continue;
-      const stripped = stripMarkdownForCheck(body);
-      if (javaVersion !== null) {
+  // (1) 本文の .md（part の順 → schema 1 は variants の順 / schema 2 は body → play）
+  for (const b of bodiesOf(material)) {
+    const path = b.path;
+    if (!path.toLowerCase().endsWith('.md')) continue;
+    const body = texts.get(path);
+    if (!isStr(body)) continue;
+    const stripped = stripMarkdownForCheck(body);
+    if (javaVersion !== null) {
+      if (full()) return out;
+      const one = oneSpace(stripped);
+      if (!hasJavaVersionText(one, javaVersion)) out.push({ path, kind: 'edition_text', sample: '' });
+    }
+    if (v2) {
+      if (b.role === 'body') {
         if (full()) return out;
-        const one = oneSpace(stripped);
-        if (!hasJavaVersionText(one, javaVersion)) out.push({ path, kind: 'edition_text', sample: '' });
+        if (cpLen(stripped) > BODY_MAX_CHARS) out.push({ path, kind: 'body_too_long', sample: '' });
+        if (full()) return out;
+        if (cpLen(body.replace(/\[c\d+\]/g, '')) < BODY_MIN_CHARS) out.push({ path, kind: 'body_too_short', sample: '' });
+        if (full()) return out;
+        const first = firstParagraph(stripped);
+        if (!FIRST_ACTION_RE.test(first)) out.push({ path, kind: 'first_paragraph_not_action', sample: cpHead(first, CHILD_TEXT_SAMPLE_CHARS) });
       }
-      for (const raw of stripped.split('\n')) {
-        if (full()) return out;
-        const line = oneSpace(raw);
-        fileNames(path, line);
-        if (full()) return out;
-        const hit = rawMarkupHit(line);
-        if (hit) out.push({ path, kind: 'raw_markup', sample: sampleAt(line, hit.i, hit.len) });
-      }
+      goalWords(path, oneSpace(stripped));
+      if (full()) return out;
+    }
+    for (const raw of stripped.split('\n')) {
+      if (full()) return out;
+      const line = oneSpace(raw);
+      fileNames(path, line);
+      if (full()) return out;
+      const hit = rawMarkupHit(line);
+      if (hit) out.push({ path, kind: 'raw_markup', sample: sampleAt(line, hit.i, hit.len) });
     }
   }
   // (2) material.json の子ども向けの文
-  const m = isObj(material) ? material : {};
-  const meta: string[] = [];
-  if (isStr(m.summary_elementary)) meta.push(m.summary_elementary);
-  if (isStr(m.summary_secondary)) meta.push(m.summary_secondary);
+  const meta: string[] = summariesOf(material).map((s) => s.text);
   for (const p of parts) {
     if (!isObj(p)) continue;
     if (isStr(p.title)) meta.push(p.title);
@@ -188,6 +266,28 @@ export function checkChildText(material: unknown, texts: ReadonlyMap<string, str
   for (const t of meta) {
     if (full()) return out;
     fileNames('material.json', oneSpace(t));
+  }
+  if (!v2) return out.slice(0, CHILD_TEXT_MAX);
+
+  // (3) §AL-3: schema 2 の material.json の文の目標語（spark には当てない）と、問いの種
+  const goalTexts = [...meta];
+  for (const p of parts) {
+    if (!isObj(p)) continue;
+    for (const key of ['questions_for_kids', 'interest_entries']) {
+      const list = p[key];
+      if (Array.isArray(list)) for (const it of list) if (isObj(it) && isStr(it.text)) goalTexts.push(it.text);
+    }
+  }
+  for (const t of goalTexts) {
+    if (full()) return out;
+    goalWords('material.json', oneSpace(t));
+  }
+  for (const p of parts) {
+    if (full()) return out;
+    if (!isObj(p)) continue;
+    const qs = Array.isArray(p.questions_for_kids) ? p.questions_for_kids : [];
+    const empty = qs.find((q) => isObj(q) && Array.isArray(q.claim_ids) && q.claim_ids.length === 0);
+    if (qs.length < 2 || empty !== undefined) out.push({ path: 'material.json', kind: 'questions_missing', sample: isObj(empty) && isStr(empty.id) ? empty.id : '' });
   }
   return out.slice(0, CHILD_TEXT_MAX);
 }

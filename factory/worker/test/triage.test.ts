@@ -3,16 +3,31 @@ import { describe, expect, it } from 'vitest';
 import {
   CAUSE_TEXT,
   CHECK_KEYS,
+  ITEM_TITLE,
   RETURN_FIXED_TEXT,
   RETURN_NOTE_MAX,
+  RETURN_NOTE_TEXT,
+  RETURN_NOTE_TEXT_V2,
   buildReturnNote,
   clampAutoReturnMax,
+  returnNoteTextOf,
   triageVersion,
   type TriageInput,
   type TriageItem,
   type TriageSource,
 } from '../src/checks/triage';
-import { goodMaterial } from './helpers';
+import { CHILD_TEXT_KINDS, checkChildText } from '../src/checks/childtext';
+import { isVersionBoundMaterial } from '../src/checks/edition';
+import { goodMaterial, goodMaterialV2, outputsFixture } from './helpers';
+
+/** §AL-5: bad fixture（test/fixtures/_shared-v2-bad/outputs/）の material と本文（取り込みと同じ: parts/ の md / svg / html） */
+function goodMaterialV2Bad(): { m: Record<string, unknown>; t: Map<string, string> } {
+  const dec = new TextDecoder();
+  const files = outputsFixture('_shared-v2-bad');
+  const t = new Map<string, string>();
+  for (const [p, b] of files) if (p.startsWith('parts/') && /\.(md|svg|html)$/.test(p)) t.set(p, dec.decode(b));
+  return { m: JSON.parse(dec.decode(files.get('material.json')!)) as Record<string, unknown>, t };
+}
 
 // 契約から一字ずつ写した文（§L-6 の表。groups の原因の文）
 const CONTRACT_CAUSE_TEXT = {
@@ -588,5 +603,118 @@ describe('groups（§L-3 のまま）', () => {
   });
   it('原因の文は §L-6 の表と一字も違わない', () => {
     expect(CAUSE_TEXT).toEqual(CONTRACT_CAUSE_TEXT);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// §AL-5: child_text の新しい kind（schema 2 の版）→ 項目、ITEM_TITLE の 9 件、return_note の版の分岐
+
+// 契約 AL-5 から一字ずつ写した文
+const CONTRACT_TITLE_V2 = {
+  goal_word: '目標の言い回しがある（目標・ねらい・学ぼう など）',
+  body_too_long: '本文が長い（1000 字の目安を大きく超えている）',
+  body_too_short: '本文が短すぎる（150 字に満たない）',
+  questions_missing: '問いの種が足りない（各部品に 2 件以上）',
+  first_paragraph_not_action: '最初の段落が動作の文で始まっていないかもしれない',
+  quality_first_action: '最初の段落が説明や前置きから始まっている',
+  quality_questions_first: '問いが答えより後にある、または問いに答えが書かれている',
+  quality_one_idea_per_paragraph: '1 つの段落に新しいことが 2 つ以上ある',
+  quality_no_goal_words: '目標の言い回しがある（読み手係の指摘）',
+};
+const NOTE_TEXT_V2 =
+  '子ども向けの本文には、ファイル名（app.html・figure-1.svg など）や作る側の言葉を書かないでください。動かせるものは「さわってみよう」、図は「図」と呼びます。直した所は本文（body.md）と、あれば遊びの形（play.md）・問いの種・関心別の入口でそろえてください。';
+// 現行 NOTE_SCOPE の「変奏どうし」を「本文と問い・入口」に置き換えた文
+const NOTE_SCOPE_V2 =
+  '前の版から始めて、下の一覧の所と、それに合わせて直す必要がある所（claims・sources・本文と問い・入口・図や動かせるものの中の同じ記述）だけを直してください。関係のない所は変えないでください。';
+// 契約 AL-3 / AL-5 の severity（既存 3 kind は従来どおり fix）
+const CONTRACT_KIND_SEVERITY: Record<string, string> = {
+  file_name: 'fix',
+  raw_markup: 'fix',
+  edition_text: 'fix',
+  goal_word: 'fix',
+  body_too_long: 'fix',
+  body_too_short: 'fix',
+  questions_missing: 'fix',
+  first_paragraph_not_action: 'note',
+};
+
+describe('§AL-5 仕分け v2（child_text の新しい kind）', () => {
+  const V2_BODY = 'parts/p1/body.md';
+  const appOk = [{ path: 'parts/p1/app.html', verdict: 'ok', reason: '' }];
+  /** schema 2・版が決まっている題材（conditions.tools に Minecraft Java 版 26.3）の material に child_text を与える */
+  const v2Triage = (childText: unknown[], o: Partial<Spec> = {}) =>
+    triageVersion(build({ claims: [['confirmed', ['s1']]], material: goodMaterialV2(), apps: appOk, checks: { ...GREEN_CHECKS, child_text: childText }, ...o }));
+
+  it('前提: 版が決まっている schema 2 の material で child_text が空なら clean', () => {
+    expect(isVersionBoundMaterial(goodMaterialV2())).toBe(true);
+    const t = v2Triage([]);
+    expect([t.gate, t.action, t.items]).toEqual(['clean', 'none', []]);
+  });
+
+  it.each([...CHILD_TEXT_KINDS])('網羅: kind %s を 1 件 → text の項目が 1 件・severity は契約どおり・title は空でない', (kind) => {
+    const path = kind === 'questions_missing' ? 'material.json' : V2_BODY;
+    const t = v2Triage([{ path, kind, sample: 'あいう' }]);
+    const text = t.items.filter((i) => i.kind === 'text');
+    expect(text).toHaveLength(1);
+    const [i] = text;
+    expect([i.severity, i.key, i.path]).toEqual([CONTRACT_KIND_SEVERITY[kind], 'explanation_and_expression', path]);
+    expect(ITEM_TITLE[i.cause]).toBeTruthy();
+    expect(i.title).toBe(ITEM_TITLE[i.cause]);
+    if (kind === 'edition_text') expect([i.id, i.cause]).toEqual([`text:edition_text:${path}`, 'edition_text_missing']);
+    else if (kind === 'file_name' || kind === 'raw_markup') expect([i.id, i.cause]).toEqual([`check:${kind}:1`, kind]);
+    else {
+      expect([i.id, i.cause, i.quote]).toEqual([`text:${kind}:${path}`, kind, 'あいう']);
+      expect(ITEM_TITLE[kind]).toBeTruthy();
+    }
+  });
+
+  it('同じ kind・同じ path の行は 1 項目（最初の sample を引用）。知らない kind は捨てる', () => {
+    const t = v2Triage([
+      { path: V2_BODY, kind: 'goal_word', sample: '学ぼう' },
+      { path: V2_BODY, kind: 'goal_word', sample: '覚えよう' },
+      { path: 'material.json', kind: 'goal_word', sample: '学習目標' },
+      { path: V2_BODY, kind: 'unknown_kind', sample: 'x' },
+    ]);
+    expect(t.items.map((i) => [i.id, i.quote])).toEqual([
+      [`text:goal_word:${V2_BODY}`, '学ぼう'],
+      ['text:goal_word:material.json', '学習目標'],
+    ]);
+  });
+
+  it('bad fixture の child_text: autoRounds 0 → auto_return（v2 の scope と text）/ autoRounds 2 → none・gate attention', () => {
+    const bad = goodMaterialV2Bad();
+    const childText = checkChildText(bad.m, bad.t);
+    const t = v2Triage(childText, { material: bad.m });
+    expect(t.items.map((i) => [i.id, i.severity])).toEqual([
+      [`text:body_too_long:${V2_BODY}`, 'fix'],
+      [`text:first_paragraph_not_action:${V2_BODY}`, 'note'],
+      [`text:goal_word:${V2_BODY}`, 'fix'],
+      ['text:goal_word:material.json', 'fix'],
+      ['text:questions_missing:material.json', 'fix'],
+    ]);
+    expect(t.action).toBe('auto_return');
+    const lines = t.return_note!.split('\n');
+    expect(lines.slice(0, 3)).toEqual(['自動の差し戻し（1 回目。機械の確認で、直す所が見つかりました）。', NOTE_SCOPE_V2, NOTE_TEXT_V2]);
+    expect(lines.slice(3).map((l) => l.split(' — ')[0])).toEqual([
+      `- 〔説明と表現〕${CONTRACT_TITLE_V2.body_too_long}`,
+      `- 〔説明と表現〕${CONTRACT_TITLE_V2.goal_word}`,
+      `- 〔説明と表現〕${CONTRACT_TITLE_V2.goal_word}`,
+      `- 〔説明と表現〕${CONTRACT_TITLE_V2.questions_missing}`,
+    ]);
+    const used = v2Triage(childText, { material: bad.m, autoRounds: 2 });
+    expect([used.action, used.gate, used.return_note]).toEqual(['none', 'attention', null]);
+  });
+
+  it('ITEM_TITLE の 9 件は契約 AL-5 と一字も違わない', () => {
+    expect(Object.fromEntries(Object.keys(CONTRACT_TITLE_V2).map((k) => [k, ITEM_TITLE[k]]))).toEqual(CONTRACT_TITLE_V2);
+  });
+
+  it('return_note の文: schema 2 は scope と text だけが違う。schema 1 は従来どおり', () => {
+    expect([RETURN_NOTE_TEXT_V2.scope, RETURN_NOTE_TEXT_V2.text]).toEqual([NOTE_SCOPE_V2, NOTE_TEXT_V2]);
+    expect(NOTE_SCOPE_V2).toBe(NOTE_SCOPE.replace('変奏どうし', '本文と問い・入口'));
+    expect([RETURN_NOTE_TEXT.scope, RETURN_NOTE_TEXT.text]).toEqual([NOTE_SCOPE, NOTE_TEXT]);
+    expect(returnNoteTextOf(goodMaterialV2())).toBe(RETURN_NOTE_TEXT_V2);
+    expect(returnNoteTextOf(goodMaterial())).toBe(RETURN_NOTE_TEXT);
+    expect(returnNoteTextOf(null)).toBe(RETURN_NOTE_TEXT);
   });
 });

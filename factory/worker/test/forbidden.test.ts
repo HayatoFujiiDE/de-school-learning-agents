@@ -84,3 +84,14 @@ describe('checkForbidden', () => {
     expect(checkForbidden(i).kakunin_zumi).toEqual([{ path: 'parts/p1/game.md', count: 1 }]);
   });
 });
+
+describe('§AL-2: schema 2 の要約 1 本（summary）', () => {
+  it('summary に禁止語 → material.json#summary の 1 件。summary_elementary / summary_secondary の行は見ない', () => {
+    const i = { ...base(), summary_elementary: '', summary_secondary: '', summary: '成績が上がる遊び' };
+    const r = checkForbidden(i);
+    expect(r.forbidden).toEqual([{ path: 'material.json#summary', word: '成績', count: 1 }]);
+    expect(r.ok).toBe(false);
+    // 渡されたら summary だけ（schema 1 の 2 行は走査しない）
+    expect(checkForbidden({ ...base(), summary_elementary: '点数', summary: 'ふつうの文' }).forbidden).toEqual([]);
+  });
+});

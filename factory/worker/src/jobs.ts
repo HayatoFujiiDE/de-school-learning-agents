@@ -12,7 +12,8 @@ import { offerableCatalogMap, offerableModels3d, type RightsRecord } from './rig
 import { loadRightsGate } from './rights-store';
 import type { Model3dEntry } from './generated/models3d-catalog';
 import { checkForbidden } from './checks/forbidden';
-import { checkChildText } from './checks/childtext';
+import { bodyChars, checkChildText } from './checks/childtext';
+import { schemaVersionOf } from './checks/shape';
 import { PRIMARY_HOSTS } from './checks/hosts';
 import { basenameOf, duplicateBasename, resolveOutputLayout } from './checks/layout';
 import {
@@ -1970,10 +1971,13 @@ class Reconciler {
     const texts = new Map<string, string>();
     // 画像（png / webp）はバイナリなので禁止語・参照の検査に入れない（§M）。検査するのは本文として読む md / svg / html だけ
     for (const [p, b] of files) if (p.startsWith('parts/') && /\.(md|svg|html)$/.test(p)) texts.set(p, dec.decode(b));
+    // §AL-2: schema 2 は要約 1 本（material.json#summary）を見る。schema 1 は従来の 2 行
+    const schemaVersion = schemaVersionOf(schema.material);
     const forb = checkForbidden({
       texts,
       summary_elementary: schema.material.summary_elementary,
       summary_secondary: schema.material.summary_secondary,
+      ...(schemaVersion === 2 ? { summary: schema.material.summary ?? '' } : {}),
       claims: schema.claims,
       sourceIds: schema.sources.map((s) => s.id),
     });
@@ -1986,15 +1990,20 @@ class Reconciler {
       parentMaterialJson: await this.parentMaterialJson(job),
     });
     if (figureShows.parentUnreadable) console.log(JSON.stringify({ at: 'ingest', job_id: job.id, warn: 'parent_material_unreadable' }));
-    // 契約 V-5: 子ども向け本文の機械検査（取り込みは止めない）
+    // 契約 V-5・§AL-3: 子ども向け本文の機械検査（取り込みは止めない）
+    const childText = checkChildText(schema.material, texts);
     const checks = {
       schema: 'ok',
       citations: cit.summary,
       ...forb,
       unreferenced_files: layout.unreferenced,
-      child_text: checkChildText(schema.material, texts),
+      child_text: childText,
+      // §AL-2: 本文の散文の字数（schema 2 だけ。観測用。仕分けは使わない）
+      ...(schemaVersion === 2 ? { body_chars: bodyChars(schema.material, texts) } : {}),
       ...figureShows.checks,
     };
+    const childTextKinds: Record<string, number> = {};
+    for (const h of childText) childTextKinds[h.kind] = (childTextKinds[h.kind] ?? 0) + 1;
 
     const now = nowIso();
     const versionId = crypto.randomUUID();
@@ -2061,7 +2070,7 @@ class Reconciler {
     );
     const r = await conditionalBatch(this.db, stmts);
     if (!r.ok) return 'discarded';
-    console.log(JSON.stringify({ at: 'ingest', job_id: job.id, version_id: versionId }));
+    console.log(JSON.stringify({ at: 'ingest', job_id: job.id, version_id: versionId, schema_version: schemaVersion, child_text: childTextKinds }));
     return 'versioned';
   }
 }

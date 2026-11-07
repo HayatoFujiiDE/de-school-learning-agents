@@ -32,6 +32,8 @@ export interface ForbiddenInput {
   texts: Map<string, string>;
   summary_elementary: string;
   summary_secondary: string;
+  /** §AL-2: schema 2 の版の要約 1 本。渡された時は material.json#summary の 1 行だけを見る（schema 1 は渡さない: 従来の 2 行） */
+  summary?: string;
   claims: Array<{ id: string; source_ids: string[] }>;
   sourceIds: string[];
 }
@@ -67,10 +69,13 @@ export function checkForbidden(input: ForbiddenInput): ForbiddenResult {
   for (const [p, t] of [...input.texts.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
     if (p.startsWith('parts/')) targets.push([p, t]);
   }
-  const summaries: Array<[string, string]> = [
-    ['material.json#summary_elementary', input.summary_elementary ?? ''],
-    ['material.json#summary_secondary', input.summary_secondary ?? ''],
-  ];
+  const summaries: Array<[string, string]> =
+    typeof input.summary === 'string'
+      ? [['material.json#summary', input.summary]]
+      : [
+          ['material.json#summary_elementary', input.summary_elementary ?? ''],
+          ['material.json#summary_secondary', input.summary_secondary ?? ''],
+        ];
 
   for (const [p, t] of [...targets, ...summaries]) {
     for (const w of FORBIDDEN_WORDS) {

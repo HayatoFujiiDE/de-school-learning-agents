@@ -10,11 +10,15 @@
 // 立体モデルは v1 では機械が中身を見ないので、1 件ごとに「人が回して見る」の ask を出す（自動公開しない）。
 // §MC-2: 版が決まっている題材（Minecraft）だけ、版の宣言（edition_missing / edition_not_java）と動画の公開日（video_too_old / video_date_unknown）の項目を足す。
 // 本文の版の 1 文（edition_text_missing）は取り込みの機械検査（checks_json.child_text の edition_text）から作る。版が決まっていない題材には何も足さない。
+// §AL-5: child_text の新しい kind（schema 2 の版だけ出る）→ 項目 text:<kind>:<path>（first_paragraph_not_action は note、ほかは fix）。
+// 新しい cause は ITEM_TITLE にだけ足す（出典 group 用の Cause・CAUSE_TEXT は変えない）。return_note の scope / text は版で分ける。
 
+import { CHILD_TEXT_KINDS, type ChildTextKind } from './childtext';
 import { model3dSourceIds, videoSourceIds } from './citations';
 import { declaredEdition, isVersionBoundMaterial, isVideoTooOld, parsePublishedDay } from './edition';
 import { PRIMARY_HOSTS } from './hosts';
 import { figureShowsMetaOf } from './schema';
+import { schemaVersionOf } from './shape';
 import { versionVideosOfMaterial } from '../videos';
 import { MODELS3D_BY_ID, versionModels3dOfMaterial } from '../models3d';
 
@@ -195,6 +199,25 @@ export const ITEM_TITLE: Record<string, string> = {
   video_too_old: CAUSE_TEXT.video_too_old,
   video_date_unknown: CAUSE_TEXT.video_date_unknown,
   edition_text_missing: CAUSE_TEXT.edition_text_missing,
+  // §AL-5: 子ども向けの文の検査 v2（child_text の kind。schema 2 の版だけ）と、読み手係の質の 4 項目（契約 AL-5。verbatim）
+  goal_word: '目標の言い回しがある（目標・ねらい・学ぼう など）',
+  body_too_long: '本文が長い（1000 字の目安を大きく超えている）',
+  body_too_short: '本文が短すぎる（150 字に満たない）',
+  questions_missing: '問いの種が足りない（各部品に 2 件以上）',
+  first_paragraph_not_action: '最初の段落が動作の文で始まっていないかもしれない',
+  quality_first_action: '最初の段落が説明や前置きから始まっている',
+  quality_questions_first: '問いが答えより後にある、または問いに答えが書かれている',
+  quality_one_idea_per_paragraph: '1 つの段落に新しいことが 2 つ以上ある',
+  quality_no_goal_words: '目標の言い回しがある（読み手係の指摘）',
+};
+
+/** §AL-5: child_text の kind のうち、項目 text:<kind>:<path>（cause = kind）にするものの severity。既存 3 kind（file_name / raw_markup / edition_text）は従来の扱い */
+export const CHILD_TEXT_V2_SEVERITY: Record<Exclude<ChildTextKind, 'file_name' | 'raw_markup' | 'edition_text'>, Severity> = {
+  goal_word: 'fix',
+  body_too_long: 'fix',
+  body_too_short: 'fix',
+  questions_missing: 'fix',
+  first_paragraph_not_action: 'note',
 };
 
 /** 項目の原因の一覧（ITEM_TITLE のキー。§S v2 B 7 の機械の差し戻しの checklist に書いてよい値） */
@@ -291,6 +314,19 @@ export const RETURN_NOTE_TEXT = {
   text: '子ども向けの本文には、ファイル名（app.html・figure-1.svg など）や作る側の言葉を書かないでください。動かせるものは「さわってみよう」、図は「図」と呼びます。直した所は、小学生・中学生・短い・長い・ゲーム版のすべてでそろえてください。',
   more: (k: number) => `（ほか ${k} 件）`,
 } as const;
+
+/** return_note の文の schema 2 の版（契約 §AL-5。scope と text だけが schema 1 と違う。verbatim） */
+export const RETURN_NOTE_TEXT_V2 = {
+  ...RETURN_NOTE_TEXT,
+  scope:
+    '前の版から始めて、下の一覧の所と、それに合わせて直す必要がある所（claims・sources・本文と問い・入口・図や動かせるものの中の同じ記述）だけを直してください。関係のない所は変えないでください。',
+  text: '子ども向けの本文には、ファイル名（app.html・figure-1.svg など）や作る側の言葉を書かないでください。動かせるものは「さわってみよう」、図は「図」と呼びます。直した所は本文（body.md）と、あれば遊びの形（play.md）・問いの種・関心別の入口でそろえてください。',
+} as const;
+
+/** 版の return_note の文（schemaVersionOf(material) が 2 なら RETURN_NOTE_TEXT_V2、それ以外は RETURN_NOTE_TEXT） */
+export function returnNoteTextOf(material: unknown): typeof RETURN_NOTE_TEXT | typeof RETURN_NOTE_TEXT_V2 {
+  return schemaVersionOf(material) === 2 ? RETURN_NOTE_TEXT_V2 : RETURN_NOTE_TEXT;
+}
 
 // ---------------------------------------------------------------------------------------------
 // 読み手係の結果の形（契約 V-4 e・f。reader.ts の parseReading が作り、reader_json に {v:1, model, …, not_read} で保存する）
@@ -722,12 +758,14 @@ export function buildReturnNote(items: readonly TriageItem[], autoRounds: number
   const manyHyp = fixes.some((i) => i.id === 'check:many_hypotheses');
   const license = fixes.some((i) => i.kind === 'source' && i.cause === 'license_unknown');
   const textFix = fixes.some((i) => i.kind === 'text' || i.kind === 'reader' || i.kind === 'learning' || i.kind === 'conditions');
-  const head = [RETURN_NOTE_TEXT.head(autoRounds + 1), RETURN_NOTE_TEXT.scope];
-  if (claimFix) head.push(RETURN_NOTE_TEXT.claims);
-  if (manyHyp) head.push(RETURN_NOTE_TEXT.manyHypotheses(ratio.h, ratio.n));
-  if (license) head.push(RETURN_NOTE_TEXT.license);
+  // §AL-5: scope と text は版で分ける（schema 1 は従来の文）
+  const note = returnNoteTextOf(material);
+  const head = [note.head(autoRounds + 1), note.scope];
+  if (claimFix) head.push(note.claims);
+  if (manyHyp) head.push(note.manyHypotheses(ratio.h, ratio.n));
+  if (license) head.push(note.license);
   if (claimFix) head.push(RETURN_FIXED_TEXT);
-  if (textFix) head.push(RETURN_NOTE_TEXT.text);
+  if (textFix) head.push(note.text);
   const lines = fixes.map((i) => {
     const fig = figureReturnLine(i, material);
     if (fig !== null) return fig;
@@ -908,6 +946,7 @@ export function triageVersion(input: TriageInput): TriageOutput {
       push({ id: idOf('missing_ref'), kind: 'check', key: 'content_and_evidence', severity: 'fix', cause: 'missing_ref', path: itemPathOf(str(r.path)), detail: str(r.ref) });
     }
     const editionTextPaths = new Set<string>();
+    const textIds = new Set<string>();
     // §MC-2・Astra R1: 本文の版の 1 文の項目は版が決まっている題材だけ（そうでない題材の edition_text は無視する）
     const editionTextApplies = isVersionBoundMaterial(material);
     for (const r of arr('child_text') ?? []) {
@@ -929,8 +968,20 @@ export function triageVersion(input: TriageInput): TriageOutput {
         });
         continue;
       }
-      if (r.kind !== 'file_name' && r.kind !== 'raw_markup') continue;
-      push({ id: idOf(r.kind), kind: 'text', key: 'explanation_and_expression', severity: 'fix', cause: r.kind, path: itemPathOf(str(r.path)), quote: cut(r.sample, 200) });
+      if (r.kind === 'file_name' || r.kind === 'raw_markup') {
+        push({ id: idOf(r.kind), kind: 'text', key: 'explanation_and_expression', severity: 'fix', cause: r.kind, path: itemPathOf(str(r.path)), quote: cut(r.sample, 200) });
+        continue;
+      }
+      // §AL-5: 新しい kind（schema 2 の版だけ出る）。(kind, path) ごとに 1 件・最初の行の sample を引用にする。知らない kind は捨てる
+      const kind = CHILD_TEXT_KINDS.find((k) => k === r.kind);
+      if (kind === undefined || kind === 'edition_text' || kind === 'file_name' || kind === 'raw_markup') continue;
+      const path = itemPathOf(str(r.path));
+      if (!path) continue;
+      const id = `text:${kind}:${path}`;
+      if (textIds.has(id)) continue;
+      textIds.add(id);
+      const quote = cut(r.sample, 200);
+      push({ id, kind: 'text', key: 'explanation_and_expression', severity: CHILD_TEXT_V2_SEVERITY[kind], cause: kind, path, ...(quote ? { quote } : {}) });
     }
     // §O-13-4 4: 絵の主張の機械検査（古い版の checks_json にはキーが無い = 項目を作らない）
     const fig = { kind: 'check' as const, key: 'explanation_and_expression' as const };
