@@ -1226,6 +1226,33 @@ state は `done` / `active` / `waiting` (人の番) / `failed` / `pending` / `sk
 7. **メニュー**: `<nav>` は 工場（`#/`）/ 確認待ち（`#/review`）/ 道具と記録 ▾（`<details class="nav-more">`。中身はグループ見出し付き: 入口 = 提案箱・新しい素材 / 制作 = 編集基準・画像の生成・動画の確認 / 倉庫 = 素材・立体モデル / そのほか = 今日のお題・改善係）。画面を移った時・外を押した時・Esc で閉じる。640px 以下では `.top` 基準で置き、`.nav` の横スクロールに切られない。§N-3 見出しの nav の順はこれで置き換える
 8. **表示名**: 「お題の棚」の表示名は「今日のお題」（メニュー・画面の見出し・タブの aria-label・パネル・リンク）。URL `#/topics` と §T・contract-T の本文の名前は変えない（過去の本文は書き換えない）
 
+### §N-8 管理画面の組み直し 2 段目（2026-11-07。オーナーの方針「項目をばらばらに置かず、仕事ごとにまとめる」「AI エージェント（係）の UI にまとめられるものはまとめる」。§N-7 の続き）
+
+上書きする条項: §N-7 6（状況帯は 4 枠のまま・入口の枠の「工場の入口を開く ›」）と §N-7 3 の表の 確認する人（自動公開は出さない・操作なし）・倉庫（入口「生成した画像の記録」）の行は、この節で置き換える（元の本文は残す）。
+
+1. **状況帯は 3 枠**: 制作 / お金 / 注意（`STATUS_CARDS`。1100px 以上で 1 段・幅 1 : 1 : 1.4、狭い時は 1 列）。「入口（収集・会議）」と「画像・動画」の枠は廃止（中身は係のパネル: 入口・会議・職人・検証係）
+   - 制作: 稼働の点と文字・[止める]/[再開]（`#pause-btn`）・制作中 n / 最大・順番待ち n・定期処理の相対時間。枠の中に注意を持たない
+   - お金: 今日のメーター・今月 収集 / 会議 / 画像 の額（上限と合計は出さない）。画像の額は `#/images` へのリンクで印 `data-img-band`（smoke (i12) が `#status` の中で数える）
+   - 注意: すべての注意を 1 列（赤が先・黄が後）。見出しの右に件数。0 件は「注意はありません」を muted で 1 行（枠は残す）。注意がある時は枠の左線を赤 / 黄。`aria-live="polite"` はこの容器だけ（中身が変わった時だけ書き直す）
+2. **注意の行き先**: 各行の末尾に、原因の係のパネルを開くリンク `#/?st=<係>`（`ALERT_GO_TEXT`）
+
+| 注意 | 色 | 行き先 |
+|---|---|---|
+| 停止中（メモ）・定期処理の遅れ / 1 時間以上・職人 未設定・今日の費用 80% / 上限 | 赤 / 黄 | なし |
+| 収集の失敗・収集の月の上限 80% 以上 | 赤 / 黄 | `st=intake`（入口の係を開く） |
+| 会議の失敗 / 失効・会議の月の上限 80% 以上 | 赤 / 黄 | `st=meeting`（会議の係を開く） |
+| 画像の停止（`data-img-halted`）・予備の鍵を 7 日以内に使った（`data-img-backup-band`）・画像の月の上限 80% 以上 | 赤 / 黄 / 黄 | `st=maker`（職人の係を開く） |
+| お題: 最後の作成が失敗 / 24 時間以内に失敗あり（`status.topics.last_run`・`failed_24h`）・お題の月の上限 80% 以上 | 赤 / 黄 / 黄 | `st=topics`（お題係を開く） |
+| 動画（今は出す注意が無い。出す時） | — | `st=verifier`（検証係を開く） |
+
+   - hash が今と違えば hashchange → `route()` が工場を作り直し、`viewFloor` が `q.st` を読んでパネルを開く。工場にいて hash が同じ時（前に同じリンクで開いて ✕ で閉じた等）は hashchange が起きないので、クリックを受けてそのパネルを開く（開いていれば閉じない）。`#/?st=` で開いた時はパネルを窓に入れる
+   - 互換: `imagesBandHtml` / `imagesMonthHtml` / `imagesAlertHtml` / `videosBandHtml` の純関数は旧い帯の形のまま残す（test/image-backup.test.ts・image-admin.test.ts・video-q2.test.ts）。帯からは使わない
+3. **確認する人のパネルの自動公開**: ④操作に自動公開のスイッチ `#sp-autopub`（`#/review` の `#rl-autopub` と同じ見た目・同じ API `GET /api/review/stats` / `POST /api/review/auto-publish {on}`）。押すと `#/review` と同じ確認ダイアログ・同じ文言・同じトースト（`switchAutoPublish` 1 か所で共有。複製しない）。stats はパネルを開いた時に 1 回取り、押した後に取り直す（15 秒ごとには取らない）。未着は「読み込み中…」（押せない）、読めなければ理由と「もう一度読み込む」。事実に「全部通った教材への判断（公開 n・直す n・却下 n（続けて公開 n））」。`#/review` 側のスイッチは残す
+4. **倉庫の「生成した画像」**:
+   - API `GET /api/images/gallery?before=<created_at>&before_id=<id>&limit=<n>`（§B-3 に追記。認証は §B-1 の admin と同じ。副作用なし）。`image_requests` の `state = 'done'` だけを `created_at DESC, id DESC` でキー付きに返す。応答 `{ items: [{ request_id, job_id, material_id, material_title, created_at, model, size, alt }], next: { before, before_id } | null }`。`alt` は `input_json` から取り出す（無い・文字列でない・壊れた JSON は null）。**prompt は返さない**。素材は `job_id → factory_jobs.material_id → materials.title` を 1 文の LEFT JOIN で（素材が引けなければ `material_id`・`material_title` とも null）。`limit` は既定 24、数なら 1〜48 に丸める（数でなければ 400 `bad_query`）。`before` と `before_id` は 2 つ一緒（片方だけ・時刻でない・id の形が違えば 400 `bad_query`）
+   - 画面 `#/library/images`「生成した画像」: カードの格子。サムネは既存の `/api/images/requests/<id>/file` を `<img loading="lazy">`（CSP `img-src 'self'` で通る。押すと原寸を別タブで）、作った日時・教材の名前（あれば `#/material/<id>` へ）・alt（esc）。下に「もっと見る」（キー付き）。0 件は「まだありません」、読み込み中・失敗（もう一度読み込む）は既存の画面の型
+   - 入口: 倉庫のパネルの入口「生成した画像の記録 › `#/images`」を「生成した画像 › `#/library/images`」に変える。`#/images`（画像の生成の道具）への入口は職人のパネルに残す。メニューの倉庫のグループに「生成した画像」を足す（倉庫 = 素材・立体モデル・生成した画像）
+
 ## §O 画像生成（段階 2。v3.9。2026-11-05 凍結。Astra high GO）
 
 本文（正本）は `docs/plans/image-generation/contract-O-draft.md`（§O-0〜§O-11）。同書が「そのまま使う」と指定した `docs/plans/image-generation/contract-M2-draft.md` の節（§M-2-2 a〜c、§M-2-4 e、§M-2-5 a、§M-2-6 a の文と表、§M-2-7）は、同書の差し替えを当てた形で本契約の一部とする。旧下書きのそれ以外の節（状態機械・精算・通知・枠・probe）は使わない。
