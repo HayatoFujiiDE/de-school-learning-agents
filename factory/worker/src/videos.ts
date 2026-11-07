@@ -348,7 +348,8 @@ export const VIDEO_NOTE_OMITTED_MARK = '（容量のため省略。判定に含�
  * `##` で始まる行の頭に全角空白を足す（見出しを偽れない）。契約 V-3 c: `<apps>` `<child_texts>` `<parts>` も同じ置き換え
  */
 export function neutralizeInputText(t: string): string {
-  return t.replace(/<(\/?\s*(?:source_captures|video_notes|videos|apps|child_texts|parts))/gi, '＜$1').replace(/^(\s*)##/gm, '$1　##');
+  // §MC-3 5: <edition>（版が決まっている題材の宣言の節）も偽れないようにする
+  return t.replace(/<(\/?\s*(?:source_captures|video_notes|videos|apps|child_texts|parts|edition))/gi, '＜$1').replace(/^(\s*)##/gm, '$1　##');
 }
 
 const oneLine = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -364,6 +365,8 @@ function officialLines(v: VersionVideo, m: VideoMetaState | undefined): string[]
     `official_channel: ${oneLine(m.author_name)}`,
     `official_channel_url: ${oneLine(m.author_url)}`,
     `channel_match: ${channelMatch(v.channel, m.author_name)}`,
+    // §MC-3 4: YouTube の公開日（無ければ不明）
+    `official_published: ${m.published ? oneLine(m.published) : '不明'}`,
   ];
 }
 
@@ -466,6 +469,8 @@ export interface VideoMetaRecord {
   title?: string;
   author_name?: string;
   author_url?: string;
+  /** §MC-3 3: YouTube の公開日（YYYY-MM-DD。ok の時だけ。空なら key を書かない） */
+  published?: string;
   at: string;
 }
 
@@ -477,12 +482,21 @@ export interface VideoMetaState {
   title?: string;
   author_name?: string;
   author_url?: string;
+  /** ok の時だけ（§MC-3 3。YYYY-MM-DD か null = 公開日が分からない。published の無い古い記録も null） */
+  published?: string | null;
 }
 
 /** 記録を作る（ok は 3 つの値を整えて入れる） */
-export function videoMetaRecordOf(v: VersionVideo, s: { outcome: 'ok' | 'not_found'; title?: unknown; author_name?: unknown; author_url?: unknown }, at: string): VideoMetaRecord {
+export function videoMetaRecordOf(
+  v: VersionVideo,
+  s: { outcome: 'ok' | 'not_found'; title?: unknown; author_name?: unknown; author_url?: unknown; published?: unknown },
+  at: string,
+): VideoMetaRecord {
   const base = { v: 1 as const, video_id: v.id, youtube_id: v.youtube_id, at };
-  return s.outcome === 'ok' ? { ...base, outcome: 'ok', ...sanitizeOEmbedFields(s) } : { ...base, outcome: 'not_found' };
+  if (s.outcome !== 'ok') return { ...base, outcome: 'not_found' };
+  // §MC-3 3: published は形が合う時だけ（空なら key を書かない。v は 1 のまま）
+  const { published, ...fields } = sanitizeOEmbedFields(s);
+  return { ...base, outcome: 'ok', ...fields, ...(published ? { published } : {}) };
 }
 
 /**
@@ -496,7 +510,7 @@ export function parseVideoMetaRecord(text: string, v: VersionVideo): VideoMetaRe
     const at = isStr(o.at) ? o.at : '';
     if (o.outcome === 'not_found') return videoMetaRecordOf(v, { outcome: 'not_found' }, at);
     if (o.outcome !== 'ok' || !isStr(o.title) || !o.title || !isStr(o.author_name) || !o.author_name) return null;
-    return videoMetaRecordOf(v, { outcome: 'ok', title: o.title, author_name: o.author_name, author_url: o.author_url }, at);
+    return videoMetaRecordOf(v, { outcome: 'ok', title: o.title, author_name: o.author_name, author_url: o.author_url, published: o.published }, at);
   } catch {
     return null;
   }
@@ -504,7 +518,9 @@ export function parseVideoMetaRecord(text: string, v: VersionVideo): VideoMetaRe
 
 /** 記録 → 試行で使う公式の情報 */
 export const videoMetaStateOfRecord = (r: VideoMetaRecord): VideoMetaState =>
-  r.outcome === 'ok' ? { outcome: 'ok', title: r.title ?? '', author_name: r.author_name ?? '', author_url: r.author_url ?? '' } : { outcome: 'not_found' };
+  r.outcome === 'ok'
+    ? { outcome: 'ok', title: r.title ?? '', author_name: r.author_name ?? '', author_url: r.author_url ?? '', published: r.published || null }
+    : { outcome: 'not_found' };
 
 /** 1 動画の記録を読む（無い・形が違う → null）。R2 の読み出しの例外はそのまま投げる */
 export async function readVideoMetaRecord(r2: R2Bucket, r2Prefix: string, v: VersionVideo): Promise<VideoMetaRecord | null> {
@@ -521,6 +537,8 @@ export interface VideoMetaView {
   author_name: string | null;
   author_url: string | null;
   channel_match: ChannelMatch;
+  /** §MC-2・§MC-3: YouTube の公開日（YYYY-MM-DD）。記録に無い・ok でない → null */
+  published: string | null;
 }
 
 /** 版の動画ごとの video_meta（§Q-11 8。記録を読むだけ。oEmbed を呼ばず、呼び出しの数も増やさない）。読めない記録は unknown */
@@ -535,8 +553,16 @@ export async function readVideoMetaViews(r2: R2Bucket, r2Prefix: string, videos:
     }
     out.push(
       r?.outcome === 'ok'
-        ? { video_id: v.id, outcome: 'ok', title: r.title ?? '', author_name: r.author_name ?? '', author_url: r.author_url ?? '', channel_match: channelMatch(v.channel, r.author_name) }
-        : { video_id: v.id, outcome: r ? 'not_found' : 'unknown', title: null, author_name: null, author_url: null, channel_match: 'unknown' },
+        ? {
+            video_id: v.id,
+            outcome: 'ok',
+            title: r.title ?? '',
+            author_name: r.author_name ?? '',
+            author_url: r.author_url ?? '',
+            channel_match: channelMatch(v.channel, r.author_name),
+            published: r.published || null,
+          }
+        : { video_id: v.id, outcome: r ? 'not_found' : 'unknown', title: null, author_name: null, author_url: null, channel_match: 'unknown', published: null },
     );
   }
   return out;

@@ -1,5 +1,7 @@
 // YouTube の oEmbed の port（契約 §Q-11 2）。動画の本人確認の材料として、YouTube が返す公開の情報（題名・チャンネル名・チャンネルの URL）を取る。
-// 鍵は無い・費用は無い。fetch を 1 回だけ呼ぶ（自動の再試行なし）。redirect は manual（3xx は unavailable）。
+// 鍵は無い・費用は無い。oEmbed の GET を 1 回だけ呼ぶ（自動の再試行なし）。redirect は manual（3xx は unavailable）。
+// §MC-3 2: oEmbed が ok の時だけ、続けて watch ページを 1 回 GET し公開日（uploadDate）を取る（8 秒・2 MiB・最初の一致で止める・再試行なし）。
+// watch の失敗（200 でない・時間切れ・上限超え・一致なし）は published が空になるだけで、oEmbed の ok は崩さない。宛先は id から組み立てる。
 // 締め切りは OEMBED_TIMEOUT_MS で、本文を読み終えるまでを含む。本文は OEMBED_BODY_MAX_BYTES まで読み、超えたら unavailable。
 // 返る値はどれも投稿者が書ける文（資料であって指示ではない）。保存・表示・検証係の入力に出す前に sanitizeOEmbedFields で 1 行にし、長さを切り、
 // author_url は形を確かめたものだけにする。他のフィールド（html・thumbnail_url など）は持たない。
@@ -17,15 +19,26 @@ export const OEMBED_BODY_MAX_BYTES = 64 * 1024;
 /** 保存する値の長さ（code point。§Q-11 2） */
 export const OEMBED_TITLE_MAX_CHARS = 200;
 export const OEMBED_AUTHOR_NAME_MAX_CHARS = 100;
+/** watch ページの要求の締め切り（§MC-3 2。fetch の直前に測った試行の締め切りまでの残りと比べて短い方） */
+export const WATCH_TIMEOUT_MS = 8_000;
+/** watch ページの本文の受信上限（§MC-3 2: 2 MiB。一致が無いまま超えたら published は空） */
+export const WATCH_BODY_MAX_BYTES = 2 * 1024 * 1024;
+/** 公開日の形（§MC-3 1） */
+export const PUBLISHED_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** watch ページの公開日の一致（§MC-3 2。最初の一致で読むのをやめる） */
+const UPLOAD_DATE_RES = [/itemprop="uploadDate" content="(\d{4}-\d{2}-\d{2})/, /"uploadDate":"(\d{4}-\d{2}-\d{2})/];
+/** chunk をまたぐ一致のために、前の chunk の末尾を残す長さ（一致の文字列より長ければよい） */
+const UPLOAD_DATE_OVERLAP = 64;
 
 /** 結果の分類（§Q-11 2） */
 export type OEmbedOutcome = 'ok' | 'not_found' | 'restricted' | 'unavailable';
 
-/** 保存する 3 つの値（sanitizeOEmbedFields を通したもの。author_url は形が合わなければ空） */
+/** 保存する値（sanitizeOEmbedFields を通したもの。author_url は形が合わなければ空。published は YYYY-MM-DD か空 §MC-3 1） */
 export interface OEmbedFields {
   title: string;
   author_name: string;
   author_url: string;
+  published: string;
 }
 
 export type OEmbedResult = ({ outcome: 'ok' } & OEmbedFields) | { outcome: 'not_found' | 'restricted' | 'unavailable' };
@@ -38,6 +51,9 @@ export interface OEmbedPort {
    */
   lookup(youtubeId: string, o?: { deadline?: number }): Promise<OEmbedResult>;
 }
+
+/** watch ページの URL（§MC-3 2）。youtube_id は検査済みの 11 文字だけを使う（職人の url をそのまま使わない） */
+export const watchUrl = (youtubeId: string): string => youtubeWatchUrl(youtubeId);
 
 /** 呼ぶ URL（§Q-11 2）。youtube_id は schema で検査済みの 11 文字だけを使う */
 export const oembedUrl = (youtubeId: string): string => `${OEMBED_ENDPOINT}?format=json&url=${encodeURIComponent(youtubeWatchUrl(youtubeId))}`;
@@ -97,14 +113,61 @@ function authorSegmentOk(pathname: string): boolean {
   return !AUTHOR_SEGMENT_BAD_RE.test(decoded);
 }
 
-/** 保存する 3 つの値に整える（§Q-11 2）。文字列でない値は空。何度当てても同じ結果になる */
-export function sanitizeOEmbedFields(o: { title?: unknown; author_name?: unknown; author_url?: unknown }): OEmbedFields {
+/** 公開日（§MC-3 1）: `^\d{4}-\d{2}-\d{2}$` に合う文字列だけ。それ以外は空 */
+export const safePublished = (v: unknown): string => (typeof v === 'string' && PUBLISHED_RE.test(v) ? v : '');
+
+/** 保存する値に整える（§Q-11 2・§MC-3 1）。文字列でない値は空。何度当てても同じ結果になる */
+export function sanitizeOEmbedFields(o: { title?: unknown; author_name?: unknown; author_url?: unknown; published?: unknown }): OEmbedFields {
   const str = (v: unknown) => (typeof v === 'string' ? v : '');
   return {
     title: capCodePoints(oneLineOEmbed(str(o.title)), OEMBED_TITLE_MAX_CHARS),
     author_name: capCodePoints(oneLineOEmbed(str(o.author_name)), OEMBED_AUTHOR_NAME_MAX_CHARS),
     author_url: safeAuthorUrl(o.author_url),
+    published: safePublished(o.published),
   };
+}
+
+/** 本文の中の最初の公開日（2 つの形のうち先に出た方）。無ければ null */
+function firstUploadDate(text: string): string | null {
+  let best: { i: number; d: string } | null = null;
+  for (const re of UPLOAD_DATE_RES) {
+    const m = re.exec(text);
+    if (m && (best === null || m.index < best.i)) best = { i: m.index, d: m[1] };
+  }
+  return best ? best.d : null;
+}
+
+/**
+ * watch ページの本文を stream で読みながら公開日を探す（§MC-3 2）。最初の一致で読むのをやめる（残りは cancel）。
+ * maxBytes を超える分は見ない（一致が無いまま上限に届いたら空）。読み出しの例外（締め切りの abort を含む）は空
+ */
+export async function readUploadDate(res: Response, maxBytes: number): Promise<string> {
+  const body = res.body;
+  if (!body) return '';
+  const reader = body.getReader();
+  const dec = new TextDecoder();
+  let total = 0;
+  let tail = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return firstUploadDate(tail + dec.decode()) ?? '';
+      let chunk = value ?? new Uint8Array();
+      const over = total + chunk.byteLength > maxBytes;
+      if (over) chunk = chunk.subarray(0, maxBytes - total);
+      total += chunk.byteLength;
+      const text = tail + dec.decode(chunk, { stream: !over });
+      const hit = firstUploadDate(text);
+      if (hit !== null || over) {
+        reader.cancel().catch(() => undefined);
+        return hit ?? '';
+      }
+      tail = text.slice(-UPLOAD_DATE_OVERLAP);
+    }
+  } catch {
+    reader.cancel().catch(() => undefined);
+    return '';
+  }
 }
 
 /** 照合の結果（§Q-11 6） */
@@ -134,47 +197,74 @@ export function classifyOEmbedStatus(status: number): Exclude<OEmbedOutcome, 'ok
   return 'unavailable';
 }
 
-/** 本物の port。fetchImpl・timeoutMs はテストで応答を模擬する時だけ渡す */
-export function youtubeOEmbedPort(opts: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): OEmbedPort {
+/** 本物の port。fetchImpl・timeoutMs・watchTimeoutMs はテストで応答を模擬する時だけ渡す */
+export function youtubeOEmbedPort(opts: { fetchImpl?: typeof fetch; timeoutMs?: number; watchTimeoutMs?: number } = {}): OEmbedPort {
   const timeoutMs = opts.timeoutMs ?? OEMBED_TIMEOUT_MS;
+  const watchTimeoutMs = opts.watchTimeoutMs ?? WATCH_TIMEOUT_MS;
+  /** §MC-3 2: watch ページの GET 1 回（再試行なし）。200 でない・時間切れ・上限超え・一致なし・残りが無い → 空 */
+  const publishedOf = async (youtubeId: string, deadline: number | undefined): Promise<string> => {
+    const ms = deadline === undefined ? watchTimeoutMs : Math.min(watchTimeoutMs, deadline - Date.now());
+    if (!(ms > 0)) return '';
+    const signal = AbortSignal.timeout(ms);
+    const f = opts.fetchImpl ?? fetch;
+    let res: Response;
+    try {
+      res = await f(watchUrl(youtubeId), { method: 'GET', redirect: 'manual', headers: { accept: 'text/html', 'accept-language': 'ja,en;q=0.8' }, signal });
+    } catch {
+      return '';
+    }
+    if (res.status !== 200) {
+      res.body?.cancel().catch(() => undefined);
+      return '';
+    }
+    return safePublished(await readUploadDate(res, WATCH_BODY_MAX_BYTES));
+  };
   return {
     isFake: false,
     async lookup(youtubeId, call) {
-      if (typeof youtubeId !== 'string' || !YOUTUBE_ID_RE.test(youtubeId)) return { outcome: 'unavailable' };
-      // 締め切り: fetch と本文の受信の両方に効かせる。試行の締め切りがあれば fetch の直前に測った残りと比べて短い方（§Q-11 2・Astra の指摘）
-      const ms = call?.deadline === undefined ? timeoutMs : Math.min(timeoutMs, call.deadline - Date.now());
-      if (!(ms > 0)) return { outcome: 'unavailable' };
-      const signal = AbortSignal.timeout(ms);
-      const f = opts.fetchImpl ?? fetch;
-      let res: Response;
-      try {
-        res = await f(oembedUrl(youtubeId), { method: 'GET', redirect: 'manual', headers: { accept: 'application/json' }, signal });
-      } catch {
-        return { outcome: 'unavailable' };
-      }
-      if (res.status !== 200) {
-        res.body?.cancel().catch(() => undefined);
-        return { outcome: classifyOEmbedStatus(res.status) };
-      }
-      let body: { bytes: Uint8Array; truncated: boolean };
-      try {
-        body = await readBodyCapped(res, OEMBED_BODY_MAX_BYTES, signal);
-      } catch {
-        return { outcome: 'unavailable' };
-      }
-      if (body.truncated) return { outcome: 'unavailable' };
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(new TextDecoder().decode(body.bytes));
-      } catch {
-        return { outcome: 'unavailable' };
-      }
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { outcome: 'unavailable' };
-      const o = parsed as Record<string, unknown>;
-      if (typeof o.title !== 'string' || !o.title || typeof o.author_name !== 'string' || !o.author_name) return { outcome: 'unavailable' };
-      return { outcome: 'ok', ...sanitizeOEmbedFields(o) };
+      const r = await oembedOnce(youtubeId, call);
+      if (r.outcome !== 'ok') return r;
+      // oEmbed が ok の時だけ（失敗で ok を崩さない）
+      return { ...r, published: await publishedOf(youtubeId, call?.deadline) };
     },
   };
+  /** oEmbed の GET 1 回（§Q-11 2。再試行なし。例外は投げない） */
+  async function oembedOnce(youtubeId: string, call?: { deadline?: number }): Promise<OEmbedResult> {
+    if (typeof youtubeId !== 'string' || !YOUTUBE_ID_RE.test(youtubeId)) return { outcome: 'unavailable' };
+    // 締め切り: fetch と本文の受信の両方に効かせる。試行の締め切りがあれば fetch の直前に測った残りと比べて短い方（§Q-11 2・Astra の指摘）
+    const ms = call?.deadline === undefined ? timeoutMs : Math.min(timeoutMs, call.deadline - Date.now());
+    if (!(ms > 0)) return { outcome: 'unavailable' };
+    const signal = AbortSignal.timeout(ms);
+    const f = opts.fetchImpl ?? fetch;
+    let res: Response;
+    try {
+      res = await f(oembedUrl(youtubeId), { method: 'GET', redirect: 'manual', headers: { accept: 'application/json' }, signal });
+    } catch {
+      return { outcome: 'unavailable' };
+    }
+    if (res.status !== 200) {
+      res.body?.cancel().catch(() => undefined);
+      return { outcome: classifyOEmbedStatus(res.status) };
+    }
+    let body: { bytes: Uint8Array; truncated: boolean };
+    try {
+      body = await readBodyCapped(res, OEMBED_BODY_MAX_BYTES, signal);
+    } catch {
+      return { outcome: 'unavailable' };
+    }
+    if (body.truncated) return { outcome: 'unavailable' };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(new TextDecoder().decode(body.bytes));
+    } catch {
+      return { outcome: 'unavailable' };
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { outcome: 'unavailable' };
+    const o = parsed as Record<string, unknown>;
+    if (typeof o.title !== 'string' || !o.title || typeof o.author_name !== 'string' || !o.author_name) return { outcome: 'unavailable' };
+    // 公開日は watch ページから取る（oEmbed の応答の published は使わない）
+    return { outcome: 'ok', ...sanitizeOEmbedFields({ ...o, published: '' }) };
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -251,6 +341,8 @@ export function youtubeInfoResult(r: OEmbedResult | { outcome: 'invalid_url' | '
     const f = sanitizeOEmbedFields(r);
     const obj: Record<string, string> = { status: 'ok', title: f.title, channel: f.author_name };
     if (f.author_url) obj.channel_url = f.author_url;
+    // §MC-3 6: 公開日（分からなければ空。port の ok は常に published を持つ。published の無い古い形の結果は従来の本文のまま）
+    if ('published' in r) obj.published = f.published;
     return { text: `${JSON.stringify(obj)}\n${YOUTUBE_INFO_NOTES.ok}`, is_error: false };
   }
   const isError = r.outcome === 'unavailable' || r.outcome === 'invalid_url' || r.outcome === 'limit_reached';

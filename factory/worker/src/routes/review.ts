@@ -262,7 +262,7 @@ async function readVideoMeta(r2: R2Bucket, prefix: string, materialJson: string)
   try {
     return await readVideoMetaViews(r2, prefix, videos);
   } catch {
-    return videos.map((x) => ({ video_id: x.id, outcome: 'unknown', title: null, author_name: null, author_url: null, channel_match: 'unknown' }));
+    return videos.map((x) => ({ video_id: x.id, outcome: 'unknown', title: null, author_name: null, author_url: null, channel_match: 'unknown', published: null }));
   }
 }
 

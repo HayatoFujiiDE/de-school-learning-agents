@@ -24,6 +24,12 @@ const CONTRACT_CAUSE_TEXT = {
   no_source: '出典が付いていない',
   source_not_listed: '出典一覧にない出典',
   license_unknown: '利用条件が分からない',
+  // §MC-2 の CAUSE_TEXT（版が決まっている題材の項目の原因。groups には出ない）
+  edition_missing: '使う条件に Minecraft の版（Java 版 ○○）が書かれていない',
+  edition_not_java: 'Java 版でない版（統合版）を宣言している',
+  video_too_old: '動画の公開日が 3 年より前（古い情報）',
+  video_date_unknown: '動画の公開日が取れていない',
+  edition_text_missing: '本文に版（Java 版 ○○）の 1 文が無い',
 };
 // 契約 V-6 g から一字ずつ写した文
 const NOTE_SCOPE =

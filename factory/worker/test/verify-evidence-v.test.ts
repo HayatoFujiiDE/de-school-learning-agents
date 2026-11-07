@@ -18,6 +18,7 @@ import {
   VERDICT_SCHEMA,
   VERIFIER_SYSTEM,
   VIDEO_SYSTEM_LINES,
+  EDITION_SYSTEM_LINES,
   appEntriesOf,
   appsBlocks,
   captureSection,
@@ -283,7 +284,7 @@ describe('契約 V-2 (u1) system と最後の指示文', () => {
     expect(lines.slice(ifg + 3, ifg + 5)).toEqual([...APPS_SYSTEM_LINES]);
     const ir = lines.indexOf(UNCHANGED[6]);
     expect(lines.slice(ir + 1, ir + 3)).toEqual([...CAPTURE_SYSTEM_LINES]);
-    const added = new Set<string>([JUDGE_PREAMBLE_LINE, ...CAPTURE_SYSTEM_LINES, PRESENTED_AS_SYSTEM_LINE, ...APPS_SYSTEM_LINES, ...ANALOGY_SYSTEM_LINES, ...VIDEO_SYSTEM_LINES, ...FIGURE_CLAIMS_SYSTEM_LINES]);
+    const added = new Set<string>([JUDGE_PREAMBLE_LINE, ...CAPTURE_SYSTEM_LINES, PRESENTED_AS_SYSTEM_LINE, ...APPS_SYSTEM_LINES, ...ANALOGY_SYSTEM_LINES, ...VIDEO_SYSTEM_LINES, ...EDITION_SYSTEM_LINES, ...FIGURE_CLAIMS_SYSTEM_LINES]);
     expect(lines.filter((l) => !added.has(l))).toEqual(UNCHANGED);
     expect(lines).toHaveLength(UNCHANGED.length + added.size);
   });

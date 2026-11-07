@@ -18,6 +18,7 @@ import {
   VERDICT_SCHEMA,
   VERIFIER_SYSTEM,
   VIDEO_SYSTEM_LINES,
+  EDITION_SYSTEM_LINES,
   VERIFY_INPUT_CHAR_LIMIT,
   APPS_SYSTEM_LINES,
   FIGURE_CLAIMS_SYSTEM_LINES,
@@ -474,7 +475,8 @@ describe('§P d4 system の新しい 2 段落（既存の文は変えない）',
     const ir = lines.indexOf(OLD[7]);
     expect(lines.slice(ir + 1, ir + 1 + CAPTURE.length)).toEqual(CAPTURE);
     // §Q-3 5 の動画の段落（たとえの段落の直後。test/video-q2.test.ts が中身を見る）は除いて比べる
-    const VIDEO: readonly string[] = VIDEO_SYSTEM_LINES;
+    // §MC-3 5 の版の 1 文（動画の段落の直後。test/mc-published.test.ts が中身と位置を見る）も動画の段落と一緒に除く
+    const VIDEO: readonly string[] = [...VIDEO_SYSTEM_LINES, ...EDITION_SYSTEM_LINES];
     // §O-13-3 2 の絵の主張の 2 行も除いて比べる（test/verify-figure-claims.test.ts が中身と位置を見る）
     const V3: readonly string[] = [PRESENTED_AS_SYSTEM_LINE, ...APPS_SYSTEM_LINES, ...FIGURE_CLAIMS_SYSTEM_LINES];
     expect(lines.filter((l) => !CAPTURE.includes(l) && !ANALOGY.includes(l) && !VIDEO.includes(l) && !V3.includes(l))).toEqual(OLD);
