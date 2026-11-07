@@ -7,6 +7,7 @@ import { claimReverify } from '../reverify';
 import { buildReject, buildReturn, buildReworkBrief, CHECKLIST_KEYS, publishSwitch } from '../publish';
 import { CHECK_KEYS, readReaderResult, type CheckKey } from '../checks/triage';
 import { videoSourceIds } from '../checks/citations';
+import { figureShowsMetaOf } from '../checks/schema';
 import { AUTO_PUBLISH_EMAIL, computeTriage, latestVerificationOf } from '../triage-step';
 import { generatedImagesOf } from './images';
 import { serveVersionFile } from './library';
@@ -219,8 +220,8 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
           unverified: ver.unverified,
           contradicted: ver.contradicted,
           overall_note: report?.overall_note ?? null,
-          // §O-12 d: 図ごとの判定（result_json に figures が無い古い検証は null）
-          figures: figuresOf(report?.figures),
+          // §O-12 d: 図ごとの判定（result_json に figures が無い古い検証は null）。§O-13-5: verdict_raw と checks も通す
+          figures: figureVerdictsOf(report?.figures),
           // §P c 5: たとえのずれ（result_json に analogy_gaps が無い古い検証は null）
           analogy_gaps: analogyGapsOf(report?.analogy_gaps),
           // §Q-5: 動画ごとの判定（result_json に videos が無い古い検証は null）
@@ -247,6 +248,8 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
     },
     auto_publish: (await getSetting(db, 'auto_publish')) === '1',
     generated_images: generatedImages,
+    // §O-13-5: 図の絵の主張と参照（版の material_json から。shows が無い図は入れない）
+    figures_meta: figuresMetaOf(material),
     video_notes: videoNotes,
     video_meta: videoMeta,
   });
@@ -286,6 +289,38 @@ function figuresOf(raw: unknown): Array<{ path: string; verdict: string; reason:
   return (raw as Array<Record<string, unknown> | null>)
     .filter((f): f is Record<string, unknown> => !!f && typeof f === 'object' && typeof f.path === 'string')
     .map((f) => ({ path: f.path as string, verdict: typeof f.verdict === 'string' ? f.verdict : '', reason: typeof f.reason === 'string' ? f.reason : '' }));
+}
+
+/**
+ * §O-13-5: result_json の figures → API の形（{path, verdict, verdict_raw, reason, checks}[]）。配列でなければ null。
+ * verdict_raw が無い（§O-13 の前の検証）は verdict、checks が無い・配列でない時は []（画面は「未検査」として出す）
+ */
+function figureVerdictsOf(raw: unknown): Array<{ path: string; verdict: string; verdict_raw: string; reason: string; checks: Array<{ n: number; result: string; note: string }> }> | null {
+  const base = figuresOf(raw);
+  if (!base) return null;
+  const rows = (raw as Array<Record<string, unknown> | null>).filter((f): f is Record<string, unknown> => !!f && typeof f === 'object' && typeof f.path === 'string');
+  return base.map((f, i) => {
+    const r = rows[i];
+    const checks = Array.isArray(r.checks)
+      ? (r.checks as unknown[]).flatMap((c) => {
+          const x = c && typeof c === 'object' && !Array.isArray(c) ? (c as Record<string, unknown>) : null;
+          return x && typeof x.n === 'number' && Number.isInteger(x.n) && typeof x.result === 'string'
+            ? [{ n: x.n, result: x.result, note: typeof x.note === 'string' ? x.note : '' }]
+            : [];
+        })
+      : [];
+    return { ...f, verdict_raw: typeof r.verdict_raw === 'string' ? r.verdict_raw : f.verdict, checks };
+  });
+}
+
+/** §O-13-5: 版の material（parse 済み）の image_id の行の絵の主張と参照 → { <path>: { shows: [{text, source_ids}], reference_url } }（shows が無い図は入れない） */
+function figuresMetaOf(material: unknown): Record<string, { shows: Array<{ text: string; source_ids: string[] }>; reference_url: string | null }> {
+  const out: Record<string, { shows: Array<{ text: string; source_ids: string[] }>; reference_url: string | null }> = {};
+  for (const [p, m] of figureShowsMetaOf(material)) {
+    if (m.shows.length === 0) continue;
+    out[p] = { shows: m.shows.map((x) => ({ text: x.text, source_ids: [...x.source_ids] })), reference_url: m.reference_url };
+  }
+  return out;
 }
 
 /** result_json の analogy_gaps → API の形（{claim_id, where, analogy, same, differs}[]）。配列でなければ null（§P c 5） */

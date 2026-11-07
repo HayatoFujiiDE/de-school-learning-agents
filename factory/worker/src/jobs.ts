@@ -9,12 +9,14 @@ import { accumulateCitations, applyCarry, finishCitations, isCitationAcc, newCit
 import { versionVideosOf } from './videos';
 import { checkForbidden } from './checks/forbidden';
 import { checkChildText } from './checks/childtext';
+import { PRIMARY_HOSTS } from './checks/hosts';
 import { basenameOf, duplicateBasename, resolveOutputLayout } from './checks/layout';
 import {
   MAX_FILE_BYTES,
   MAX_FILES,
   REQUIRED_FILES,
   contentDigestInput,
+  checkFigureShows,
   imageRefsOf,
   isSafeRelativePath,
   normalizeOutputPath,
@@ -1694,6 +1696,40 @@ class Reconciler {
     return (await sha256Hex(bytes)) === want.sha256 ? { format: want.format, bytes } : null;
   }
 
+  /** §O-13-2 2: image_id → image_requests の accuracy（行が無い・読めない値は ''。scientific だけが「対象画像」） */
+  private async imageAccuracies(ids: string[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    for (const id of new Set(ids)) {
+      const row = await first<{ input_json: string }>(this.db, stmt('SELECT input_json FROM image_requests WHERE id = ?', id));
+      let accuracy = '';
+      try {
+        const a = row ? (JSON.parse(row.input_json) as { accuracy?: unknown }).accuracy : '';
+        accuracy = typeof a === 'string' ? a : '';
+      } catch {
+        accuracy = '';
+      }
+      out.set(id, accuracy);
+    }
+    return out;
+  }
+
+  /**
+   * §O-13-2 5: 作り直し（rework かつ parent_version_id あり）の親の版の material_json（同じ素材の版）。作り直しでなければ null（比べない）。
+   * 読めない（行が無い・D1 の失敗）時は ''（checkFigureShows が parentUnreadable にし、比べずに通す。親が読めないのは別の異常なので止めない）
+   */
+  private async parentMaterialJson(job: JobRow): Promise<string | null> {
+    if (job.kind !== 'rework' || !job.parent_version_id) return null;
+    try {
+      const pv = await first<{ material_json: string }>(
+        this.db,
+        stmt('SELECT material_json FROM material_versions WHERE id = ? AND material_id = ?', job.parent_version_id, job.material_id),
+      );
+      return pv && typeof pv.material_json === 'string' ? pv.material_json : '';
+    } catch {
+      return '';
+    }
+  }
+
   /** §B-4-d 手順 6: inspected → listed → ingested → versioned。各段階の途中経過は reconcile_state_json に置き、ページ / ファイル単位で再開する */
   private async ingest(job: JobRow, missingError: string): Promise<string> {
     let stage = job.reconcile_stage;
@@ -1933,8 +1969,22 @@ class Reconciler {
     });
     const digest = await crypto.subtle.digest('SHA-256', contentDigestInput(files));
     const sha = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    // §O-13-2: 絵の主張の検査（取り込みは止めない。checks_json に残す）。I/O はここで済ませ、検査は純関数に渡す
+    const figureShows = checkFigureShows(schema.material, schema.sources, {
+      accuracyByImageId: await this.imageAccuracies(refs.map((r) => r.image_id)),
+      primaryHosts: PRIMARY_HOSTS,
+      parentMaterialJson: await this.parentMaterialJson(job),
+    });
+    if (figureShows.parentUnreadable) console.log(JSON.stringify({ at: 'ingest', job_id: job.id, warn: 'parent_material_unreadable' }));
     // 契約 V-5: 子ども向け本文の機械検査（取り込みは止めない）
-    const checks = { schema: 'ok', citations: cit.summary, ...forb, unreferenced_files: layout.unreferenced, child_text: checkChildText(schema.material, texts) };
+    const checks = {
+      schema: 'ok',
+      citations: cit.summary,
+      ...forb,
+      unreferenced_files: layout.unreferenced,
+      child_text: checkChildText(schema.material, texts),
+      ...figureShows.checks,
+    };
 
     const now = nowIso();
     const versionId = crypto.randomUUID();

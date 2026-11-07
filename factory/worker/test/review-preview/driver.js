@@ -92,6 +92,19 @@
         done();
       });
     },
+    // §O-13-5: 「説明と表現」の補足を開き、図のサムネイルの下の絵の主張（✓ ✗ ？ －）が見える所まで右の一覧を巻く
+    'fig-claims': function () {
+      when(located, function () {
+        var row = $('details[data-mk="explanation_and_expression"]');
+        if (row) row.open = true;
+        setTimeout(function () {
+          var el = $('[data-fig-claims]');
+          var rail = $('.rv-rail');
+          if (el && rail) rail.scrollTop += el.getBoundingClientRect().top - rail.getBoundingClientRect().top - 220;
+          done(160);
+        }, 200);
+      });
+    },
     sticky: function () {
       addSticky(2, 'hard', '「いちばん 数が 多い」の根拠が子どもに伝わらない', function () {
         addSticky(3, 'fact', '核と運搬量の関係は食い違いの指摘あり', function () { done(); });

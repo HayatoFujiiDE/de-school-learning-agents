@@ -104,7 +104,45 @@ export function readerWait() {
   return d;
 }
 
-export const ALL = { attention, clean, pending, readerWait };
+/**
+ * 絵の主張（§O-13-5）のある版: p1 に生成画像 1 枚（絵の主張 3 件・参照つき）。検証係は [1] ok・[2] wrong・[3] unclear（最終の判定は problem）。
+ * 4 通りの版とは別に serve.mjs だけが出す（#/review/vfig-0001。撮影 shot=fig-claims）。参照の URL は作り物
+ */
+export function figureClaims() {
+  const d = attention();
+  d.version.id = 'vfig-0001';
+  d.version.version = 7;
+  d.version.created_at = '2026-11-07T09:00:00.000Z';
+  d.material.title = '赤血球のしごと（絵の主張のある版）';
+  const path = 'parts/p1/p1-rbc.png';
+  const shows = [
+    { text: '赤血球はまん中がへこんだ円盤で、核が無い', source_ids: ['s1'] },
+    { text: '静脈の血も赤い（青くない）', source_ids: ['s1', 's2'] },
+    { text: '毛細血管の中を赤血球が 1 列で通る', source_ids: ['s1'] },
+  ];
+  const ref = 'https://example.org/body/blood/red-cells/photo';
+  d.version.material.parts[0].files.push({ path, role: 'figure', image_id: 'img_' + '0'.repeat(32), alt: '血管の中を流れる赤血球', shows, reference_url: ref });
+  d.generated_images = [{ path, accuracy: 'scientific', prompt: 'Red blood cells flowing in a capillary, oblique view, soft light', alt: '血管の中を流れる赤血球' }];
+  d.figures_meta = { [path]: { shows, reference_url: ref } };
+  const checks = [
+    { n: 1, result: 'ok', note: '絵も出典も合う' },
+    { n: 2, result: 'wrong', note: '絵の奥の静脈が青く塗られている' },
+    { n: 3, result: 'unclear', note: '参照のページを開けなかった' },
+  ];
+  const reason = '絵の主張 [2] が成り立たない: 奥の血管が青い';
+  d.verification.figures = [...d.verification.figures.map((f) => ({ ...f, verdict_raw: f.verdict, checks: [] })), { path, verdict: 'problem', verdict_raw: 'ok', reason, checks }];
+  const detail = [
+    '絵の主張 [2] に問題、[3] は確かめきれない',
+    '・[2] 静脈の血も赤い（青くない）: 問題（絵の奥の静脈が青く塗られている）',
+    '・[3] 毛細血管の中を赤血球が 1 列で通る: 確かめきれない（参照のページを開けなかった）',
+    reason,
+  ].join('\n');
+  d.triage.items = [{ id: 'figure:' + path, kind: 'figure', key: 'explanation_and_expression', severity: 'fix', cause: 'figure_problem', title: '図に問題がある', detail, path }, ...d.triage.items];
+  d.triage.counts = { ...d.triage.counts, fix: d.triage.counts.fix + 1 };
+  return d;
+}
+
+export const ALL = { attention, clean, pending, readerWait, figureClaims };
 
 /** 一覧（GET /api/review）の行。並びはサーバーと同じ（needs_review の多い順 → 古い順） */
 export function listRows() {

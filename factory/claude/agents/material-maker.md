@@ -8,10 +8,10 @@ tools:
     configs:
       - name: web_search
         enabled: true
-        allowed_domains: [minecraft.wiki, docs.python.org, scratch.mit.edu, mext.go.jp, nier.go.jp, ja.wikipedia.org, developer.mozilla.org, youtube.com]
+        allowed_domains: [minecraft.wiki, docs.python.org, scratch.mit.edu, mext.go.jp, nier.go.jp, ja.wikipedia.org, developer.mozilla.org, youtube.com, kahaku.go.jp, jaxa.jp, nao.ac.jp, jamstec.go.jp, riken.jp, aist.go.jp, jma.go.jp, gsi.go.jp, env.go.jp, mhlw.go.jp, jst.go.jp, nih.gov, medlineplus.gov, nasa.gov, esa.int, noaa.gov, usgs.gov, britannica.com, kotobank.jp, tokyo-shoseki.co.jp, kyoiku-shuppan.co.jp, dainippon-tosho.co.jp, keirinkan.com, shinko-keirin.co.jp, gakko-tosho.co.jp, teikokushoin.co.jp, en.wikipedia.org, kidshealth.org]
       - name: web_fetch
         enabled: true
-        allowed_domains: [minecraft.wiki, docs.python.org, scratch.mit.edu, mext.go.jp, nier.go.jp, ja.wikipedia.org, developer.mozilla.org, youtube.com]
+        allowed_domains: [minecraft.wiki, docs.python.org, scratch.mit.edu, mext.go.jp, nier.go.jp, ja.wikipedia.org, developer.mozilla.org, youtube.com, kahaku.go.jp, jaxa.jp, nao.ac.jp, jamstec.go.jp, riken.jp, aist.go.jp, jma.go.jp, gsi.go.jp, env.go.jp, mhlw.go.jp, jst.go.jp, nih.gov, medlineplus.gov, nasa.gov, esa.int, noaa.gov, usgs.gov, britannica.com, kotobank.jp, tokyo-shoseki.co.jp, kyoiku-shuppan.co.jp, dainippon-tosho.co.jp, keirinkan.com, shinko-keirin.co.jp, gakko-tosho.co.jp, teikokushoin.co.jp, en.wikipedia.org, kidshealth.org]
         max_content_tokens: 40000
   - type: custom
     name: generate_image
@@ -98,8 +98,11 @@ tools:
 - 立体の絵を作る時は、prompt に見る向き（ななめ上から・切り口など）、光と影、質感（つや・やわらかさなど）、背景（その物がある場所。例: 赤血球なら血管の中を流れている様子）を書く。名前の引き出し線や説明は、画像の中に入れるより本文か SVG の図で添える（画像の中の文字は崩れやすい）
 - 同じ物に「立体の絵（generate_image）」と「名前や数を示す模式図（SVG）」の両方があってよい。どこに使うかはあなたが決めてよい
 - accuracy は、大きさの順・数・比率・構造・地図・図表など正確さが要る絵なら scientific、雰囲気や挿絵なら standard にする
-- 返ってきた画像は必ず見て、注文票・claims.json の事実・本文と食い違っていないか確かめる。食い違いや読み取りにくさがあれば prompt を直して描き直す。1 回の注文で作れるのは 8 枚まで（描き直しも 1 枚に数える）。結果の文に残りの枚数が書いてある
+- 返ってきた画像は必ず見て、注文票・claims.json の事実・本文と食い違っていないか確かめる。食い違いや読み取りにくさがあれば prompt を直して描き直す。1 回の注文で作れるのは 8 枚まで（描き直しも 1 枚に数える）。結果の文に残りの枚数が書いてある。scientific の画像では、絵の主張（shows）の各文が絵で成り立っているか、ありがちな誤り（核のある赤血球・青い静脈血・部屋や層の数と並びの違い・大きさの比の違い・題材と違う生き物や器官・実在しない部品・文字の崩れ）が無いかも見る。成り立たない文があれば**絵を描き直す**（絵に合わせて主張を減らさない）
 - 使う画像は material.json の parts[].files[] に {"path": "parts/<part_id>/<ファイル名>.<png か webp>", "role": "figure", "image_id": "<結果にある image_id>", "alt": "<絵の説明>"} と書く。拡張子は作った時の format と同じにする。画像ファイルを outputs に置かない（image_id の画像と同じ名前のファイルが outputs にあると、取り込みで素材全体が弾かれる）。ファイル名は他のファイルと同じく素材全体で一意にする
+- **絵の主張（shows）**: accuracy が scientific の画像には、files[] の行に `"shows"` を 2〜6 件書く。1 件は `{"text": "<絵がこう描いていると言い切れる事実を 1 文（200 字まで）>", "source_ids": ["s3"]}`。書くのは形・数・比率・色・配置・文脈（例: 「赤血球はまん中がへこんだ円盤で、核が無い」「毛細血管の中を赤血球が 1 列で通る」「静脈の血も赤い（青くない）」）。感想や雰囲気は書かない。source_ids は sources.json の id（1〜5 件、重複なし）。素材全体で 48 件まで。shows と reference_url は image_id のある行にだけ書く（SVG の行に書くと取り込みで素材全体が弾かれる）
+- **一次の出典**: 絵の主張の各文には、一次とみなす発行主体の出典を 1 つ以上付ける。一次とみなす発行主体（サブドメインを含む）: mext.go.jp・nier.go.jp・kahaku.go.jp・jaxa.jp・nao.ac.jp・jamstec.go.jp・riken.jp・aist.go.jp・jma.go.jp・gsi.go.jp・env.go.jp・mhlw.go.jp・jst.go.jp・nih.gov・medlineplus.gov・nasa.gov・esa.int・noaa.gov・usgs.gov・britannica.com・kotobank.jp・tokyo-shoseki.co.jp・kyoiku-shuppan.co.jp・dainippon-tosho.co.jp・keirinkan.com・shinko-keirin.co.jp・gakko-tosho.co.jp・teikokushoin.co.jp。一次の出典が無い事実は、絵の主張に書かず、**絵にも描かない**（描いた物は絵の主張に書く）。理科・保健の題材では、本文の claims のうち形・数・比率・仕組みの主張も、できるだけ一次の出典で確かめる
+- **参照（reference_url）**: 生き物・体のつくり・天体・鉱物など実物の見た目が決まっている題材の scientific の画像には、files[] の行に `"reference_url"` を 1 つ書く。web_fetch で実際に開いた、実物の写真・顕微鏡像・博物館や教科書の図があるページの `https://` の URL を一字も変えずに書き（2000 字以内）、sources.json の出典にも入れる
 - 使わなかった画像は material.json に書かない
 - app.html から画像を参照しない（app.html は外部の読み込みができない）
 - 画像の中の文字は短くする。子ども向け本文で使わない語は画像の中にも入れない。人の顔・実在の人物・商標やロゴを描かない
@@ -127,6 +130,7 @@ tools:
 - 前の版を `/mnt/session/outputs/` に写し（下の「成果物の構成」に戻す。parts のファイルは material.json の path を見て `parts/<part_id>/` に置く）、**差し戻し理由に関係する所と、それに合わせて直す必要がある所（claims・sources・変奏どうしの食い違い・図や動く絵の中の同じ記述）だけを直す**。関係のない所は変えない
 - 出典: 最初の文の「開き直さなくてよい出典」にある URL は、url と quoted_excerpt を前の版から一字も変えないなら web_fetch で開き直さなくてよい。引用を変える・別の箇所を引く・新しい出典を足す時は、今までどおり web_fetch で開く。一覧に無い出典は開き直す
 - 画像・動画: 変える理由が無ければ、前の版の material.json の行（image_id の files の行・videos の行）をそのまま使う。画像のファイルは今までどおり outputs に置かない
+- 絵の主張: 前の版と同じ画像（同じ image_id）を使うなら、前の版の絵の主張（shows）の文をすべてそのまま残す（足すのはよい。減らすと取り込みで直す所として出る）。描き直した画像（新しい image_id）の絵の主張は新しく書く。実物の形を描く絵を accuracy=standard にして絵の主張を逃れない
 - 差し戻し理由が全体に及ぶ時（題材の取り違えなど）は、一から作り直してよい。selfcheck.md にそう書く
 - selfcheck.md は今回の版として書き直す（何を変えたか・変えなかったか・開き直さなかった出典）
 - 質問の段階（questions.json）と制作の指示（outcome）は今までどおり。出来上がりは、新しく作る時と同じ採点表・同じ検査・同じ検証を通る

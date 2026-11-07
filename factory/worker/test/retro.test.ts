@@ -457,6 +457,22 @@ describe('段 a〜d（node:sqlite の実 DB + stub port）', () => {
     ]);
   });
 
+  it('a 登録（§S v2 B 4）: invalid_outputs の failed は取り込み直しを待つため 6 時間後。ほかの failed はすぐ', async () => {
+    seedJob(raw, { id: 'ji', status: 'failed', updated: '2026-11-06T02:00:00.000Z' });
+    raw.prepare("UPDATE factory_jobs SET error = 'invalid_outputs' WHERE id = 'ji'").run();
+    seedMaterial(raw, 'm2');
+    seedJob(raw, { id: 'jb', material: 'm2', status: 'failed', updated: '2026-11-06T02:00:00.000Z' });
+    raw.prepare("UPDATE factory_jobs SET error = 'budget_exceeded' WHERE id = 'jb'").run();
+    seedMaterial(raw, 'm3');
+    seedJob(raw, { id: 'jo', material: 'm3', status: 'failed', updated: '2026-11-05T20:00:00.000Z' }); // 7 時間前
+    raw.prepare("UPDATE factory_jobs SET error = 'invalid_outputs' WHERE id = 'jo'").run();
+    expect(await registerRetros(env.DB, SINCE, NOW)).toBe(2);
+    expect(rows(raw, 'SELECT job_id FROM job_retros ORDER BY job_id')).toEqual([{ job_id: 'jb' }, { job_id: 'jo' }]);
+    // 取り込み直しで done になれば、done の条件（確認の決定か 6 時間）で入る
+    raw.prepare("UPDATE factory_jobs SET status = 'done', error = NULL WHERE id = 'ji'").run();
+    expect(await registerRetros(env.DB, SINCE, NOW)).toBe(0);
+  });
+
   it('retroTick: 初回で retro_since を今にする（それより前に終わった注文は入らない）。retro_enabled=0 なら登録しない', async () => {
     seedMaterial(raw, 'm2');
     seedJob(raw, { id: 'j1', material: 'm2', status: 'failed', updated: '2026-11-06T02:00:00.000Z' });

@@ -1056,3 +1056,65 @@ describe('図・動かせるものへの付箋（§L-9）', () => {
     expect(h2).not.toContain('data-stick-media="video"');
   });
 });
+
+describe('§O-13-5 図のサムネイルの下の「絵の主張」（✓ ✗ ？ －・参照を開く・esc）', () => {
+  const PATH = 'parts/p1/p1-rbc.png';
+  const marks = (h: string) => [...h.matchAll(/data-fig-claim="(\w+)"><span class="fc-mark [\w-]+" title="[^"]*">([^<]+)<\/span>/g)].map((m) => [m[1], m[2]]);
+
+  it('figures_meta と verification.figures の checks から、文ごとに ✓（ok）✗（wrong）？（unclear）と note。参照は新しいタブで開くリンク', () => {
+    const h = R.figsBlockHtml(FX.figureClaims());
+    expect(n(h, /data-fig-claims="3"/g)).toBe(1);
+    expect(marks(h)).toEqual([
+      ['ok', '✓'],
+      ['wrong', '✗'],
+      ['unclear', '？'],
+    ]);
+    expect(h).toContain('静脈の血も赤い（青くない） <span class="muted">絵の奥の静脈が青く塗られている</span>');
+    expect(h).toContain('<a data-fig-ref="1" href="https://example.org/body/blood/red-cells/photo" target="_blank" rel="noopener noreferrer">参照を開く</a>');
+    // 判定の pill の下に出る
+    expect(h.indexOf('data-fig-verdict="problem"')).toBeLessThan(h.indexOf('data-fig-claims="3"'));
+  });
+
+  it('－（未検査）: checks の無い旧い結果・not_seen・検証前（判定が無い）。checks に無い番号も －', () => {
+    const meta = FX.figureClaims().figures_meta[PATH];
+    expect(marks(R.figClaimsHtml(meta, { path: PATH, verdict: 'ok', reason: '' })).map((x) => x[1])).toEqual(['－', '－', '－']);
+    expect(marks(R.figClaimsHtml(meta, { path: PATH, verdict: 'not_seen', verdict_raw: 'not_seen', reason: '', checks: [{ n: 1, result: 'ok', note: '' }] })).map((x) => x[1])).toEqual(['－', '－', '－']);
+    expect(marks(R.figClaimsHtml(meta, null)).map((x) => x[0])).toEqual(['none', 'none', 'none']);
+    expect(marks(R.figClaimsHtml(meta, { path: PATH, verdict: 'ok', checks: [{ n: 2, result: 'ok', note: '' }] })).map((x) => x[1])).toEqual(['－', '✓', '－']);
+  });
+
+  it('絵の主張の無い図には出ない（figures_meta に無い・shows が空）。参照が無ければリンクを出さない', () => {
+    const d = FX.figureClaims();
+    const h = R.figsBlockHtml(d);
+    expect(n(h, /data-fig-claims=/g)).toBe(1);
+    expect(R.figClaimsHtml(null, null)).toBe('');
+    expect(R.figClaimsHtml({ shows: [], reference_url: 'https://example.org/x' }, null)).toBe('');
+    expect(R.figClaimsHtml({ shows: [{ text: 'a', source_ids: ['s1'] }], reference_url: null }, null)).not.toContain('data-fig-ref');
+    expect(R.figClaimsHtml({ shows: [{ text: 'a', source_ids: ['s1'] }], reference_url: 'javascript:alert(1)' }, null)).not.toContain('data-fig-ref');
+    delete d.figures_meta;
+    expect(R.figsBlockHtml(d)).not.toContain('data-fig-claims');
+  });
+
+  it('文・note・参照の URL は esc() を通る', () => {
+    const h = R.figClaimsHtml(
+      { shows: [{ text: '<img src=x onerror=alert(1)>', source_ids: ['s1'] }], reference_url: 'https://example.org/"><script>x</script>' },
+      { path: PATH, verdict: 'problem', checks: [{ n: 1, result: 'wrong', note: '<b>n</b>' }] },
+    );
+    expect(h).not.toMatch(/<img|<script|<b>n/);
+    expect(h).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    expect(h).toContain('&lt;b&gt;n&lt;/b&gt;');
+    expect(h).toContain('href="https://example.org/&quot;&gt;&lt;script&gt;x&lt;/script&gt;"');
+  });
+
+  it('子どもの画面（教材プレビューの図 .mp-fig）には出さない。確認画面の全体でも一覧は補足の 1 か所だけ', () => {
+    const d = FX.figureClaims();
+    const h = R.reviewHtml(d, R.newReviewState(), {});
+    expect(n(h, /data-fig-claims=/g)).toBe(1);
+    // 子どもの画面の本文（図を実際に描画した上で）に絵の主張が混ざらない
+    const body = R.previewBodyHtml('## 本文', d.version.material.parts[0], { fileBase: BASE, marks: true, stick: true, frame: 0, pi: 0 });
+    const figs = body.match(/<figure class="mp-fig[\s\S]*?<\/figure>/g) ?? [];
+    expect(figs.some((m) => m.includes('data-media-key="parts/p1/p1-rbc.png"'))).toBe(true);
+    for (const m of figs) expect(m).not.toMatch(/fig-claims|絵の主張/);
+    expect(body).not.toMatch(/fig-claims|data-fig-ref/);
+  });
+});

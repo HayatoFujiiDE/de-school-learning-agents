@@ -9,6 +9,7 @@ import type { Env } from '../src/env';
 import {
   ANALOGY_SYSTEM_LINES,
   APPS_SYSTEM_LINES,
+  FIGURE_CLAIMS_SYSTEM_LINES,
   CAPTURE_SYSTEM_LINES,
   EXCERPT_HEAD_MARK,
   EXCERPT_MARK,
@@ -276,11 +277,13 @@ describe('契約 V-2 (u1) system と最後の指示文', () => {
     expect(lines[2]).toBe(JUDGE_PREAMBLE_LINE);
     const ia = lines.indexOf(ANALOGY_SYSTEM_LINES[ANALOGY_SYSTEM_LINES.length - 1]);
     expect(lines[ia + 1]).toBe(PRESENTED_AS_SYSTEM_LINE);
+    // §O-13-3 2: 図の判定の段落の直後に絵の主張の 2 行、その後に apps
     const ifg = lines.indexOf(UNCHANGED[12]);
-    expect(lines.slice(ifg + 1, ifg + 3)).toEqual([...APPS_SYSTEM_LINES]);
+    expect(lines.slice(ifg + 1, ifg + 3)).toEqual([...FIGURE_CLAIMS_SYSTEM_LINES]);
+    expect(lines.slice(ifg + 3, ifg + 5)).toEqual([...APPS_SYSTEM_LINES]);
     const ir = lines.indexOf(UNCHANGED[6]);
     expect(lines.slice(ir + 1, ir + 3)).toEqual([...CAPTURE_SYSTEM_LINES]);
-    const added = new Set<string>([JUDGE_PREAMBLE_LINE, ...CAPTURE_SYSTEM_LINES, PRESENTED_AS_SYSTEM_LINE, ...APPS_SYSTEM_LINES, ...ANALOGY_SYSTEM_LINES, ...VIDEO_SYSTEM_LINES]);
+    const added = new Set<string>([JUDGE_PREAMBLE_LINE, ...CAPTURE_SYSTEM_LINES, PRESENTED_AS_SYSTEM_LINE, ...APPS_SYSTEM_LINES, ...ANALOGY_SYSTEM_LINES, ...VIDEO_SYSTEM_LINES, ...FIGURE_CLAIMS_SYSTEM_LINES]);
     expect(lines.filter((l) => !added.has(l))).toEqual(UNCHANGED);
     expect(lines).toHaveLength(UNCHANGED.length + added.size);
   });
@@ -312,7 +315,12 @@ describe('契約 V-2 (u1) system と最後の指示文', () => {
     const items = VERDICT_SCHEMA.properties.verdicts.items;
     expect(items.properties.presented_as).toEqual({ type: 'string', enum: ['fact', 'hedged', 'analogy', 'not_in_text'] });
     expect(items.required).toEqual(['claim_id', 'verdict', 'reason', 'opened_urls', 'presented_as']);
-    expect(VERDICT_SCHEMA.properties.apps).toEqual(VERDICT_SCHEMA.properties.figures);
+    // §O-13-3 3: figures の要素にだけ required の checks が足された（apps は §O-13 の前の figures と同じ形のまま）
+    const { checks: _checks, ...figProps } = VERDICT_SCHEMA.properties.figures.items.properties;
+    expect(VERDICT_SCHEMA.properties.apps).toEqual({
+      type: 'array',
+      items: { ...VERDICT_SCHEMA.properties.figures.items, properties: figProps, required: ['path', 'verdict', 'reason'] },
+    });
     expect(VERDICT_SCHEMA.required).toEqual(['verdicts', 'overall_note', 'figures', 'analogy_gaps', 'videos', 'apps']);
   });
 });
@@ -542,7 +550,7 @@ describe('契約 V-3 a (u2) presented_as と <child_texts>', () => {
 
 describe('契約 V-3 b (u2) apps と <apps>', () => {
   const PARTS = { 'parts/p1/elementary-short.md': '本文 [c1]', 'parts/p1/app.html': '<button>押す</button>', 'parts/p2/b.html': '<input type="range">', 'parts/p1/figure-1.svg': '<svg/>' };
-  const FIG = [{ path: 'parts/p1/figure-1.svg', verdict: 'ok', reason: '' }];
+  const FIG = [{ path: 'parts/p1/figure-1.svg', verdict: 'ok', reason: '', checks: [] }];
 
   it('<apps> の節が <child_texts> の後・<parts> の前に入り、最後の指示文に apps の部品。正しい apps は path 昇順で保存', async () => {
     seed({ material: appMaterial(), parts: PARTS });

@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import vm from 'node:vm';
 import type { SessionCreateParams } from '@anthropic-ai/sdk/resources/beta/sessions/sessions';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PortError, type FactoryPort, type FileMeta, type Page } from '../src/anthropic';
 import { CARRY_MAX_AGE_MS, applyCarry, carryRecordFor, checkCitations, reopenFreeUrls, type CarryRecord, type CitationSourceInput } from '../src/checks/citations';
 import type { Env } from '../src/env';
@@ -685,6 +685,59 @@ describe('§S-8-3 前の job の画像を使い続ける', () => {
     seedRework({ status: 'running', phase: 'making', session: 'sesn_jr', createdAgo: 2 * DAY });
     await seedImage('jp'); // jp は 1 日前 + 1 時間に作られた job（jr は 2 日前）
     expect(await rec('jr', 25_000, ingestPort(withImage()).port)).toBe('failed:invalid_outputs');
+  });
+});
+
+describe('§O-13-2 取り込み: 絵の主張の検査を checks_json に残す（jobs.ts の呼び出し・親の版の material_json）', () => {
+  const IMG = `img_${'f'.repeat(32)}`;
+  const PNG = grayPng(1, 1);
+  const PATH = 'parts/p1/rbc.png';
+  const sha = async (b: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))].map((x) => x.toString(16).padStart(2, '0')).join('');
+  async function seedSciImage(job: string) {
+    const key = `img/${job}/${IMG}/tok.png`;
+    r2.set(key, PNG);
+    db.prepare(
+      `INSERT INTO image_requests (id, custom_tool_use_id, job_id, session_id, model, size, quality, format, background, u_cents, input_json, state,
+         enqueue_count, dispatched_at, r2_key, sha256, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'gpt-image-2.5-flare', '1024x1024', 'high', 'png', 'opaque', 10, ?, 'done', 1, ?, ?, ?, ?, ?)`,
+    ).run(IMG, `tu_${job}`, job, `sesn_${job}`, JSON.stringify({ accuracy: 'scientific', prompt: 'rbc', alt: '赤血球' }), iso(DAY), key, await sha(PNG), iso(DAY), iso(DAY));
+  }
+  const matWith = (row: Record<string, unknown>) => {
+    const m = goodMaterial();
+    (m.parts as Array<Record<string, unknown>>)[0].files = [{ path: 'parts/p1/figure-1.svg', role: 'figure' }, { path: PATH, role: 'figure', image_id: IMG, alt: '赤血球', ...row }];
+    return m;
+  };
+  const sh = (text: string) => ({ text, source_ids: ['s1'] });
+  const checks = () => JSON.parse(String(one(db, "SELECT checks_json FROM material_versions WHERE job_id = 'jr'").checks_json)) as Record<string, unknown>;
+
+  it('作り直しで同じ画像の親の文を 1 つ落とす → figure_shows_removed。一次でない出典だけの文は figure_shows_no_primary', async () => {
+    seedParent({ material_json: JSON.stringify(matWith({ shows: [sh('一'), sh('二')] })) });
+    seedRework({ status: 'running', phase: 'making', session: 'sesn_jr' });
+    await seedSciImage('jp');
+    expect(await rec('jr', 25_000, ingestPort(goodFiles(matWith({ shows: [sh('一'), sh('三')] }))).port)).toBe('versioned');
+    const c = checks();
+    expect(c.figure_shows_removed).toEqual([{ path: PATH, texts: ['二'] }]);
+    expect(c.figure_shows_no_primary).toEqual([
+      { path: PATH, n: 1 },
+      { path: PATH, n: 2 },
+    ]);
+    expect(c.figure_shows_refs).toEqual([]);
+    expect(c.figure_shows_missing).toEqual([]);
+  });
+
+  it('scientific の画像に shows が無い → figure_shows_missing（弾かない）。親の版が読めない時は比べずにログを 1 行', async () => {
+    seedParent();
+    seedRework({ status: 'running', phase: 'making', session: 'sesn_jr', parent: 'v_missing' });
+    await seedSciImage('jp');
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((x: unknown) => void logs.push(String(x)));
+    try {
+      expect(await rec('jr', 25_000, ingestPort(goodFiles(matWith({}))).port)).toBe('versioned');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(checks()).toMatchObject({ figure_shows_missing: [PATH], figure_shows_removed: [] });
+    expect(logs.filter((l) => l.includes('parent_material_unreadable'))).toEqual([JSON.stringify({ at: 'ingest', job_id: 'jr', warn: 'parent_material_unreadable' })]);
   });
 });
 

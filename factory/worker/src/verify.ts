@@ -6,7 +6,7 @@ import type { MessageBatchIndividualResponse } from '@anthropic-ai/sdk/resources
 import { PortError, VERIFY_RESULTS_MAX_BYTES, type FactoryPort } from './anthropic';
 import { all, conditionalBatch, errorKind, first, getSetting, isoPlus, nowIso, setSetting, stmt, tokyoDay, cas, type SqlValue, type Stmt } from './db';
 import { cfg, type Env } from './env';
-import { imageRefsOf } from './checks/schema';
+import { SHOW_TEXT_MAX, figureShowsMetaOf, imageRefsOf, type FigureShowsMeta } from './checks/schema';
 import { carryRecordFor, looksOffloaded, normalizeSpace, normalizeUrl, resultText } from './checks/citations';
 import { ALLOWLIST } from './generated/claude-assets';
 import { GEMINI_TEXT_MAX_CHARS, GeminiError, capChars, type GeminiPort } from './gemini';
@@ -84,6 +84,17 @@ export const APPS_SYSTEM_LINES = [
   '動かせるものごとに ok / problem / unclear のどれか 1 つを apps に書きます（判定の基準は図と同じ）。apps には <apps> の path をちょうど 1 回ずつ含めます。無ければ空配列です。',
 ] as const;
 
+/** §O-13-3 2（verbatim）: 絵の主張の確かめ方（図の判定の段落の直後） */
+export const FIGURE_CLAIMS_SYSTEM_LINES = [
+  '生成画像のうち絵の主張がある図は、絵の主張を 1 文ずつ絵と照らし、その文の出典（と参照の URL）を開いて事実としても確かめます。絵がその文のとおりでない（形・数・比率・色・配置・文脈のどれかが違う）か、文が出典と食い違うなら、その文は wrong です。ありがちな誤りに注意します: 核のある赤血球、青い静脈血、部屋や層の数と並びの違い、大きさの比の違い、題材と違う生き物・器官・器具、実在しない部品、文字の崩れ。絵の主張が無い生成画像や、正確さ=standard なのに実物の形を描いている画像は、prompt と alt を同じ基準で見て、問題があれば図の reason に書きます。',
+  '図ごとの checks には、絵の主張の番号順に {n, result, note} を書きます（result: ok = 絵も出典も合う / wrong = 絵が文のとおりでない、または文が出典と食い違う / unclear = 絵か出典だけでは決められない。参照や出典を開けなかった時も unclear）。絵の主張が無い図の checks は空配列です。',
+] as const;
+
+/** §O-13-3 3: 絵の主張ごとの結果 */
+export const FIGURE_CHECK_RESULTS = ['ok', 'wrong', 'unclear'] as const;
+/** §O-13-3 5: note の長さの上限 */
+export const FIGURE_CHECK_NOTE_MAX = 500;
+
 /** 契約 V-3 a: 本文の書き方の値 */
 export const PRESENTED_AS = ['fact', 'hedged', 'analogy', 'not_in_text'] as const;
 export type PresentedAs = (typeof PRESENTED_AS)[number];
@@ -134,6 +145,8 @@ export const VERIFIER_SYSTEM = [
   '- problem: 誤り・食い違い・不適切な表現がある（reason に場所と内容を書く）',
   '- unclear: 絵が不鮮明、または本文・出典だけでは正しいか決められない',
   'figures には、渡された図・画像の一覧の path（容量のため渡していない画像を除く）をちょうど 1 回ずつ含めます。図が無ければ空配列です。',
+  // §O-13-3 2: 図の判定の段落の直後
+  ...FIGURE_CLAIMS_SYSTEM_LINES,
   // 契約 V-3 b: 図の行の直後
   ...APPS_SYSTEM_LINES,
   '全 claim の判定が終わったら、最後に report_verdicts を必ず 1 回だけ呼んでください。verdicts には claims の全 id をちょうど 1 回ずつ含めます。',
@@ -167,8 +180,22 @@ export const VERDICT_SCHEMA = {
           path: { type: 'string' },
           verdict: { type: 'string', enum: [...FIGURE_VERDICTS] },
           reason: { type: 'string' },
+          // §O-13-3 3: 絵の主張ごとの結果（絵の主張が無い図は空配列）
+          checks: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                n: { type: 'integer' },
+                result: { type: 'string', enum: [...FIGURE_CHECK_RESULTS] },
+                note: { type: 'string' },
+              },
+              required: ['n', 'result', 'note'],
+              additionalProperties: false,
+            },
+          },
         },
-        required: ['path', 'verdict', 'reason'],
+        required: ['path', 'verdict', 'reason', 'checks'],
         additionalProperties: false,
       },
     },
@@ -234,10 +261,36 @@ export const ANALOGY_GAP_FIELD_MAX = 1000;
 
 /** 保存する図の判定。not_seen は検証係ではなく Worker が付ける（容量のため渡さなかった画像。§O-12 F1） */
 export type FigureVerdict = (typeof FIGURE_VERDICTS)[number] | 'not_seen';
+/** §O-13-3 5: 絵の主張 n 番の結果（note は 500 字まで） */
+export interface FigureCheck {
+  n: number;
+  result: (typeof FIGURE_CHECK_RESULTS)[number];
+  note: string;
+}
+/**
+ * §O-13-3 6: verdict = Worker が決めた最終の判定（checks に wrong があれば problem・wrong が無く unclear があり verdict_raw が ok なら unclear・それ以外は verdict_raw）。
+ * verdict_raw = 検証係の判定（not_seen は Worker）。checks は n の昇順（旧い計画・not_seen は []）
+ */
 export interface FigureReport {
   path: string;
   verdict: FigureVerdict;
+  verdict_raw: FigureVerdict;
   reason: string;
+  checks: FigureCheck[];
+}
+
+/** §O-13-3 4: 計画の figure_checks（見せた path → その図の絵の主張の件数） */
+export type FigureChecksPlan = Record<string, number>;
+
+/** §O-13-3 6: 検証係の判定と checks から最終の判定と reason（reason は 2000 字で切る） */
+export function finalFigureVerdict(raw: (typeof FIGURE_VERDICTS)[number], reason: string, checks: readonly FigureCheck[]): { verdict: FigureVerdict; reason: string } {
+  const nums = (r: FigureCheck['result']) => checks.filter((c) => c.result === r).map((c) => c.n).sort((a, b) => a - b);
+  const marks = (ns: number[]) => ns.map((n) => `[${n}]`).join('');
+  const wrong = nums('wrong');
+  const unclear = nums('unclear');
+  if (wrong.length) return raw === 'problem' ? { verdict: raw, reason } : { verdict: 'problem', reason: `絵の主張 ${marks(wrong)} が成り立たない: ${reason}`.slice(0, 2000) };
+  if (unclear.length && raw === 'ok') return { verdict: 'unclear', reason: `絵の主張 ${marks(unclear)} を確かめきれない: ${reason}`.slice(0, 2000) };
+  return { verdict: raw, reason };
 }
 
 /** 保存する動画の判定（§Q-3 6）。not_seen は検証係ではなく Worker が付ける（記録を入力に入れなかった動画） */
@@ -278,6 +331,9 @@ const byId = (a: { id: string }, b: { id: string }) => byVideoId(a.id, b.id);
  * presented_as（契約 V-3 a）は値の外・無い時は null にして通す（試行は失敗させない）。
  * apps（契約 V-3 b）は計画に apps がある時（appPaths が配列）だけ確かめる（無い・配列でない・path の重複・過不足・値の外は null）。
  * 計画に無い（appPaths が null / undefined = 古い入力）なら見ず、apps: null
+ * figureChecks（§O-13-3 5）: undefined = 計画にキーが無い（旧い計画）→ 応答の checks を見ず、保存は checks: []。
+ * キーがあるのにオブジェクトでない・見せた path の欠け・余分・N が 0 以上の整数でない → null（旧い計画とは見なさない）。
+ * 正しい時は図ごとに checks が配列・各要素がオブジェクト・n が 1 以上の整数で重複なし・result が値の内、n の集合が 1..N とちょうど一致（違えば null）
  */
 export function validateVerdicts(
   input: unknown,
@@ -285,6 +341,7 @@ export function validateVerdicts(
   figurePaths: string[] = [],
   videoIds: string[] = [],
   appPaths: string[] | null = null,
+  figureChecks?: unknown,
 ): VerdictReport | null {
   const o = input as Record<string, unknown> | null;
   if (!o || !Array.isArray(o.verdicts)) return null;
@@ -304,6 +361,21 @@ export function validateVerdicts(
   }
   const want = new Set(claimIds);
   if (seen.size !== want.size || [...want].some((id) => !seen.has(id))) return null;
+  // §O-13-3 5: 計画の figure_checks（undefined = 旧い計画。キーがあれば形が正しくなければ失敗）
+  let planChecks: Map<string, number> | null = null;
+  if (figureChecks !== undefined) {
+    if (!figureChecks || typeof figureChecks !== 'object' || Array.isArray(figureChecks)) return null;
+    const fc = figureChecks as Record<string, unknown>;
+    const keys = Object.keys(fc);
+    const wantKeys = new Set(figurePaths);
+    if (keys.length !== wantKeys.size || keys.some((k) => !wantKeys.has(k))) return null;
+    planChecks = new Map();
+    for (const k of keys) {
+      const n = fc[k];
+      if (typeof n !== 'number' || !Number.isInteger(n) || n < 0) return null;
+      planChecks.set(k, n);
+    }
+  }
   const rawFigures = o.figures === undefined || o.figures === null ? [] : o.figures;
   if (!Array.isArray(rawFigures)) return null;
   const figSeen = new Set<string>();
@@ -312,7 +384,28 @@ export function validateVerdicts(
     if (!f || typeof f !== 'object' || typeof f.path !== 'string' || !(FIGURE_VERDICTS as readonly unknown[]).includes(f.verdict)) return null;
     if (figSeen.has(f.path)) return null;
     figSeen.add(f.path);
-    figures.push({ path: f.path, verdict: f.verdict as FigureVerdict, reason: typeof f.reason === 'string' ? f.reason.slice(0, 2000) : '' });
+    const raw = f.verdict as (typeof FIGURE_VERDICTS)[number];
+    const reason = typeof f.reason === 'string' ? f.reason.slice(0, 2000) : '';
+    if (!planChecks) {
+      figures.push({ path: f.path, verdict: raw, verdict_raw: raw, reason, checks: [] });
+      continue;
+    }
+    const want = planChecks.get(f.path);
+    if (want === undefined || !Array.isArray(f.checks)) return null;
+    const ns = new Set<number>();
+    const checks: FigureCheck[] = [];
+    for (const c of f.checks as unknown[]) {
+      if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+      const r = c as Record<string, unknown>;
+      if (typeof r.n !== 'number' || !Number.isInteger(r.n) || r.n < 1 || ns.has(r.n)) return null;
+      if (!(FIGURE_CHECK_RESULTS as readonly unknown[]).includes(r.result)) return null;
+      ns.add(r.n);
+      checks.push({ n: r.n, result: r.result as FigureCheck['result'], note: typeof r.note === 'string' ? r.note.slice(0, FIGURE_CHECK_NOTE_MAX) : '' });
+    }
+    if (ns.size !== want || [...ns].some((n) => n > want)) return null;
+    checks.sort((a, b) => a.n - b.n);
+    const fin = finalFigureVerdict(raw, reason, checks);
+    figures.push({ path: f.path, verdict: fin.verdict, verdict_raw: raw, reason: fin.reason, checks });
   }
   const wantFig = new Set(figurePaths);
   if (figSeen.size !== wantFig.size || [...wantFig].some((p) => !figSeen.has(p))) return null;
@@ -373,7 +466,9 @@ export function withNotSeen(report: VerdictReport, notSeen: string[], notSeenVid
   if (notSeen.length === 0 && notSeenVideos.length === 0) return report;
   return {
     ...report,
-    figures: notSeen.length ? [...report.figures, ...notSeen.map((path) => ({ path, verdict: 'not_seen' as const, reason: '' }))].sort(byPath) : report.figures,
+    figures: notSeen.length
+      ? [...report.figures, ...notSeen.map((path) => ({ path, verdict: 'not_seen' as const, verdict_raw: 'not_seen' as const, reason: '', checks: [] }))].sort(byPath)
+      : report.figures,
     videos: notSeenVideos.length ? [...report.videos, ...notSeenVideos.map((id) => ({ id, verdict: 'not_seen' as const, reason: '' }))].sort(byId) : report.videos,
   };
 }
@@ -484,6 +579,8 @@ export interface VerifyInput {
   capturedSourceIds: string[];
   /** 契約 V-3 b: 動かせるもの（material の parts の variants / files の .html のうち、本文として入れたもの。昇順） */
   apps: string[];
+  /** §O-13-3 4: 見せた図（figures − notSeen）→ その図の絵の主張の件数（無ければ 0） */
+  figureChecks: FigureChecksPlan;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1252,16 +1349,30 @@ export interface VerifyPlan {
   evidence_v?: 2;
   /** 契約 V-3 d: その提出を report_verdicts の strict つきで出したか（無い = strict かどうか分からない = strict なしと同じ扱い） */
   strict?: boolean;
+  /**
+   * §O-13-3 4: 見せた図 → 絵の主張の件数。キーが無い = 旧い計画（回収時に checks を見ない）。キーがあれば値は読んだまま渡し、
+   * 形は validateVerdicts が確かめる（不正なら claim_set_mismatch。旧い計画とは見なさない）
+   */
+  figure_checks?: unknown;
 }
 
 const capturesMeta = (c: CaptureStats | null): Pick<VerifyMeta, 'captures'> => (c ? { captures: c } : {});
 
 /** verifyPlanKey の中身を読む（無い・読めない・形が違えば null） */
 async function readPlan(env: Pick<Env, 'R2'>, key: string): Promise<VerifyPlan | null> {
+  return (await readPlanWithRaw(env, key))?.plan ?? null;
+}
+
+/**
+ * verifyPlanKey の中身を読み、読んだ形（plan）と、読んだ JSON のオブジェクト全体（raw）を返す（無い・読めない・形が違えば null）。
+ * 書き戻す時は raw を土台にする（§O-13-3 4: 読み取り側が知らないフィールドを落とさない）
+ */
+async function readPlanWithRaw(env: Pick<Env, 'R2'>, key: string): Promise<{ plan: VerifyPlan; raw: Record<string, unknown> } | null> {
   const o = await env.R2.get(key);
   if (!o) return null;
   try {
     const v = JSON.parse(await o.text()) as Record<string, unknown>;
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
     const f = v?.figures as Record<string, unknown> | undefined;
     const c = v?.captures as Record<string, unknown> | undefined;
     const strs = (a: unknown) => (Array.isArray(a) && a.every((x) => typeof x === 'string') ? (a as string[]) : null);
@@ -1294,7 +1405,7 @@ async function readPlan(env: Pick<Env, 'R2'>, key: string): Promise<VerifyPlan |
       if (!as) return null;
       apps = as;
     }
-    return {
+    const plan: VerifyPlan = {
       v: 1,
       figures: { shown, not_seen: notSeen },
       captures: { used, missing, truncated },
@@ -1303,7 +1414,10 @@ async function readPlan(env: Pick<Env, 'R2'>, key: string): Promise<VerifyPlan |
       ...(apps ? { apps } : {}),
       ...(v.evidence_v === 2 ? { evidence_v: 2 as const } : {}),
       ...(typeof v.strict === 'boolean' ? { strict: v.strict } : {}),
+      // §O-13-3 4: キーがある時だけ（null も「キーはあるが不正」として渡す）
+      ...(Object.prototype.hasOwnProperty.call(v, 'figure_checks') ? { figure_checks: v.figure_checks } : {}),
     };
+    return { plan, raw: v };
   } catch {
     return null;
   }
@@ -1380,14 +1494,17 @@ export async function buildVerifyInput(
     shown.push({ path: p, media_type: p.endsWith('.png') ? 'image/png' : 'image/webp', data: bytesToBase64Chunked(buf) });
   }
   const notSeenSet = new Set(notSeen);
+  // 図の一覧は職人が書いた値（prompt・alt・絵の主張・参照）を含むので、<child_texts> / <apps> と同じく neutralizeInputText を通す（節の区切りを偽れない）
   const listing = figures.length
-    ? [
-        FIGURES_HEADING,
-        ...figures.map((p) => {
-          const desc = info.desc.get(p) ?? (info.alt.has(p) ? `: alt=${info.alt.get(p)}` : '');
-          return `- ${p}${desc}${notSeenSet.has(p) ? NOT_SEEN_MARK : ''}`;
-        }),
-      ].join('\n')
+    ? neutralizeInputText(
+        [
+          FIGURES_HEADING,
+          ...figures.map((p) => {
+            const desc = info.desc.has(p) ? info.desc.get(p)! + showsLine(info.shows.get(p)) : info.alt.has(p) ? `: alt=${info.alt.get(p)}` : '';
+            return `- ${p}${desc}${notSeenSet.has(p) ? NOT_SEEN_MARK : ''}`;
+          }),
+        ].join('\n'),
+      )
     : '';
   total += listing.length + shown.reduce((n, s) => n + IMAGE_HEADING_PREFIX.length + s.path.length, 0);
   if (total > VERIFY_INPUT_CHAR_LIMIT) return null;
@@ -1434,7 +1551,11 @@ export async function buildVerifyInput(
   }
   const apps = appList.map((a) => a.path);
   content.push({ type: 'text', text: finalInstruction({ figures: figures.length > 0, videos: vids.length > 0, apps: apps.length > 0 }) });
+  // §O-13-3 4: 見せた図ごとの絵の主張の件数（not_seen は入れない）
+  const figureChecks: FigureChecksPlan = {};
+  for (const p of figures) if (!notSeenSet.has(p)) figureChecks[p] = info.desc.has(p) ? (info.shows.get(p)?.shows.length ?? 0) : 0;
   return {
+    figureChecks,
     content,
     figures,
     notSeen,
@@ -1555,6 +1676,8 @@ async function figurePlanAtCollect(
       apps: string[] | null;
       /** 契約 V-2: plan.json に evidence_v: 2 がある（無ければ古い入力の検証） */
       evidenceV2: boolean;
+      /** §O-13-3 4: plan.json の figure_checks（キーが無い = undefined = 旧い計画） */
+      figureChecks: unknown;
     }
   | { fail: string }
 > {
@@ -1577,6 +1700,7 @@ async function figurePlanAtCollect(
     sourcesText,
     apps: null,
     evidenceV2: false,
+    figureChecks: undefined,
   };
   const first = prev?.[0];
   if (first && typeof first.content === 'string') return figures.length || videoList.length || hasYoutube ? { fail: 'claim_set_mismatch' } : none;
@@ -1610,6 +1734,7 @@ async function figurePlanAtCollect(
     sourcesText,
     apps: plan.apps ? [...plan.apps] : null,
     evidenceV2: plan.evidence_v === 2,
+    figureChecks: Object.prototype.hasOwnProperty.call(plan, 'figure_checks') ? plan.figure_checks : undefined,
   };
 }
 
@@ -1625,11 +1750,12 @@ const oneLineText = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
 async function figureInfo(
   env: Pick<Env, 'R2'> & { DB?: D1Database },
   v: VersionForVerify,
-): Promise<{ desc: Map<string, string>; alt: Map<string, string>; material: unknown } | PartMissing> {
+): Promise<{ desc: Map<string, string>; alt: Map<string, string>; material: unknown; shows: Map<string, FigureShowsMeta> } | PartMissing> {
   const desc = new Map<string, string>();
   const alt = new Map<string, string>();
+  const shows = new Map<string, FigureShowsMeta>();
   const mo = await env.R2.get(v.r2_prefix + 'material.json');
-  if (!mo) return { desc, alt, material: null };
+  if (!mo) return { desc, alt, material: null, shows };
   const text = await mo.text();
   let material: unknown = null;
   try {
@@ -1645,8 +1771,10 @@ async function figureInfo(
   } catch {
     // 読めない material.json は説明なし（取り込みの検査が落とす）
   }
+  // §O-13-3 1: 生成画像の行の絵の主張と参照（形は取り込みが確かめた。ここでも形の違う値は飛ばす）
+  for (const [p, m] of figureShowsMetaOf(material)) shows.set(p, m);
   const refs = imageRefsOf(text);
-  if (!refs.ok || refs.refs.length === 0) return { desc, alt, material };
+  if (!refs.ok || refs.refs.length === 0) return { desc, alt, material, shows };
   if (!env.DB) return { error: 'part_missing' };
   for (const r of refs.refs) {
     // §S-8-3 の取り込みと同じ決まり（別の素材・後の job・draft は拒む）: この版の job の画像か、作り直しの job なら同じ素材のこの job より前の job の画像
@@ -1671,7 +1799,14 @@ async function figureInfo(
     }
     if (!desc.has(r.path)) desc.set(r.path, `: 正確さ=${oneLineText(input.accuracy)}、prompt=${oneLineText(input.prompt)}、alt=${oneLineText(input.alt)}`);
   }
-  return { desc, alt, material };
+  return { desc, alt, material, shows };
+}
+
+/** §O-13-3 1: 生成画像の行の末尾（`、絵の主張=[1] <text>（出典 s3, s4）[2] …、参照=<url か「なし」>`。shows が無ければ `、絵の主張=なし`） */
+function showsLine(m: FigureShowsMeta | undefined): string {
+  if (!m || m.shows.length === 0) return '、絵の主張=なし';
+  const items = m.shows.map((x, i) => `[${i + 1}] ${[...oneLineText(x.text)].slice(0, SHOW_TEXT_MAX).join('')}（出典 ${x.source_ids.map(oneLineText).join(', ')}）`).join('');
+  return `、絵の主張=${items}、参照=${m.reference_url ? oneLineText(m.reference_url) : 'なし'}`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1910,7 +2045,8 @@ async function runAttempt(
     const tu = reportBlock(resp.content);
     if (resp.stop_reason === 'tool_use' && tu) {
       // 契約 V-3 b: 同期は入力が計画（apps は常にある）
-      const report = validateVerdicts(tu.input, claimIds, shownFigures, input.videos.shown, input.apps);
+      // §O-13-3 4: 同期は入力が計画（figure_checks は常にある）
+      const report = validateVerdicts(tu.input, claimIds, shownFigures, input.videos.shown, input.apps, input.figureChecks);
       // §Q-9.10 (c): この試行の会話（メモリの messages）で web_fetch が本文を返した URL（構造化された block。opened_urls ではない）
       const fm = fetchMeta(messages);
       return report
@@ -2392,6 +2528,8 @@ export async function submitOne(
         apps: input.apps,
         evidence_v: 2,
         strict,
+        // §O-13-3 4: 見せた図ごとの絵の主張の件数（回収時の checks の検査に使う）
+        figure_checks: input.figureChecks,
       };
       await env.R2.put(verifyPlanKey(r.id, r.verification_token), JSON.stringify(plan));
     } else {
@@ -2402,9 +2540,10 @@ export async function submitOne(
       if (!m) return failAttempt(env, l, r.material_id, { reason: 'conversation_missing' });
       messages = m;
       // 契約 V-3 d: 2 ターン目以降は plan.json の strict をこの提出の値にする（strict の無い配備前の plan.json も書く。plan.json が読めなければ書かない）
+      // §O-13-3 4: 書き戻しは読んだ JSON のオブジェクト全体を土台にする（figure_checks など、読み取り側が知らないフィールドを落とさない）
       const pk = verifyPlanKey(r.id, r.verification_token);
-      const plan = await readPlan(env, pk);
-      if (plan && plan.strict !== strict) await env.R2.put(pk, JSON.stringify({ ...plan, strict }));
+      const read = await readPlanWithRaw(env, pk);
+      if (read && read.plan.strict !== strict) await env.R2.put(pk, JSON.stringify({ ...read.raw, strict }));
     }
   } catch (e) {
     // createBatch の前なので batch は無い（見積りを付けない）
@@ -2456,7 +2595,8 @@ async function decideTurn(env: Env, r: BatchRow, row: MessageBatchIndividualResp
     const plan = await figurePlanAtCollect(env, r, prev);
     if ('fail' in plan) return { kind: 'fail', micro, reason: plan.fail };
     // 契約 V-3 b: plan.json に apps がある時だけ apps を確かめる（古い plan は null = 見ない）
-    const report = validateVerdicts(tu.input, claimIdsOf(r.claims_json), plan.shown, plan.videos.shown, plan.apps);
+    // §O-13-3 4・5: plan.json に figure_checks がある時だけ checks を確かめる（キーが無い旧い plan は見ない・保存は checks: []）
+    const report = validateVerdicts(tu.input, claimIdsOf(r.claims_json), plan.shown, plan.videos.shown, plan.apps, plan.figureChecks);
     if (!report) return { kind: 'fail', micro, reason: 'claim_set_mismatch' };
     // §Q-9.10 (c): 保存した会話 + 最後の応答の web_fetch_result の block（構造化された tool の結果。プロンプトの文字列は解析しない）
     const fm = fetchMeta([...(prev ?? []), assistant]);

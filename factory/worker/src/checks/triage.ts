@@ -8,6 +8,8 @@
 // 引用の不一致の割合の集計（分子・分母）から外す。
 
 import { videoSourceIds } from './citations';
+import { PRIMARY_HOSTS } from './hosts';
+import { figureShowsMetaOf } from './schema';
 import { versionVideosOfMaterial } from '../videos';
 
 export type Cause =
@@ -131,6 +133,11 @@ export const ITEM_TITLE: Record<string, string> = {
   file_name: '本文にファイル名が出ている',
   raw_markup: '記法の記号がそのまま見える',
   checks_missing: '機械検査の結果が読めない',
+  // 絵の主張（§O-13-4 4）
+  figure_shows_missing: 'scientific の画像に絵の主張（shows）が無い',
+  figure_shows_ref: '絵の主張の出典 id が出典一覧に無い',
+  figure_shows_no_primary: '絵の主張に一次の出典が無い',
+  figure_shows_removed: '作り直しで絵の主張が減った（同じ画像）',
   // 動画
   video_problem: '動画に問題がある',
   video_unclear: '動画を機械では決められなかった',
@@ -529,8 +536,79 @@ function legacyGroups(input: TriageInput): { groups: TriageGroup[]; ok_counts: {
 /** checks_json の path（material.json#summary_elementary など）→ 項目の path（material.json の枠の頭は material.json） */
 const itemPathOf = (p: string): string => (p.startsWith('material.json') ? 'material.json' : p);
 
-/** return_note（契約 V-6 g）。fix の項目の行を入る所まで入れ、入らなければ最後に（ほか k 件） */
-export function buildReturnNote(items: readonly TriageItem[], autoRounds: number, ratio: { h: number; n: number }): string {
+/** code point で n 字に切る */
+const cutCp = (s: string, n: number): string => [...s].slice(0, n).join('');
+const FIGURE_CHECK_RESULTS = ['ok', 'wrong', 'unclear'] as const;
+
+/** result.figures の行の checks（{n, result, note}）。形の違う要素は飛ばし、n の昇順 */
+function readFigureChecks(raw: unknown): Array<{ n: number; result: (typeof FIGURE_CHECK_RESULTS)[number]; note: string }> {
+  if (!Array.isArray(raw)) return [];
+  const out: Array<{ n: number; result: (typeof FIGURE_CHECK_RESULTS)[number]; note: string }> = [];
+  for (const c of raw) {
+    if (!isObj(c) || typeof c.n !== 'number' || !Number.isInteger(c.n) || c.n < 1 || !inList(FIGURE_CHECK_RESULTS, c.result)) continue;
+    if (out.some((x) => x.n === c.n)) continue;
+    out.push({ n: c.n, result: c.result, note: str(c.note) });
+  }
+  return out.sort((a, b) => a.n - b.n);
+}
+
+/**
+ * §O-13-4 2: 図の項目の detail。1 行目「絵の主張 [1][3] に問題、[2] は確かめきれない」（80 字まで）、続けて wrong・unclear ごとの行
+ * （`・[n] <text 60 字>: 問題（<note 40 字>）`）、最後に reason。wrong も unclear も無ければ reason だけ。
+ * 合計は ITEM_DETAIL_MAX（600 字）まで。入らない分は後ろから切るが、番号の行は途中で切らず（入らない行ごと落とす）、最後の reason だけ入る分まで切る
+ */
+export function figureItemDetail(checks: ReadonlyArray<{ n: number; result: string; note: string }>, texts: ReadonlyMap<number, string>, reason: string): string {
+  const wrong = checks.filter((c) => c.result === 'wrong');
+  const unclear = checks.filter((c) => c.result === 'unclear');
+  if (!wrong.length && !unclear.length) return reason;
+  const marks = (xs: ReadonlyArray<{ n: number }>) => xs.map((c) => `[${c.n}]`).join('');
+  const head = cutCp(`絵の主張 ${[wrong.length ? `${marks(wrong)} に問題` : '', unclear.length ? `${marks(unclear)} は確かめきれない` : ''].filter(Boolean).join('、')}`, 80);
+  const row = (c: { n: number; note: string }, label: string) => {
+    const note = cutCp(oneLine(c.note), 40);
+    return `・[${c.n}] ${cutCp(oneLine(texts.get(c.n) ?? ''), 60)}: ${label}${note ? `（${note}）` : ''}`;
+  };
+  const rows = [...wrong.map((c) => row(c, '問題')), ...unclear.map((c) => row(c, '確かめきれない'))];
+  let out = head;
+  for (const l of rows) {
+    if (out.length + 1 + l.length > ITEM_DETAIL_MAX) return out;
+    out += '\n' + l;
+  }
+  if (reason) {
+    const room = ITEM_DETAIL_MAX - out.length - 1;
+    if (room > 0) out += '\n' + reason.slice(0, room);
+  }
+  return out;
+}
+
+/** material の parts のうち files[] に path がある part の id（無ければ path の parts/<id>/ から。どちらも無ければ ''） */
+function partIdOf(material: unknown, path: string): string {
+  if (isObj(material) && Array.isArray(material.parts)) {
+    for (const p of material.parts) {
+      if (isObj(p) && typeof p.id === 'string' && Array.isArray(p.files) && p.files.some((f) => isObj(f) && f.path === path)) return p.id;
+    }
+  }
+  const m = /^parts\/([^/]+)\//.exec(path);
+  return m ? m[1] : '';
+}
+
+/**
+ * return_note の図の行（§O-13-4 3・4。§L-9 の付箋の行と同じ形）。図の項目は `- 図 <part_id> <path>: 検証係の指摘 — <detail>`、
+ * 絵の主張の機械検査は `- 図 <part_id> <path>: <title>（[n] <text>）`（減った文は `（<減った文>）`）。それ以外の項目は null
+ */
+function figureReturnLine(i: TriageItem, material: unknown): string | null {
+  if (!i.path) return null;
+  const head = `- 図 ${oneLine(partIdOf(material, i.path))} ${oneLine(i.path)}: `;
+  if (i.kind === 'figure') return `${head}検証係の指摘 — ${oneLine(i.detail)}`;
+  if (i.kind !== 'check') return null;
+  if (i.cause === 'figure_shows_removed') return `${head}${i.title}（${oneLine(i.detail)}）`;
+  if (i.cause !== 'figure_shows_ref' && i.cause !== 'figure_shows_no_primary') return null;
+  const n = Number(/:(\d+)$/.exec(i.id)?.[1] ?? 0);
+  const text = figureShowsMetaOf(material).get(i.path)?.shows[n - 1]?.text ?? '';
+  return `${head}${i.title}（[${n}] ${oneLine(text)}）`;
+}
+
+/** return_note（契約 V-6 g）。fix の項目の行を入る所まで入れ、入らなければ最後に（ほか k 件）。material は図の行（§O-13-4 3）の part_id と絵の主張の文に使う */
+export function buildReturnNote(items: readonly TriageItem[], autoRounds: number, ratio: { h: number; n: number }, material: unknown = null): string {
   const fixes = items.filter((i) => i.severity === 'fix');
   const claimFix = fixes.some((i) => i.kind === 'claim' || (i.kind === 'check' && i.key === 'content_and_evidence'));
   const manyHyp = fixes.some((i) => i.id === 'check:many_hypotheses');
@@ -543,6 +621,8 @@ export function buildReturnNote(items: readonly TriageItem[], autoRounds: number
   if (claimFix) head.push(RETURN_FIXED_TEXT);
   if (textFix) head.push(RETURN_NOTE_TEXT.text);
   const lines = fixes.map((i) => {
+    const fig = figureReturnLine(i, material);
+    if (fig !== null) return fig;
     const path = i.path ? ` — ${oneLine(i.path)}` : '';
     const quote = i.quote ? `「${oneLine(i.quote)}」` : '';
     const claim = i.claim_id ? `（主張 ${oneLine(i.claim_id)}）` : '';
@@ -653,11 +733,19 @@ export function triageVersion(input: TriageInput): TriageOutput {
   // 図（report の figures）
   if (result) {
     const rows = readJudgedRows(result.figures, 'path') ?? new Map<string, { verdict: string; reason: string }>();
+    // §O-13-4 2: 絵の主張ごとの結果（result.figures[].checks）と、その文（版の material の shows）
+    const checksBy = new Map<string, ReturnType<typeof readFigureChecks>>();
+    for (const f of Array.isArray(result.figures) ? result.figures : []) {
+      if (isObj(f) && typeof f.path === 'string' && !checksBy.has(f.path)) checksBy.set(f.path, readFigureChecks(f.checks));
+    }
+    const showsMeta = figureShowsMetaOf(material);
     const paths = [...figurePaths];
     for (const [p, r] of rows) if (!paths.includes(p) && r.verdict !== 'ok') paths.push(p);
     for (const path of paths) {
       const r = rows.get(path);
-      const base = { id: `figure:${path}`, kind: 'figure' as const, key: 'explanation_and_expression' as const, path, detail: r?.reason };
+      const texts = new Map((showsMeta.get(path)?.shows ?? []).map((x, k) => [k + 1, x.text] as const));
+      const detail = r ? figureItemDetail(checksBy.get(path) ?? [], texts, r.reason) : undefined;
+      const base = { id: `figure:${path}`, kind: 'figure' as const, key: 'explanation_and_expression' as const, path, detail };
       if (r?.verdict === 'ok') continue;
       if (r?.verdict === 'problem') push({ ...base, severity: 'fix', cause: 'figure_problem' });
       else if (r?.verdict === 'unclear') push({ ...base, severity: 'ask', cause: 'figure_unclear' });
@@ -711,6 +799,24 @@ export function triageVersion(input: TriageInput): TriageOutput {
     for (const r of arr('child_text') ?? []) {
       if (!isObj(r) || (r.kind !== 'file_name' && r.kind !== 'raw_markup')) continue;
       push({ id: idOf(r.kind), kind: 'text', key: 'explanation_and_expression', severity: 'fix', cause: r.kind, path: itemPathOf(str(r.path)), quote: cut(r.sample, 200) });
+    }
+    // §O-13-4 4: 絵の主張の機械検査（古い版の checks_json にはキーが無い = 項目を作らない）
+    const fig = { kind: 'check' as const, key: 'explanation_and_expression' as const };
+    for (const p of arr('figure_shows_missing') ?? []) {
+      if (typeof p !== 'string') continue;
+      push({ ...fig, id: `check:figure_shows_missing:${p}`, severity: 'note', cause: 'figure_shows_missing', path: p });
+    }
+    for (const r of arr('figure_shows_refs') ?? []) {
+      if (!isObj(r) || typeof r.path !== 'string' || typeof r.n !== 'number') continue;
+      push({ ...fig, id: `check:figure_shows_ref:${r.path}:${r.n}`, severity: 'fix', cause: 'figure_shows_ref', path: r.path, detail: strList(r.source_ids).join('、') });
+    }
+    for (const r of arr('figure_shows_no_primary') ?? []) {
+      if (!isObj(r) || typeof r.path !== 'string' || typeof r.n !== 'number') continue;
+      push({ ...fig, id: `check:figure_shows_no_primary:${r.path}:${r.n}`, severity: 'fix', cause: 'figure_shows_no_primary', path: r.path, detail: `一次とみなす発行主体: ${PRIMARY_HOSTS.slice(0, 8).join('、')}…` });
+    }
+    for (const r of arr('figure_shows_removed') ?? []) {
+      if (!isObj(r) || typeof r.path !== 'string') continue;
+      push({ ...fig, id: `check:figure_shows_removed:${r.path}`, severity: 'fix', cause: 'figure_shows_removed', path: r.path, detail: strList(r.texts).map(oneLine).join(' / ') });
     }
     if (['forbidden', 'app_html', 'kakunin_zumi', 'missing_source_refs', 'missing_claim_refs'].some((k) => arr(k) === null))
       push({ id: 'check:checks_missing', kind: 'check', key: 'artifact_behavior', severity: 'ask', cause: 'checks_missing' });
@@ -886,7 +992,7 @@ export function triageVersion(input: TriageInput): TriageOutput {
     reasons,
     action,
     reverify_kind: reverifyKind,
-    return_note: action === 'auto_return' ? buildReturnNote(items, autoRounds, { h: hypotheses, n }) : null,
+    return_note: action === 'auto_return' ? buildReturnNote(items, autoRounds, { h: hypotheses, n }, material) : null,
     auto_rounds: autoRounds,
     auto_return_max: autoReturnMax,
     trusted_keys: trustedKeys,

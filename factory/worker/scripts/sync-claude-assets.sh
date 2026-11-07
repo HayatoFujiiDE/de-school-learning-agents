@@ -19,12 +19,17 @@ for (const f of fs.readdirSync(rubricsDir).sort()) {
   if (m) kinds[Number(m[1])] = fs.readFileSync(path.join(rubricsDir, f), 'utf8');
 }
 const allowlist = JSON.parse(read('allowlist.json'));
+// §O-13-0: primary_hosts（一次とみなす発行主体）は domains の部分集合。外れていれば止まる
+const primaryHosts = Array.isArray(allowlist.primary_hosts) ? allowlist.primary_hosts : [];
+for (const h of primaryHosts) {
+  if (typeof h !== 'string' || !allowlist.domains.includes(h)) { console.error(`allowlist: primary_hosts の ${h} が domains にない`); process.exit(1); }
+}
 const out = [
   '// 生成ファイル。手で編集しない（scripts/sync-claude-assets.sh が factory/claude/ から生成する）',
   `export const EDITORIAL_STANDARDS: string = ${JSON.stringify(read('editorial-standards.md'))};`,
   `export const RUBRIC_COMMON: string = ${JSON.stringify(read('rubrics/common.md'))};`,
   `export const RUBRIC_KINDS: Record<number, string> = ${JSON.stringify(kinds)};`,
-  `export const ALLOWLIST: { domains: string[]; hosts: string[] } = ${JSON.stringify({ domains: allowlist.domains, hosts: allowlist.hosts })};`,
+  `export const ALLOWLIST: { domains: string[]; primary_hosts: string[]; hosts: string[] } = ${JSON.stringify({ domains: allowlist.domains, primary_hosts: primaryHosts, hosts: allowlist.hosts })};`,
   '',
 ].join('\n');
 fs.mkdirSync(path.join(root, 'src/generated'), { recursive: true });
