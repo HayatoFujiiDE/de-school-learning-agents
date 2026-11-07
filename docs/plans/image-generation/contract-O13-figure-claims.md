@@ -13,7 +13,7 @@
 2. `primary_hosts`（新設。**`domains` の部分集合**であることを test で固定する）: 上のうち `en.wikipedia.org`・`kidshealth.org`・`ja.wikipedia.org`・`minecraft.wiki`・`docs.python.org`・`scratch.mit.edu`・`developer.mozilla.org`・`youtube.com` を**除く**全部 + `mext.go.jp`・`nier.go.jp`。
 3. `hosts`（限定環境の allowed_hosts）にも同じ host を足す（`domains ⊆ hosts` を test で固定。2026-11-06 の sessions.create 全件 400 の再発防止）。
 4. `material-maker.md` の `allowed_domains:`（web_search / web_fetch の 2 か所）と `claude/environments/` の allowed_hosts を同じ一覧に直す（`sync-claude-assets.sh` が生成するなら生成、手書きなら手で揃えて test で突き合わせる）。反映は ant apply（職人と環境の両方）→ 確認用の session を 1 本（[[feedback-smoke-session-after-ant-apply]]）。
-5. host の照合（取り込み・仕分け・確認画面が同じ純関数 `hostMatches(hostname, list)` を使う。検証係の取得先は API の web_fetch の allowed_domains が守るので Worker 側に照合は無い）: `new URL(url).hostname` を小文字にし、末尾の `.` を取り、ポートは見ない。一致は完全一致か、`'.' + entry` で終わること（`notkahaku.go.jp` は `kahaku.go.jp` に一致しないが `go.jp` が一覧にあれば一致する。一覧に裸の `go.jp` は入れない）。
+5. host の照合（純関数 `hostMatches(hostname, list)` は取り込みが使い、仕分け・確認画面はその判定結果（checks_json・figures_meta）を使う。検証係の取得先は API の web_fetch の allowed_domains が守るので Worker 側に照合は無い）: `new URL(url).hostname` を小文字にし、末尾の `.` を取り、ポートは見ない。一致は完全一致か、`'.' + entry` で終わること（`notkahaku.go.jp` は `kahaku.go.jp` に一致しないが `go.jp` が一覧にあれば一致する。一覧に裸の `go.jp` は入れない）。
 
 ## O13-1 職人（material-maker.md。ant apply が要る）
 
