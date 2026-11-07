@@ -297,6 +297,25 @@ describe('確認画面の generated_images（§O-7 6）', () => {
     expect(await generatedImagesOf(env.DB, 'j1', { parts: [{ files: 'x' }, null] })).toEqual([]);
   });
 
+  it('§S-8-3: 作り直しの job は同じ素材の前の job の画像を出す。draft の job は他の job の画像を出さない', async () => {
+    db.prepare(
+      "INSERT INTO materials (id, slug, title, kinds_json, work_status, publish_status, brief_md, created_at, updated_at) VALUES ('m-s8', 'slug-m-s8', 't', '[3]', 'making', 'none', 'b', ?, ?)",
+    ).run(T, T);
+    const job = (id: string, kind: 'draft' | 'rework', at: string, parent: string | null) =>
+      db.prepare(
+        `INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, session_id, parent_version_id, brief_md, budget_cents, created_at, updated_at)
+         VALUES (?, 'm-s8', ?, 'claude-sonnet-5-5', 'making', 'done', ?, ?, 'b', 300, ?, ?)`,
+      ).run(id, kind, `sesn_${id}`, parent, at, at);
+    job('j0', 'draft', T, null);
+    job('j1', 'rework', '2026-11-05T01:00:00.000Z', 'v0');
+    job('j2', 'draft', '2026-11-05T02:00:00.000Z', null);
+    seedReq({ n: 1, job: 'j0', state: 'done' });
+    const m = goodMaterial() as { parts: Array<{ files: Array<Record<string, unknown>> }> };
+    m.parts[0].files = [{ path: 'parts/p1/gen-a.png', role: 'figure', image_id: imgId(1) }];
+    expect(await generatedImagesOf(env.DB, 'j1', m)).toEqual([{ path: 'parts/p1/gen-a.png', accuracy: 'scientific', prompt: PROMPT, alt: '赤い線の図' }]);
+    expect(await generatedImagesOf(env.DB, 'j2', m)).toEqual([]);
+  });
+
   it('GET /api/review/:version_id が generated_images を返す（画像の無い版は []）', async () => {
     seedJob('j1', 'm1');
     seedJob('j2', 'm2');

@@ -982,6 +982,71 @@ describe('§O-8 t12 入力検査・U の表・取り込みの image_id・鍵の�
     files['p/material.json'] = JSON.stringify(imageMaterial([{ path: 'parts/p1/photo-1.png', image_id: OTHER }]));
     expect(await buildUserContent({ R2: bucket, DB: env.DB }, v)).toEqual({ error: 'part_missing' });
   });
+
+  it('検証係の入力（§S-8-3）: 作り直しの版は同じ素材の前の job の done の画像を引く。draft・別の素材・後の job・done でない画像は part_missing', async () => {
+    const T1 = '2026-11-04T01:00:00.000Z';
+    const T2 = '2026-11-04T02:00:00.000Z';
+    const job = (id: string, mid: string, kind: 'draft' | 'rework', at: string, parent: string | null = null) =>
+      db.prepare(
+        `INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, session_id, parent_version_id, brief_md, created_at, updated_at)
+         VALUES (?, ?, ?, 'claude-sonnet-5-5', 'making', 'done', ?, ?, 'b', ?, ?)`,
+      ).run(id, mid, kind, `sesn_${id}`, parent, at, at);
+    const version = (id: string, mid: string, n: number, jobId: string, prefix: string) =>
+      db.prepare(
+        `INSERT INTO material_versions (id, material_id, version, job_id, session_id, r2_prefix, content_sha256, material_json, claims_json, adapt_rules_md,
+           checks_json, public_paths_json, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'x', '{}', '{}', '', '{}', '[]', 'review', ?)`,
+      ).run(id, mid, n, jobId, `sesn_${jobId}`, prefix, T);
+    for (const mid of ['m_s8', 'm_other']) {
+      db.prepare(
+        "INSERT INTO materials (id, slug, title, kinds_json, work_status, publish_status, brief_md, created_at, updated_at) VALUES (?, ?, 't', '[3]', 'making', 'none', 'b', ?, ?)",
+      ).run(mid, `slug-${mid}`, T, T);
+    }
+    job('j0', 'm_s8', 'draft', T);
+    version('v0', 'm_s8', 1, 'j0', 'p0/');
+    job('j1', 'm_s8', 'rework', T1, 'v0');
+    version('v1', 'm_s8', 2, 'j1', 'p/');
+    insertImage({ id: IMG, tu: 'tu_prev', job: 'j0', state: 'done', r2_key: 'k', sha: 's', input: { prompt: 'a red\ncube', alt: '赤い立方体', accuracy: 'scientific' } });
+    const files: Record<string, string> = {
+      'p/sources.json': '{"sources":[]}',
+      'p/parts/p1/a.md': '本文',
+      'p/parts/p1/photo-1.png': 'PNG',
+      'p/material.json': JSON.stringify(imageMaterial([{ path: 'parts/p1/photo-1.png', role: 'figure', image_id: IMG }])),
+    };
+    const bucket = {
+      get: async (k: string) => (k in files ? { text: async () => files[k], arrayBuffer: async () => new TextEncoder().encode(files[k]).buffer } : null),
+      list: async (o: { prefix?: string }) => ({ objects: Object.keys(files).filter((k) => k.startsWith(o.prefix ?? '')).sort().map((key) => ({ key })), truncated: false }),
+    } as unknown as R2Bucket;
+    const v = { id: 'v1', material_id: 'm_s8', r2_prefix: 'p/', claims_json: '{"claims":[]}' };
+    const textOf = (r: unknown) => (r as Array<{ type: string; text?: string }>).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+    const pointTo = (imageId: string) => (files['p/material.json'] = JSON.stringify(imageMaterial([{ path: 'parts/p1/photo-1.png', role: 'figure', image_id: imageId }])));
+    // 作り直しの版 v1（j1）が前の job j0 の done の画像を指す → 正確さ・prompt・alt の行
+    const reused = await buildUserContent({ R2: bucket, DB: env.DB }, v);
+    expect(reused).not.toEqual({ error: 'part_missing' });
+    expect(textOf(reused)).toContain('- parts/p1/photo-1.png: 正確さ=scientific、prompt=a red cube、alt=赤い立方体');
+    // (a) j1 が draft なら前の job の画像は読まない（今までどおり）
+    db.prepare("UPDATE factory_jobs SET kind = 'draft' WHERE id = 'j1'").run();
+    expect(await buildUserContent({ R2: bucket, DB: env.DB }, v)).toEqual({ error: 'part_missing' });
+    db.prepare("UPDATE factory_jobs SET kind = 'rework' WHERE id = 'j1'").run();
+    expect(textOf(await buildUserContent({ R2: bucket, DB: env.DB }, v))).toContain('正確さ=scientific');
+    // (b) 別の素材の job（j1 より前）の done の画像
+    const OTHER_M = `img_${'d'.repeat(32)}`;
+    job('jx', 'm_other', 'draft', T);
+    insertImage({ id: OTHER_M, tu: 'tu_other_m', job: 'jx', state: 'done', r2_key: 'kx', sha: 'sx', input: { prompt: 'other material', alt: 'x', accuracy: 'standard' } });
+    pointTo(OTHER_M);
+    expect(await buildUserContent({ R2: bucket, DB: env.DB }, v)).toEqual({ error: 'part_missing' });
+    // (c) 同じ素材だが j1 より後に作られた job の done の画像
+    const LATER = `img_${'e'.repeat(32)}`;
+    job('j2', 'm_s8', 'rework', T2, 'v1');
+    insertImage({ id: LATER, tu: 'tu_later', job: 'j2', state: 'done', r2_key: 'k2', sha: 's2', input: { prompt: 'later job', alt: 'x', accuracy: 'standard' } });
+    pointTo(LATER);
+    expect(await buildUserContent({ R2: bucket, DB: env.DB }, v)).toEqual({ error: 'part_missing' });
+    // (d) 前の job の画像でも done でない（failed）
+    const FAILED = `img_${'f'.repeat(32)}`;
+    insertImage({ id: FAILED, tu: 'tu_failed', job: 'j0', state: 'failed', error: 'x', input: { prompt: 'failed one', alt: 'x', accuracy: 'standard' } });
+    pointTo(FAILED);
+    expect(await buildUserContent({ R2: bucket, DB: env.DB }, v)).toEqual({ error: 'part_missing' });
+  });
 });
 
 describe('§O-8 t13 migration 0004', () => {

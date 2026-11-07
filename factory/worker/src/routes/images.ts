@@ -135,7 +135,8 @@ export async function imageRequestFile(c: RouteCtx, id: string): Promise<Respons
 }
 
 /**
- * 確認画面の generated_images（§O-7 6）。版の material.json の parts[].files[].image_id を、同じ job の image_requests の input_json に結ぶ。
+ * 確認画面の generated_images（§O-7 6）。版の material.json の parts[].files[].image_id を、同じ job の image_requests の input_json に結ぶ
+ * （作り直しの job は同じ素材の前の job の依頼も。§S-8-3）。
  * prompt を返すのは認証済みの運営（GET /api/review/:version_id）だけ。
  */
 export async function generatedImagesOf(
@@ -158,7 +159,15 @@ export async function generatedImagesOf(
   const ids = [...new Set(want.map((w) => w.image_id))].slice(0, 100);
   const rows = await all<{ id: string; input_json: string }>(
     db,
-    stmt(`SELECT id, input_json FROM image_requests WHERE job_id = ? AND id IN (${ids.map(() => '?').join(',')})`, jobId, ...ids),
+    // §S-8-3 の取り込みと同じ決まり（別の素材・後の job・draft は拒む）: この job の画像か、作り直しの job なら同じ素材のこの job より前の job の画像
+    stmt(
+      `SELECT r.id, r.input_json FROM image_requests r JOIN factory_jobs j ON j.id = ?
+       WHERE r.id IN (${ids.map(() => '?').join(',')})
+         AND (r.job_id = j.id OR (j.kind = 'rework' AND j.parent_version_id IS NOT NULL AND EXISTS (
+           SELECT 1 FROM factory_jobs pj WHERE pj.id = r.job_id AND pj.material_id = j.material_id AND pj.id <> j.id AND pj.created_at < j.created_at)))`,
+      jobId,
+      ...ids,
+    ),
   );
   const byId = new Map(rows.map((r) => [r.id, r.input_json]));
   const str = (v: unknown) => (typeof v === 'string' ? v : null);
