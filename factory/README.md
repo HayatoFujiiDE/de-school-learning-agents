@@ -63,6 +63,7 @@ npm run smoke                         # 受け入れ基準を fake で一周（S
 ## 運用の勘所
 
 - 「利用できる」への切替は管理画面の承認だけ。職人側に遷移手段はない
+- 素材に組み合わせてよい立体モデル（3D）は `factory/models3d/catalog.json` の一覧だけ（人が提供元の記録でライセンスを確かめたもの。CC0 / CC BY / NASA の利用の決まり。足し方は同じフォルダの README）。変更したら `npm run build:assets` → `npm run deploy`
 - 止めたい時は管理画面の「止める」（新しい session を作らない）。配信を止めるのは素材ごとの「配信を止める」
 - 予算に当たった job（`budget_reached`）は、job 画面の赤い帯にある「$5 / $10 / $20 増やして続ける」で増額できる（`POST /api/jobs/:id/raise-budget`、契約 §B-4-f）。新しい予算は `max(今の予算, 使った額 + 1¢) + 増やす額`（1 job $50 まで・日次上限あり）。増額が受理されると職人は自動で続きを始める（公式仕様）。cron・webhook・職人からは増額しない
 - Files API はファイル名の basename しか返さないので、職人の成果物はファイル名が素材全体で一意である必要がある（契約 §E-0）。Worker は `raw/` に取り込んでから material.json の参照で `parts/<id>/…` の論理キーへ復元する
