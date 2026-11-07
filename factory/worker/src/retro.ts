@@ -1368,7 +1368,8 @@ async function moveRow(
  * a 登録。done の job は、その job が作った版に確認の決定（approve / return / reject。自動の差し戻しを含む）が付いた時か、
  * job の updated_at から 6 時間たった時（§S v2 B 1。差し戻しの事実を振り返りへ届ける。検証の完了は 6 時間の側に吸収）。failed はすぐ。
  * ただし invalid_outputs の failed は取り込み直し（§W-2）で done に変わりうるので、done と同じく 6 時間待つ（§S v2 B 4。2026-11-07、
- * 工場の取り込みの不具合で failed になった 2 件を失敗の時点で振り返り、職人のせいだと誤って工夫を 2 つ自動で入れた）
+ * 工場の取り込みの不具合で failed になった 2 件を失敗の時点で振り返り、職人のせいだと誤って工夫を 2 つ自動で入れた）。
+ * retries_exhausted の failed は振り返らない（API の不調で職人のせいではない。作り直しは契約 V-13 が同じ brief で作り直し、その job を振り返る。§S v2 B 6）
  */
 export async function registerRetros(db: D1Database, since: string, now: Date): Promise<number> {
   const rows = await all<{ id: string; material_id: string }>(
@@ -1377,6 +1378,7 @@ export async function registerRetros(db: D1Database, since: string, now: Date): 
       `SELECT j.id, j.material_id FROM factory_jobs j
        WHERE j.status IN ('done','failed') AND j.session_id IS NOT NULL AND j.updated_at >= ?
          AND NOT EXISTS (SELECT 1 FROM job_retros r WHERE r.job_id = j.id)
+         AND NOT (j.status = 'failed' AND COALESCE(j.error, '') = 'retries_exhausted')
          AND ((j.status = 'failed' AND COALESCE(j.error, '') <> 'invalid_outputs') OR j.updated_at < ?
               OR EXISTS (SELECT 1 FROM material_versions v JOIN review_decisions d ON d.material_version_id = v.id
                          WHERE v.job_id = j.id AND d.decision IN ('approve','return','reject')))

@@ -468,6 +468,11 @@ describe('段 a〜d（node:sqlite の実 DB + stub port）', () => {
     raw.prepare("UPDATE factory_jobs SET error = 'invalid_outputs' WHERE id = 'jo'").run();
     expect(await registerRetros(env.DB, SINCE, NOW)).toBe(2);
     expect(rows(raw, 'SELECT job_id FROM job_retros ORDER BY job_id')).toEqual([{ job_id: 'jb' }, { job_id: 'jo' }]);
+    // retries_exhausted は API の不調なので、すぐにも 6 時間後にも入らない（§S v2 B 6）
+    seedMaterial(raw, 'm4');
+    seedJob(raw, { id: 'jx', material: 'm4', status: 'failed', updated: '2026-11-05T20:00:00.000Z' });
+    raw.prepare("UPDATE factory_jobs SET error = 'retries_exhausted' WHERE id = 'jx'").run();
+    expect(await registerRetros(env.DB, SINCE, NOW)).toBe(0);
     // 取り込み直しで done になれば、done の条件（確認の決定か 6 時間）で入る
     raw.prepare("UPDATE factory_jobs SET status = 'done', error = NULL WHERE id = 'ji'").run();
     expect(await registerRetros(env.DB, SINCE, NOW)).toBe(0);
