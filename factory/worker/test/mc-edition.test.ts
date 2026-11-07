@@ -89,6 +89,18 @@ describe('MC-1 declaredEdition', () => {
     expect(declaredEdition(mc('Minecraft Java 版 26.3'))).toBeNull();
     expect(declaredEdition(null)).toBeNull();
   });
+  it('Astra R1: 版番号は edition の語（Java 版・Java Edition・Java・統合版・Bedrock Edition）の直後だけ。両方ある文字列は java が先', () => {
+    const d = (t: string) => declaredEdition(mc([t]));
+    expect(d('Minecraft Java 1.21')).toEqual({ edition: 'java', version: '1.21' });
+    expect(d('Minecraft Bedrock Edition 1.21.50')).toEqual({ edition: 'bedrock', version: '1.21.50' });
+    expect(d('Minecraft 統合版 1.21（Java 版ではない）')).toEqual({ edition: 'bedrock', version: '1.21' });
+    expect(d('Minecraft Java 版 126.3.1')).toBeNull();
+    expect(d('Minecraft 画面比 16.9 / Java 版 26.3')).toEqual({ edition: 'java', version: '26.3' });
+    expect(d('Minecraft')).toBeNull();
+    expect(d('JavaScript 1.2 と Minecraft')).toBeNull();
+    expect(d('Minecraft Java 版 v26.3')).toEqual({ edition: 'java', version: '26.3' });
+    expect(d('Minecraft Java Edition: 1.21.4')).toEqual({ edition: 'java', version: '1.21.4' });
+  });
   it('文字列でない要素は飛ばし、宣言の文字列を探す', () => {
     expect(declaredEdition(mc([1, null, 'タブレット', 'Minecraft Java 版 26.3']))).toEqual({ edition: 'java', version: '26.3' });
   });
@@ -120,6 +132,12 @@ describe('MC-1 3 childtext の edition_text（本文の版の 1 文）', () => {
   });
   it('版番号が無い・別の版番号（26.31 は 26.3 ではない）→ その path', () => {
     expect(edition(mc(['Minecraft Java 版 26.3']), bodies({ [PATHS[0]]: 'この説明は Java 版のものです。', [PATHS[4]]: 'Java 版 26.31 で遊ぼう' })).map((h) => h.path)).toEqual([PATHS[0], PATHS[4]]);
+  });
+  it('Astra R1: 「Java 版 <版>」の並びだけを数える（離れた所の数字・別の版番号は数えない）', () => {
+    const m = mc(['Minecraft Java 版 26.3']);
+    expect(edition(m, bodies({ [PATHS[0]]: 'この説明は Java 版 26.3 のものです。' }))).toEqual([]);
+    expect(edition(m, bodies({ [PATHS[0]]: 'Java 版の話。温度は26.3度。' })).map((h) => h.path)).toEqual([PATHS[0]]);
+    expect(edition(m, bodies({ [PATHS[0]]: 'Java 版 26.30 の説明' })).map((h) => h.path)).toEqual([PATHS[0]]);
   });
   it('全部にある → 0 件（「Java版」の続け書きも通す）', () => {
     expect(edition(mc(['Minecraft Java 版 26.3']), bodies())).toEqual([]);
@@ -268,6 +286,11 @@ describe('MC-2 仕分け: 本文の版の 1 文（edition_text_missing）', () =
     expect(t.items.find((i) => i.cause === 'edition_text_missing')).toMatchObject({ kind: 'text', path: PATHS[1], title: '本文に版（Java 版 ○○）の 1 文が無い' });
     expect(t.action).toBe('auto_return');
     expect(t.return_note).toContain(`本文に版（Java 版 ○○）の 1 文が無い — ${PATHS[1]}。${PATHS[1]} に『この説明は Java 版 26.3 のものです。』の 1 文を入れる`);
+  });
+  it('Astra R1 反対側: 版が決まっていない題材では child_text に edition_text があっても項目を作らない', () => {
+    const t = triageVersion(input(material(), { checks: checks([{ path: PATHS[1], kind: 'edition_text', sample: '' }]) }));
+    expect(mcItems(t)).toEqual([]);
+    expect(t.gate).toBe('clean');
   });
   it('既存の file_name・raw_markup はそのまま。古い版（child_text 無し）は項目を作らない', () => {
     const t = triageVersion(input(mc(['Minecraft Java 版 26.3']), { checks: checks([{ path: PATHS[0], kind: 'file_name', sample: 'app.html' }]) }));

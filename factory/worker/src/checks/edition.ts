@@ -6,10 +6,12 @@ const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 
 /** 題材が Minecraft か（題名・slug・tools の文字列。§MC-1 1） */
 export const MINECRAFT_RE = /minecraft|マイクラ|マインクラフト/i;
-/** 版番号（§MC-1 2） */
-const VERSION_RE = /\b(\d{1,2}\.\d{1,2}(?:\.\d{1,2})?)\b/;
-const JAVA_RE = /java(?!script)/i;
-const BEDROCK_RE = /bedrock|統合版|\bbe\b/i;
+/**
+ * 宣言（§MC-1 2・Astra R1）: 版番号は edition の語（Java 版・Java Edition・Java / 統合版・Bedrock・Bedrock Edition）の直後だけ
+ * （空白・`)`・`）`・`:`・`：` と `v` を挟んでよい）。後ろに数字や「.」が続く数（126.3.1 の 26.3.1 など）は版番号にしない
+ */
+const JAVA_DECL_RE = /java(?!script)\s*(?:版|edition)?[\s)）:：]*v?(\d{1,2}\.\d{1,2}(?:\.\d{1,2})?)(?![\d.])/i;
+const BEDROCK_DECL_RE = /(?:bedrock(?:\s*edition)?|統合版)[\s)）:：]*v?(\d{1,2}\.\d{1,2}(?:\.\d{1,2})?)(?![\d.])/i;
 
 /** 版が決まっている題材の動画の公開日の上限（§MC-0・§MC-1 4。3 年） */
 export const VERSION_BOUND_VIDEO_MAX_AGE_DAYS = 1095;
@@ -39,17 +41,18 @@ export function isVersionBoundMaterial(material: unknown): boolean {
 }
 
 /**
- * 素材が宣言する版（§MC-1 2）: conditions.tools[] の文字列のうち、MINECRAFT_RE に合い版番号を含むものを順に見て、
- * /java(?!script)/i なら java、/bedrock|統合版|\bbe\b/i なら bedrock（最初に決まったもの。JavaScript・maybe の be には当てない）。どれも決まらない・tools が無い → null
+ * 素材が宣言する版（§MC-1 2・Astra R1）: conditions.tools[] の文字列のうち MINECRAFT_RE に合うものを順に見て、
+ * まず JAVA_DECL_RE、次に BEDROCK_DECL_RE を試し、最初に当たったもの（両方当たる文字列は java。後ろの説明文を拾わない）。
+ * JavaScript には当てない。どれも決まらない・tools が無い → null
  */
 export function declaredEdition(material: unknown): DeclaredEdition | null {
   if (!isObj(material)) return null;
   for (const t of toolsOf(material)) {
     if (!MINECRAFT_RE.test(t)) continue;
-    const m = VERSION_RE.exec(t);
-    if (!m) continue;
-    if (JAVA_RE.test(t)) return { edition: 'java', version: m[1] };
-    if (BEDROCK_RE.test(t)) return { edition: 'bedrock', version: m[1] };
+    const j = JAVA_DECL_RE.exec(t);
+    if (j) return { edition: 'java', version: j[1] };
+    const b = BEDROCK_DECL_RE.exec(t);
+    if (b) return { edition: 'bedrock', version: b[1] };
   }
   return null;
 }

@@ -96,6 +96,24 @@ describe('MC-3 2 本物の port: watch ページの GET', () => {
     expect(r.seen).toHaveLength(2);
   });
 
+  it('Astra R1: 一致なしで受信がちょうど 2 MiB・閉じない stream → 次の chunk を待たずに空・cancel は 1 回', async () => {
+    let cancels = 0;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode('a'.repeat(WATCH_BODY_MAX_BYTES)));
+      },
+      cancel() {
+        cancels++;
+      },
+    });
+    const t = Date.now();
+    const r = real(() => new Response(body, { status: 200 }), undefined, { watchTimeoutMs: 3_000 });
+    expect(await r.port.lookup(YT)).toEqual({ outcome: 'ok', ...OEMBED_OK, published: '' });
+    expect(Date.now() - t).toBeLessThan(1_500);
+    await new Promise((res) => setTimeout(res, 0));
+    expect(cancels).toBe(1);
+  });
+
   it('2 MiB ちょうどまでにある一致は読む（境界）', async () => {
     const pad = 'a'.repeat(WATCH_BODY_MAX_BYTES - ITEMPROP.length);
     expect(((await real(() => streamed([pad, ITEMPROP])).port.lookup(YT)) as Obj).published).toBe('2019-05-21');

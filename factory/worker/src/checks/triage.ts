@@ -827,9 +827,12 @@ export function triageVersion(input: TriageInput): TriageOutput {
       push({ id: idOf('missing_ref'), kind: 'check', key: 'content_and_evidence', severity: 'fix', cause: 'missing_ref', path: itemPathOf(str(r.path)), detail: str(r.ref) });
     }
     const editionTextPaths = new Set<string>();
+    // §MC-2・Astra R1: 本文の版の 1 文の項目は版が決まっている題材だけ（そうでない題材の edition_text は無視する）
+    const editionTextApplies = isVersionBoundMaterial(material);
     for (const r of arr('child_text') ?? []) {
       if (!isObj(r)) continue;
       if (r.kind === 'edition_text') {
+        if (!editionTextApplies) continue;
         // §MC-2: 本文の版の 1 文が無い（path ごとに 1 件）
         const path = str(r.path);
         if (!path || editionTextPaths.has(path)) continue;

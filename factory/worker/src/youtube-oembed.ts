@@ -153,12 +153,13 @@ export async function readUploadDate(res: Response, maxBytes: number): Promise<s
       const { done, value } = await reader.read();
       if (done) return firstUploadDate(tail + dec.decode()) ?? '';
       let chunk = value ?? new Uint8Array();
-      const over = total + chunk.byteLength > maxBytes;
-      if (over) chunk = chunk.subarray(0, maxBytes - total);
+      if (total + chunk.byteLength > maxBytes) chunk = chunk.subarray(0, maxBytes - total);
       total += chunk.byteLength;
-      const text = tail + dec.decode(chunk, { stream: !over });
+      // 上限ちょうどに届いたら（一致が無くても）次の chunk を待たずに止める（Astra R1）
+      const atCap = total >= maxBytes;
+      const text = tail + dec.decode(chunk, { stream: !atCap });
       const hit = firstUploadDate(text);
-      if (hit !== null || over) {
+      if (hit !== null || atCap) {
         reader.cancel().catch(() => undefined);
         return hit ?? '';
       }
