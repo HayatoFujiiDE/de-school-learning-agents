@@ -122,7 +122,7 @@ function versionFileNames(material: unknown): Set<string> {
  */
 function hasJavaVersionText(text: string, version: string): boolean {
   const esc = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`Java\\s*版\\s*v?${esc}(?![\\d.])`).test(text);
+  return new RegExp(`Java\\s*版\\s*v?${esc}(?!\\d|\\.\\d)`).test(text);
 }
 
 export function checkChildText(material: unknown, texts: ReadonlyMap<string, string>): ChildTextHit[] {
