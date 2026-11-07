@@ -920,10 +920,11 @@
     return '<span class="m3d-rights-main">' + esc(lines[0]) + '</span>' + (r.blocked === true ? ' ' + pill('止めている', 'red') : '') +
       lines.slice(1).map(function (t) { return '<span class="m3d-note">' + esc(t) + '</span>'; }).join('');
   }
-  /** 確認日（checked_at。無ければ最後の試行 last_attempt_at） */
+  /** 確認日（checked_at。無ければ最後の試行 last_attempt_at。未試行の印 1970-01-01 は「未試行」。§AK v3.2） */
   function rightsDateText(r) {
     r = isObj(r) ? r : {};
     if (typeof r.checked_at === 'string' && r.checked_at) return channelDate(r.checked_at);
+    if (r.last_attempt_at === '1970-01-01T00:00:00.000Z') return '未試行';
     if (typeof r.last_attempt_at === 'string' && r.last_attempt_at) return '最後の試行 ' + channelDate(r.last_attempt_at);
     return '—';
   }

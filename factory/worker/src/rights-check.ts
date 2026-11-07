@@ -50,17 +50,32 @@ const isHtmlWs = (c: number): boolean => c === 0x09 || c === 0x0a || c === 0x0c 
 /** 終了タグの名前の後ろに来てよい文字（空白・/・>） */
 const isTagDelim = (c: number): boolean => isHtmlWs(c) || c === 0x2f || c === 0x3e;
 
-const NAMED_ENTITIES: Record<string, string> = { amp: '&', nbsp: ' ', quot: '"', copy: '©', lt: '<', gt: '>', apos: "'" };
-// 数値（; なしも。桁数は制限しない = 先頭の 0 で隠せない）と、名前付き（amp・nbsp・quot・copy・lt・gt は ; なしの旧式も。apos は ; 付きだけ）
-const ENTITY_RE = /&(?:#([0-9]+);?|#[xX]([0-9a-fA-F]+);?|(amp|nbsp|quot|copy|lt|gt)(;?)|(apos);)/g;
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&',
+  nbsp: '\u00a0',
+  quot: '"',
+  copy: '\u00a9',
+  COPY: '\u00a9',
+  lt: '<',
+  gt: '>',
+  apos: "'",
+  colon: ':',
+  sol: '/',
+  period: '.',
+  lpar: '(',
+  rpar: ')',
+};
+// 数値（; なしも。桁数は制限しない = 先頭の 0 で隠せない）と、名前付き（amp・nbsp・quot・copy・COPY・lt・gt は ; なしの旧式も。
+// apos・colon・sol・period・lpar・rpar は ; 付きだけ。v3.2 で COPY と記号を足した）
+const ENTITY_RE = /&(?:#([0-9]+);?|#[xX]([0-9a-fA-F]+);?|(amp|nbsp|quot|copy|COPY|lt|gt)(;?)|(apos|colon|sol|period|lpar|rpar);)/g;
 
 /**
  * 文字実体を 1 回だけ復号する。inAttr（属性値）では、; の無い名前付きの実体の直後が英数字か = の時は復号しない（HTML の決まり）。
  * 数値の範囲外・0・サロゲートは U+FFFD
  */
 export function decodeEntities(s: string, inAttr = false): string {
-  return s.replace(ENTITY_RE, (m: string, dec: string | undefined, hex: string | undefined, name: string | undefined, semi: string | undefined, apos: string | undefined, off: number) => {
-    if (apos) return "'";
+  return s.replace(ENTITY_RE, (m: string, dec: string | undefined, hex: string | undefined, name: string | undefined, semi: string | undefined, sym: string | undefined, off: number) => {
+    if (sym) return NAMED_ENTITIES[sym];
     if (name !== undefined) {
       if (!semi && inAttr && /[A-Za-z0-9=]/.test(s.charAt(off + m.length))) return m;
       return NAMED_ENTITIES[name];
@@ -98,7 +113,7 @@ const RAW_TEXT = new Set(['style', 'xmp', 'iframe', 'noembed', 'noframes', 'nosc
 const RCDATA = new Set(['title', 'textarea']);
 
 /** i（'<' の位置）からタグを 1 つ読む。属性値の "…" '…' と引用なしを区別する。閉じていなければ null */
-function readTag(html: string, i: number): { isEnd: boolean; name: string; attrs: Map<string, string>; end: number } | null {
+function readTag(html: string, i: number): { isEnd: boolean; name: string; attrs: Map<string, string>; end: number; selfClosing: boolean } | null {
   const n = html.length;
   let j = i + 1;
   const isEnd = html.charCodeAt(j) === 0x2f;
@@ -109,9 +124,11 @@ function readTag(html: string, i: number): { isEnd: boolean; name: string; attrs
   const name = asciiLower(html.slice(nameStart, j));
   const attrs = new Map<string, string>();
   for (;;) {
+    const skipFrom = j;
     while (j < n && (isHtmlWs(html.charCodeAt(j)) || html.charCodeAt(j) === 0x2f)) j++;
     if (j >= n) return null;
-    if (html.charCodeAt(j) === 0x3e) return { isEnd, name, attrs, end: j + 1 };
+    // 属性の外で読み飛ばした / の直後の > = 自己終了（引用なしの属性値の末尾の / は値に入るので数えない）
+    if (html.charCodeAt(j) === 0x3e) return { isEnd, name, attrs, end: j + 1, selfClosing: j > skipFrom && html.charCodeAt(j - 1) === 0x2f };
     const an = j;
     j++; // 先頭の 1 字は = でも名前に入る（HTML の決まり）
     while (j < n && !isTagDelim(html.charCodeAt(j)) && html.charCodeAt(j) !== 0x3d) j++;
@@ -214,6 +231,8 @@ function scriptEnd(low: string, from: number): number {
 export function parseHtml(html: string): HtmlToken[] | null {
   const n = html.length;
   const low = asciiLower(html);
+  // v3.2: <![CDATA[ は HTML と SVG で意味が違い（SVG では ]]> まで文字）、正の判定を偽に満たせるので扱わない
+  if (low.includes('<![cdata[')) return null;
   const tokens: HtmlToken[] = [];
   let textStart = 0;
   let i = 0;
@@ -244,6 +263,9 @@ export function parseHtml(html: string): HtmlToken[] | null {
       const t = readTag(html, lt);
       if (!t) return null;
       if (!t.isEnd && t.name === 'plaintext') return null; // 残り全部が文字になる要素は扱わない
+      // v3.2: 生テキスト要素（script・style 等）の開始タグの自己終了は HTML では自己終了にならない（続きが生テキストになる）。空要素として扱うと
+      // 隠れた本文を本文とみなすので扱わない
+      if (!t.isEnd && t.selfClosing && (t.name === 'script' || RAW_TEXT.has(t.name) || RCDATA.has(t.name))) return null;
       tokens.push({ type: t.isEnd ? 'end' : 'start', name: t.name, attrs: t.attrs, start: lt, end: t.end });
       i = textStart = t.end;
       if (!t.isEnd && (t.name === 'script' || RAW_TEXT.has(t.name) || RCDATA.has(t.name))) {
@@ -456,7 +478,7 @@ export async function checkSketchfab(e: Model3dEntry, fetchImpl: typeof fetch): 
   };
 }
 
-const NASA_MARKER_RE = /copyright|©|courtesy|all rights reserved|used with permission/i;
+const NASA_MARKER_RE = /copyright|\u00a9|&copy|courtesy|all\s+rights\s+reserved|used\s+with\s+permission/i;
 const DETAILS_SOURCE = ' Details Source ';
 const DOWNLOADS = ' Downloads ';
 
@@ -482,7 +504,8 @@ export async function checkNasa(e: Model3dEntry, fetchImpl: typeof fetch): Promi
   const dl = text.indexOf(DOWNLOADS, at + 1);
   const end = Math.min(dl < 0 ? Number.POSITIVE_INFINITY : dl, at + DETAILS_MAX);
   const rawSection = page.text.slice(rawStartAt(vis.marks, at), rawEndAt(vis.marks, end, page.text.length));
-  if (NASA_MARKER_RE.test(text.slice(at, end)) || NASA_MARKER_RE.test(decodeEntities(rawSection))) return failed('third_party_marker');
+  // 区画は広めに取る（負の判定だけ。区画の前後の文のかたまりが入りうる = 安全側）
+  if (NASA_MARKER_RE.test(text.slice(at, end)) || NASA_MARKER_RE.test(rawSection) || NASA_MARKER_RE.test(decodeEntities(rawSection))) return failed('third_party_marker');
   if (e.download_url === null || !attrValues(tokens, 'a', 'href').includes(e.download_url)) return failed('download_url_not_linked');
   // (b) 3D Resources のトップ
   const hub = await fetchCapped(fetchImpl, NASA_HUB_URL, 'text/html', PAGE_MAX_BYTES);
@@ -512,6 +535,9 @@ export async function checkNasa(e: Model3dEntry, fetchImpl: typeof fetch): Promi
 
 const CC_URL_RE = /https?:\/\/creativecommons\.org\/[A-Za-z0-9./_-]+/g;
 const ccUrlsIn = (s: string): string[] => [...s.matchAll(CC_URL_RE)].map((m) => m[0]);
+/** v3.2: scheme の書き方（https&colon;// など）に依存しない CC の URL の拾い方（一意の検査の側だけ）。https:// を付けて正規化する */
+const CC_PATH_RE = /creativecommons\.org\/(?:licenses|publicdomain)\/[A-Za-z0-9./_-]*/gi;
+const ccPathsIn = (s: string): string[] => [...s.matchAll(CC_PATH_RE)].map((m) => 'https://' + m[0]);
 
 /** url の host と、path の先頭 2 区分（どちらも空でない時だけ）。https でなければ null */
 function scopeOf(u: string): { host: string; head: string } | null {
@@ -545,7 +571,7 @@ export async function checkCcUrl(e: Model3dEntry, fetchImpl: typeof fetch): Prom
   const norm = (list: string[]) => new Set(list.map(normalizeLicenseUrl).filter((u): u is string => u !== null));
   const shown = norm([...ccUrlsIn(text), ...attrValues(tokens, 'a', 'href').flatMap(ccUrlsIn)]);
   if (shown.size === 0) return failed('no_cc_url');
-  const all = new Set([...shown, ...norm(ccUrlsIn(decodeEntities(got.text)))]);
+  const all = new Set([...shown, ...norm(ccUrlsIn(decodeEntities(got.text))), ...norm(ccPathsIn(decodeEntities(got.text)))]);
   const codes = new Set([...all].map(licenseCodeOfUrl));
   if (all.size !== 1 || codes.size !== 1) return failed('ambiguous_cc_url');
   const url = [...all][0];

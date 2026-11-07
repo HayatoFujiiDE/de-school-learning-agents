@@ -1,5 +1,5 @@
 // 権利の確認の自動（契約 §AK-6。cron の段 3-d）。一覧の項目を少しずつ確かめ直す: 1 回の cron で 5 件まで・1 件ずつ runRightsCheck。
-// 対象の選び方は純関数 rightsCandidates（行なし・指紋違いが先 / 古い確認 / 失敗の取り直し / claim 中は飛ばす / 台帳に無い提供元は飛ばす）。
+// 対象の選び方は純関数 rightsCandidates（最後の試行の古い順 / 指紋違いは 1 時間・失敗は 1 日空ける / claim 中は飛ばす / 台帳に無い提供元は飛ばす）。
 
 import { all, getSetting, stmt } from './db';
 import type { Env } from './env';
@@ -7,7 +7,7 @@ import { MODELS3D, type Model3dEntry } from './generated/models3d-catalog';
 import { assetKey, subjectShasOf, type RightsRecord } from './rights';
 import { runRightsCheck } from './rights-check';
 import { providerOf } from './rights-providers';
-import { rightsRecordOf } from './rights-store';
+import { NEVER_ATTEMPTED, rightsRecordOf } from './rights-store';
 
 const DAY_MS = 86_400_000;
 const CLAIM_TTL_MS = 10 * 60_000;
@@ -34,48 +34,49 @@ const olderThan = (iso: string | null, now: Date, ms: number): boolean => {
 };
 
 /**
- * 対象（AK-6 v3.1）: providerOf(e) が unsupported でないもので、(a) 行が無い /
- * (b) 行の subject_sha256 が今の指紋と違い、かつ last_attempt_at が 1 時間より前（失敗し続ける指紋違いが 1 時間に 1 回しか枠を使わない。B4）/
+ * 対象（AK-6 v3.2）: providerOf(e) が unsupported でないもので、(a) 行が無い / (u) last_attempt_at が未試行（1970。止める・戻すで作る）/
+ * (b) 行の subject_sha256 が今の指紋と違い、かつ last_attempt_at が 1 時間より前 /
  * (c) status が verified / human で checked_at が 30 日より前 かつ last_attempt_at が 1 日より前 /
  * (d) status が stale / unverified / mismatch で last_attempt_at が 1 日より前。claim_at が 10 分以内なら対象外。blocked は飛ばさない。
  * 不正な行（'invalid'）は (d) と同じく last_attempt_at が 1 日より前の時だけ（判断: 毎回の取り直しで枠を占めない）。
- * 並び: (a)（一覧の順）→ (b)（last_attempt_at の古い順）→ (c)(d)（同じく古い順。同じなら一覧の順）。件数は切らない（呼び出し側が 5 件まで）。
- * 指紋は失敗の時に更新しない（古い権利の記録を新しい対象に戻さないため）
+ * 並び（v3.2・B4）: last_attempt_at の古い順の 1 本（行なしは最古。同じなら一覧の順）。(a)(b) を優先しない =
+ * 失敗したばかりの項目は後ろに回る（指紋違いの行は門番が既に出口を閉じているので、確認が遅れても権利の穴にはならない）。
+ * 件数は切らない（呼び出し側が 5 件まで）。指紋は失敗の時に更新しない（古い権利の記録を新しい対象に戻さないため）
  */
 export function rightsCandidates(entries: readonly Model3dEntry[], rows: ReadonlyMap<string, RightsCronRow>, subjects: ReadonlyMap<string, string>, now: Date): Model3dEntry[] {
-  const first: Model3dEntry[] = [];
-  const changed: Array<{ e: Model3dEntry; at: number; i: number }> = [];
-  const rest: Array<{ e: Model3dEntry; at: number; i: number }> = [];
+  const due: Array<{ e: Model3dEntry; at: number; i: number }> = [];
   entries.forEach((e, i) => {
     if (providerOf(e).kind === 'unsupported') return;
     const key = assetKey('models3d', e.id);
     const row = rows.get(key);
     if (!row) {
-      first.push(e);
+      due.push({ e, at: Number.NEGATIVE_INFINITY, i });
       return;
     }
     if (row.claim_at !== null && !olderThan(row.claim_at, now, CLAIM_TTL_MS)) return;
     const at = row.last_attempt_at === null ? Number.NEGATIVE_INFINITY : Date.parse(row.last_attempt_at);
-    const atKey = Number.isFinite(at) ? at : Number.NEGATIVE_INFINITY;
+    const item = { e, at: Number.isFinite(at) ? at : Number.NEGATIVE_INFINITY, i };
+    if (row.last_attempt_at === NEVER_ATTEMPTED) {
+      due.push(item);
+      return;
+    }
     const r = row.record;
     if (r === 'invalid') {
-      if (olderThan(row.last_attempt_at, now, DAY_MS)) rest.push({ e, at: atKey, i });
+      if (olderThan(row.last_attempt_at, now, DAY_MS)) due.push(item);
       return;
     }
     if (r.subject_sha256 !== subjects.get(key)) {
-      if (olderThan(r.last_attempt_at, now, SUBJECT_RETRY_MS)) changed.push({ e, at: atKey, i });
+      if (olderThan(r.last_attempt_at, now, SUBJECT_RETRY_MS)) due.push(item);
       return;
     }
     if (r.status === 'verified' || r.status === 'human') {
-      if (olderThan(r.checked_at, now, RECHECK_AFTER_MS) && olderThan(r.last_attempt_at, now, DAY_MS)) rest.push({ e, at: atKey, i });
+      if (olderThan(r.checked_at, now, RECHECK_AFTER_MS) && olderThan(r.last_attempt_at, now, DAY_MS)) due.push(item);
       return;
     }
-    if (olderThan(r.last_attempt_at, now, DAY_MS)) rest.push({ e, at: atKey, i });
+    if (olderThan(r.last_attempt_at, now, DAY_MS)) due.push(item);
   });
-  const byAttempt = (a: { at: number; i: number }, b: { at: number; i: number }) => a.at - b.at || a.i - b.i;
-  changed.sort(byAttempt);
-  rest.sort(byAttempt);
-  return [...first, ...changed.map((x) => x.e), ...rest.map((x) => x.e)];
+  due.sort((a, b) => (a.at === b.at ? a.i - b.i : a.at < b.at ? -1 : 1));
+  return due.map((x) => x.e);
 }
 
 /** rights_records の全行を cron 用に読む（記録・claim_at・last_attempt_at） */

@@ -95,12 +95,13 @@ export async function loadRightsGate(env: Pick<Env, 'DB' | 'R2'>, catalog: reado
 /** 中身の無い門番（行も取り込みも無い = どの項目も出ない） */
 export const EMPTY_RIGHTS_GATE: RightsGate = { records: new Map(), hosted: new Map(), hostedShas: new Map(), subjects: new Map() };
 
-/** 一度も試していない行の last_attempt_at（止める操作で作った行。cron がすぐ確かめる。§AK-3 v3.1） */
+/** 一度も試していない行の last_attempt_at（止める操作で作った行・戻した行。cron がすぐ確かめる。§AK-3 v3.1・v3.2） */
 export const NEVER_ATTEMPTED = '1970-01-01T00:00:00.000Z';
 
 /**
  * 止める / 戻す（§AK-3）。行が無ければ unverified の行（AK-2 の claim と同じ値・claim_at = NULL・last_attempt_at は未試行 NEVER_ATTEMPTED）を
- * 作ってから blocked を更新し、rights_checks に blocked / unblocked の 1 行（1 つの batch）。「戻す」は記録を変えない（blocked だけ）。止めている間も確認は走る
+ * 作ってから blocked を更新し、rights_checks に blocked / unblocked の 1 行（1 つの batch）。止めている間も確認は走る（取り込みはしない）。
+ * 「戻す」は権利の記録を変えず、blocked と last_attempt_at（未試行に戻す = 次の cron が確かめ、止めている間に省いた取り込みを行う。v3.2）だけ
  */
 export async function setRightsBlocked(env: Pick<Env, 'DB'>, e: Model3dEntry, blocked: boolean, by: string): Promise<{ blocked: boolean }> {
   const key = assetKey('models3d', e.id);
@@ -117,7 +118,9 @@ export async function setRightsBlocked(env: Pick<Env, 'DB'>, e: Model3dEntry, bl
       NEVER_ATTEMPTED,
       by,
     ),
-    stmt('UPDATE rights_records SET blocked = ? WHERE asset_key = ?', blocked ? 1 : 0, key),
+    blocked
+      ? stmt('UPDATE rights_records SET blocked = 1 WHERE asset_key = ?', key)
+      : stmt('UPDATE rights_records SET blocked = 0, last_attempt_at = ? WHERE asset_key = ?', NEVER_ATTEMPTED, key),
     stmt(
       `INSERT INTO rights_checks (asset_key, at, by, evidence_kind, result, license_code, evidence_json, check_token) VALUES (?, ?, ?, ?, ?, NULL, '[]', NULL)`,
       key,

@@ -791,6 +791,9 @@ describe('§AJ2-5 9・§AK-5 admin.js: #/models3d の表（権利の列と操作
     expect(rowOf(h, 'x-inv')).toContain('<span class="m3d-rights-main">記録が壊れています</span>');
     expect(rowOf(h, 'x-unv')).toContain('<span class="m3d-note">確認できていません</span>');
     expect(rowOf(h, 'x-unv')).toContain('<td>最後の試行 2026/11/7</td>');
+    // v3.2: 未試行の印（1970-01-01）は「未試行」
+    expect(M.rightsDateText({ checked_at: null, last_attempt_at: '1970-01-01T00:00:00.000Z' })).toBe('未試行');
+    expect(M.rightsDateText({ checked_at: '2026-11-07', last_attempt_at: '1970-01-01T00:00:00.000Z' })).toBe('2026/11/7');
     // 題名は page_url（https:// の時だけ）へのリンク
     expect(rowOf(h, ROVER)).toContain(`<a href="https://example.org/${ROVER}" target="_blank" rel="noopener noreferrer">${ROVER}の題</a>`);
     expect(rowOf(h, 'dbcls-bodyparts3d')).not.toContain('javascript:');

@@ -259,7 +259,7 @@ describe('B4 cron の飢餓: 失敗し続ける指紋違い (b) は 1 時間に 
     expect(S.slice(0, 5).map(attempts)).toEqual([2, 2, 2, 2, 2]);
   });
 
-  it('並び: (a) 行なし → (b) 試行の古い順 → (c)(d) の期限切れの古い順', async () => {
+  it('v3.2 並び: 最後の試行の古い順の 1 本（行なしは最古）。指紋違い (b) を (c)(d) より優先しない', async () => {
     const [A, B1, B2, D1] = S;
     const now = new Date('2026-12-20T00:00:00.000Z');
     const ago = (ms: number) => new Date(now.getTime() - ms).toISOString();
@@ -269,7 +269,7 @@ describe('B4 cron の飢餓: 失敗し続ける指紋違い (b) は 1 時間に 
     const subjects = new Map<string, string>();
     for (const e of [A, B1, B2, D1]) subjects.set(assetKey('models3d', e.id), await subjectSha256(e));
     const got = rightsCandidates([D1, B1, B2, A], await rightsCronRows(env.DB), subjects, now).map((e) => e.id);
-    expect(got).toEqual([A.id, B2.id, B1.id, D1.id]);
+    expect(got).toEqual([A.id, D1.id, B2.id, B1.id]);
     // 試行から 1 時間以内の (b) は対象外
     insertRecord(db, await goodRecord(S[4], { subject_sha256: '0'.repeat(64), last_attempt_at: ago(30 * 60_000) }));
     subjects.set(assetKey('models3d', S[4].id), await subjectSha256(S[4]));
@@ -304,3 +304,103 @@ describe('申告分 (i)・(iv)', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------------------------
+// §AK v3.2（Astra 2 回目の残り。司令塔の裁定）
+
+describe('v3.2 B1 第三者の印: 生 HTML は大文字小文字を区別せず・&copy の字面・語の間は \\s+（空白の実体は空白に）', () => {
+  it.each<[string, string]>([
+    ['大文字の &COPY;（可視の本文）', '<p>&COPY; ThirdParty</p>'],
+    ['属性の中の ; なしの &COPY', '<span data-c="&COPY">x</span>'],
+    ['属性の中の &nbsp; でつないだ All rights reserved', '<span title="All&nbsp;rights&nbsp;reserved">x</span>'],
+    ['属性の中の 2 つの空白と改行の実体でつないだ USED WITH PERMISSION', '<span data-c="USED  WITH&#10;PERMISSION">x</span>'],
+  ])('%s → third_party_marker', async (_n, details) => {
+    expect(await nasa({ details })).toEqual({ ok: false, fail_code: 'third_party_marker' });
+  });
+
+  it('区画は広めに取る（負の判定だけ）: Details の直前の文のかたまりのコメントの印でも落とす = 安全側', async () => {
+    expect(await nasa({ h1Block: `<h1 class="page-title">${ROVER.title_src}</h1><!-- © Other Footer -->` })).toEqual({ ok: false, fail_code: 'third_party_marker' });
+  });
+});
+
+describe('v3.2 B1 構造: CDATA と生テキスト要素の自己終了は unparseable', () => {
+  it('SVG の CDATA の中だけに h1 とリンクを置いても通らない（文書のどこかに <![CDATA[ があれば unparseable）', async () => {
+    const h1Block = `<svg><![CDATA[><h1>${ROVER.title_src}</h1><a href="${GLB_URL}">GLB</a>]]></svg>`;
+    expect(await nasa({ h1Block, downloads: '<p>none</p>' })).toEqual({ ok: false, fail_code: 'unparseable' });
+    expect(await nasa({ after: '<svg><![CDATA[ x ]]></svg>' })).toEqual({ ok: false, fail_code: 'unparseable' });
+  });
+
+  it('生テキスト要素の開始タグの自己終了（<style/>）は unparseable（空要素として扱うと、後ろの </style> までの本文を隠せる）', async () => {
+    expect(await nasa({ after: '<svg><style/></svg><p>visible</p><style>p{}</style>' })).toEqual({ ok: false, fail_code: 'unparseable' });
+    expect(await nasa({ after: '<svg><style/></svg>' })).toEqual({ ok: false, fail_code: 'unparseable' });
+  });
+
+  it('対照: 引用なしの属性値の末尾の / は自己終了ではない（<script src=/a/></script> は通る）', async () => {
+    expect(await nasa({ head: '<script src=/a/></script>' })).toMatchObject({ ok: true });
+  });
+});
+
+describe('v3.2 B1 DBCLS: 一意の側は scheme の書き方に依存しない', () => {
+  const ev = DBCLS.evidence_url!;
+  const cc = (body: string) => checkCcUrl(DBCLS, stubBy({ [ev]: htmlRes(dbclsPageOf(body)) }));
+  const BY = '<a href="https://creativecommons.org/licenses/by/4.0/">表示 4.0</a>';
+
+  it('通常の BY のリンクと href="https&colon;//…/by-nc/4.0/" が混ざる → ambiguous_cc_url', async () => {
+    expect(await cc(BY + '<a href="https&colon;//creativecommons.org/licenses/by-nc/4.0/">x</a>')).toEqual({ ok: false, fail_code: 'ambiguous_cc_url' });
+  });
+
+  it('scheme の無い creativecommons.org/licenses/by-nc/4.0/（コメントの中）が混ざる → ambiguous_cc_url。&sol; で書いた path も拾う', async () => {
+    expect(await cc(BY + '<!-- creativecommons.org/licenses/by-nc/4.0/ -->')).toEqual({ ok: false, fail_code: 'ambiguous_cc_url' });
+    expect(await cc(BY + '<span data-l="creativecommons&period;org&sol;licenses&sol;by-nc&sol;4.0&sol;">x</span>')).toEqual({ ok: false, fail_code: 'ambiguous_cc_url' });
+  });
+
+  it('対照: BY だけなら通る', async () => {
+    expect(await cc(BY)).toMatchObject({ ok: true, license_code: 'cc-by' });
+  });
+});
+
+describe('v3.2 B4 時間の制約の下でも飢餓にならない（前段が毎回 500 秒・1 回 1 件）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('Astra の再現: Sketchfab 8 件のうち 7 件が旧指紋で毎回 503（19 秒）、8 件目は確認の期限切れ → 30 回の cron のうちに 8 件目を確かめる', async () => {
+    const S8 = MODELS3D.filter((e) => e.kind === 'sketchfab').slice(0, 8);
+    const T0 = Date.parse('2026-12-20T00:00:00.000Z');
+    const twoDays = new Date(T0 - 2 * 86_400_000).toISOString();
+    for (const e of S8.slice(0, 7)) insertRecord(db, await goodRecord(e, { subject_sha256: '0'.repeat(64), last_attempt_at: twoDays }));
+    insertRecord(db, await goodRecord(S8[7], { checked_at: new Date(T0 - 31 * 86_400_000).toISOString(), last_attempt_at: twoDays }));
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const slow503 = (async () => {
+      vi.setSystemTime(Date.now() + 19_000);
+      return new Response('x', { status: 503 });
+    }) as unknown as typeof fetch;
+    const counts: number[] = [];
+    for (let k = 0; k < 30; k++) {
+      const start = T0 + k * 600_000;
+      vi.setSystemTime(start + 500_000);
+      const r = await rightsStep(env, { deadline: start + 840_000, fetchImpl: slow503, catalog: S8 });
+      counts.push(r === 'paused' ? -1 : r.checked);
+    }
+    expect(Math.max(...counts)).toBe(1);
+    const eighth = rows(db, 'SELECT id FROM rights_checks WHERE asset_key = ?', assetKey('models3d', S8[7].id)).length;
+    expect(eighth).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('v3.2 戻す（unblock）は未試行に戻し、止めている間に省いた取り込みを次の cron で行う', () => {
+  it('止める → 確認は通るが取り込まない → 戻す → 次の cron の候補になり、取り込む', async () => {
+    await setRightsBlocked(env, ROVER, true, 'ops@example.invalid');
+    const glb = tinyGlb('after-unblock');
+    const f = stubBy(nasaRoutesOf(ROVER, {}, { [GLB_URL]: glbRes(glb) }));
+    expect(await runRightsCheck(env, ROVER, 'cron', f)).toMatchObject({ kind: 'verified', blocked: true, import: { ok: false, error: 'blocked' } });
+    expect(hostedRows()).toEqual([]);
+    await setRightsBlocked(env, ROVER, false, 'ops@example.invalid');
+    expect(one(db, 'SELECT last_attempt_at, blocked, status FROM rights_records WHERE asset_key = ?', KEY)).toEqual({ last_attempt_at: '1970-01-01T00:00:00.000Z', blocked: 0, status: 'verified' });
+    const subjects = new Map([[KEY, await subjectSha256(ROVER)]]);
+    expect(rightsCandidates([ROVER], await rightsCronRows(env.DB), subjects, new Date()).map((e) => e.id)).toEqual([ROVER.id]);
+    const r = await rightsStep(env, { deadline: Date.now() + 10 * 60_000, fetchImpl: f, catalog: [ROVER] });
+    expect(r).toMatchObject({ checked: 1, verified: 1, imported: 1 });
+    expect(hostedRows().map((h) => h.sha256)).toEqual([shaHex(glb)]);
+  });
+});

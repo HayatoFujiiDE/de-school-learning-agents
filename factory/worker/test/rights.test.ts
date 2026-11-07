@@ -871,7 +871,7 @@ describe('AK-7 14 cron の段（rightsCandidates / rightsStep）', () => {
   const DAY = 86_400_000;
   const S = MODELS3D.filter((e) => e.kind === 'sketchfab');
 
-  it('rightsCandidates: 行なし・指紋違いが先（一覧の順）/ 30 日 + 1 日 / 1 日 / claim 10 分 / unsupported を飛ばす / blocked は飛ばさない / last_attempt_at の古い順', async () => {
+  it('rightsCandidates: 最後の試行の古い順（行なしは最古。v3.2）/ 30 日 + 1 日 / 1 日 / claim 10 分 / unsupported を飛ばす / blocked は飛ばさない / last_attempt_at の古い順', async () => {
     const [A, B, C, D, E, F, G, H, I, J] = S;
     const U = { ...ALLO, id: 'x-unsupported', page_url: 'https://example.org/3d-models/x' };
     const entries = [A, B, C, D, E, F, G, H, I, J, TRI, U];
@@ -894,11 +894,12 @@ describe('AK-7 14 cron の段（rightsCandidates / rightsStep）', () => {
       await row(TRI, { checked_at: '2026-11-07', last_attempt_at: ago(2 * DAY + 7200_000) }),
     ]);
     const got = rightsCandidates(entries, rowsMap, subjects, NOW).map((e) => e.id);
-    expect(got).toEqual([A.id, B.id, J.id, G.id, TRI.id, C.id, F.id]);
+    // v3.2: 最後の試行の古い順の 1 本（行なしの A が最古。指紋違いの B は試行が 2 時間前なので最後）
+    expect(got).toEqual([A.id, J.id, G.id, TRI.id, C.id, F.id, B.id]);
     // claim が 10 分より古ければ対象に戻る
     rowsMap.set(assetKey('models3d', I.id), { ...rowsMap.get(assetKey('models3d', I.id))!, claim_at: ago(11 * 60_000) });
-    // v3.1: 指紋違い (b) は試行の古い順（I は最後の試行が 2026-11-07 で B より古い）
-    expect(rightsCandidates(entries, rowsMap, subjects, NOW).map((e) => e.id).slice(0, 3)).toEqual([A.id, I.id, B.id]);
+    // v3.2: I は最後の試行が 2026-11-07（最も古い）なので A の次
+    expect(rightsCandidates(entries, rowsMap, subjects, NOW).map((e) => e.id).slice(0, 3)).toEqual([A.id, I.id, J.id]);
   });
 
   it('rightsStep: 5 件で止まり、先頭 5 件が毎回失敗しても次の cron で別の 5 件に進む。paused は paused。deadline を過ぎたら残す', async () => {
