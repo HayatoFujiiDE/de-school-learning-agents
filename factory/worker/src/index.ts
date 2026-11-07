@@ -30,7 +30,7 @@ import { decideRetroTip, getRetro } from './routes/retro';
 import { addStandard, getStandards } from './routes/standards';
 import { getStatus, setPause } from './routes/status';
 import { handleWebhook } from './routes/webhook';
-import { getImagesStatus, haltImages, imageRequestFile, unhaltImages } from './routes/images';
+import { getImagesStatus, haltImages, imageGallery, imageRequestFile, unhaltImages } from './routes/images';
 import { enableVideos, getVideosStatus, probeVideo } from './routes/videos';
 import { createTopic, decideTopic, deriveTopicRoute, getTopic, listTopicRuns, listTopics, runTopicsRoute, topicSchedule, topicSettings, topicsMeta } from './routes/topics';
 
@@ -44,6 +44,7 @@ const ROUTES: Array<[string, RegExp, Handler]> = [
   ['POST', /^\/api\/images\/halt$/, haltImages],
   ['POST', /^\/api\/images\/unhalt$/, unhaltImages],
   ['GET', /^\/api\/images\/requests\/(img_[0-9a-f]{32})\/file$/, imageRequestFile],
+  ['GET', /^\/api\/images\/gallery$/, imageGallery], // §N-8 C: 生成した画像の棚（done だけ・新しい順・キー付き）
   // 動画の確認（§Q-9.5）と probe（§Q-6。一時 route。結果を確かめた後の PR で消す）
   ['GET', /^\/api\/videos\/status$/, (c) => getVideosStatus(c)],
   ['POST', /^\/api\/videos\/enable$/, (c) => enableVideos(c)],

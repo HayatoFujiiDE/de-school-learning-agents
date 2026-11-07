@@ -822,6 +822,17 @@ li.mp-para.has-pin, li.mp-para.is-note { margin-left: 0; margin-right: 0; }
 .rl-stats { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; justify-content: space-between; }
 .rl-stats > p { margin: 0; }
 .rl-stats-line { flex: 1 1 360px; line-height: 1.7; }
+/* 倉庫の「生成した画像」（§N-8 C）: カードの格子。サムネは正方形の枠に収める（切らない） */
+.gl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin: 0 0 16px; }
+.gl-card { margin: 0; display: flex; flex-direction: column; background: var(--white); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.gl-thumb { display: block; aspect-ratio: 1 / 1; background: var(--gray-soft); }
+.gl-thumb img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.gl-thumb:focus-visible { outline: 3px solid var(--orange); outline-offset: -3px; }
+.gl-card figcaption { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px 10px; font-size: 13px; line-height: 1.5; min-width: 0; }
+.gl-time { font-size: 12px; }
+.gl-mat { font-weight: 600; overflow-wrap: anywhere; }
+.gl-alt { overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.gl-more { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 0 0 16px; }
 .rl-auto { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
 .rl-switch { font: inherit; display: inline-flex; align-items: center; gap: 10px; min-height: 40px; padding: 6px 14px 6px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--white); color: var(--ink); cursor: pointer; text-align: left; }
 .rl-knob { flex: none; position: relative; width: 36px; height: 20px; border-radius: 999px; background: var(--gray-soft); box-shadow: inset 0 0 0 1px var(--line); }

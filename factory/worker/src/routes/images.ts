@@ -91,6 +91,89 @@ export async function getImagesStatus(c: RouteCtx): Promise<Response> {
   });
 }
 
+/** 生成した画像の棚（§N-8 C）の 1 ページの件数: 既定 24・1〜48（範囲外は丸める） */
+export const GALLERY_LIMIT_DEFAULT = 24;
+export const GALLERY_LIMIT_MAX = 48;
+
+interface GalleryRow {
+  request_id: string;
+  job_id: string;
+  created_at: string;
+  model: string | null;
+  size: string | null;
+  input_json: string | null;
+  material_id: string | null;
+  material_title: string | null;
+}
+
+/** input_json から alt だけを取り出す（prompt は返さない）。壊れた JSON・文字列でない alt は null */
+function altOf(raw: string | null): string | null {
+  if (!raw) return null;
+  try {
+    const v: unknown = JSON.parse(raw);
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+    const alt = (v as { alt?: unknown }).alt;
+    return typeof alt === 'string' ? alt : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * GET /api/images/gallery?before=<created_at>&before_id=<id>&limit=<1〜48>（§N-8 C。認証は §B-1 の admin と同じ）。
+ * image_requests の state = 'done' だけを新しい順（created_at DESC, id DESC）にキー付きで返す。素材は job → factory_jobs.material_id → materials.title（取れなければ null）。
+ * prompt は返さない（alt だけ input_json から取り出す）。limit は数でなければ 400、数なら 1〜48 に丸める。before と before_id は 2 つ一緒で、形が違えば 400
+ */
+export async function imageGallery(c: RouteCtx): Promise<Response> {
+  const bad = () => json(400, { error: 'bad_query' });
+  const q = c.url.searchParams;
+  const limitRaw = q.get('limit');
+  let limit = GALLERY_LIMIT_DEFAULT;
+  if (limitRaw !== null && limitRaw !== '') {
+    const v = Number(limitRaw);
+    if (!Number.isFinite(v)) return bad();
+    limit = Math.min(GALLERY_LIMIT_MAX, Math.max(1, Math.floor(v)));
+  }
+  const before = q.get('before');
+  const beforeId = q.get('before_id');
+  if ((before === null) !== (beforeId === null)) return bad();
+  if (before !== null && beforeId !== null) {
+    if (before.length > 40 || Number.isNaN(Date.parse(before)) || !IMAGE_REQUEST_ID_RE.test(beforeId)) return bad();
+  }
+  const rows = await all<GalleryRow>(
+    c.env.DB,
+    stmt(
+      `SELECT r.id AS request_id, r.job_id, r.created_at, r.model, r.size, r.input_json, j.material_id, m.title AS material_title
+       FROM image_requests r
+       LEFT JOIN factory_jobs j ON j.id = r.job_id
+       LEFT JOIN materials m ON m.id = j.material_id
+       WHERE r.state = 'done'
+         AND (? IS NULL OR r.created_at < ? OR (r.created_at = ? AND r.id < ?))
+       ORDER BY r.created_at DESC, r.id DESC LIMIT ?`,
+      before,
+      before,
+      before,
+      beforeId,
+      limit + 1,
+    ),
+  );
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return json(200, {
+    items: page.map((r) => ({
+      request_id: r.request_id,
+      job_id: r.job_id,
+      material_id: r.material_title === null ? null : r.material_id,
+      material_title: r.material_title,
+      created_at: r.created_at,
+      model: r.model,
+      size: r.size,
+      alt: altOf(r.input_json),
+    })),
+    next: rows.length > limit && last ? { before: last.created_at, before_id: last.request_id } : null,
+  });
+}
+
 /** POST /api/images/halt（H1。既に止まっていれば最初の理由を残す） */
 export async function haltImages(c: RouteCtx): Promise<Response> {
   const db = c.env.DB;

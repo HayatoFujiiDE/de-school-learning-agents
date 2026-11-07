@@ -648,6 +648,91 @@
     });
   }
 
+  // ---- 画面: 倉庫の「生成した画像」（§N-8 C）。GET /api/images/gallery（done だけ・新しい順・キー付き）を格子で。読むだけ ----
+  var GALLERY_LIMIT = 24;
+  /** 1 ページ目・続きの url（next = { before, before_id } | null） */
+  function galleryUrl(next) {
+    var q = ['limit=' + GALLERY_LIMIT];
+    if (next && next.before && next.before_id) q.push('before=' + encodeURIComponent(next.before), 'before_id=' + encodeURIComponent(next.before_id));
+    return '/api/images/gallery?' + q.join('&');
+  }
+  function galleryItemsOf(d) {
+    return (d && Array.isArray(d.items) ? d.items : []).filter(function (x) { return isObj(x) && typeof x.request_id === 'string'; });
+  }
+  /** カード 1 枚（純関数）: サムネ（/api/images/requests/<id>/file を lazy で）・作った日時・教材の名前（あれば #/material/<id>）・alt。外の値は全部 esc */
+  function galleryCardHtml(it) {
+    var file = '/api/images/requests/' + encodeURIComponent(it.request_id) + '/file';
+    var alt = typeof it.alt === 'string' && it.alt ? it.alt : '';
+    var mat = typeof it.material_id === 'string' && it.material_id && typeof it.material_title === 'string'
+      ? '<a class="gl-mat" href="#/material/' + esc(it.material_id) + '">' + esc(it.material_title) + '</a>'
+      : '<span class="gl-mat muted">教材なし</span>';
+    return '<figure class="gl-card" data-gl-card="1">' +
+      '<a class="gl-thumb" href="' + esc(file) + '" target="_blank" rel="noopener noreferrer" title="原寸で開く"><img loading="lazy" src="' + esc(file) + '" alt="' + esc(alt) + '"></a>' +
+      '<figcaption><span class="gl-time muted">' + esc(fmtTime(it.created_at)) + '</span>' + mat +
+        (alt ? '<span class="gl-alt">' + esc(alt) + '</span>' : '<span class="gl-alt muted">（説明の文なし）</span>') + '</figcaption></figure>';
+  }
+  /** 「もっと見る」（next がある時だけ）。busy = 読み込み中、err = 続きを読めなかった理由 */
+  function galleryMoreHtml(next, busy, err) {
+    if (!next) return '';
+    return '<div class="gl-more" data-gl-more="1">' + (err ? '<p class="err">続きを読み込めませんでした: ' + esc(err) + '</p>' : '') +
+      '<button type="button" class="btn" id="gl-more-btn"' + (busy ? ' disabled' : '') + '>' + (busy ? '読み込み中…' : err ? 'もう一度読み込む' : 'もっと見る') + '</button></div>';
+  }
+  /** 画面の本体（純関数）。items = それまでに読んだ全部、next = 続き。0 件は「まだありません」 */
+  function galleryHtml(items, next, busy, err) {
+    return '<h1>生成した画像</h1><p class="muted">職人が作った画像（完成したものだけ）を新しい順に並べています。画像を押すと原寸で開きます。</p>' +
+      (items.length
+        ? '<div class="gl-grid" data-gl-grid="1">' + items.map(galleryCardHtml).join('') + '</div>' + galleryMoreHtml(next, busy, err)
+        : '<div class="card"><p class="muted" data-gl-empty="1">まだありません</p></div>');
+  }
+  function galleryLoadingHtml() { return '<h1>生成した画像</h1><p class="loading" data-gl-loading="1">読み込み中…</p>'; }
+  function galleryErrorHtml(msg) {
+    return '<h1>生成した画像</h1><div class="card" data-gl-error="1"><p class="err">読み込めませんでした: ' + esc(msg) + '</p><p><button type="button" class="btn" id="gl-retry">もう一度読み込む</button></p></div>';
+  }
+  function viewGallery(view) {
+    view.innerHTML = galleryLoadingHtml();
+    var here = location.hash;
+    var g = { items: [], next: null, busy: false, err: null };
+    function draw(focusMore) {
+      view.innerHTML = galleryHtml(g.items, g.next, g.busy, g.err);
+      var b = $('#gl-more-btn');
+      if (!b) return;
+      b.addEventListener('click', more);
+      if (focusMore) b.focus();
+    }
+    function more() {
+      if (g.busy || !g.next) return;
+      g.busy = true; g.err = null;
+      var shown = g.items.length;
+      draw(true);
+      api('GET', galleryUrl(g.next)).then(function (d) {
+        if (location.hash !== here) return;
+        g.items = g.items.concat(galleryItemsOf(d));
+        g.next = d && isObj(d.next) ? d.next : null;
+        g.busy = false;
+        draw(true);
+        // 足した分の先頭のカードへフォーカスを送る（もっと見るのボタンが下へ動くので）
+        var first = view.querySelectorAll('.gl-card')[shown];
+        var link = first && first.querySelector('a');
+        if (link) link.focus();
+      }, function (e) {
+        if (location.hash !== here) return;
+        g.busy = false; g.err = e.message || '失敗しました';
+        draw(true);
+      });
+    }
+    api('GET', galleryUrl(null)).then(function (d) {
+      if (location.hash !== here) return;
+      g.items = galleryItemsOf(d);
+      g.next = d && isObj(d.next) ? d.next : null;
+      draw(false);
+    }, function (e) {
+      if (location.hash !== here) return;
+      view.innerHTML = galleryErrorHtml(e.message);
+      var b = $('#gl-retry');
+      if (b) b.addEventListener('click', route);
+    });
+  }
+
   // ---- 画面: 動画の確認（Gemini。§Q-9.5）----
   /** probe の clip_accepted の意味（src/routes/videos.ts の PROBE_CLIP_ACCEPTED_LABEL と同じ文） */
   var PROBE_CLIP_ACCEPTED_LABEL = 'API が区間つきの要求を受けて本文を返したか（中身が区間どおりかは司令塔が text_head で判断）';
@@ -1732,7 +1817,7 @@
           spFact('止めている', lb ? esc(spNum(lb.stopped)) + ' 本' : null)
         ];
       },
-      links: [spLink('#/materials', '素材の台帳を開く'), spLink('#/materials?publish=available', '利用できる教材'), spLink('#/models3d', '立体モデル'), spLink('#/images', '生成した画像の記録')]
+      links: [spLink('#/materials', '素材の台帳を開く'), spLink('#/materials?publish=available', '利用できる教材'), spLink('#/models3d', '立体モデル'), spLink('#/library/images', '生成した画像')]
     },
     retro: {
       name: '改善係', role: '終わった注文ごとに費用を振り返り、質を下げずに費用を下げる「工夫」を職人に渡します。',
@@ -5036,6 +5121,7 @@
     if (p[0] === 'standards') return viewStandards(view);
     if (p[0] === 'proposals') return viewProposals(view, r.q);
     if (p[0] === 'images') return viewImages(view);
+    if (p[0] === 'library' && p[1] === 'images') return viewGallery(view); // §N-8 C: 倉庫の「生成した画像」
     if (p[0] === 'videos') return viewVideos(view);
     if (p[0] === 'models3d') return viewModels3d(view);
     if (p[0] === 'retro') return viewRetro(view);
@@ -5058,6 +5144,11 @@
   window.FactoryAdminImages = {
     HALT_TEXT: HALT_TEXT, haltText: haltText, imagesBandHtml: imagesBandHtml, imagesMonthHtml: imagesMonthHtml, imagesAlertHtml: imagesAlertHtml, imagesHtml: imagesHtml,
     imagesLoadingHtml: imagesLoadingHtml, imagesErrorHtml: imagesErrorHtml, genCaption: genCaption
+  };
+  // 倉庫の「生成した画像」（§N-8 C）の純関数（テストから呼ぶ）
+  window.FactoryAdminGallery = {
+    GALLERY_LIMIT: GALLERY_LIMIT, galleryUrl: galleryUrl, galleryItemsOf: galleryItemsOf, galleryCardHtml: galleryCardHtml, galleryMoreHtml: galleryMoreHtml,
+    galleryHtml: galleryHtml, galleryLoadingHtml: galleryLoadingHtml, galleryErrorHtml: galleryErrorHtml
   };
   if (window.__FACTORY_ADMIN_NO_BOOT__) return; // smoke が純関数だけを読む時
   window.addEventListener('hashchange', route);

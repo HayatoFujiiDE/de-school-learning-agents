@@ -4,8 +4,10 @@
 // 一覧（#/review）・判断の数・自動公開のスイッチ・確認済みのチャンネル（#/videos）・立体モデル（#/models3d）も作り物を返す（POST はメモリの中だけ）。
 // §AJ2: FACTORY_PREVIEW_GLB=<探査車の .glb のパス> を付けると #/review/vm3d-0001 の d3 が回せる（無ければ「読み込めませんでした」）。
 // 上部の状況帯は ?status=alert で異常の作り物（statusFixture）。工場（#/）の /api/floor も作り物（floorFixture。src/routes/floor.ts の形）。
+// 倉庫の「生成した画像」（#/library/images。§N-8 C）の /api/images/gallery と /api/images/requests/<id>/file も作り物（小さな png をその場で作る）。
 // ?shot=<名前> を付けると driver.js が画面を操作してから document.title を "ready" にする（headless Chrome で撮るため）。
 import { createServer } from 'node:http';
+import { deflateSync } from 'node:zlib';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, normalize, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,7 +52,49 @@ function statusFixture(variant) {
     ...base, paused: true, paused_note: '費用の確認のため止めています', today_cents: 21040, last_cron_at: ago(48),
     scout: { ...base.scout, last_status: 'failed', month_cents: 1700 },
     images: { ...base.images, halted: 'manual', month_cents: 8400, backup_last_used_at: ago(60 * 26) },
+    topics: { ...base.topics, failed_24h: 1, last_run: { status: 'done', updated_at: ago(30) } },
   };
+}
+
+// 倉庫の「生成した画像」の作り物: 30 枚（24 枚 + もっと見る で 6 枚）。新しい順。教材の無い行・説明の文の無い行・長い説明の行も混ぜる
+const GALLERY_TITLES = ['赤血球のしごと', '月の満ち欠け', '火山のしくみ', null, '季節と太陽の高さ'];
+const GALLERY_ALTS = ['赤血球が血管の中を流れる様子の図', '月の形が 8 つ並んだ図（新月から満月まで）', null, '火山の断面図。マグマだまりから火口までの道すじ', '太陽の高さが季節で変わることを示す図。夏至・春分・冬至の 3 本の線と、それぞれの日の正午の影の長さを並べています'];
+const galleryId = (n) => 'img_' + n.toString(16).padStart(32, '0');
+const GALLERY = Array.from({ length: 30 }, (_, i) => {
+  const k = i % 5;
+  return { request_id: galleryId(30 - i), job_id: 'job-g' + k, material_id: GALLERY_TITLES[k] ? 'fx-g' + k : null, material_title: GALLERY_TITLES[k], created_at: new Date(Date.parse('2026-11-07T09:00:00.000Z') - i * 47 * 60_000).toISOString(), model: 'gpt-image-2.5-flare', size: '1024x1024', alt: GALLERY_ALTS[k] };
+});
+function galleryFixture(url) {
+  const limit = Math.min(48, Math.max(1, Math.floor(Number(url.searchParams.get('limit') || 24))));
+  const before = url.searchParams.get('before'), beforeId = url.searchParams.get('before_id');
+  const rest = before ? GALLERY.filter((x) => x.created_at < before || (x.created_at === before && x.request_id < beforeId)) : GALLERY;
+  const page = rest.slice(0, limit), last = page[page.length - 1];
+  return { items: page, next: rest.length > limit ? { before: last.created_at, before_id: last.request_id } : null };
+}
+// 小さな png（96 × 96。斜めの縞と円）を色ごとに作る（外のファイル・依存を足さない）
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+const crc32 = (buf) => { let c = 0xffffffff; for (const b of buf) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+function pngChunk(type, data) {
+  const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+  const td = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(td));
+  return Buffer.concat([len, td, crc]);
+}
+function fixturePng(seed) {
+  const W = 96, H = 96, hue = [[231, 112, 85], [86, 140, 200], [240, 180, 70], [90, 160, 120], [150, 110, 190]][seed % 5];
+  const raw = Buffer.alloc((W * 3 + 1) * H);
+  for (let y = 0; y < H; y++) {
+    raw[y * (W * 3 + 1)] = 0;
+    for (let x = 0; x < W; x++) {
+      const inCircle = (x - 48) ** 2 + (y - 48) ** 2 < (20 + (seed % 3) * 6) ** 2;
+      const stripe = ((x + y + seed * 7) >> 3) % 2 === 0;
+      const f = inCircle ? 0.55 : stripe ? 1 : 0.85;
+      const o = y * (W * 3 + 1) + 1 + x * 3;
+      raw[o] = Math.round(hue[0] * f + (1 - f) * 255 * 0.3); raw[o + 1] = Math.round(hue[1] * f + (1 - f) * 255 * 0.3); raw[o + 2] = Math.round(hue[2] * f + (1 - f) * 255 * 0.3);
+    }
+  }
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(W, 0); ihdr.writeUInt32BE(H, 4); ihdr[8] = 8; ihdr[9] = 2;
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), pngChunk('IHDR', ihdr), pngChunk('IDAT', deflateSync(raw)), pngChunk('IEND', Buffer.alloc(0))]);
 }
 
 // 工場（GET /api/floor）の作り物。src/routes/floor.ts の応答の形（stations 8 キー + queue）。行は 回答待ち・確認待ち・制作中・検証中・利用できる の 5 本
@@ -128,6 +172,14 @@ createServer((req, res) => {
   if (path === '/api/status') return json(res, 200, statusFixture(statusVariant(req)));
   if (path === '/api/floor') return json(res, 200, floorFixture());
   if (path === '/api/review') return json(res, 200, { versions: listRows() });
+  if (path === '/api/images/gallery') return json(res, 200, galleryFixture(url));
+  const gf = /^\/api\/images\/requests\/(img_[0-9a-f]{32})\/file$/.exec(path);
+  if (gf) {
+    const n = parseInt(gf[1].slice(4), 16);
+    // 5 枚に 1 枚は確認画面の作り物の赤血球の png（本物に近い絵）、ほかはその場で作る
+    const body = n % 5 === 0 ? readFileSync(join(FILES, 'parts/p1/p1-rbc.png')) : fixturePng(n);
+    return send(res, 200, body, 'image/png', { 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox" });
+  }
   if (path === '/api/review/stats') return json(res, 200, { auto_publish: state.auto_publish, clean: { approve: 12, return: 1, reject: 0 }, streak: 9, auto_published: state.auto_publish ? 3 : 0 });
   if (path === '/api/review/auto-publish' && req.method === 'POST') return readBody(req).then((b) => { state.auto_publish = !!(b && b.on); json(res, 200, { auto_publish: state.auto_publish }); });
   if (path === '/api/channels' && req.method === 'DELETE') {

@@ -131,7 +131,7 @@ describe('stationPanelHtml: 12 の係すべて', () => {
     expect(h('verifier')).toContain('href="#/videos"');
     expect(h('verifier')).toContain('有効');
     expect(h('reviewer')).toContain('class="btn primary small sp-link" href="#/review"');
-    for (const href of ['#/materials', '#/materials?publish=available', '#/models3d', '#/images']) expect(h('library')).toContain(`href="${href}"`);
+    for (const href of ['#/materials', '#/materials?publish=available', '#/models3d', '#/library/images']) expect(h('library')).toContain(`href="${href}"`);
     expect(h('library')).toContain('12 本');
     expect(h('retro')).toContain('data-retro-floor="1"');
     expect(h('retro')).toContain('href="#/retro"');
@@ -245,7 +245,7 @@ describe('メニュー（index.html）', () => {
   });
   it('details の中に全部の画面のリンク（グループ見出し付き）。表示名は「今日のお題」', () => {
     const det = html.slice(html.indexOf('<details'), html.indexOf('</details>'));
-    expect([...det.matchAll(/href="([^"]+)"/g)].map((m) => m[1])).toEqual(['#/proposals', '#/new', '#/standards', '#/images', '#/videos', '#/materials', '#/models3d', '#/topics', '#/retro']);
+    expect([...det.matchAll(/href="([^"]+)"/g)].map((m) => m[1])).toEqual(['#/proposals', '#/new', '#/standards', '#/images', '#/videos', '#/materials', '#/models3d', '#/library/images', '#/topics', '#/retro']);
     expect([...det.matchAll(/<span class="nav-grp-h">([^<]+)<\/span>/g)].map((m) => m[1])).toEqual(['入口', '制作', '倉庫', 'そのほか']);
     expect(det).toContain('<a href="#/topics">今日のお題</a>');
     expect(html).not.toContain('お題の棚');
