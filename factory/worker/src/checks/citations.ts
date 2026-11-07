@@ -149,7 +149,16 @@ function markUrl(acc: CitationAcc, url: string, t: 0 | 1, o: 0 | 1, e: 0 | 1 = 0
   acc.urls[key(url)] = { t: or(prev?.t, t), o: or(prev?.o, o), e: or(prev?.e, e), s: or(prev?.s, s) };
 }
 
-export function accumulateCitations(acc: CitationAcc, sources: CitationSourceInput[], events: unknown[]): CitationAcc {
+/**
+ * onResult（§AK2-2）: web_fetch の result を処理する時（fetches から URL を引いて消す直前）に、正規化 URL と result の本文（resultText）を渡す。
+ * エラーの結果・本文の無い結果・offload らしい結果では呼ばない。出典照合の結果は変えない（use → result の対応は出典照合と同じ 1 つの表）
+ */
+export function accumulateCitations(
+  acc: CitationAcc,
+  sources: CitationSourceInput[],
+  events: unknown[],
+  onResult?: (url: string, text: string) => void,
+): CitationAcc {
   const byUrl = new Map<string, Array<{ id: string; ex: string }>>();
   for (const s of sources) {
     const ex = normalizeSpace(s.quoted_excerpt ?? '');
@@ -178,6 +187,10 @@ export function accumulateCitations(acc: CitationAcc, sources: CitationSourceInp
       if (has(acc.nf, id)) continue;
       const u = get(acc.fetches, id);
       if (u === undefined) continue; // 対応する web_fetch の use が未到着（古い順の契約では来ない）/ 処理済み → 無視
+      if (onResult && (ev as { is_error?: unknown }).is_error !== true) {
+        const body = resultText(ev);
+        if (body !== null && !looksOffloaded(body)) onResult(u, body);
+      }
       delete acc.fetches[key(id)];
       // エラーの結果（url_not_accessible 等）は「開いた」に数えない（§R-48）。開けた時だけ url_was_fetched の根拠にする
       if ((ev as { is_error?: unknown }).is_error === true) {

@@ -78,7 +78,10 @@
     channel_trust_required: '初めてのチャンネルを確かめてから公開してください',
     checks_pending: '機械の確認が終わってから公開してください',
     stale_reader: '読み手チェックが新しくなりました。画面を読み直します',
-    reader_running: '読み手チェックが動いています'
+    reader_running: '読み手チェックが動いています',
+    // §AK2-3: 承認・戻しの止め
+    verbatim_copy_present: '本文にページの文の丸写しがあります（直した版を作ってください）',
+    verbatim_incomplete: '丸写しの検査が最後まで済んでいません（作り直してください）'
   };
 
   var $ = function (sel, root) { return (root || document).querySelector(sel); };
@@ -3482,7 +3485,7 @@
       return '<li data-app-verdict="' + esc(x && typeof x.verdict === 'string' ? x.verdict : 'none') + '"><b>' + esc(a.title || '動かせるもの') + '</b> ' + (x ? mkVerdictHtml(x) : '<span class="muted">判定がありません</span>') + '</li>';
     }).join('') + '</ul>' : '';
     sum.terms_of_use = ['出典 ' + srcs.length + ' 件' + (vids.length && tri.present && (anyNew || tri.trusted_keys.length) ? '・動画のチャンネル: ' + (anyNew ? '初めて' : '確認済み') : '')];
-    more.terms_of_use = (licUnknown ? '<p class="muted">利用条件が分からない出典があります（' + licUnknown + ' 件）</p>' : '') + videoTermsHtml(vids, d, tri) + models3dTermsHtml(d);
+    more.terms_of_use = verbatimHtml(d.version && d.version.checks) + (licUnknown ? '<p class="muted">利用条件が分からない出典があります（' + licUnknown + ' 件）</p>' : '') + videoTermsHtml(vids, d, tri) + models3dTermsHtml(d);
     var reread = rd.status === 'failed' && d.version && d.version.status === 'review'
       ? '<p class="mk-reread"><button type="button" class="btn small" id="rv-reread">読み手チェックをやり直す</button></p>' : '';
     return '<h2 class="rv-rail-h">機械が確かめたこと</h2>' + reread + MK_KEYS.map(function (k) {
@@ -3956,6 +3959,31 @@
       (ver && ver.overall_note ? '<p class="muted">検証係のメモ: ' + esc(ver.overall_note) + '</p>' : '') +
       '<div class="grid2"><div><h3>selfcheck.md（自己点検）</h3>' + renderMd(v.selfcheck_md) + '</div><div><h3>adapt-rules.md（変えてよい範囲）</h3>' + renderMd(v.adapt_rules_md) + '</div></div>' +
       '<h3>機械検査の詳細（checks_json）</h3><pre>' + esc(JSON.stringify(checks, null, 2)) + '</pre>';
+  }
+
+  // §AK2-3: 本文の丸写しの検査（checks_json の verbatim_*）。3 通り: なし（検査済み）/ 件数と一覧（path・sample・URL の host）/ 最後まで済んでいない。
+  // キーの無い古い版は何も出さない。sample・path・URL は職人の出力と取得したページの文なので esc して出す
+  function verbatimHostOf(url) {
+    var m = /^[a-z][a-z0-9+.-]*:\/\/([^\/?#]*)/i.exec(String(url || ''));
+    if (!m) return '';
+    var h = m[1];
+    var at = h.lastIndexOf('@');
+    return (at >= 0 ? h.slice(at + 1) : h).replace(/^www\./i, '');
+  }
+  function verbatimHtml(checks) {
+    var c = isObj(checks) ? checks : {};
+    if (!Object.prototype.hasOwnProperty.call(c, 'verbatim_status')) return '';
+    var st = c.verbatim_status;
+    if (st === 'clean') return '<p class="mk-verbatim" data-verbatim="clean">丸写し: なし（検査済み）</p>';
+    if (st === 'found') {
+      var hits = Array.isArray(c.verbatim_copy) ? c.verbatim_copy.filter(isObj) : [];
+      var total = typeof c.verbatim_total === 'number' && c.verbatim_total > hits.length ? c.verbatim_total : hits.length;
+      return '<div class="mk-verbatim" data-verbatim="found"><p class="err">丸写し: ' + esc(total) + ' 件' + (total > hits.length ? '（先頭の ' + esc(hits.length) + ' 件）' : '') + '</p><ul>' +
+        hits.map(function (h) {
+          return '<li><span class="pre">' + esc(h.path) + '</span> 「' + esc(h.sample) + '」 <span class="muted">' + esc(verbatimHostOf(h.url)) + '</span></li>';
+        }).join('') + '</ul></div>';
+    }
+    return '<p class="err mk-verbatim" data-verbatim="incomplete">丸写しの検査: 最後まで済んでいません</p>';
   }
 
   // §S-8-2: 作り直しで前の版の取得記録により確かめた出典（この session では開いていない）。ほかの値はそのまま出す
@@ -5038,6 +5066,8 @@
     // 子どもの画面
     inlineMd: inlineMd, mdBlocks: mdBlocks, pickVariant: pickVariant, previewBodyHtml: previewBodyHtml, previewFrameHtml: previewFrameHtml, kindName: kindName,
     defaultPv: defaultPv,
+    // §AK2-3 本文の丸写しの検査の表示
+    verbatimHtml: verbatimHtml,
     // §AL schema 2（本文 1 本・遊びの形・バディ用の枠・読み手係の quality）
     isV2: isV2, framesFor: framesFor, bodiesOfPart: bodiesOfPart, previewPartV2Html: previewPartV2Html, buddyHtml: buddyHtml, missingVariantHtml: missingVariantHtml,
     pvSwitchHtml: pvSwitchHtml, READER_QUALITY_LABEL: READER_QUALITY_LABEL, READER_QUALITY_KEYS: READER_QUALITY_KEYS,

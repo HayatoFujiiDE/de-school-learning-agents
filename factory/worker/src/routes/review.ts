@@ -8,6 +8,7 @@ import { buildReject, buildReturn, buildReworkBrief, CHECKLIST_KEYS, publishSwit
 import { CHECK_KEYS, readReaderResult, type CheckKey } from '../checks/triage';
 import { schemaVersionOf } from '../checks/shape';
 import { videoSourceIds } from '../checks/citations';
+import { verbatimBlockReason } from '../checks/verbatim';
 import { figureShowsMetaOf } from '../checks/schema';
 import { AUTO_PUBLISH_EMAIL, computeTriage, latestVerificationOf } from '../triage-step';
 import { generatedImagesOf } from './images';
@@ -447,6 +448,9 @@ export async function decide(c: RouteCtx, vid: string): Promise<Response> {
   const now = nowIso();
 
   if (decision === 'approve') {
+    // §AK2-3: 丸写しがある・丸写しの検査が済んでいない版は人も承認できない（直した版を作る）。verbatim_status の無い古い版は従来どおり
+    const verbatim = verbatimBlockReason(v.checks_json);
+    if (verbatim) return json(409, { error: verbatim });
     // 省略できる項目は最新 verification の仕分けで決まるので、検証の世代を先に確かめてから checklist を見る
     if (v.verification_status !== 'done') return json(400, { error: 'verification_pending' });
     if (typeof b.verification_id !== 'string' || !b.verification_id) return json(400, { error: 'verification_id_required' });
@@ -507,7 +511,7 @@ export async function decide(c: RouteCtx, vid: string): Promise<Response> {
       },
       { decision_id: crypto.randomUUID(), now },
     );
-    if (!r.ok) return json(409, { error: 'conflict' });
+    if (!r.ok) return json(409, { error: r.reason ?? 'conflict' });
     console.log(JSON.stringify({ at: 'approve', version_id: vid }));
     return json(200, { version_id: vid, status: 'approved', publish_status: 'available' });
   }

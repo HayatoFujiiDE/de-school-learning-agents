@@ -9,7 +9,7 @@ import { reopenFreeUrls, type CarryRecord } from './checks/citations';
 import { basenameOf } from './checks/layout';
 import { all, errorKind, first, stmt } from './db';
 import type { Env } from './env';
-import { loadSourceCaptures, readSourceCapturesFile, type SourceCapturesFile } from './verify';
+import { SOURCE_CAPTURES_FILE, SOURCE_CAPTURE_MAX_CHARS, loadSourceCaptures, readSourceCapturesFile, type SourceCapturesFile } from './verify';
 import { versionVideosOf, type VersionVideo } from './videos';
 
 /** 前の版のファイルを置く場所 */
@@ -206,5 +206,35 @@ export async function carryForIngest(
   } catch (e) {
     console.log(JSON.stringify({ at: 'ingest', job_id: job.id, carry: 'unavailable', kind: errorKind(e) }));
     return null;
+  }
+}
+
+/**
+ * §AK2-2: 丸写しの検査のための親の版の取得記録の厳密な読み方（readSourceCapturesFile は引用の引き継ぎ用で、形の違う行を黙って捨てるので使わない）。
+ * R2 の 1 回の get → JSON → v === 1・captures が配列・各行の url と text が文字列・text の長さが 30,000 字未満（30,000 字ちょうどは切り詰めの疑い。
+ * 記録を作る側は UTF-16 の長さで切るので、UTF-16 の長さで比べる = コードポイントの数より厳しい）・missing は配列（空でなくてよい）・truncated が空の配列。
+ * 1 つでも外れたら、または記録が無い・読めない時は ok: false（呼び出し側が incomplete にする）。throw しない
+ */
+export async function readCapturesStrict(
+  env: Pick<Env, 'R2'>,
+  parent: { r2_prefix: string },
+): Promise<{ ok: true; captures: Array<{ url: string; text: string }> } | { ok: false }> {
+  try {
+    const obj = await env.R2.get(parent.r2_prefix + SOURCE_CAPTURES_FILE);
+    if (!obj) return { ok: false };
+    const o = JSON.parse(await obj.text()) as Record<string, unknown> | null;
+    if (!o || typeof o !== 'object' || Array.isArray(o) || o.v !== 1 || !Array.isArray(o.captures)) return { ok: false };
+    // missing（その session で開かなかった出典・YouTube の出典 = 本文を持たない行）は未完了にしない（v3.2）。truncated（見ていない残りがある）は未完了
+    if (!Array.isArray(o.missing) || !Array.isArray(o.truncated) || o.truncated.length !== 0) return { ok: false };
+    const captures: Array<{ url: string; text: string }> = [];
+    for (const raw of o.captures as unknown[]) {
+      const c = raw as Record<string, unknown> | null;
+      if (!c || typeof c !== 'object' || typeof c.url !== 'string' || typeof c.text !== 'string') return { ok: false };
+      if (c.text.length >= SOURCE_CAPTURE_MAX_CHARS) return { ok: false };
+      captures.push({ url: c.url, text: c.text });
+    }
+    return { ok: true, captures };
+  } catch {
+    return { ok: false };
   }
 }

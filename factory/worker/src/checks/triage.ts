@@ -209,6 +209,9 @@ export const ITEM_TITLE: Record<string, string> = {
   quality_questions_first: '問いが答えより後にある、または問いに答えが書かれている',
   quality_one_idea_per_paragraph: '1 つの段落に新しいことが 2 つ以上ある',
   quality_no_goal_words: '目標の言い回しがある（読み手係の指摘）',
+  // §AK2-3: 本文の丸写しの検査（checks_json の verbatim_copy / verbatim_status。verbatim）
+  verbatim_copy: '本文にページの文の丸写し（100 字以上）がある',
+  verbatim_incomplete: '丸写しの検査が最後まで済んでいない',
 };
 
 /** §AL-5: child_text の kind のうち、項目 text:<kind>:<path>（cause = kind）にするものの severity。既存 3 kind（file_name / raw_markup / edition_text）は従来の扱い */
@@ -1028,6 +1031,12 @@ export function triageVersion(input: TriageInput): TriageOutput {
       if (!isObj(r) || typeof r.path !== 'string') continue;
       push({ ...fig, id: `check:figure_shows_removed:${r.path}`, severity: 'fix', cause: 'figure_shows_removed', path: r.path, detail: strList(r.texts).map(oneLine).join(' / ') });
     }
+    // §AK2-3: 本文の丸写し（1 件 1 項目。quote は区間の先頭 60 字）と、検査が最後まで済んでいない版（1 件）。古い版（キーが無い）は項目を作らない
+    for (const r of arr('verbatim_copy') ?? []) {
+      if (!isObj(r)) continue;
+      push({ id: idOf('verbatim_copy'), kind: 'check', key: 'terms_of_use', severity: 'fix', cause: 'verbatim_copy', path: str(r.path), quote: cut(r.sample, 200) });
+    }
+    if (checks && checks.verbatim_status === 'incomplete') push({ id: 'check:verbatim_incomplete', kind: 'check', key: 'terms_of_use', severity: 'fix', cause: 'verbatim_incomplete' });
     if (['forbidden', 'app_html', 'kakunin_zumi', 'missing_source_refs', 'missing_claim_refs'].some((k) => arr(k) === null))
       push({ id: 'check:checks_missing', kind: 'check', key: 'artifact_behavior', severity: 'ask', cause: 'checks_missing' });
     // 古い版（child_text が無い）は「検査していない」: 項目を作らない（読み手係の mismatch が拾う。契約 V-5）

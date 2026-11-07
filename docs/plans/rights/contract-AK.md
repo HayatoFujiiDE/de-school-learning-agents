@@ -242,7 +242,7 @@ CREATE TABLE rights_hosted (
 | 立体モデル（download） | 複製して配る（host） | 本契約の記録（host。`api` / `statement` の根拠だけ。sha ごとの取り込み記録） | `offerableModels3d` + 配信 |
 | 動画（§Q） | YouTube の公式の埋め込み（複製しない） | 提供元の標準の決まり（埋め込みのみ） + 本人のチャンネルを人が初回だけ確かめる（`trusted_channels`） | §Q のまま（本契約の `rightsModes` には載せない。将来 `provider-embed` の行として統合する時は別契約） |
 | 出典（sources.json・お題の sources） | url を示す・短い引用（`quoted_excerpt`） | 引用は複製ではあるが、著作権法 32 条の要件（明瞭な区別・主従の関係・必然性・出典の明示）を満たす時だけ許される。既存の検査（§L・§T）は「文がページにある」「出典がある」を見るだけで、**適法な引用であることの保証ではない**。字数の上限も根拠にならない | 既存（次段 PR-AK2 で扱う） |
-| 本文（.md / app.html） | 職人が自分で書く | 丸写しは引用でない → **PR-AK2（次段）**: 取得したページの文と本文の 100 字以上の一致を `verbatim_copy` として止める（§P の取得記録の文を使う。純関数 + `checks/citations.ts` への差し込み）。これは検出の手段であって非侵害の保証ではない | 次段 |
+| 本文（.md / app.html / .svg） | 職人が自分で書く | 丸写しは引用でない → **PR-AK2**（`contract-AK2.md`）: 取り込みが職人の session の events を古い順に直接流し読み、`web_fetch` の結果の文（sources.json に無い URL も）と本文の見える文の正規化後 100 字以上の一致（同じ URL の引用に収まるものを除く）を `verbatim_copy` として止める（純関数 `checks/verbatim.ts` + `checks/citations.ts` の `accumulateCitations` の callback と `jobs.ts` の取り込みへの差し込み。作り直しは親の版の取得記録を厳密に読み、親の検出を引き継ぐ。検査が済まない版は `verbatim_incomplete` で止める）。これは検出の手段であって非侵害の保証ではない | `checks/verbatim.ts` + 取り込み（`jobs.ts`）+ `publishSwitch` |
 | 新しい提供元・記述だけのページ | — | **PR-AK3（次段）**: LLM の「権利係」が「このページのこの文」を候補として出し、同じ機械の検査（`page-quote`: 文がページにある + 文が固定の正規表現でどの code かに当たる + host が台帳の「記述を認める host」）で決める。LLM は code も見せ方も決めない。複製の根拠にはしない（`cc-url` と同じ） | 次段 |
 
 ## AK-9 PR と着地

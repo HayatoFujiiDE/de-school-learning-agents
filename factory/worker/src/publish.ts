@@ -2,7 +2,8 @@
 // あわせて確認の決定（return / reject）の batch もここで組み立てる（publish_status は触らない）。
 // SQL の組み立て（build*）は純関数で、test/publish-sql.test.ts が node:sqlite の実 DB で実行して行数を確かめる。
 
-import { ACTIVE_JOB_SQL, conditionalBatch, stmt, type SqlValue, type Stmt } from './db';
+import { verbatimBlockReason } from './checks/verbatim';
+import { ACTIVE_JOB_SQL, conditionalBatch, first, stmt, type SqlValue, type Stmt } from './db';
 
 /** 読み手係の世代（判定で読んだ reader_status と reader_token。契約 V-7 b・c） */
 export interface ReaderGuard {
@@ -51,6 +52,11 @@ const P_ROLLBACK = `SELECT 1 FROM material_versions pv JOIN materials pm ON pm.i
   WHERE pv.id = ? AND pv.material_id = ? AND pv.status = 'approved'
     AND (pm.current_version_id IS NULL OR pm.current_version_id <> pv.id OR pm.publish_status = 'stopped')`;
 
+// §AK2-3: 版を available にする経路（approve・rollback）の共通の前提。版の checks_json の verbatim_status が無い（本契約の前に取り込んだ版・
+// 読めない checks_json）か 'clean' の時だけ。publishSwitch が先に理由を返すが、述語にも入れて同じ batch の中で確かめる（json_valid で読めない値は通す）
+const VERBATIM_OK = `(CASE WHEN json_valid(vb.checks_json) THEN json_type(vb.checks_json, '$.verbatim_status') IS NULL OR json_extract(vb.checks_json, '$.verbatim_status') = 'clean' ELSE 1 END)`;
+const P_VERBATIM = `SELECT 1 FROM material_versions vb WHERE vb.id = ? AND ${VERBATIM_OK}`;
+
 // 述語 P（stop）: 配信中
 const P_STOP = `SELECT 1 FROM materials pm WHERE pm.id = ? AND pm.publish_status = 'available'`;
 
@@ -90,8 +96,8 @@ export function buildPublishSwitch(a: PublishSwitchArgs, c: BuildCtx): Stmt[] {
         // 入口の後に一時停止されても、コミットの時点で一時停止中なら機械は承認しない（契約 V-7 c・d）
         extra.push(`COALESCE((SELECT value FROM settings WHERE key = 'paused'), '0') <> '1'`);
       }
-      const P = `EXISTS (${P_APPROVE})${extra.map((e) => ` AND ${e}`).join('')}`;
-      const p = [a.version_id, a.material_id, a.verification_id, ...extraParams];
+      const P = `EXISTS (${P_APPROVE}) AND EXISTS (${P_VERBATIM})${extra.map((e) => ` AND ${e}`).join('')}`;
+      const p = [a.version_id, a.material_id, a.verification_id, a.version_id, ...extraParams];
       const out: Stmt[] = [
         stmt(
           `INSERT INTO review_decisions (id, material_version_id, material_id, decision, checklist_json, note, reviewer_email, content_sha256_at_decision, created_at, machine_gate)
@@ -128,17 +134,18 @@ export function buildPublishSwitch(a: PublishSwitchArgs, c: BuildCtx): Stmt[] {
       return out;
     }
     case 'rollback': {
-      const p = [a.version_id, a.material_id];
+      const p = [a.version_id, a.material_id, a.version_id];
+      const P = `EXISTS (${P_ROLLBACK}) AND EXISTS (${P_VERBATIM})`;
       return [
         stmt(
           `INSERT INTO review_decisions (id, material_version_id, material_id, decision, checklist_json, note, reviewer_email, content_sha256_at_decision, created_at)
            SELECT ?, ?, ?, 'rollback', NULL, ?, ?, (SELECT content_sha256 FROM material_versions WHERE id = ?), ?
-           WHERE EXISTS (${P_ROLLBACK})`,
+           WHERE ${P}`,
           c.decision_id, a.version_id, a.material_id, a.note, a.reviewer_email, a.version_id, c.now, ...p,
         ),
         stmt(
           `UPDATE materials SET current_version_id = ?, publish_status = 'available', updated_at = ?
-           WHERE id = ? AND EXISTS (${P_ROLLBACK})`,
+           WHERE id = ? AND ${P}`,
           a.version_id, c.now, a.material_id, ...p,
         ),
       ];
@@ -161,8 +168,21 @@ export function buildPublishSwitch(a: PublishSwitchArgs, c: BuildCtx): Stmt[] {
   }
 }
 
-/** publish_status / current_version_id を変える唯一の関数。ok=false は述語不成立（409） */
-export async function publishSwitch(db: D1Database, a: PublishSwitchArgs, c: BuildCtx): Promise<{ ok: boolean }> {
+/**
+ * publish_status / current_version_id を変える唯一の関数。ok=false は述語不成立（409）。
+ * §AK2-3: 版を available にする経路（approve = 人の承認・自動公開 / rollback = 戻し）は、版の checks_json の verbatim_status が 'clean' でなければ
+ * 拒否する（reason = verbatim_copy_present / verbatim_incomplete）。verbatim_status が無い版は従来どおり通す
+ */
+export async function publishSwitch(
+  db: D1Database,
+  a: PublishSwitchArgs,
+  c: BuildCtx,
+): Promise<{ ok: boolean; reason?: 'verbatim_copy_present' | 'verbatim_incomplete' }> {
+  if (a.kind === 'approve' || a.kind === 'rollback') {
+    const v = await first<{ checks_json: string | null }>(db, stmt('SELECT checks_json FROM material_versions WHERE id = ? AND material_id = ?', a.version_id, a.material_id));
+    const reason = verbatimBlockReason(v?.checks_json);
+    if (reason) return { ok: false, reason };
+  }
   const r = await conditionalBatch(db, buildPublishSwitch(a, c));
   return { ok: r.ok };
 }

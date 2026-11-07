@@ -5,7 +5,19 @@
 import type { BetaManagedAgentsEventParams } from '@anthropic-ai/sdk/resources/beta/sessions/events';
 import type { SessionCreateParams } from '@anthropic-ai/sdk/resources/beta/sessions/sessions';
 import { PortError, type CallOpts, type FactoryPort, type FileMeta } from './anthropic';
-import { accumulateCitations, applyCarry, finishCitations, isCitationAcc, newCitationAcc, type CitationAcc } from './checks/citations';
+import { accumulateCitations, applyCarry, finishCitations, isCitationAcc, newCitationAcc, normalizeUrl, type CitationAcc } from './checks/citations';
+import {
+  buildNeedles,
+  inheritParentHits,
+  isVerbState,
+  mergeHits,
+  newVerbState,
+  normalizeForMatch,
+  prepareBodies,
+  scanPage,
+  verbatimStatusOf,
+  type VerbState,
+} from './checks/verbatim';
 import { versionVideosOf } from './videos';
 import { models3dSectionLines } from './models3d';
 import { offerableCatalogMap, offerableModels3d, type RightsRecord } from './rights';
@@ -58,7 +70,7 @@ import {
   registerImage,
 } from './images';
 import { activeMakerNotes, makerNoteLines } from './retro';
-import { carryForIngest, prevForStart, prevSectionLines } from './rework';
+import { carryForIngest, prevForStart, prevSectionLines, readCapturesStrict } from './rework';
 import { OutOfTime, SAVE_FAILURES_MAX, ScanLimit, ScanStalled, runScan, stateJsonForSave, type ScanIO, type ScanState } from './scan';
 import { isActiveJob, isReingestable, isTerminalJob } from './state';
 import {
@@ -988,8 +1000,8 @@ interface ReconcileState {
   /** ingested（versioned の途中）: 論理 Map の全ファイルを論理キーへ置き終えた。再入時は置き直さない（raw/ を取り直す時は消える） */
   /** 論理キーへの配置と parts/ の古いキーの掃除が両方済んだ印（§R-47。旧名 placed は掃除を含まないので読まない） */
   placed_clean?: boolean;
-  /** ingested: events（古い順）の途中経過。本文は持たず、出典照合の集計と採点結果だけ */
-  ev?: { cursor: string | null; acc: CitationAcc; grader: { result: string; explanation: string } | null; complete: boolean };
+  /** ingested: events（古い順）の途中経過。本文は持たず、出典照合の集計・採点結果・丸写しの検査の一致の記録（§AK2-2 verb）だけ */
+  ev?: { cursor: string | null; acc: CitationAcc; grader: { result: string; explanation: string } | null; complete: boolean; verb: VerbState };
   /**
    * §Q-13 5・裁定 a: 「この id は youtube_info」という種別の記録（返したかどうかの記録ではない）。送る前に保存する。
    * 値は毎回 (前の info_event_ids ∩ 今の idle の event_ids) ∪ 今回処理する id（今の待ちの分だけ。件数の上限は置かない）
@@ -1927,20 +1939,48 @@ class Reconciler {
     }
     const citeSources = schema.sources.map((s) => ({ id: s.id, url: s.url, quoted_excerpt: s.quoted_excerpt, is_primary: s.is_primary }));
 
+    const texts = new Map<string, string>();
+    // 画像（png / webp）はバイナリなので禁止語・参照の検査に入れない（§M）。検査するのは本文として読む md / svg / html だけ
+    for (const [p, b] of files) if (p.startsWith('parts/') && /\.(md|svg|html)$/.test(p)) texts.set(p, dec.decode(b));
+    // §AK2-2: 丸写しの検査の本文と針（events の走査の前に 1 回だけ作る。ファイルから決まるので保存しない）
+    const bodies = prepareBodies(texts);
+    const needles = buildNeedles(bodies);
+    // 同じ URL（normalizeUrl）の出典の quoted_excerpt を normalizeForMatch した列（区間の全部が収まる一致は丸写しに数えない）
+    const quotesByUrl = new Map<string, string[]>();
+    for (const s of citeSources) {
+      const q = normalizeForMatch(s.quoted_excerpt ?? '');
+      if (q.length === 0) continue;
+      const u = normalizeUrl(s.url);
+      quotesByUrl.set(u, [...(quotesByUrl.get(u) ?? []), q]);
+    }
+    const quotesOf = (u: string): string[] => quotesByUrl.get(u) ?? [];
+
     // events を古い順に最後のページまで。ページごとに集計と続き位置を保存する
-    // 旧形式の集計（tool_result ごとの配列 / 順序逆転の仮集計 pend を持つ形 / キーが名前空間化されていない形）が残っていたら先頭から集計し直す
-    let ev = state.ev && isCitationAcc(state.ev.acc) ? state.ev : { cursor: null, acc: newCitationAcc(), grader: null, complete: false };
+    // 旧形式の集計（tool_result ごとの配列 / 順序逆転の仮集計 pend を持つ形 / キーが名前空間化されていない形 / 丸写しの検査の記録 verb が無い・版が違う形）が
+    // 残っていたら、cursor・acc・verb・grader・complete を全部初期化して先頭から集計し直す
+    let ev =
+      state.ev && isCitationAcc(state.ev.acc) && isVerbState(state.ev.verb)
+        ? state.ev
+        : { cursor: null, acc: newCitationAcc(), grader: null, complete: false, verb: newVerbState() };
     for (let i = 0; !ev.complete; i++) {
       if (i >= MAX_PAGES) throw new Error('too_many_pages');
       await this.extend();
       const p = await this.port.listEventsPage(sid, { order: 'asc', page: ev.cursor }, this.call);
-      accumulateCitations(ev.acc, citeSources, p.data);
+      const verb = ev.verb;
+      // §AK2-2: 出典照合と同じ use → result の対応で、web_fetch の結果の文ごとに丸写しを探す（ページをまたいでも対応は acc.fetches が持つ）
+      accumulateCitations(ev.acc, citeSources, p.data, (url, text) => {
+        const r = scanPage(needles, bodies, text, url, quotesOf(url));
+        verb.hits = mergeHits(verb.hits, r.hits);
+        verb.total += r.hits.length;
+        verb.pages++;
+        if (r.incomplete) verb.incomplete = true;
+      });
       let grader = ev.grader;
       for (const e of p.data) {
         const x = e as { type?: unknown; result?: unknown; explanation?: unknown };
         if (x.type === 'span.outcome_evaluation_end') grader = { result: String(x.result ?? ''), explanation: String(x.explanation ?? '') };
       }
-      ev = { cursor: p.next, acc: ev.acc, grader, complete: !p.next };
+      ev = { cursor: p.next, acc: ev.acc, grader, complete: !p.next, verb };
       state = { ...state, ev };
       await this.writeState(job, 'ingested', state);
     }
@@ -1951,6 +1991,11 @@ class Reconciler {
     // （親の events は読まず、親の記録も書かない。レビュー裁定 1）。無い・読めない時は引き継がない（取り込みは失敗させない・carried の項目も付けない）。
     // 読み始める時間も残っていなければ、版を書かずに次の reconcile へ回す（events の集計は保存済みなので、次はこの段から始まる）
     let cit = sessionCit;
+    // §AK2-2: 丸写しの検査の結果（この session の分 + 本文・針の上限）。作り直しは下で親の分を足す
+    let verbHits = ev.verb.hits;
+    let verbTotal = ev.verb.total;
+    let verbPages = ev.verb.pages;
+    let verbIncomplete = ev.verb.incomplete || bodies.incomplete || needles.incomplete;
     // 裁定 3: 先送りは 1 つの job で CARRY_DEFER_MAX 回まで（reconcile_state_json.carry_defers）。使い切ったら引き継ぎなしで取り込む
     if (job.kind === 'rework' && job.parent_version_id) {
       const defers = Number.isInteger(state.carry_defers) ? state.carry_defers! : 0;
@@ -1960,17 +2005,62 @@ class Reconciler {
         await this.writeState(job, null, state);
         throw new OutOfTime();
       }
+      // §AK2-2 親の検出の引き継ぎ: 親の版（同じ素材）の checks_json を 1 回読む（r2_prefix は親の取得記録の厳密な読み方に使う）。読めなければ未完了
+      let parentScanned = false;
+      let parent: { r2_prefix: string; checks_json: string | null } | null = null;
+      try {
+        parent = await first<{ r2_prefix: string; checks_json: string | null }>(
+          this.db,
+          stmt('SELECT r2_prefix, checks_json FROM material_versions WHERE id = ? AND material_id = ?', job.parent_version_id, job.material_id),
+        );
+      } catch {
+        parent = null;
+      }
+      if (!parent) {
+        verbIncomplete = true;
+      } else {
+        let parentChecks: unknown = null;
+        try {
+          parentChecks = JSON.parse(String(parent.checks_json ?? ''));
+        } catch {
+          parentChecks = null;
+        }
+        // 親が本契約の後に取り込まれた版（verbatim_status あり）なら、親の session の web_fetch は全部その時に走査済み → 取得記録は読まず、検出の引き継ぎだけで足りる（v3.2）
+        const pc = parentChecks as Record<string, unknown> | null;
+        parentScanned = !!pc && typeof pc === 'object' && !Array.isArray(pc) && typeof pc.verbatim_status === 'string';
+        const inherited = inheritParentHits(parentChecks, bodies);
+        verbHits = mergeHits(verbHits, inherited.hits);
+        verbTotal += inherited.hits.length;
+        if (inherited.incomplete) verbIncomplete = true;
+      }
       if (!short) {
         await this.extend();
         const carry = await carryForIngest(this.env, job);
         if (carry) cit = applyCarry(sessionCit, citeSources, videosOfVersion, carry.records, Date.now());
+        // §AK2-2 親の取得記録の検査（引用の引き継ぎとは別の厳密な読み方。壊れた行・切り詰めの疑い・missing / truncated があれば未完了）
+        const strict = parentScanned ? null : parent ? await readCapturesStrict(this.env, parent) : ({ ok: false } as const);
+        if (strict === null) {
+          // 親は走査済み（上の引き継ぎで足りる）
+        } else if (!strict.ok) {
+          verbIncomplete = true;
+        } else {
+          for (const c of strict.captures) {
+            const u = normalizeUrl(c.url);
+            const r = scanPage(needles, bodies, c.text, u, quotesOf(u));
+            verbHits = mergeHits(verbHits, r.hits);
+            verbTotal += r.hits.length;
+            verbPages++;
+            if (r.incomplete) verbIncomplete = true;
+          }
+        }
+      } else if (!parentScanned) {
+        // 先送りを使い切った: 親の取得記録を読まずに取り込む → 丸写しの検査は済んでいない（親が走査済みなら引き継ぎで足りる）
+        verbIncomplete = true;
       }
     }
+    const verbStatus = verbatimStatusOf(verbHits.length, verbIncomplete);
     const grader = ev.grader;
 
-    const texts = new Map<string, string>();
-    // 画像（png / webp）はバイナリなので禁止語・参照の検査に入れない（§M）。検査するのは本文として読む md / svg / html だけ
-    for (const [p, b] of files) if (p.startsWith('parts/') && /\.(md|svg|html)$/.test(p)) texts.set(p, dec.decode(b));
     // §AL-2: schema 2 は要約 1 本（material.json#summary）を見る。schema 1 は従来の 2 行
     const schemaVersion = schemaVersionOf(schema.material);
     const forb = checkForbidden({
@@ -2004,6 +2094,11 @@ class Reconciler {
       // §AL-2: 本文の散文の字数（schema 2 だけ。観測用。仕分けは使わない）
       ...(schemaVersion === 2 ? { body_chars: bodyChars(schema.material, texts) } : {}),
       ...figureShows.checks,
+      // §AK2-2: 本文の丸写しの検査（取り込みは止めない。承認と公開は verbatim_status が 'clean' でなければ止まる）
+      verbatim_copy: verbHits,
+      verbatim_total: verbTotal,
+      verbatim_pages: verbPages,
+      verbatim_status: verbStatus,
     };
     const childTextKinds: Record<string, number> = {};
     for (const h of childText) childTextKinds[h.kind] = (childTextKinds[h.kind] ?? 0) + 1;
@@ -2073,7 +2168,19 @@ class Reconciler {
     );
     const r = await conditionalBatch(this.db, stmts);
     if (!r.ok) return 'discarded';
-    console.log(JSON.stringify({ at: 'ingest', job_id: job.id, version_id: versionId, schema_version: schemaVersion, child_text: childTextKinds }));
+    console.log(
+      JSON.stringify({
+        at: 'ingest',
+        job_id: job.id,
+        version_id: versionId,
+        schema_version: schemaVersion,
+        child_text: childTextKinds,
+        // §AK2-2: 状態と数だけ（本文・URL・ページの文は出さない）
+        verbatim: verbStatus,
+        verbatim_n: verbTotal,
+        verbatim_pages: verbPages,
+      }),
+    );
     return 'versioned';
   }
 }
