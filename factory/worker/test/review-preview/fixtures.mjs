@@ -171,7 +171,12 @@ export function models3d() {
   for (const p of picks) {
     const e = entryOf(p.catalog_id);
     d.sources.push({ source_id: p.source_id, url: e.page_url, title: e.title_ja, accessed_at: '2026-11-07', quoted_excerpt: '', license: e.license.label, is_primary: 0, url_was_fetched: 0, quote_found: 0, check_detail: 'model3d' });
-    d.models3d_meta[p.id] = { catalog_id: e.id, title: e.title_ja, org: e.org, kind: e.kind, embed_url: e.embed_url, page_url: e.page_url, license: e.license.label, attribution: e.attribution };
+    // §AK-4 4: license は記録の code と url からの名前・attribution は記録の値・license_url / license_code / rights_kind / rights_status（作り物の記録は rightsOfFixture）
+    const r = rightsOfFixture(e);
+    d.models3d_meta[p.id] = {
+      catalog_id: e.id, title: e.title_ja, org: e.org, kind: e.kind, embed_url: e.embed_url, page_url: e.page_url, license: r.label, attribution: r.attribution,
+      license_url: r.license_url, license_code: r.code, rights_kind: r.evidence_kind, rights_status: r.status,
+    };
     // §AJ2-3: 取り込み済みの download だけ file_url（相対）・bytes
     if (e.id === ROVER_ID) Object.assign(d.models3d_meta[p.id], { file_url: ROVER_FILE_URL, bytes: ROVER_BYTES });
   }
@@ -181,16 +186,63 @@ export function models3d() {
   return d;
 }
 
-/** §AJ2-2: GET /api/models3d の作り物（一覧の全件。探査車だけ取り込み済み・ISS は未取り込み・BodyParts3D は url 無し） */
-export function models3dAdmin() {
+/** §AK: 作り物の権利の記録の名前（licenseLabelOf と同じ。一覧の 3 種類だけ） */
+const LABEL_OF = { cc0: 'CC0 1.0', 'cc-by': 'CC BY 4.0', 'nasa-media': 'NASA の利用の決まり' };
+const AT = '2026-11-07T12:00:00.000Z';
+
+/**
+ * §AK-5: 作り物の rights（GET /api/models3d の 1 件の rights）。探査車 = verified / statement（取り込み済み）・ISS = verified / statement だが取り込みの失敗 import:too_large・
+ * Sketchfab = verified / api・Voyager = 人の記録・BodyParts3D = verified / cc-url（埋め込みだけ = download なので出ない）。blocked の id は止めている
+ */
+export function rightsOfFixture(e, blocked = false) {
+  const kind = e.kind === 'sketchfab' ? 'api' : e.kind === 'voyager' ? 'human' : e.id.startsWith('nasa-') ? 'statement' : 'cc-url';
+  const code = e.license.code;
+  const modes = blocked
+    ? { host: false, embed: false }
+    : kind === 'human' || kind === 'cc-url' ? { host: false, embed: true } : code === 'nasa-media' ? { host: true, embed: false } : { host: true, embed: true };
+  const offered = e.kind === 'download' ? modes.host : modes.embed;
+  return {
+    code,
+    label: LABEL_OF[code] || '不明',
+    license_url: e.license.url,
+    attribution: e.attribution,
+    evidence_kind: kind,
+    status: kind === 'human' ? 'human' : 'verified',
+    blocked,
+    checked_at: kind === 'human' ? e.checked_at : AT,
+    last_attempt_at: AT,
+    fail_code: null,
+    check: kind === 'human' ? 'none' : kind,
+    modes,
+    record: 'ok',
+    reason: blocked ? 'blocked' : offered ? 'ok' : 'license',
+    last_fail: null,
+    last_import_fail: e.id === 'nasa-iss' ? { at: AT, result: 'import:too_large' } : null,
+  };
+}
+
+/** §AJ2-2・§AK-5: GET /api/models3d の作り物（一覧の全件。探査車だけ取り込み済み・ISS は未取り込み・BodyParts3D は url 無し）。blocked = 止めている id の集合 */
+export function models3dAdmin(blocked = new Set()) {
   return {
     models: readCatalog().map((e) => {
-      const base = { id: e.id, title: e.title_ja, org: e.org, kind: e.kind, license: e.license.label, page_url: e.page_url, has_download_url: e.download_url !== null };
+      const base = { id: e.id, title: e.title_ja, org: e.org, kind: e.kind, license: e.license.label, page_url: e.page_url, has_download_url: e.download_url !== null, rights: rightsOfFixture(e, blocked.has(e.id)) };
       if (e.kind !== 'download') return { ...base, state: 'embed' };
-      if (e.id === ROVER_ID) return { ...base, state: 'hosted', bytes: ROVER_BYTES, sha256: ROVER_SHA, fetched_at: '2026-11-07T12:00:00.000Z', object_ok: true };
+      if (e.id === ROVER_ID) return { ...base, state: 'hosted', bytes: ROVER_BYTES, sha256: ROVER_SHA, fetched_at: AT, object_ok: true };
       return { ...base, state: e.download_url !== null ? 'not_hosted' : 'unavailable' };
     }),
   };
+}
+
+/** §AK-5: POST /api/rights/models3d/<id>/check の作り物の応答（null = 一覧に無い id） */
+export function rightsCheckFixture(id, blocked = false) {
+  const e = readCatalog().find((m) => m.id === id);
+  if (!e) return null;
+  const r = rightsOfFixture(e, blocked);
+  if (r.evidence_kind === 'human') return { status: 'human_unchanged', code: r.code, label: r.label, modes: r.modes };
+  const out = { status: 'verified', code: r.code, label: r.label, modes: r.modes };
+  if (!blocked && e.id === ROVER_ID) out.import = { status: 'unchanged', bytes: ROVER_BYTES };
+  if (!blocked && e.id === 'nasa-iss') out.import = { status: 'failed', error: 'too_large' };
+  return out;
 }
 
 export const ALL = { attention, clean, pending, readerWait, figureClaims, models3d };

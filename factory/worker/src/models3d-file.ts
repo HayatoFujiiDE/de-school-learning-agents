@@ -181,8 +181,3 @@ export async function hostedModels3d(env: Pick<Env, 'DB' | 'R2'>): Promise<Map<s
   }
   return out;
 }
-
-/** 取り込み済みの id の集合（注文票・取り込み検査に渡す） */
-export async function hostedModel3dIds(env: Pick<Env, 'DB' | 'R2'>): Promise<Set<string>> {
-  return new Set((await hostedModels3d(env)).keys());
-}

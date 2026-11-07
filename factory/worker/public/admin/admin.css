@@ -664,6 +664,11 @@ button.sc-cid { text-decoration: underline; text-underline-offset: 2px; }
 .mp-model3d-cap { margin: 6px 0 0 !important; font-size: 0.85em; color: var(--mp-muted); }
 .mp-model3d-cap a { margin-left: 8px; }
 .mp-model3d-why { margin: 8px 0 0 !important; font-size: 0.93em; }
+/* §AK-5: 立体モデルのページの権利の列（1 行目 = ライセンスと根拠・2 行目以降 = 未確認や失敗の注記・止めている札は .pill.red）と操作の並び */
+.m3d-rights .m3d-rights-main { font-weight: 600; }
+.m3d-rights .m3d-note { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); }
+.m3d-ops .btn + .btn { margin-left: 6px; }
+.mp-missing[data-rights-blocked] { border-color: #e3a94a; }
 .mp-k { display: inline-block; font-size: 12px; font-weight: 700; color: var(--mp-green); margin-right: 8px; }
 .mp-missing { color: var(--mp-muted); background: var(--mp-paper); border: 1px dashed #cfcabd; border-radius: 12px; padding: 10px 14px; }
 .mp-loading { color: var(--mp-muted); }

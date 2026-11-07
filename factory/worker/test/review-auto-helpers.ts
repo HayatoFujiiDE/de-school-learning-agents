@@ -30,6 +30,11 @@ export function world(over: Record<string, string> = {}): World {
       const v = r2.get(k);
       return v === undefined ? null : { text: async () => v };
     },
+    // §AK-7 13: 権利の門番（loadRightsGate → hostedModels3d）が取り込み済みの object を head で確かめる
+    async head(k: string) {
+      const v = r2.get(k);
+      return v === undefined ? null : { key: k, size: v.length };
+    },
   };
   return { db, r2, env: { DB: d1(db), R2, ...over } as unknown as Env, seq: 0 };
 }

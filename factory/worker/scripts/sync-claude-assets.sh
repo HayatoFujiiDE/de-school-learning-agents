@@ -73,6 +73,22 @@ if (m3models.length > 200) m3bad('models は 200 件まで');
 const m3ids = new Set();
 const m3str = (v, max) => typeof v === 'string' && v.length > 0 && v.length <= max && v === v.trim();
 const m3https = (v) => typeof v === 'string' && /^https:\/\/[^\s]+$/.test(v) && v.length <= 500;
+// §AK-1: license.url → code（src/rights.ts の normalizeLicenseUrl / licenseCodeOfUrl と同じ規則。実在する組み合わせの有限集合。unknown なら止まる）
+const m3normLicense = (url) => {
+  let u;
+  try { u = new URL(String(url).trim()); } catch { return null; }
+  if ((u.protocol !== 'http:' && u.protocol !== 'https:') || u.username !== '' || u.password !== '' || !u.host) return null;
+  const segs = u.pathname.toLowerCase().split('/');
+  while (segs.length > 1 && segs[segs.length - 1] === '') segs.pop();
+  if (segs.length > 1 && /^(deed|legalcode)(\.[a-z]{2})?$/.test(segs[segs.length - 1])) segs.pop();
+  return `https://${u.host.toLowerCase()}${segs.join('/')}/`;
+};
+const m3licenseCodes = new Map([['https://creativecommons.org/publicdomain/zero/1.0/', 'cc0'], ['https://creativecommons.org/publicdomain/mark/1.0/', 'pdm'], ['https://www.nasa.gov/nasa-brand-center/images-and-media/', 'nasa-media']]);
+for (const el of ['by', 'by-sa', 'by-nd', 'by-nc', 'by-nc-sa', 'by-nc-nd']) {
+  for (const v of ['1.0', '2.0', '2.5', '3.0', '4.0']) m3licenseCodes.set(`https://creativecommons.org/licenses/${el}/${v}/`, `cc-${el}`);
+  for (const v of ['2.0', '2.1']) m3licenseCodes.set(`https://creativecommons.org/licenses/${el}/${v}/jp/`, `cc-${el}`);
+}
+const m3licenseCodeOfUrl = (url) => m3licenseCodes.get(m3normLicense(url)) || 'unknown';
 for (const m of m3models) {
   if (!m || typeof m !== 'object') m3bad('models[] はオブジェクト');
   if (!/^[a-z0-9-]{3,40}$/.test(String(m.id))) m3bad(`id の形: ${m.id}`);
@@ -80,9 +96,19 @@ for (const m of m3models) {
   m3ids.add(m.id);
   if (!m3str(m.title_ja, 80) || !m3str(m.title_src, 120) || !m3str(m.org, 80) || !m3str(m.attribution, 200)) m3bad(`${m.id}: title_ja / title_src / org / attribution は 1 文字以上の文字列（前後の空白なし）`);
   if (!m3https(m.page_url)) m3bad(`${m.id}: page_url は https の URL`);
+  // §AK-7 17: uploader（Sketchfab の投稿者の username。sketchfab は必須・他は null）と evidence_url（権利の根拠のページ。download だけ）
+  if (m.uploader !== null && (typeof m.uploader !== 'string' || !/^[A-Za-z0-9_.-]{1,60}$/.test(m.uploader))) m3bad(`${m.id}: uploader は英数字と _ . -（60 字まで）か null`);
+  if (m.evidence_url !== null && !m3https(m.evidence_url)) m3bad(`${m.id}: evidence_url は https の URL か null`);
+  if (m.kind !== 'download' && m.evidence_url !== null) m3bad(`${m.id}: download 以外の evidence_url は null`);
+  if (m.kind === 'download' && /^https:\/\/dbarchive\.biosciencedbc\.jp\//.test(m.page_url) && m.evidence_url === null) m3bad(`${m.id}: dbarchive.biosciencedbc.jp の download は evidence_url が要る`);
+  if (m.kind !== 'sketchfab' && m.uploader !== null) m3bad(`${m.id}: sketchfab 以外の uploader は null`);
   if (m.kind === 'sketchfab') {
     if (!/^https:\/\/sketchfab\.com\/models\/[0-9a-f]{32}\/embed$/.test(String(m.embed_url))) m3bad(`${m.id}: sketchfab の embed_url の形`);
     if (!m.page_url.endsWith(m.embed_url.slice('https://sketchfab.com/models/'.length, -'/embed'.length))) m3bad(`${m.id}: page_url の uid が embed_url と違う`);
+    const uid = m.embed_url.slice('https://sketchfab.com/models/'.length, -'/embed'.length);
+    const pre = 'https://sketchfab.com/3d-models/';
+    if (!m.page_url.startsWith(pre) || !/^[A-Za-z0-9-]*$/.test(m.page_url.slice(pre.length, m.page_url.length - uid.length))) m3bad(`${m.id}: sketchfab の page_url は https://sketchfab.com/3d-models/[A-Za-z0-9-]*<uid>`);
+    if (m.uploader === null) m3bad(`${m.id}: sketchfab は uploader が要る`);
   } else if (m.kind === 'voyager') {
     if (!/^https:\/\/3d-api\.si\.edu\/voyager\/3d_package:[0-9a-f-]{36}$/.test(String(m.embed_url))) m3bad(`${m.id}: voyager の embed_url の形`);
     if (!m.page_url.endsWith(m.embed_url.slice(m.embed_url.lastIndexOf(':') + 1))) m3bad(`${m.id}: page_url の id が embed_url と違う`);
@@ -93,17 +119,19 @@ for (const m of m3models) {
   if (m.kind !== 'download' && m.download_url !== null) m3bad(`${m.id}: 埋め込みのものの download_url は null`);
   const lic = m.license;
   if (!lic || !['cc0', 'cc-by', 'nasa-media'].includes(lic.code) || !m3str(lic.label, 120) || !m3https(lic.url)) m3bad(`${m.id}: license は {code: cc0 / cc-by / nasa-media, label, url}`);
+  if (m3licenseCodeOfUrl(lic.url) === 'unknown') m3bad(`${m.id}: license.url が実在する組み合わせ（src/rights.ts の licenseCodeOfUrl）に無い`);
   if (!Array.isArray(m.topics) || m.topics.length < 1 || m.topics.length > 8 || !m.topics.every((t) => m3str(t, 20))) m3bad(`${m.id}: topics は 1〜8 個の短い語`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(m.checked_at)) || !m3str(m.checked_how, 300)) m3bad(`${m.id}: checked_at（YYYY-MM-DD）と checked_how`);
 }
 const m3out = m3models.map((m) => ({
   id: m.id, title_ja: m.title_ja, title_src: m.title_src, org: m.org, kind: m.kind, page_url: m.page_url, embed_url: m.embed_url, download_url: m.download_url,
-  license: { code: m.license.code, label: m.license.label, url: m.license.url }, attribution: m.attribution, topics: [...m.topics], checked_at: m.checked_at,
+  uploader: m.uploader, evidence_url: m.evidence_url,
+  license: { code: m.license.code, label: m.license.label, url: m.license.url }, attribution: m.attribution, topics: [...m.topics], checked_at: m.checked_at, checked_how: m.checked_how,
 }));
 fs.writeFileSync(
   path.join(root, 'src/generated/models3d-catalog.ts'),
   '// 生成ファイル。手で編集しない（scripts/sync-claude-assets.sh が factory/models3d/catalog.json から生成する）\n' +
-    'export interface Model3dEntry {\n  id: string;\n  title_ja: string;\n  title_src: string;\n  org: string;\n  kind: \'sketchfab\' | \'voyager\' | \'download\';\n  page_url: string;\n  embed_url: string | null;\n  download_url: string | null;\n  license: { code: \'cc0\' | \'cc-by\' | \'nasa-media\'; label: string; url: string };\n  attribution: string;\n  topics: string[];\n  checked_at: string;\n}\n' +
+    'export interface Model3dEntry {\n  id: string;\n  title_ja: string;\n  title_src: string;\n  org: string;\n  kind: \'sketchfab\' | \'voyager\' | \'download\';\n  page_url: string;\n  embed_url: string | null;\n  download_url: string | null;\n  uploader: string | null;\n  evidence_url: string | null;\n  license: { code: \'cc0\' | \'cc-by\' | \'nasa-media\'; label: string; url: string };\n  attribution: string;\n  topics: string[];\n  checked_at: string;\n  checked_how: string;\n}\n' +
     `export const MODELS3D: readonly Model3dEntry[] = ${JSON.stringify(m3out)};\n`,
 );
 

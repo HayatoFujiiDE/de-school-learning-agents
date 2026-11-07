@@ -1,5 +1,7 @@
 # §AJ2 立体モデル v2: `download` を工場が自分で持って見せる（2026-11-07 凍結）
 
+> **改訂の注記（2026-11-07・§AK 権利の門番 `docs/plans/rights/contract-AK.md` の AK-4・AK-9）**: 本契約の次の点は §AK が置き換える。(1) 取り込みの route `POST /api/models3d/<id>/fetch` は**廃止**（AJ2-2 の 2〜6 は `importModel3d` に切り出され、権利の確認 `POST /api/rights/models3d/<id>/check` / cron が verified の直後に claim を持ったまま呼ぶ経路だけ。管理のページの「取り込む」「取り直す」のボタンは無くなり「権利を確かめる」「止める」「戻す」になる）。(2) 配信 `GET /api/library/models3d/files/<id>/<sha>.glb` は **D1 を見る**（`rights_records` と `rights_hosted` を 1 クエリで読み、記録の指紋が一致し host が許され、その sha を確認のもとで取り込んだ時だけ 200。「D1 は見ない・R2 の object があれば配る」は改訂）。(3) 学習者側の一覧と確認画面の `models3d_meta` に**キーが増える**（`license_code`・`license_url`。確認画面は `rights_kind`・`rights_status` と、門番で × の時の `rights_blocked`・`rights_reason`）。`license` は記録の code と url からの名前、`attribution` は記録の値になる。注文票・取り込み検査・一覧・確認画面は `viewable*` ではなく門番の `offerableModels3d` / `offerableCatalogMap` を通る。(4) **cache の短縮**: 一覧 API は 3600 → 600 秒、配信は `public, max-age=31536000, immutable` → `public, max-age=86400`（deploy 前に 1 年の immutable で配った url の端末の cache は回収できない = §AK-0 4 の範囲外）。
+
 ふじさんの決定（2026-11-07）: 「学習者に見せられたら何でもいい。利用できるコンテンツは利用する」+「指示を待たずどんどん進めて」。v1（`contract-AJ.md`。埋め込み。main `f3004be`・lock `927a0fc`）の次段。一覧（`factory/models3d/catalog.json`）の `kind: download` を、運営が確認画面から取り込み（GLB を R2 に置き）、確認画面と学習者側の入口で自前に見せる。
 
 ## 実測した事実（2026-11-07。推測を含まない）

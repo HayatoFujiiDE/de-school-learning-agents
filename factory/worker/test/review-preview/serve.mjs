@@ -9,7 +9,7 @@ import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, normalize, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ALL, listRows, models3dAdmin, ROVER_BYTES, ROVER_FILE_URL, ROVER_ID, ROVER_SHA } from './fixtures.mjs';
+import { ALL, listRows, models3dAdmin, rightsCheckFixture, ROVER_FILE_URL } from './fixtures.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ADMIN = join(HERE, '../../public/admin');
@@ -18,6 +18,8 @@ const PORT = Number(process.argv[2] || 8791);
 const DETAILS = Object.fromEntries(Object.values(ALL).map((f) => { const d = f(); return [d.version.id, d]; }));
 const VID = 'vfix-0001';
 const state = { auto_publish: false, channels: [{ channel_key: 'https://www.youtube.com/@fixture-science', channel_name: '作り物の科学チャンネル', channel_url: 'https://www.youtube.com/@fixture-science', first_version_id: 'vclean-0001', approved_by: 'owner@example.invalid', created_at: '2026-11-05T09:00:00.000Z' }] };
+/** §AK-5: 立体モデルのページで止めている id（メモリの中だけ） */
+const m3dBlocked = new Set();
 const readBody = (req) => new Promise((resolve) => { let b = ''; req.on('data', (c) => { b += c; }); req.on('end', () => { try { resolve(b ? JSON.parse(b) : null); } catch { resolve(null); } }); });
 // Worker の /admin と同じ CSP（src/index.ts。§AJ2-3 の model-viewer + Draco の分を含む。style の hash は src/index.ts の MODEL_VIEWER_STYLE_HASH）
 const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'sha256-PXtZZkJMMyc18o/DN1ZEFOJ2qEGq95IQbVaJFMOXOb0='; img-src 'self' data:; connect-src 'self' blob:; worker-src blob:; frame-src 'self' https://www.youtube-nocookie.com https://sketchfab.com https://3d-api.si.edu; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
@@ -92,13 +94,17 @@ createServer((req, res) => {
     return json(res, 200, { deleted: state.channels.length < before });
   }
   if (path === '/api/channels') return json(res, 200, { channels: state.channels });
-  // §AJ2: 立体モデルのページ（#/models3d）と取り込んだ GLB の配信の作り物。POST はメモリにも書かない（探査車は unchanged・ISS は too_large）
-  if (path === '/api/models3d' && req.method === 'GET') return json(res, 200, models3dAdmin());
-  const mf = /^\/api\/models3d\/([a-z0-9-]{3,40})\/fetch$/.exec(path);
-  if (mf && req.method === 'POST') {
-    if (mf[1] === ROVER_ID) return json(res, 200, { status: 'unchanged', catalog_id: ROVER_ID, sha256: ROVER_SHA, bytes: ROVER_BYTES });
-    if (mf[1] === 'nasa-iss') return json(res, 413, { error: 'too_large' });
-    return json(res, 400, { error: 'not_download' });
+  // §AJ2・§AK-5: 立体モデルのページ（#/models3d）と権利の確認・止める / 戻す・取り込んだ GLB の配信の作り物。止めている id はメモリの中だけ
+  // （確認: 探査車は verified / statement で取り込みは unchanged・ISS は verified だが取り込み失敗 too_large・Sketchfab は verified / api・Voyager は人の記録）
+  if (path === '/api/models3d' && req.method === 'GET') return json(res, 200, models3dAdmin(m3dBlocked));
+  const mr = /^\/api\/rights\/models3d\/([a-z0-9-]{3,40})\/(check|block|unblock)$/.exec(path);
+  if (mr && req.method === 'POST') {
+    const out = rightsCheckFixture(mr[1], m3dBlocked.has(mr[1]));
+    if (!out) return json(res, 404, { error: 'not_found' });
+    if (mr[2] === 'check') return json(res, 200, out);
+    if (mr[2] === 'block') m3dBlocked.add(mr[1]);
+    else m3dBlocked.delete(mr[1]);
+    return json(res, 200, { blocked: mr[2] === 'block' });
   }
   if (path === ROVER_FILE_URL) {
     if (!PREVIEW_GLB || !existsSync(PREVIEW_GLB) || !statSync(PREVIEW_GLB).isFile()) return json(res, 404, { error: 'not_found' });

@@ -3,8 +3,13 @@
 import { describe, expect, it } from 'vitest';
 import { checkModels3d, MAX_MODELS3D, MODEL3D_ID_RE, validateOutputs } from '../src/checks/schema';
 import type { Model3dEntry } from '../src/generated/models3d-catalog';
-import { MODELS3D_BY_ID, model3dEntryOf, versionModels3dOf, versionModels3dOfMaterial, viewableCatalogMap } from '../src/models3d';
+import { embeddableModels3d, MODELS3D_BY_ID, model3dEntryOf, versionModels3dOf, versionModels3dOfMaterial } from '../src/models3d';
+import { offerableCatalogMap } from '../src/rights';
 import { goodFiles, goodMaterial } from './helpers';
+import { fullGate, gateOf, goodRecord, hostedRow } from './rights-helpers';
+
+/** §AK-4 2: 取り込み検査の既定は空の Map（全部 catalog で落ちる）。形の検査は「門番を通った一覧」= 埋め込みの件を渡す */
+const PASSED: ReadonlyMap<string, Model3dEntry> = new Map(embeddableModels3d().map((e) => [e.id, e]));
 
 type Obj = Record<string, unknown>;
 const page = (id: string) => MODELS3D_BY_ID.get(id)!.page_url;
@@ -57,7 +62,7 @@ function filesWith(byPart: Array<unknown | undefined>, extraSources?: Obj[]) {
   return files;
 }
 const detailOf = (files: Map<string, Uint8Array>) => {
-  const r = validateOutputs(files);
+  const r = validateOutputs(files, { models3dCatalog: PASSED });
   return r.ok ? 'ok' : r.detail;
 };
 
@@ -69,7 +74,7 @@ describe('§AJ-1 schema: parts[].models3d[]', () => {
   });
 
   it('正しい models3d は通り、part に 4 キーだけが付く（余分なキーは落とす・他の part は models3d キーを持たない）', () => {
-    const r = validateOutputs(filesWith([[model({ extra: 'x', embed_url: 'https://evil.example/' }), model({ id: 'd2', catalog_id: 'si-triceratops', source_id: 's10' })], undefined]));
+    const r = validateOutputs(filesWith([[model({ extra: 'x', embed_url: 'https://evil.example/' }), model({ id: 'd2', catalog_id: 'si-triceratops', source_id: 's10' })], undefined]), { models3dCatalog: PASSED });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.material.parts[0].models3d).toEqual([model(), model({ id: 'd2', catalog_id: 'si-triceratops', source_id: 's10' })]);
@@ -141,14 +146,14 @@ describe('§AJ-1 schema: parts[].models3d[]', () => {
   });
 
   it('§AJ-6 2: 立体モデルの出典の行が quoted_excerpt: "" でも取り込みを通り、出典の行はそのまま残る', () => {
-    const r = validateOutputs(filesWith([[model()]], [m3Source('omnh-allosaurus', 's9')]));
+    const r = validateOutputs(filesWith([[model()]], [m3Source('omnh-allosaurus', 's9')]), { models3dCatalog: PASSED });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.sources.find((s) => s.id === 's9')).toMatchObject({ url: page('omnh-allosaurus'), quoted_excerpt: '', license: 'CC BY 4.0', is_primary: false });
   });
 
   it('license が空の立体モデルの出典の行は既存どおり unknown（検査では一致を求めない）', () => {
-    const r = validateOutputs(filesWith([[model()]], [{ ...m3Source('omnh-allosaurus', 's9'), license: '' }]));
+    const r = validateOutputs(filesWith([[model()]], [{ ...m3Source('omnh-allosaurus', 's9'), license: '' }]), { models3dCatalog: PASSED });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.sources.find((s) => s.id === 's9')?.license).toBe('unknown');
   });
@@ -187,18 +192,23 @@ describe('§AJ-1 checkModels3d（純関数・小さな一覧を渡す）', () =>
     if (ok.ok) expect(ok.byPart.get('p1')?.map((d) => d.catalog_id)).toEqual(['x-one', 'x-voy']);
   });
 
-  // §AJ2-5 7: 埋め込み判定の責務は viewableCatalogMap に移った（checkModels3d は Map に無いことで落とす）
-  it('§AJ2: viewableCatalogMap(空集合) で作った Map に download は入らない（→ catalog で落ちる）', () => {
-    const viewable = viewableCatalogMap(new Set(), [...catalog.values()]);
-    expect([...viewable.keys()]).toEqual(['x-one', 'x-voy']);
-    expect(checkModels3d([{ id: 'p1', models3d: [{ id: 'd1', catalog_id: 'x-dl', why: 'a', source_id: 's2' }] }], urls, viewable)).toEqual({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
+  // §AJ2-5 7・§AK-4 2: 見せられるかの責務は門番（offerableCatalogMap）にある（checkModels3d は Map に無いことで落とす）
+  const smallGate = async (o: { hosted?: boolean } = {}) => {
+    const cat = [...catalog.values()];
+    const records = [await goodRecord(catalog.get('x-one')!), await goodRecord(catalog.get('x-voy')!), await goodRecord(catalog.get('x-dl')!, { evidence_kind: 'statement' })];
+    return gateOf({ records, catalog: cat, ...(o.hosted ? { hosted: [['x-dl', hostedRow('9'.repeat(64))]], hostedShas: [['x-dl', '9'.repeat(64)]] } : {}) });
+  };
+  it('§AK: 取り込みの無い download は offerableCatalogMap に入らない（→ catalog で落ちる）', async () => {
+    const offered = offerableCatalogMap(await smallGate(), [...catalog.values()]);
+    expect([...offered.keys()]).toEqual(['x-one', 'x-voy']);
+    expect(checkModels3d([{ id: 'p1', models3d: [{ id: 'd1', catalog_id: 'x-dl', why: 'a', source_id: 's2' }] }], urls, offered)).toEqual({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
   });
 
-  it('§AJ2: download を含む Map を渡せば通る（hosted にある download = viewableCatalogMap に入る）', () => {
+  it('§AK: download を含む Map を渡せば通る（host の記録 + 取り込み済み + rights_hosted = offerableCatalogMap に入る）', async () => {
     expect(checkModels3d([{ id: 'p1', models3d: [{ id: 'd1', catalog_id: 'x-dl', why: 'a', source_id: 's2' }] }], urls, catalog).ok).toBe(true);
-    const viewable = viewableCatalogMap(new Set(['x-dl']), [...catalog.values()]);
-    expect([...viewable.keys()]).toEqual(['x-one', 'x-dl', 'x-voy']);
-    const r = checkModels3d([{ id: 'p1', models3d: [{ id: 'd1', catalog_id: 'x-dl', why: 'a', source_id: 's2' }] }], urls, viewable);
+    const offered = offerableCatalogMap(await smallGate({ hosted: true }), [...catalog.values()]);
+    expect([...offered.keys()]).toEqual(['x-one', 'x-dl', 'x-voy']);
+    const r = checkModels3d([{ id: 'p1', models3d: [{ id: 'd1', catalog_id: 'x-dl', why: 'a', source_id: 's2' }] }], urls, offered);
     expect(r.ok && r.byPart.get('p1')?.map((d) => d.catalog_id)).toEqual(['x-dl']);
   });
 
@@ -233,24 +243,34 @@ describe('§AJ-1 versionModels3dOf / versionModels3dOfMaterial（src/models3d.ts
   });
 });
 
-describe('§AJ2-0・§AJ2-5 7 validateOutputs(files, { models3dHosted })', () => {
+describe('§AK-4 2・§AK-7 13 validateOutputs(files, { models3dCatalog })', () => {
   const ROVER = 'nasa-perseverance-rover';
+  const SHA = 'b'.repeat(64);
   const files = () => filesWith([[model({ catalog_id: ROVER, source_id: 's13' })]], [...DEFAULT_SOURCES, m3Source(ROVER, 's13')]);
+  const hosted = { hosted: [[ROVER, hostedRow(SHA)]] as Array<[string, ReturnType<typeof hostedRow>]> };
 
-  it('models3dHosted に id を入れると download の id が通り、part に 4 キーだけが付く', () => {
-    const r = validateOutputs(files(), { models3dHosted: new Set([ROVER]) });
+  it('既定（{}）は空の Map: download も埋め込みも catalog で落ちる', () => {
+    expect(validateOutputs(files())).toMatchObject({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
+    expect(validateOutputs(files(), {})).toMatchObject({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
+    expect(validateOutputs(filesWith([[model()]]), {})).toMatchObject({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
+  });
+
+  it('offerableCatalogMap(門番): verified + hosted + rights_hosted の download だけ通り、part に 4 キーだけが付く', async () => {
+    const r = validateOutputs(files(), { models3dCatalog: offerableCatalogMap(await fullGate({ ...hosted, hostedShas: [[ROVER, SHA]] })) });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.material.parts[0].models3d).toEqual([{ id: 'd1', catalog_id: ROVER, why: model().why, source_id: 's13' }]);
   });
 
-  it('入れないと（既定も空集合）catalog で落ちる。別の id だけ入れても落ちる', () => {
-    expect(validateOutputs(files())).toMatchObject({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
-    expect(validateOutputs(files(), { models3dHosted: new Set() })).toMatchObject({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
-    expect(validateOutputs(files(), { models3dHosted: new Set(['nasa-iss']) })).toMatchObject({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
+  it('hosted でも rights_hosted に無い sha・記録が無い・止めた記録は catalog で落ちる', async () => {
+    expect(validateOutputs(files(), { models3dCatalog: offerableCatalogMap(await fullGate(hosted)) })).toMatchObject({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
+    expect(validateOutputs(files(), { models3dCatalog: offerableCatalogMap(await gateOf({ ...hosted, hostedShas: [[ROVER, SHA]] })) })).toMatchObject({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
+    const blocked = await gateOf({ records: [await goodRecord(MODELS3D_BY_ID.get(ROVER)!, { blocked: true })], ...hosted, hostedShas: [[ROVER, SHA]] });
+    expect(validateOutputs(files(), { models3dCatalog: offerableCatalogMap(blocked) })).toMatchObject({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
   });
 
-  it('hosted に入れても一覧に無い id・埋め込みの id の扱いは v1 のまま', () => {
-    expect(validateOutputs(filesWith([[model({ catalog_id: 'no-such-model' })]]), { models3dHosted: new Set(['no-such-model']) })).toMatchObject({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
-    expect(validateOutputs(filesWith([[model()]]), { models3dHosted: new Set([ROVER]) }).ok).toBe(true);
+  it('一覧に無い id は門番を通っても catalog。記録のある埋め込みの id は通る', async () => {
+    const gate = await fullGate();
+    expect(validateOutputs(filesWith([[model({ catalog_id: 'no-such-model' })]]), { models3dCatalog: offerableCatalogMap(gate) })).toMatchObject({ ok: false, detail: 'bad_model3d:p1:0:catalog' });
+    expect(validateOutputs(filesWith([[model()]]), { models3dCatalog: offerableCatalogMap(gate) }).ok).toBe(true);
   });
 });

@@ -13,7 +13,9 @@ import { generatedImagesOf } from './images';
 import { serveVersionFile } from './library';
 import { readVersionVideoNotes, readVideoMetaViews, versionVideosOf, versionVideosOfMaterial, type VideoMetaView, type VideoNotesFile } from '../videos';
 import { model3dEntryOf, versionModels3dOfMaterial } from '../models3d';
-import { fileUrlOf, hostedModels3d, type HostedModel3d } from '../models3d-file';
+import { fileUrlOf } from '../models3d-file';
+import { assetKey, licenseLabelOf, rightsReasonOf, type EvidenceKind, type LicenseCode, type RightsGate, type RightsReason, type RightsStatus } from '../rights';
+import { EMPTY_RIGHTS_GATE, loadRightsGate } from '../rights-store';
 
 // 観点の一覧は publish.ts に置く（振り返り係 §S が同じ一覧で差し戻しの観点を数える。route を import しない）
 export { CHECKLIST_KEYS };
@@ -255,8 +257,8 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
     video_notes: videoNotes,
     video_meta: videoMeta,
     // §AJ-4: 版の立体モデルの一覧の情報（material の models3d の id → 一覧の項目。一覧に無い id は入れない）。埋め込みの url は画面が表示の直前にもう一度形を確かめる
-    // §AJ2-3: 取り込み済みの download だけ file_url（相対）・bytes が付く（立体モデルのある版だけ hostedModels3d を 1 回読む）
-    models3d_meta: models3dMetaOf(material, versionModels3dOfMaterial(material).length ? await hostedModels3d(c.env) : new Map()),
+    // §AJ2-3: 取り込み済みの download だけ file_url（相対）・bytes が付く。§AK-4 4: 権利の門番を通らないものは rights_blocked と理由（立体モデルのある版だけ門番を 1 回読む）
+    models3d_meta: models3dMetaOf(material, versionModels3dOfMaterial(material).length ? await loadRightsGate(c.env) : EMPTY_RIGHTS_GATE),
   });
 }
 
@@ -267,34 +269,58 @@ interface Model3dMeta {
   kind: string;
   embed_url: string | null;
   page_url: string;
+  /** §AK-4 4: 記録の code と url からの名前（licenseLabelOf）。記録が無ければ「不明」 */
   license: string;
+  /** §AK-4 4: 記録の値。記録が無ければ '' */
   attribution: string;
-  /** §AJ2-3: 取り込み済みの download だけ（相対の配信パス。確認画面は同じオリジン） */
+  license_url: string;
+  license_code: LicenseCode;
+  rights_kind: EvidenceKind | null;
+  rights_status: RightsStatus | null;
+  /** §AK-4 4: 門番で × の時だけ true（埋め込み・model-viewer は描かない。embed_url は null にして出す） */
+  rights_blocked?: true;
+  rights_reason?: RightsReason;
+  /** §AJ2-3: 取り込み済み（かつ rights_hosted にその sha がある）download だけ（相対の配信パス。確認画面は同じオリジン） */
   file_url?: string;
   bytes?: number;
 }
 
 /**
- * §AJ-4: models3d_meta（{ <models3d の id>: { catalog_id, title, org, kind, embed_url, page_url, license, attribution } }）。
- * §AJ2-3: kind が download で hosted（D1 の行 + R2 の object）にある時だけ file_url・bytes を足す
+ * §AJ-4: models3d_meta（{ <models3d の id>: { catalog_id, title, org, kind, embed_url, page_url, license, attribution, … } }）。一覧に無い id は出さない。
+ * §AK-4 4: license・attribution は記録から。license_url・license_code・rights_kind・rights_status を足す。門番で × のもの
+ * （rightsReasonOf が ok でない）は rights_blocked: true と rights_reason を付ける。§AJ2-3: download で取り込み済みかつ rights_hosted に
+ * その sha がある時だけ file_url・bytes を足す（host が許されても未取り込みなら付けない = 画面は「まだ取り込まれていません」）
  */
-function models3dMetaOf(material: unknown, hosted: ReadonlyMap<string, HostedModel3d>): Record<string, Model3dMeta> {
+function models3dMetaOf(material: unknown, gate: RightsGate): Record<string, Model3dMeta> {
   const out: Record<string, Model3dMeta> = {};
   for (const d of versionModels3dOfMaterial(material)) {
     const e = model3dEntryOf(d.catalog_id);
     if (!e) continue;
-    const h = e.kind === 'download' ? hosted.get(e.id) : undefined;
-    out[d.id] = {
+    const key = assetKey('models3d', e.id);
+    const r = gate.records.get(key);
+    const rec = r !== undefined && r !== 'invalid' ? r : null;
+    const reason = rightsReasonOf(r, e, gate.subjects.get(key));
+    const base: Model3dMeta = {
       catalog_id: e.id,
       title: e.title_ja,
       org: e.org,
       kind: e.kind,
       embed_url: e.embed_url,
       page_url: e.page_url,
-      license: e.license.label,
-      attribution: e.attribution,
-      ...(h ? { file_url: fileUrlOf(e.id, h.sha256), bytes: h.bytes } : {}),
+      license: rec ? licenseLabelOf(rec.license_code, rec.license_url) : licenseLabelOf('unknown', ''),
+      attribution: rec ? rec.attribution : '',
+      license_url: rec ? rec.license_url : '',
+      license_code: rec ? rec.license_code : 'unknown',
+      rights_kind: rec ? rec.evidence_kind : null,
+      rights_status: rec ? rec.status : null,
     };
+    if (reason !== 'ok') {
+      out[d.id] = { ...base, embed_url: null, rights_blocked: true, rights_reason: reason };
+      continue;
+    }
+    const h = e.kind === 'download' ? gate.hosted.get(e.id) : undefined;
+    const hostedOk = !!h && !!gate.hostedShas.get(key)?.has(h.sha256);
+    out[d.id] = { ...base, ...(h && hostedOk ? { file_url: fileUrlOf(e.id, h.sha256), bytes: h.bytes } : {}) };
   }
   return out;
 }

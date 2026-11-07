@@ -5,8 +5,10 @@ import type { Env } from '../env';
 import { json, parseJsonField } from '../http';
 import { isRealDate } from '../topics/schema';
 import { isTopicKind, topicsSwitch } from '../topics/store';
-import { model3dViewOf, viewableModels3d } from '../models3d';
-import { hostedModels3d, MODEL3D_CATALOG_ID_RE, R2_KEY, SHA256_HEX_RE } from '../models3d-file';
+import { model3dEntryOf, model3dViewOf } from '../models3d';
+import { MODEL3D_CATALOG_ID_RE, R2_KEY, SHA256_HEX_RE } from '../models3d-file';
+import { assetKey, offerableModels3d, rightsModes, subjectSha256 } from '../rights';
+import { loadRightsGate, rightsRecordOf } from '../rights-store';
 
 const HTML_CSP = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:";
 const SVG_CSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'";
@@ -168,25 +170,40 @@ export async function libraryTopicStock(env: Env, url: URL): Promise<Response> {
 }
 
 /**
- * §AJ-5・§AJ2-0: GET /api/library/models3d（認証なし）。一覧のうち埋め込めるもの（sketchfab / voyager）と取り込み済みの download を一覧の順に。
- * download の件は v1 の 8 キーに file_url（絶対 url = origin + 配信パス。学習者のアプリは別オリジン）・bytes・sha256 を足した 11 キー。
- * 埋め込みの件は v1 のまま 8 キー。子ども向けアプリは material.json の catalog_id をこれで引いて描く
+ * §AJ-5・§AJ2-0・§AK-4 3: GET /api/library/models3d（認証なし）。権利の門番を通ったもの（offerableModels3d）を一覧の順に。
+ * キーは v1 の 8 + license_code・license_url（license は記録の code と url から・attribution は記録の値）。download の件は
+ * file_url（絶対 url = origin + 配信パス。学習者のアプリは別オリジン）・bytes・sha256 を足す。
+ * cache は 10 分（初回の 0 件が 1 時間残らないように。§AJ2 の 3600 を改訂）
  */
 export async function libraryModels3d(env: Env, origin: string): Promise<Response> {
-  const hosted = await hostedModels3d(env);
-  const models = viewableModels3d(new Set(hosted.keys())).map((e) => {
-    const v = model3dViewOf(e, hosted.get(e.id));
+  const gate = await loadRightsGate(env);
+  const models = offerableModels3d(gate).map(({ entry, record, hosted }) => {
+    const v = model3dViewOf(entry, record, hosted);
     return v.file_url === undefined ? v : { ...v, file_url: origin + v.file_url };
   });
-  return json(200, { models }, { 'cache-control': 'public, max-age=3600', 'access-control-allow-origin': '*' });
+  return json(200, { models }, { 'cache-control': 'public, max-age=600', 'access-control-allow-origin': '*' });
 }
 
 /**
- * §AJ2-0: GET /api/library/models3d/files/<catalog_id>/<sha256>.glb（認証なし）。D1 は見ない: 形が合えば key を組み立てて R2 から get し、無ければ 404。
- * 取り直しの後も古い sha の object は残るので、cache された一覧の url が取り直しの直後に死なない
+ * §AJ2-0・§AK-4 6: GET /api/library/models3d/files/<catalog_id>/<sha256>.glb（認証なし）。形の検査のあと、記録と rights_hosted を 1 クエリで読み、
+ * 行があり指紋が一致し rightsModes.host で、かつ rights_hosted にその (asset_key, sha) がある時だけ R2 から返す。cache は 1 日。
+ * 取り直しの後も古い sha の object と rights_hosted の行は残るので、cache された一覧の url が取り直しの直後に死なない
  */
 export async function libraryModel3dFile(env: Env, catalogId: string, sha: string): Promise<Response> {
   if (!MODEL3D_CATALOG_ID_RE.test(catalogId) || !SHA256_HEX_RE.test(sha)) return notFound();
+  const entry = model3dEntryOf(catalogId);
+  if (!entry || entry.kind !== 'download') return notFound();
+  const row = await first<Record<string, unknown>>(
+    env.DB,
+    stmt(
+      'SELECT r.*, h.sha256 AS hosted_sha FROM rights_records r LEFT JOIN rights_hosted h ON h.asset_key = r.asset_key AND h.sha256 = ? WHERE r.asset_key = ?',
+      sha,
+      assetKey('models3d', catalogId),
+    ),
+  );
+  if (!row) return notFound();
+  if (!rightsModes(rightsRecordOf(row), await subjectSha256(entry)).host) return notFound();
+  if (row.hosted_sha === null || row.hosted_sha === undefined) return notFound();
   const obj = await env.R2.get(R2_KEY(catalogId, sha));
   if (!obj) return notFound();
   return new Response(obj.body, {
@@ -194,7 +211,7 @@ export async function libraryModel3dFile(env: Env, catalogId: string, sha: strin
     headers: {
       'content-type': 'model/gltf-binary',
       'content-length': String(obj.size),
-      'cache-control': 'public, max-age=31536000, immutable',
+      'cache-control': 'public, max-age=86400',
       'x-content-type-options': 'nosniff',
       'access-control-allow-origin': '*',
     },

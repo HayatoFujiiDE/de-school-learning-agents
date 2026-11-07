@@ -11,7 +11,8 @@ import { executeTopicRun, parseTopicRunMessage } from './topics/gen';
 import { getFloor } from './routes/floor';
 import { answerJobRoute, cancelJobRoute, createJob, getJobDetail, raiseBudgetRoute, reconcileJobRoute, reingestJobRoute, startJobRoute } from './routes/jobs';
 import { libraryAvailable, libraryFile, libraryModel3dFile, libraryModels3d, libraryTopicStock, libraryTopics } from './routes/library';
-import { fetchModel3d, listModels3d } from './routes/models3d';
+import { listModels3d } from './routes/models3d';
+import { blockRights, checkRights } from './routes/rights';
 import { createMaterial, getMaterialDetail, listMaterials, rollbackMaterial, stopMaterial } from './routes/materials';
 import { createOrder } from './routes/orders';
 import {
@@ -102,9 +103,12 @@ const ROUTES: Array<[string, RegExp, Handler]> = [
   ['GET', new RegExp(`^/api/topics/${TOPIC_ID}$`), getTopic],
   ['POST', new RegExp(`^/api/topics/${TOPIC_ID}/decide$`), decideTopic],
   ['POST', new RegExp(`^/api/topics/${TOPIC_ID}/derive$`), deriveTopicRoute],
-  // 立体モデル v2（§AJ2-2。運営が一覧の download を取り込む。service token はこの route では Access の層で 401）
-  ['POST', /^\/api\/models3d\/([a-z0-9-]{3,40})\/fetch$/, (c, id) => fetchModel3d(c, id)],
+  // 立体モデル（§AJ2-2・§AK-5。管理のページ用の一覧。取り込みの route は §AK-4 5 で廃止 = 取り込みは権利の確認の直後だけ）
   ['GET', /^\/api\/models3d$/, (c) => listModels3d(c)],
+  // 権利の門番（§AK-5。人だけ。service token はこの 3 本では Access の層で 401 = allowCommonName に入れない）
+  ['POST', /^\/api\/rights\/models3d\/([a-z0-9-]{3,40})\/check$/, (c, id) => checkRights(c, id)],
+  ['POST', /^\/api\/rights\/models3d\/([a-z0-9-]{3,40})\/block$/, (c, id) => blockRights(c, id, true)],
+  ['POST', /^\/api\/rights\/models3d\/([a-z0-9-]{3,40})\/unblock$/, (c, id) => blockRights(c, id, false)],
 ];
 
 // 管理画面に付ける CSP（同一 origin の /api/* だけを読む。確認用 iframe は sandbox 付きで同一 origin から読む）。

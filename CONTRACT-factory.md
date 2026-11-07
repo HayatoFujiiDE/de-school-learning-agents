@@ -1332,3 +1332,7 @@ v3.5（2026-11-04 段階 0 の実測。最初の本物の session sesn_01Jfui3ap
 ## §AJ2 立体モデル v2: `download` を工場が自分で持って見せる（v3.16。2026-11-07 凍結）
 
 本文（正本）は `docs/plans/models3d/contract-AJ2.md`（AJ2-0〜AJ2-6）。一覧の `kind: download` のうち運営が確認画面の「立体モデル」ページで取り込んだもの（GLB を一覧の `download_url` から取り、形を検査して R2 に置き、D1 `models3d_files` に記録。1 件 24 MiB まで）だけを、確認画面（`<model-viewer>` と Draco 復号器を自前に置く。`/admin` の CSP に `'wasm-unsafe-eval'` と `worker-src blob:`）と学習者側の入口（`GET /api/library/models3d` の `file_url`・`GET /api/library/models3d/files/<id>/<sha>.glb`。認証なし・CORS `*`）で見せる。職人の定義は変えない（`ant apply` 不要）。子ども向けアプリの描画・OBJ の変換・24 MiB 超の軽量化は範囲外。
+
+## §AK 権利の門番: 外から来た資料は、機械が確かめた権利の記録が無ければ学習者に届かない（v3.17。2026-11-07 凍結 v3）
+
+本文（正本）は `docs/plans/rights/contract-AK.md`（AK-0〜AK-9）。立体モデルの 6 つの出口（注文票・取り込み検査・学習者側の一覧・確認画面・取り込み・配信）は、D1 `rights_records` の記録（一覧の対象の指紋 `subject_sha256` に結ぶ）を固定の表 `rightsModes`（`src/rights.ts`）で見て、複製して配る（host）か提供元の埋め込み（embed）かを決める。ライセンスの種類は提供元の API の `license.url`・ページの CC の URL・台帳の固定の記述から機械が導き（人・LLM・画面は code を書かない）、確かめ方は台帳 `src/rights-providers.ts`（Sketchfab = api・NASA = statement・DBCLS = cc-url（embed だけ）・Smithsonian = 人の記録（embed だけ））。host は `api` / `statement` の記録で、確認の直後に claim を持ったまま取り込んだ sha（`rights_hosted`）だけ。取り込みの route `POST /api/models3d/<id>/fetch` は廃止（§AJ2-2 の改訂）。確認は cron の段 3-d（1 回 5 件まで）と `POST /api/rights/models3d/<id>/check`、運営は止める / 戻すができる。migration 0017（記録は消さない）。職人の定義は変えない（`ant apply` 不要）。動画・出典の引用・本文の丸写し・LLM の権利係は範囲外（AK-8）。

@@ -1,5 +1,5 @@
 // §AJ2-5: 立体モデル v2（download を工場が自分で持って見せる）。fake で。実物の GLB は repo に入れず、最小の GLB をテストの中で合成する。
-// 1 inspectGlb / 2 readCapped / 3 取り込み（POST /api/models3d/<id>/fetch）/ 4 配信 / 5 学習者側の一覧 / 8 review の models3d_meta・hostedModels3d /
+// 1 inspectGlb / 2 readCapped / 3 取り込み（§AK-2 6 の importModel3d。旧 fetch route は §AK-4 5 で廃止 → 権利の確認の route）/ 4 配信 / 5 学習者側の一覧 / 8 review の models3d_meta・hostedModels3d /
 // 9 admin.js の純関数と /admin の CSP・style の hash / 10 serve.mjs の CSP。6・7 は models3d-order・models3d-schema・rework-from-previous。
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -12,10 +12,12 @@ import type { RouteCtx } from '../src/http';
 import worker from '../src/index';
 import { MODELS3D_BY_ID } from '../src/models3d';
 import { fileUrlOf, hostedModels3d, inspectGlb, MAX_MODEL3D_BYTES, MODEL3D_FILE_URL_RE, R2_KEY, readCapped } from '../src/models3d-file';
-import { fetchModel3d, listModels3d } from '../src/routes/models3d';
+import { importModel3d, listModels3d } from '../src/routes/models3d';
+import { checkRights } from '../src/routes/rights';
 import { reviewDetail } from '../src/routes/review';
 import { d1, migratedDb, one, rows } from './d1-shim';
 import { ctx as reviewCtx, good, material, seed, world } from './review-auto-helpers';
+import { seedAllGood, seedGood, seedHostedSha } from './rights-helpers';
 
 type Obj = Record<string, any>;
 const ROVER = 'nasa-perseverance-rover';
@@ -186,7 +188,7 @@ describe('§AJ2-5 2 readCapped', () => {
 });
 
 // ---------------------------------------------------------------------------------------------
-// 取り込み（POST /api/models3d/<id>/fetch）
+// 取り込み（§AK-2 6: importModel3d。権利の確認が verified の直後に呼ぶ）
 
 function r2Fake() {
   const store = new Map<string, Uint8Array>();
@@ -252,24 +254,17 @@ const stubFetch = (make: () => Response | Promise<Response>): Stub => {
   return f;
 };
 const glbRes = (b: ArrayBuffer, headers: Record<string, string> = {}) => new Response(b, { status: 200, headers: { 'content-type': 'model/gltf-binary', ...headers } });
-const call = async (id: string, f: typeof fetch, o: { service?: boolean } = {}) => {
-  const res = await fetchModel3d(routeCtx(o), id, f);
-  return { status: res.status, body: (await res.json()) as Obj };
-};
+const BY = 'ops@example.invalid';
+/** §AK-2 6: 取り込みの中身（importModel3d。権利の確認が verified の直後に claim を持ったまま呼ぶ）。e が無い id は作り物の download で */
+const call = async (id: string, f: typeof fetch) => importModel3d(env, MODELS3D_BY_ID.get(id)!, BY, f);
 const fileRows = () => rows(db, 'SELECT * FROM models3d_files');
 
-describe('§AJ2-5 3 POST /api/models3d/<id>/fetch（fetchModel3d）', () => {
-  it('一覧に無い id → 404 not_found（取得しない）', async () => {
+describe('§AJ2-5 3・§AK-2 6 importModel3d（取り込みの中身。旧 POST /api/models3d/<id>/fetch の 2〜6）', () => {
+  it('voyager の id・download_url 無しの id → not_download（取得しない・何も書かない）', async () => {
     const f = stubFetch(() => glbRes(glb()));
-    expect(await call('no-such-model', f)).toEqual({ status: 404, body: { error: 'not_found' } });
-    expect(f.calls).toHaveLength(0);
-  });
-
-  it('voyager の id・download_url 無しの id → 400 not_download（取得しない・何も書かない）', async () => {
-    const f = stubFetch(() => glbRes(glb()));
-    expect(await call('si-triceratops', f)).toEqual({ status: 400, body: { error: 'not_download' } });
+    expect(await call('si-triceratops', f)).toEqual({ ok: false, error: 'not_download', http: 400 });
     expect(MODELS3D_BY_ID.get('dbcls-bodyparts3d')!.download_url).toBeNull();
-    expect(await call('dbcls-bodyparts3d', f)).toEqual({ status: 400, body: { error: 'not_download' } });
+    expect(await call('dbcls-bodyparts3d', f)).toEqual({ ok: false, error: 'not_download', http: 400 });
     expect(f.calls).toHaveLength(0);
     expect(fileRows()).toEqual([]);
     expect(r2.store.size).toBe(0);
@@ -277,7 +272,7 @@ describe('§AJ2-5 3 POST /api/models3d/<id>/fetch（fetchModel3d）', () => {
 
   it('取得は一覧の download_url だけ。redirect manual・accept・signal を付ける', async () => {
     const f = stubFetch(() => glbRes(glb()));
-    expect((await call(ROVER, f)).status).toBe(200);
+    expect((await call(ROVER, f)).ok).toBe(true);
     expect(f.calls).toHaveLength(1);
     const [u, init] = f.calls[0];
     expect(u).toBe(ROVER_E.download_url);
@@ -290,13 +285,13 @@ describe('§AJ2-5 3 POST /api/models3d/<id>/fetch（fetchModel3d）', () => {
     let pulled = 0;
     const lazy = new ReadableStream<Uint8Array>({ pull: (c) => { pulled++; c.enqueue(new Uint8Array(4)); }, cancel() {} }, { highWaterMark: 0 });
     const f1 = stubFetch(() => new Response(lazy, { status: 200, headers: { 'content-length': String(MAX_MODEL3D_BYTES + 1) } }));
-    expect(await call(ROVER, f1)).toEqual({ status: 413, body: { error: 'too_large' } });
+    expect(await call(ROVER, f1)).toEqual({ ok: false, error: 'too_large', http: 413 });
     expect(pulled).toBe(0);
     // 上限 + 4 MiB を流す source（上限を超えた所で cancel され、残りは流れない）
     const total = MAX_MODEL3D_BYTES + 4 * 1024 * 1024;
     const big = chunkedStream(total);
     const f2 = stubFetch(() => new Response(big.stream, { status: 200 }));
-    expect(await call(ROVER, f2)).toEqual({ status: 413, body: { error: 'too_large' } });
+    expect(await call(ROVER, f2)).toEqual({ ok: false, error: 'too_large', http: 413 });
     expect(big.st.cancelled).toBe(1);
     expect(big.st.sent).toBeLessThan(total);
     expect(fileRows()).toEqual([]);
@@ -305,44 +300,45 @@ describe('§AJ2-5 3 POST /api/models3d/<id>/fetch（fetchModel3d）', () => {
   });
 
   it('fetch_failed: status 500・302（追わない）・例外・timeout・本文の途中で切れる', async () => {
-    expect(await call(ROVER, stubFetch(() => new Response('x', { status: 500 })))).toEqual({ status: 502, body: { error: 'fetch_failed:500' } });
+    const ng = (error: string) => ({ ok: false, error, http: 502 });
+    expect(await call(ROVER, stubFetch(() => new Response('x', { status: 500 })))).toEqual(ng('fetch_failed:500'));
     const f302 = stubFetch(() => new Response(null, { status: 302, headers: { location: 'https://evil.example/x.glb' } }));
-    expect(await call(ROVER, f302)).toEqual({ status: 502, body: { error: 'fetch_failed:302' } });
+    expect(await call(ROVER, f302)).toEqual(ng('fetch_failed:302'));
     expect(f302.calls).toHaveLength(1);
-    expect(await call(ROVER, stubFetch(() => { throw new TypeError('network'); }))).toEqual({ status: 502, body: { error: 'fetch_failed:network' } });
-    expect(await call(ROVER, stubFetch(() => { throw new DOMException('timed out', 'TimeoutError'); }))).toEqual({ status: 502, body: { error: 'fetch_failed:timeout' } });
+    expect(await call(ROVER, stubFetch(() => { throw new TypeError('network'); }))).toEqual(ng('fetch_failed:network'));
+    expect(await call(ROVER, stubFetch(() => { throw new DOMException('timed out', 'TimeoutError'); }))).toEqual(ng('fetch_failed:timeout'));
     let n = 0;
     const broken = new ReadableStream<Uint8Array>({ pull: (c) => (n++ === 0 ? c.enqueue(new Uint8Array(8)) : c.error(new TypeError('reset'))) });
-    expect(await call(ROVER, stubFetch(() => new Response(broken, { status: 200 })))).toEqual({ status: 502, body: { error: 'fetch_failed:network' } });
+    expect(await call(ROVER, stubFetch(() => new Response(broken, { status: 200 })))).toEqual(ng('fetch_failed:network'));
     const slow = new ReadableStream<Uint8Array>({ pull: (c) => c.error(new DOMException('timed out', 'TimeoutError')) });
-    expect(await call(ROVER, stubFetch(() => new Response(slow, { status: 200 })))).toEqual({ status: 502, body: { error: 'fetch_failed:timeout' } });
+    expect(await call(ROVER, stubFetch(() => new Response(slow, { status: 200 })))).toEqual(ng('fetch_failed:timeout'));
     expect(fileRows()).toEqual([]);
     expect(r2.store.size).toBe(0);
   });
 
-  it('bad_glb: 形の検査で落ちたら 422 bad_glb:<reason>。何も書かない', async () => {
-    expect(await call(ROVER, stubFetch(() => glbRes(new TextEncoder().encode('<html>not a model</html>').buffer)))).toEqual({ status: 422, body: { error: 'bad_glb:magic' } });
-    expect(await call(ROVER, stubFetch(() => glbRes(withJson({ extensionsUsed: ['KHR_texture_basisu'] }))))).toEqual({ status: 422, body: { error: 'bad_glb:extension' } });
+  it('bad_glb: 形の検査で落ちたら bad_glb:<reason>。何も書かない', async () => {
+    expect(await call(ROVER, stubFetch(() => glbRes(new TextEncoder().encode('<html>not a model</html>').buffer)))).toEqual({ ok: false, error: 'bad_glb:magic', http: 422 });
+    expect(await call(ROVER, stubFetch(() => glbRes(withJson({ extensionsUsed: ['KHR_texture_basisu'] }))))).toEqual({ ok: false, error: 'bad_glb:extension', http: 422 });
     expect(fileRows()).toEqual([]);
     expect(r2.store.size).toBe(0);
   });
 
-  it('fetched: R2 に key が入り D1 に行が入る。応答の sha は本文の sha256。ログに url と本文を出さない', async () => {
+  it('fetched: R2 に key が入り D1 に行が入る（fetched_by = by）。sha は本文の sha256。ログに url と本文を出さない', async () => {
     const body = withJson({ extensionsRequired: ['KHR_draco_mesh_compression'] });
     const sha = shaHex(body);
     const r = await call(ROVER, stubFetch(() => glbRes(body, { 'content-length': String(body.byteLength) })));
-    expect(r).toEqual({ status: 200, body: { status: 'fetched', catalog_id: ROVER, sha256: sha, bytes: body.byteLength, draco: true } });
+    expect(r).toEqual({ ok: true, status: 'fetched', sha256: sha, bytes: body.byteLength, draco: true });
     expect([...r2.store.keys()]).toEqual([`models3d/${ROVER}/${sha}.glb`]);
     expect(r2.puts[0].opts).toEqual({ httpMetadata: { contentType: 'model/gltf-binary' }, sha256: sha });
     expect(shaHex(r2.store.get(R2_KEY(ROVER, sha))!)).toBe(sha);
     expect(fileRows()).toEqual([
-      { catalog_id: ROVER, sha256: sha, bytes: body.byteLength, r2_key: `models3d/${ROVER}/${sha}.glb`, draco: 1, fetched_at: expect.any(String), fetched_by: 'ops@example.invalid' },
+      { catalog_id: ROVER, sha256: sha, bytes: body.byteLength, r2_key: `models3d/${ROVER}/${sha}.glb`, draco: 1, fetched_at: expect.any(String), fetched_by: BY },
     ]);
     const line = logs.find((l) => l.includes('model3d_fetch'))!;
     expect(JSON.parse(line)).toEqual({ at: 'model3d_fetch', catalog_id: ROVER, status: 'fetched', bytes: body.byteLength });
     for (const l of logs) {
       expect(l).not.toContain('assets.science.nasa.gov');
-      expect(l).not.toContain('ops@example.invalid');
+      expect(l).not.toContain(BY);
     }
   });
 
@@ -351,7 +347,7 @@ describe('§AJ2-5 3 POST /api/models3d/<id>/fetch（fetchModel3d）', () => {
     await call(ROVER, stubFetch(() => glbRes(body)));
     expect(r2.puts).toHaveLength(1);
     const r = await call(ROVER, stubFetch(() => glbRes(body)));
-    expect(r).toEqual({ status: 200, body: { status: 'unchanged', catalog_id: ROVER, sha256: shaHex(body), bytes: body.byteLength } });
+    expect(r).toEqual({ ok: true, status: 'unchanged', sha256: shaHex(body), bytes: body.byteLength });
     expect(r2.puts).toHaveLength(1);
   });
 
@@ -360,7 +356,7 @@ describe('§AJ2-5 3 POST /api/models3d/<id>/fetch（fetchModel3d）', () => {
     await call(ROVER, stubFetch(() => glbRes(body)));
     r2.store.clear();
     const r = await call(ROVER, stubFetch(() => glbRes(body)));
-    expect(r.body.status).toBe('fetched');
+    expect(r).toMatchObject({ ok: true, status: 'fetched' });
     expect(r2.puts).toHaveLength(2);
     expect(r2.store.has(R2_KEY(ROVER, shaHex(body)))).toBe(true);
   });
@@ -370,24 +366,27 @@ describe('§AJ2-5 3 POST /api/models3d/<id>/fetch（fetchModel3d）', () => {
     const b = glb({ bin: new Uint8Array([9, 9, 9, 9]) });
     await call(ROVER, stubFetch(() => glbRes(a)));
     const r = await call(ROVER, stubFetch(() => glbRes(b)));
-    expect(r.body).toMatchObject({ status: 'fetched', sha256: shaHex(b) });
+    expect(r).toMatchObject({ ok: true, status: 'fetched', sha256: shaHex(b) });
     expect(r2.store.has(R2_KEY(ROVER, shaHex(a)))).toBe(true);
     expect(r2.store.has(R2_KEY(ROVER, shaHex(b)))).toBe(true);
     expect(one(db, 'SELECT sha256 FROM models3d_files WHERE catalog_id = ?', ROVER).sha256).toBe(shaHex(b));
     expect(fileRows()).toHaveLength(1);
   });
 
-  it('handler 単体で c.service は 403 human_only（取得しない）', async () => {
+  it('§AK-5: check の handler 単体で c.service は 403 human_only（取得しない・D1 に書かない）', async () => {
     const f = stubFetch(() => glbRes(glb()));
-    expect(await call(ROVER, f, { service: true })).toEqual({ status: 403, body: { error: 'human_only' } });
+    const res = await checkRights(routeCtx({ service: true }), ROVER, f);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'human_only' });
     expect(f.calls).toHaveLength(0);
+    expect(rows(db, 'SELECT asset_key FROM rights_records')).toEqual([]);
   });
 });
 
 // ---------------------------------------------------------------------------------------------
-// route: Access の層（service token の common_name は 401）・人は handler に届く
+// route: Access の層（service token の common_name は 401）・人は handler に届く。取り込みの route は廃止（§AK-4 5）
 
-describe('§AJ2-5 3 route（Access の層）', () => {
+describe('§AK-5・§AK-7 11・15 route（Access の層）', () => {
   const TEAM = 'https://team.example.cloudflareaccess.com';
   const AUD = 'aud-test';
   const b64u = (b: ArrayBuffer | Uint8Array | string) => Buffer.from(typeof b === 'string' ? b : b instanceof Uint8Array ? b : new Uint8Array(b)).toString('base64url');
@@ -402,7 +401,7 @@ describe('§AJ2-5 3 route（Access の層）', () => {
     (globalThis as unknown as { caches: unknown }).caches = {
       default: { match: async (r: Request) => store.get(r.url)?.clone(), put: async (r: Request, res: Response) => void store.set(r.url, res) },
     };
-    // JWKS の取得。取り込みの handler に届いた時の取得もこれが返す（GLB でないので bad_glb:magic = handler に届いた印）
+    // JWKS の取得。権利の確認の handler に届いた時の取得もこれが返す（HTML でないので NASA の検査は title_missing = handler に届いた印）
     (globalThis as unknown as { fetch: unknown }).fetch = async () => new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
     sign = async (payload) => {
       const h = b64u(JSON.stringify({ alg: 'RS256', kid: 'k1' }));
@@ -416,20 +415,37 @@ describe('§AJ2-5 3 route（Access の層）', () => {
     (globalThis as unknown as { fetch: unknown }).fetch = realFetch;
     (globalThis as unknown as { caches: unknown }).caches = realCaches;
   });
-  const post = async (token: string) =>
-    worker.fetch(new Request(`http://localhost/api/models3d/${ROVER}/fetch`, { method: 'POST', headers: { 'Cf-Access-Jwt-Assertion': token, origin: 'http://localhost' } }), env, exec);
+  const post = async (path: string, token: string) =>
+    worker.fetch(new Request(`http://localhost${path}`, { method: 'POST', headers: { 'Cf-Access-Jwt-Assertion': token, origin: 'http://localhost' } }), env, exec);
 
-  it('service token（common_name）の request は Access の層で 401（handler に届かない）', async () => {
-    const res = await post(await sign({ common_name: 'claude-order.access', sub: '' }));
-    expect(res.status).toBe(401);
-    expect(await res.json()).toEqual({ error: 'access_denied' });
+  it('service token（common_name）の request は新しい 3 本で Access の層の 401（handler に届かない・D1 に書かない）', async () => {
+    const t = await sign({ common_name: 'claude-order.access', sub: '' });
+    for (const op of ['check', 'block', 'unblock']) {
+      const res = await post(`/api/rights/models3d/${ROVER}/${op}`, t);
+      expect(res.status, op).toBe(401);
+      expect(await res.json()).toEqual({ error: 'access_denied' });
+    }
+    expect(rows(db, 'SELECT asset_key FROM rights_records')).toEqual([]);
     expect(fileRows()).toEqual([]);
   });
 
-  it('人（email）の request は handler に届く（取得先の stub が GLB でない → 422 bad_glb:magic）', async () => {
-    const res = await post(await sign({ email: 'op@example.invalid' }));
-    expect(res.status).toBe(422);
-    expect(await res.json()).toEqual({ error: 'bad_glb:magic' });
+  it('人（email）の request は handler に届く（取得先の stub が HTML でない → NASA の検査は title_missing の失敗を 200 で返す）', async () => {
+    const res = await post(`/api/rights/models3d/${ROVER}/check`, await sign({ email: 'op@example.invalid' }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'failed', fail_code: 'title_missing', fail_class: 'mismatch', modes: { host: false, embed: false } });
+    expect(one(db, 'SELECT status, fail_code, checked_by FROM rights_records WHERE asset_key = ?', `models3d:${ROVER}`)).toEqual({ status: 'unverified', fail_code: 'title_missing', checked_by: 'op@example.invalid' });
+  });
+
+  it('取り込みの route（POST /api/models3d/<id>/fetch）は無い（404）。知らない id の check は 404 not_found', async () => {
+    const t = await sign({ email: 'op@example.invalid' });
+    const res = await post(`/api/models3d/${ROVER}/fetch`, t);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'not_found' });
+    const nf = await post('/api/rights/models3d/no-such-model/check', t);
+    expect(nf.status).toBe(404);
+    expect(await nf.json()).toEqual({ error: 'not_found' });
+    expect(fileRows()).toEqual([]);
+    expect(r2.puts).toHaveLength(0);
   });
 });
 
@@ -448,7 +464,7 @@ describe('§AJ2-2 GET /api/models3d（listModels3d）', () => {
     const b = (await res.json()) as { models: Obj[] };
     expect(b.models.map((m) => m.id)).toEqual(MODELS3D.map((e) => e.id));
     const by = Object.fromEntries(b.models.map((m) => [m.id, m]));
-    expect(by['omnh-allosaurus']).toEqual({ id: 'omnh-allosaurus', title: MODELS3D_BY_ID.get('omnh-allosaurus')!.title_ja, org: '大阪市立自然史博物館', kind: 'sketchfab', license: 'CC BY 4.0', page_url: MODELS3D_BY_ID.get('omnh-allosaurus')!.page_url, has_download_url: false, state: 'embed' });
+    expect(by['omnh-allosaurus']).toEqual({ id: 'omnh-allosaurus', title: MODELS3D_BY_ID.get('omnh-allosaurus')!.title_ja, org: '大阪市立自然史博物館', kind: 'sketchfab', license: 'CC BY 4.0', page_url: MODELS3D_BY_ID.get('omnh-allosaurus')!.page_url, has_download_url: false, state: 'embed', rights: expect.objectContaining({ record: 'none', code: 'unknown', status: null, check: 'api', reason: 'no_record' }) });
     expect(by[ROVER]).toMatchObject({ state: 'hosted', bytes: 5000000, sha256: sha, fetched_at: '2026-11-07T12:00:00.000Z', object_ok: true, has_download_url: true, kind: 'download' });
     expect(by['nasa-iss']).toMatchObject({ state: 'hosted_missing', object_ok: false });
     expect(by['dbcls-bodyparts3d']).toMatchObject({ state: 'unavailable', has_download_url: false });
@@ -466,30 +482,38 @@ describe('§AJ2-2 GET /api/models3d（listModels3d）', () => {
 
 const libGet = (path: string, e: Env = env, method = 'GET') => worker.fetch(new Request(`http://localhost${path}`, { method }), e, exec);
 
-describe('§AJ2-5 4 GET /api/library/models3d/files/<id>/<sha>.glb', () => {
+describe('§AJ2-5 4・§AK-4 6 GET /api/library/models3d/files/<id>/<sha>.glb', () => {
   const sha = 'd'.repeat(64);
   const path = `/api/library/models3d/files/${ROVER}/${sha}.glb`;
+  /** 記録（verified / statement）と rights_hosted（確認のもとで取り込んだ sha） */
+  const allow = async (shas: string[] = [sha]) => {
+    await seedGood(db, ROVER);
+    for (const s of shas) seedHostedSha(db, ROVER, s);
+  };
 
-  it('object があれば 200 と 5 つの headers（content-length は object の size）・本文は R2 の bytes。D1 は見ない', async () => {
+  it('記録が通り rights_hosted にその sha があり object があれば 200 と 5 つの headers（content-length は object の size・cache は 1 日）', async () => {
+    await allow();
     const bytes = new Uint8Array([1, 2, 3, 4, 5, 6, 7]);
     r2.store.set(R2_KEY(ROVER, sha), bytes);
-    const res = await libGet(path, { R2: r2.R2 } as unknown as Env);
+    const res = await libGet(path);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('model/gltf-binary');
     expect(res.headers.get('content-length')).toBe('7');
-    expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=86400');
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     expect(res.headers.get('access-control-allow-origin')).toBe('*');
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
   });
 
-  it('D1 の行が別の sha を指していても、object があれば 200（取り直し前の古い url が生きる）', async () => {
+  it('D1 models3d_files の行が別の sha を指していても、rights_hosted と object があれば 200（取り直し前の古い url が生きる）', async () => {
+    await allow([sha, 'e'.repeat(64)]);
     db.prepare('INSERT INTO models3d_files (catalog_id, sha256, bytes, r2_key, draco, fetched_at, fetched_by) VALUES (?, ?, 1, ?, 0, ?, ?)').run(ROVER, 'e'.repeat(64), 'x', '2026-11-07T00:00:00.000Z', 'ops@example.invalid');
     r2.store.set(R2_KEY(ROVER, sha), new Uint8Array([1]));
     expect((await libGet(path)).status).toBe(200);
   });
 
   it('形が違う（sha が 63 桁・大文字・id に .）・object 無し → 404。POST は 405', async () => {
+    await allow([sha, 'f'.repeat(64)]);
     r2.store.set(R2_KEY(ROVER, sha), new Uint8Array([1]));
     for (const p of [
       `/api/library/models3d/files/${ROVER}/${sha.slice(1)}.glb`,
@@ -505,15 +529,18 @@ describe('§AJ2-5 4 GET /api/library/models3d/files/<id>/<sha>.glb', () => {
   });
 });
 
-describe('§AJ2-5 5 GET /api/library/models3d（取り込み済みの download）', () => {
-  it('取り込み済みの download は一覧の順で入り 11 キー・file_url は絶対 url。埋め込みは 8 キー。object が欠けた行は出さない。CORS', async () => {
+describe('§AJ2-5 5・§AK-4 3 GET /api/library/models3d（取り込み済みの download）', () => {
+  it('記録 + 取り込み済み + rights_hosted の download は一覧の順で入り 13 キー・file_url は絶対 url。埋め込みは 10 キー。object が欠けた行は出さない。CORS・cache 10 分', async () => {
     const sha = '1'.repeat(64);
+    await seedAllGood(db);
+    seedHostedSha(db, ROVER, sha);
+    seedHostedSha(db, 'nasa-iss', '2'.repeat(64));
     db.prepare('INSERT INTO models3d_files (catalog_id, sha256, bytes, r2_key, draco, fetched_at, fetched_by) VALUES (?, ?, 4987176, ?, 1, ?, ?)').run(ROVER, sha, 'x', '2026-11-07T00:00:00.000Z', 'ops@example.invalid');
     db.prepare('INSERT INTO models3d_files (catalog_id, sha256, bytes, r2_key, draco, fetched_at, fetched_by) VALUES (?, ?, 9, ?, 0, ?, ?)').run('nasa-iss', '2'.repeat(64), 'x', '2026-11-07T00:00:00.000Z', 'ops@example.invalid');
     r2.store.set(R2_KEY(ROVER, sha), new Uint8Array(1));
     const res = await libGet('/api/library/models3d');
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=3600');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=600');
     expect(res.headers.get('access-control-allow-origin')).toBe('*');
     const b = (await res.json()) as { models: Obj[] };
     expect(b.models.map((m) => m.id)).toEqual(MODELS3D.filter((e) => e.kind !== 'download' || e.id === ROVER).map((e) => e.id));
@@ -525,14 +552,17 @@ describe('§AJ2-5 5 GET /api/library/models3d（取り込み済みの download�
       kind: 'download',
       embed_url: null,
       page_url: ROVER_E.page_url,
-      license: ROVER_E.license.label,
+      license: 'NASA の利用の決まり',
       attribution: ROVER_E.attribution,
+      license_code: 'nasa-media',
+      license_url: 'https://www.nasa.gov/nasa-brand-center/images-and-media/',
       file_url: `http://localhost/api/library/models3d/files/${ROVER}/${sha}.glb`,
       bytes: 4987176,
       sha256: sha,
     });
-    expect(Object.keys(rover)).toHaveLength(11);
-    for (const m of b.models.filter((x) => x.kind !== 'download')) expect(Object.keys(m).sort()).toEqual(['attribution', 'embed_url', 'id', 'kind', 'license', 'org', 'page_url', 'title']);
+    expect(Object.keys(rover)).toHaveLength(13);
+    for (const m of b.models.filter((x) => x.kind !== 'download'))
+      expect(Object.keys(m).sort()).toEqual(['attribution', 'embed_url', 'id', 'kind', 'license', 'license_code', 'license_url', 'org', 'page_url', 'title']);
     // 一覧の file_url は配信の route に当たる（同じ形）
     expect(MODEL3D_FILE_URL_RE.test(new URL(rover.file_url).pathname)).toBe(true);
     expect((await libGet(new URL(rover.file_url).pathname)).status).toBe(200);
@@ -555,6 +585,10 @@ describe('§AJ2-5 8 hostedModels3d と GET /api/review/:id の models3d_meta', (
   const reviewWith = async (withObject: boolean) => {
     const w = world();
     const sha = '5'.repeat(64);
+    // §AK-4 4: 門番を通る記録（探査車は statement・アロサウルスは api）と、確認のもとで取り込んだ sha
+    await seedGood(w.db, ROVER);
+    await seedGood(w.db, 'omnh-allosaurus');
+    seedHostedSha(w.db, ROVER, sha);
     w.db.prepare('INSERT INTO models3d_files (catalog_id, sha256, bytes, r2_key, draco, fetched_at, fetched_by) VALUES (?, ?, 4987176, ?, 1, ?, ?)').run(ROVER, sha, 'x', '2026-11-07T00:00:00.000Z', 'ops@example.invalid');
     (w.env.R2 as unknown as Obj).head = async (k: string) => (withObject && k === R2_KEY(ROVER, sha) ? { key: k, size: 4987176 } : null);
     const m = material();
@@ -576,13 +610,17 @@ describe('§AJ2-5 8 hostedModels3d と GET /api/review/:id の models3d_meta', (
       kind: 'download',
       embed_url: null,
       page_url: ROVER_E.page_url,
-      license: ROVER_E.license.label,
+      license: 'NASA の利用の決まり',
       attribution: ROVER_E.attribution,
+      license_url: 'https://www.nasa.gov/nasa-brand-center/images-and-media/',
+      license_code: 'nasa-media',
+      rights_kind: 'statement',
+      rights_status: 'verified',
       file_url: fileUrlOf(ROVER, sha),
       bytes: 4987176,
     });
     expect(b.models3d_meta.d1.file_url).toBe(`/api/library/models3d/files/${ROVER}/${sha}.glb`);
-    expect(Object.keys(b.models3d_meta.d2).sort()).toEqual(['attribution', 'catalog_id', 'embed_url', 'kind', 'license', 'org', 'page_url', 'title']);
+    expect(Object.keys(b.models3d_meta.d2).sort()).toEqual(['attribution', 'catalog_id', 'embed_url', 'kind', 'license', 'license_code', 'license_url', 'org', 'page_url', 'rights_kind', 'rights_status', 'title']);
   });
 
   it('D1 に行があっても object が無ければ file_url・bytes は付かない', async () => {
@@ -644,7 +682,7 @@ describe('§AJ2-5 9 admin.js: 子どもの画面の自前の表示', () => {
   ])('file_url の形が違う（%s）→「まだ取り込まれていません」で model-viewer なし', (_n, u) => {
     const h = body(x(), meta({ file_url: u }));
     expect(n(h, /<model-viewer/g)).toBe(0);
-    expect(h).toContain('<p class="mp-missing">立体モデル d1 はまだ取り込まれていません（<a href="#/models3d">立体モデル</a> のページで取り込んでください）</p>');
+    expect(h).toContain('<p class="mp-missing">立体モデル d1 はまだ取り込まれていません（<a href="#/models3d">立体モデル</a> のページで「権利を確かめる」と取り込みます）</p>');
     expect(h).not.toContain('onerror');
   });
 
@@ -663,14 +701,29 @@ describe('§AJ2-5 9 admin.js: 子どもの画面の自前の表示', () => {
   });
 });
 
-describe('§AJ2-5 9 admin.js: #/models3d の表', () => {
+describe('§AJ2-5 9・§AK-5 admin.js: #/models3d の表（権利の列と操作）', () => {
+  const AT = '2026-11-07T12:00:00.000Z';
+  const rights = (o: Obj = {}) => ({
+    code: 'cc-by', label: 'CC BY 4.0', license_url: 'https://creativecommons.org/licenses/by/4.0/', attribution: 'x', evidence_kind: 'api', status: 'verified', blocked: false,
+    checked_at: AT, last_attempt_at: AT, fail_code: null, check: 'api', modes: { host: true, embed: true }, record: 'ok', reason: 'ok', last_fail: null, last_import_fail: null, ...o,
+  });
+  const none = { record: 'none', code: 'unknown', label: '不明', license_url: null, attribution: null, evidence_kind: null, status: null, checked_at: null, last_attempt_at: null, reason: 'no_record', modes: { host: false, embed: false } };
+  const nasa = { code: 'nasa-media', label: 'NASA の利用の決まり', license_url: 'https://www.nasa.gov/nasa-brand-center/images-and-media/', evidence_kind: 'statement', check: 'statement', modes: { host: true, embed: false } };
+  const row = (id: string, kind: string, state: string, r: Obj, o: Obj = {}) => ({ id, title: id + 'の題', org: '提供元', kind, license: 'x', page_url: 'https://example.org/' + id, has_download_url: kind === 'download', state, rights: r, ...o });
   const list = () => ({
     models: [
-      { id: 'omnh-allosaurus', title: 'アロ', org: '大阪', kind: 'sketchfab', license: 'CC BY 4.0', page_url: 'https://sketchfab.com/3d-models/a', has_download_url: false, state: 'embed' },
-      { id: ROVER, title: '探査車', org: 'NASA', kind: 'download', license: 'NASA', page_url: 'https://science.nasa.gov/x/', has_download_url: true, state: 'hosted', bytes: 4987176, sha256: 'a'.repeat(64), fetched_at: '2026-11-07T12:00:00.000Z', object_ok: true },
-      { id: 'nasa-x', title: '別', org: 'NASA', kind: 'download', license: 'NASA', page_url: 'https://science.nasa.gov/y/', has_download_url: true, state: 'hosted_missing', bytes: 10, sha256: 'b'.repeat(64), fetched_at: '2026-11-06T00:00:00.000Z', object_ok: false },
-      { id: 'nasa-iss', title: 'ISS', org: 'NASA', kind: 'download', license: 'NASA', page_url: 'https://science.nasa.gov/z/', has_download_url: true, state: 'not_hosted' },
-      { id: 'dbcls-bodyparts3d', title: '体', org: 'DBCLS', kind: 'download', license: 'CC BY 4.0', page_url: 'javascript:alert(1)', has_download_url: false, state: 'unavailable' },
+      row('omnh-allosaurus', 'sketchfab', 'embed', rights()),
+      row(ROVER, 'download', 'hosted', rights(nasa), { bytes: 4987176, sha256: 'a'.repeat(64), fetched_at: AT, object_ok: true }),
+      row('nasa-x', 'download', 'hosted_missing', rights({ ...none, check: 'statement' }), { bytes: 10, sha256: 'b'.repeat(64), fetched_at: AT, object_ok: false }),
+      row('nasa-iss', 'download', 'not_hosted', rights({ ...nasa, last_import_fail: { at: AT, result: 'import:too_large' } })),
+      row('dbcls-bodyparts3d', 'download', 'unavailable', rights({ evidence_kind: 'cc-url', check: 'cc-url', status: 'stale', fail_code: 'fetch_failed:503', modes: { host: false, embed: true }, checked_at: '2026-11-01T00:00:00.000Z' }), { page_url: 'javascript:alert(1)' }),
+      row('si-x', 'voyager', 'embed', rights({ code: 'cc0', label: 'CC0 1.0', evidence_kind: 'human', status: 'human', check: 'none', checked_at: '2026-11-07', blocked: true, reason: 'blocked', modes: { host: false, embed: false } })),
+      row('x-unsup', 'sketchfab', 'embed', rights({ ...none, check: 'unsupported' })),
+      row('x-mis', 'sketchfab', 'embed', rights({ status: 'mismatch', fail_code: 'uploader_mismatch', reason: 'mismatch', modes: { host: false, embed: false } })),
+      row('x-nc', 'sketchfab', 'embed', rights({ code: 'cc-by-nc', label: 'CC BY-NC 4.0', reason: 'license', modes: { host: false, embed: false } })),
+      row('x-sub', 'sketchfab', 'embed', rights({ reason: 'subject_changed', modes: { host: false, embed: false } })),
+      row('x-inv', 'sketchfab', 'embed', rights({ ...none, record: 'invalid', reason: 'invalid' })),
+      row('x-unv', 'sketchfab', 'embed', rights({ ...none, record: 'ok', code: 'unknown', status: 'unverified', fail_code: null, last_attempt_at: AT, evidence_kind: 'api', reason: 'unverified' })),
     ],
   });
   const rowOf = (h: string, id: string) => {
@@ -678,39 +731,127 @@ describe('§AJ2-5 9 admin.js: #/models3d の表', () => {
     return m ? m[0] : '';
   };
 
-  it('状態の文言（5 状態）とボタンの有無（not_hosted は取り込む・hosted と object_ok: false の hosted_missing は取り直す）', () => {
+  it('列（題名 / 提供元 / 権利 / 確認日 / 種類 / 状態 / 操作）と権利の列の文（根拠の日本語・未確認・失敗・取り込み失敗・提供できない・止めている）', () => {
     const h = M.models3dPageHtml(list());
-    expect(h).toContain('<th>題名</th><th>提供元</th><th>ライセンス</th><th>種類</th><th>状態</th><th>操作</th>');
+    expect(h).toContain('<th>題名</th><th>提供元</th><th>権利</th><th>確認日</th><th>種類</th><th>状態</th><th>操作</th>');
+    expect(rowOf(h, 'omnh-allosaurus')).toContain('<span class="m3d-rights-main">CC BY 4.0（機械: 提供元の API）</span>');
+    expect(rowOf(h, 'omnh-allosaurus')).toContain('<td>2026/11/7</td>');
     expect(rowOf(h, 'omnh-allosaurus')).toContain('<td>埋め込み</td>');
-    expect(rowOf(h, 'omnh-allosaurus')).not.toContain('<button');
+    expect(rowOf(h, ROVER)).toContain('NASA の利用の決まり（機械: 提供元の記述）');
     expect(rowOf(h, ROVER)).toContain('<td>取り込み済み（4.8 MiB・2026/11/7）</td>');
-    expect(rowOf(h, ROVER)).toMatch(/<button[^>]*data-m3d-fetch="1"[^>]*>取り直す<\/button>/);
-    expect(rowOf(h, 'nasa-x')).toContain('<td>取り込み済みだがファイルが無い（取り直してください）</td>');
-    expect(rowOf(h, 'nasa-x')).toMatch(/>取り直す<\/button>/);
-    expect(rowOf(h, 'nasa-iss')).toContain('<td>未取り込み</td>');
-    expect(rowOf(h, 'nasa-iss')).toMatch(/>取り込む<\/button>/);
+    expect(rowOf(h, 'nasa-x')).toContain('<span class="m3d-rights-main">未確認</span>');
+    expect(rowOf(h, 'nasa-x')).toContain('<td>—</td>');
+    expect(rowOf(h, 'nasa-x')).toContain('<td>取り込み済みだがファイルが無い（「権利を確かめる」で取り直します）</td>');
+    expect(rowOf(h, 'nasa-iss')).toContain('<span class="m3d-note">取り込み失敗: 24 MiB を超えています</span>');
+    expect(rowOf(h, 'dbcls-bodyparts3d')).toContain('CC BY 4.0（機械: CC の URL（埋め込みだけ））');
+    expect(rowOf(h, 'dbcls-bodyparts3d')).toContain('<span class="m3d-note">取り直し失敗: 提供元から取れませんでした</span>');
     expect(rowOf(h, 'dbcls-bodyparts3d')).toContain('<td>取り込めない（配布の url が無い）</td>');
-    expect(rowOf(h, 'dbcls-bodyparts3d')).not.toContain('<button');
+    expect(rowOf(h, 'si-x')).toContain('CC0 1.0（人の記録）</span> <span class="pill red">止めている</span>');
+    expect(rowOf(h, 'si-x')).toContain('data-m3d-blocked="1"');
+    expect(rowOf(h, 'x-unsup')).toContain('<span class="m3d-note">確かめ方が未登録（台帳に足す）</span>');
+    expect(rowOf(h, 'x-mis')).toContain('<span class="m3d-note">対象が一致しません: 投稿者が一覧と違います</span>');
+    expect(rowOf(h, 'x-nc')).toContain('<span class="m3d-note">提供できません（CC BY-NC 4.0）</span>');
+    expect(rowOf(h, 'x-sub')).toContain('<span class="m3d-note">一覧が変わりました（確かめ直し待ち）</span>');
+    expect(rowOf(h, 'x-inv')).toContain('<span class="m3d-rights-main">記録が壊れています</span>');
+    expect(rowOf(h, 'x-unv')).toContain('<span class="m3d-note">確認できていません</span>');
+    expect(rowOf(h, 'x-unv')).toContain('<td>最後の試行 2026/11/7</td>');
     // 題名は page_url（https:// の時だけ）へのリンク
-    expect(rowOf(h, ROVER)).toContain('<a href="https://science.nasa.gov/x/" target="_blank" rel="noopener noreferrer">探査車</a>');
+    expect(rowOf(h, ROVER)).toContain(`<a href="https://example.org/${ROVER}" target="_blank" rel="noopener noreferrer">${ROVER}の題</a>`);
     expect(rowOf(h, 'dbcls-bodyparts3d')).not.toContain('javascript:');
-    expect(n(h, /<button/g)).toBe(3);
   });
 
-  it('読み込み中・失敗（再試行ボタン）の 2 状態', () => {
+  it('操作: 「権利を確かめる」（台帳に無い提供元は出さない・止めていても出す）と「止める」/「戻す」。「取り込む」「取り直す」は無い', () => {
+    const h = M.models3dPageHtml(list());
+    expect(rowOf(h, 'omnh-allosaurus')).toMatch(/<button[^>]*data-m3d-check="0"[^>]*>権利を確かめる<\/button><button[^>]*data-m3d-block="0"[^>]*>止める<\/button>/);
+    expect(rowOf(h, 'si-x')).toMatch(/data-m3d-check="5"[^>]*>権利を確かめる</);
+    expect(rowOf(h, 'si-x')).toMatch(/data-m3d-unblock="5"[^>]*>戻す</);
+    expect(rowOf(h, 'si-x')).not.toContain('>止める<');
+    expect(rowOf(h, 'x-unsup')).not.toContain('権利を確かめる');
+    expect(rowOf(h, 'x-unsup')).toContain('>止める<');
+    expect(h).not.toContain('>取り込む<');
+    expect(h).not.toContain('>取り直す<');
+    expect(h).not.toContain('data-m3d-fetch');
+    // 12 行: 止める / 戻すは全部・確かめるは台帳に無い 1 行を除く 11
+    expect(n(h, /<button/g)).toBe(12 + 11);
+  });
+
+  it('読み込み中・失敗（再試行ボタン）・0 件の 3 状態', () => {
     expect(M.models3dLoadingHtml()).toContain('読み込み中…');
     const e = M.models3dErrorHtml('<b>x</b>');
     expect(e).toContain('読み込めませんでした: &lt;b&gt;x&lt;/b&gt;');
     expect(e).toContain('id="m3d-retry"');
+    expect(M.models3dPageHtml({ models: [] })).toContain('data-m3d-empty="1"');
   });
 
-  it('toast の文: fetched は「取り込みました（MiB）」・unchanged は「変わっていません」。失敗は日本語', () => {
-    expect(M.model3dFetchToast({ status: 'fetched', bytes: 4987176 })).toBe('取り込みました（4.8 MiB）');
-    expect(M.model3dFetchToast({ status: 'unchanged', bytes: 4987176 })).toBe('変わっていません');
-    expect(M.model3dFetchErrorText({ error: 'too_large' }, 'x')).toBe('24 MiB を超えています');
-    expect(M.model3dFetchErrorText({ error: 'bad_glb:extension' }, 'x')).toBe('GLB の形が合いません（extension）');
-    expect(M.model3dFetchErrorText({ error: 'fetch_failed:500' }, 'x')).toBe('提供元から取れませんでした（500）');
-    expect(M.model3dFetchErrorText({ error: 'not_download' }, '応答の文')).toBe('応答の文');
+  it('値はエスケープする（題名・提供元・ライセンスの名前・失敗のコード）', () => {
+    const h = M.models3dPageHtml({ models: [row('x', 'sketchfab', 'embed', rights({ label: '<i>L</i>', status: 'stale', fail_code: '<b>c</b>' }), { title: '<s>t</s>', org: 'A&B' })] });
+    expect(h).toContain('&lt;i&gt;L&lt;/i&gt;');
+    expect(h).toContain('&lt;b&gt;c&lt;/b&gt;');
+    expect(h).toContain('&lt;s&gt;t&lt;/s&gt;');
+    expect(h).toContain('A&amp;B');
+    expect(h).not.toContain('<b>c</b>');
+  });
+
+  it('確認ダイアログの文: 確かめる・止める・戻す（最後の記録の名前と状態）', () => {
+    expect(M.M3D_CHECK_BODY).toBe('提供元の記録を取りに行き、通ればファイルも取り込みます（GLB の件）');
+    expect(M.M3D_BLOCK_BODY).toBe('学習者側の一覧と配信から外します');
+    expect(M.rightsUnblockBody({ label: 'CC BY 4.0', status: 'stale' })).toBe('最後の記録のとおりに戻します（CC BY 4.0・取り直し失敗）');
+    expect(M.rightsUnblockBody({ label: 'CC0 1.0', status: 'human' })).toBe('最後の記録のとおりに戻します（CC0 1.0・人の記録）');
+    expect(M.rightsUnblockBody({})).toBe('最後の記録のとおりに戻します（不明・未確認）');
+  });
+
+  it('toast の文（rightsCheckToast）: 全部の結果と、取り込み・止めている時の末尾', () => {
+    const T = M.rightsCheckToast;
+    expect(T({ status: 'verified', label: 'CC BY 4.0', modes: { host: true, embed: true } }, false)).toBe('確かめました（CC BY 4.0）');
+    expect(T({ status: 'verified', label: 'CC BY-NC 4.0', modes: { host: false, embed: false } }, false)).toBe('確かめましたが提供できません（CC BY-NC 4.0）');
+    expect(T({ status: 'verified', label: 'NASA の利用の決まり', modes: { host: true, embed: false }, import: { status: 'fetched', bytes: 4987176 } }, false)).toBe('取り込みました（4.8 MiB）');
+    expect(T({ status: 'verified', label: 'NASA の利用の決まり', modes: { host: true, embed: false }, import: { status: 'unchanged', bytes: 4987176 } }, false)).toBe('取り込みました（4.8 MiB）');
+    expect(T({ status: 'verified', label: 'NASA の利用の決まり', modes: { host: true, embed: false }, import: { status: 'failed', error: 'too_large' } }, false)).toBe('確かめましたが取り込めませんでした（24 MiB を超えています）');
+    expect(T({ status: 'verified', modes: {}, import: { status: 'failed', error: 'bad_glb:extension' } }, false)).toBe('確かめましたが取り込めませんでした（GLB の形が合いません（extension））');
+    expect(T({ status: 'human', label: 'CC0 1.0', modes: { host: false, embed: true } }, false)).toBe('人の記録を書きました');
+    expect(T({ status: 'human_unchanged', label: 'CC0 1.0', modes: { host: false, embed: true } }, false)).toBe('人の記録に変わりはありません');
+    expect(T({ status: 'failed', fail_code: 'third_party_marker', modes: {} }, false)).toBe('確かめられませんでした（第三者の権利の印があります）');
+    expect(T({ status: 'skipped', reason: 'busy', modes: {} }, false)).toBe('いま別の確認が走っています');
+    expect(T({ status: 'lost_claim', modes: {} }, false)).toBe('確認が長引いたので結果を捨てました。もう一度');
+    expect(T({ status: 'verified', label: 'CC BY 4.0', modes: { host: false, embed: false } }, true)).toBe('確かめました（CC BY 4.0）（止めているので出ません）');
+    expect(T({ status: 'failed', fail_code: 'fetch_failed:500', modes: {} }, true)).toBe('確かめられませんでした（提供元から取れませんでした）（止めているので出ません）');
+  });
+
+  it('fail_code の日本語（rightsFailText）と根拠の日本語（rightsKindText）', () => {
+    const F = M.rightsFailText;
+    const table: Array<[string, string]> = [
+      ['fetch_failed:404', '提供元から取れませんでした'],
+      ['fetch_failed:timeout', '提供元から取れませんでした'],
+      ['too_large', '提供元のページが大きすぎます'],
+      ['bad_response', '提供元の応答が読めません'],
+      ['uploader_mismatch', '投稿者が一覧と違います'],
+      ['uploader_missing', '一覧に投稿者がありません'],
+      ['embed_mismatch', '提供元の情報が一覧と違います'],
+      ['page_mismatch', '提供元の情報が一覧と違います'],
+      ['uid_mismatch', '提供元の情報が一覧と違います'],
+      ['attribution_mismatch', '出典の書き方が投稿者の名前と合いません'],
+      ['no_cc_url', 'ページに CC の URL がありません'],
+      ['ambiguous_cc_url', 'ページに CC の URL が 2 つ以上あります'],
+      ['title_missing', 'ページの題名が一覧と違います'],
+      ['title_mismatch', 'ページの題名が一覧と違います'],
+      ['source_not_nasa', 'ページの Source の行が一覧と違います'],
+      ['source_mismatch', 'ページの Source の行が一覧と違います'],
+      ['third_party_marker', '第三者の権利の印があります'],
+      ['download_url_not_linked', 'ページにファイルのリンクがありません'],
+      ['statement_missing:hub', '提供元の決まりの文が見つかりません'],
+      ['statement_missing:terms', '提供元の決まりの文が見つかりません'],
+      ['evidence_url_missing', '根拠のページが対象と合いません'],
+      ['evidence_scope_mismatch', '根拠のページが対象と合いません'],
+      ['subject_mismatch', '根拠のページが対象と合いません'],
+      ['license_url_mismatch', 'license_url_mismatch'],
+      ['no_license_url', 'no_license_url'],
+    ];
+    for (const [code, text] of table) expect(F(code), code).toBe(text);
+    expect(M.rightsKindText('api')).toBe('機械: 提供元の API');
+    expect(M.rightsKindText('statement')).toBe('機械: 提供元の記述');
+    expect(M.rightsKindText('cc-url')).toBe('機械: CC の URL（埋め込みだけ）');
+    expect(M.rightsKindText('human')).toBe('人の記録');
+    expect(M.rightsKindText('toString')).toBe('—');
   });
 });
 

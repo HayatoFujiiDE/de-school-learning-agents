@@ -7,17 +7,17 @@
 | 項目 | 決まり |
 |---|---|
 | ライセンス | CC0 / CC BY（`cc0` / `cc-by`）と、NASA の利用の決まり（`nasa-media`）だけ。非営利限定（NC）は載せない（将来の月額販売と合わない） |
-| 確かめ方 | Sketchfab は Data API v3（`GET https://api.sketchfab.com/v3/models/<uid>` の `license.slug`）。Smithsonian は 3d.si.edu の記録の表示。NASA は brand center の利用の決まり。`checked_how` に書く |
-| 見せ方（kind） | `sketchfab` = Sketchfab の公式の埋め込み（`https://sketchfab.com/models/<uid>/embed`）/ `voyager` = Smithsonian Voyager の公式の iframe（`https://3d-api.si.edu/voyager/3d_package:<id>`）/ `download` = 取ってきて自前で見せる（契約 §AJ2。運営が確認画面の「立体モデル」ページで取り込んだもの = GLB・24 MiB まで だけが素材に使える） |
+| 確かめ方 | 一覧に載せるだけでは学習者に届かない。**工場の権利の門番（契約 §AK。`docs/plans/rights/contract-AK.md`）が機械で確かめた記録**（D1 `rights_records`）がある項目だけが、注文票・取り込み検査・確認画面・学習者側の一覧・取り込み・配信に出る。根拠の種類: Sketchfab = 機械: 提供元の API（Data API v3 の `license.url`・投稿者 `uploader`・埋め込みの url を一覧と照らす）/ NASA = 機械: 提供元の記述（モデルのページの題名・Source の行・ファイルのリンクと、3D Resources のトップ・利用の決まりの文）/ DBCLS = 機械: CC の URL（`evidence_url` のページの creativecommons.org の URL。**埋め込みだけ**の根拠で、自前で配る根拠にはしない）/ Smithsonian = 人の記録（自動取得を拒むので `checked_how` を人が書く。**埋め込みだけ**）。ライセンスの種類は機械が `license.url` から決める（一覧の `license.code`・`label` は見せ方に使わない）。一覧の対象の値（url・`uploader`・`evidence_url`・`attribution`・`title_src`・`checked_at`・`checked_how`）を変えると記録の指紋が合わなくなり、確かめ直すまで出ない |
+| 見せ方（kind） | `sketchfab` = Sketchfab の公式の埋め込み（`https://sketchfab.com/models/<uid>/embed`）/ `voyager` = Smithsonian Voyager の公式の iframe（`https://3d-api.si.edu/voyager/3d_package:<id>`）/ `download` = 取ってきて自前で見せる（契約 §AJ2・§AK。根拠が `api` / `statement` の記録が通った直後に工場が取り込み、その sha を `rights_hosted` に記録したもの = GLB・24 MiB まで だけが素材に使える。`cc-url` と人の記録の件は自前で配らない） |
 | 出典 | `page_url` は提供元のそのモデルのページ。素材の sources.json にはこの url を一字も変えずに書く |
 | 題材の札（topics） | 1〜8 個。職人が題材から探す手がかり（恐竜・クジラ・昆虫・花・宇宙 など） |
 
 ## 足し方
 
-1. 提供元の記録でライセンスを確かめる（上の確かめ方）。NC・ND・不明は載せない
-2. `catalog.json` の `models` に 1 件足す（`id` は `[a-z0-9-]`・一意。`checked_at` は確かめた日）
+1. 提供元の記録でライセンスを確かめる（上の確かめ方）。NC・ND・不明は載せない。提供元が門番の台帳（`factory/worker/src/rights-providers.ts`）に無ければ、台帳に足す PR が先（足さないと「確かめ方が未登録」で出ない）
+2. `catalog.json` の `models` に 1 件足す（`id` は `[a-z0-9-]`・一意。`checked_at` は確かめた日）。`uploader` は Sketchfab の投稿者の username（`sketchfab` は必須・英数字と `_ . -`。他は `null`）。`evidence_url` は権利の根拠のページ（`dbarchive.biosciencedbc.jp` の `download` は必須・`download` 以外は `null`）。`license.url` は実在する組み合わせ（`src/rights.ts` の `licenseCodeOfUrl`）でなければ止まる
 3. `cd factory/worker && bash scripts/sync-claude-assets.sh && npx vitest run test/models3d-catalog.test.ts`
-4. commit（生成ファイル `src/generated/models3d-catalog.ts` も一緒に）
+4. commit（生成ファイル `src/generated/models3d-catalog.ts` も一緒に）。deploy の後、cron（10 分ごとに 5 件まで）か確認画面の「立体モデル」ページの「権利を確かめる」で記録ができると出る
 
 ## 今の一覧（2026-11-07）
 
@@ -34,17 +34,17 @@
 | 宇宙（自前で見せる予定） | nasa-perseverance-rover / nasa-iss | NASA | NASA の利用の決まり | download |
 | 体のつくり（自前で見せる予定） | dbcls-bodyparts3d | DBCLS | CC BY 4.0 | download |
 
-## 子ども向けアプリでの見せ方（契約 §AJ2-4）
+## 子ども向けアプリでの見せ方（契約 §AJ2-4・§AK-4）
 
-- 一覧は `GET <工場のオリジン>/api/library/models3d`（認証なし・`access-control-allow-origin: *`・1 時間 cache）。material.json の `parts[].models3d[].catalog_id` をここの `id` で引く。埋め込みの件（`kind` が `sketchfab` / `voyager`）は v1 のまま `embed_url` を iframe に渡す（形の再確認は §AJ-4 と同じ 2 つの正規表現）
-- 取り込み済みの `download` の件には `file_url`（**絶対 url**）・`bytes`・`sha256` が付く。`file_url` はそのまま `<model-viewer src="…">` に渡す（工場とアプリは別オリジンなので、相対の url に組み直さない）。配信は `GET /api/library/models3d/files/<id>/<sha256>.glb`（`content-type: model/gltf-binary`・`access-control-allow-origin: *`・`immutable` で 1 年 cache）
+- 一覧は `GET <工場のオリジン>/api/library/models3d`（認証なし・`access-control-allow-origin: *`・10 分 cache）。**権利の門番を通った項目だけ**が入る（記録の無い項目・止めた項目は入らない）。material.json の `parts[].models3d[].catalog_id` をここの `id` で引く（無ければ描かない）。埋め込みの件（`kind` が `sketchfab` / `voyager`）は `embed_url` を iframe に渡す（形の再確認は §AJ-4 と同じ 2 つの正規表現）
+- 取り込み済みの `download` の件には `file_url`（**絶対 url**）・`bytes`・`sha256` が付く。`file_url` はそのまま `<model-viewer src="…">` に渡す（工場とアプリは別オリジンなので、相対の url に組み直さない）。配信は `GET /api/library/models3d/files/<id>/<sha256>.glb`（`content-type: model/gltf-binary`・`access-control-allow-origin: *`・1 日 cache。権利の記録が通っていて、その sha を確認のもとで取り込んだ時だけ 200）
 - アプリ側の CSP に要るもの（確認画面 `/admin` で実ブラウザ・Chrome で確かめた組）:
   - `connect-src` に工場のオリジン（GLB の取得）と `blob:`（three の GLTFLoader が埋め込みの画像を `blob:` の URL で読む。無いと質感が全部落ちる）
   - `script-src` に `'wasm-unsafe-eval'`（Draco の復号器の wasm のコンパイル）
   - `worker-src blob:`（DRACOLoader が Blob の URL で Worker を作る）
   - `style-src` に model-viewer が shadow root に入れる `<style>` の本文の hash（版ごとに違う。model-viewer 4.4.0 は `src/index.ts` の `MODEL_VIEWER_STYLE_HASH`）か、アプリ自前の許し方。拒否されると要素が 0×0 になり何も見えない
 - Draco の復号器は自前に置いて `dracoDecoderLocation` を指す（既定の置き場は外部の gstatic）。model-viewer の script より前に `window.ModelViewerElement = { dracoDecoderLocation: '<自前の置き場>/' };` を実行する（確認画面は `public/admin/vendor/draco/` に three 0.183.2 の `draco_decoder.wasm`・`draco_wasm_wrapper.js` を置いている）
-- ライセンスの表示は一覧の `attribution` をそのまま出す（`license` はライセンスの名前、`page_url` は提供元のページ）
+- 出典の表示は一覧 API の 4 つをそのまま出す: `attribution`（出典の書き方）・`license`（ライセンスの名前。機械が決めた code から）・`license_url`（ライセンスの url）・`page_url`（提供元のページ）。`license_code` は機械の判定用（`cc0` / `cc-by` / `nasa-media` など）
 
 ## 載せなかったもの（理由つき）
 

@@ -16,6 +16,7 @@ import { retryFailedReworkStep } from './retry-step';
 import { readerStep } from './reader';
 import { topicsTick } from './topics/tick';
 import { opsTick } from './ops';
+import { rightsStep } from './rights-cron';
 
 // cron 経由の reconcile は開始から 10 分を締め切りにする（scheduled handler は最長 15 分。検証の時間を残す）
 const CRON_RECONCILE_BUDGET_MS = 10 * 60_000;
@@ -126,6 +127,13 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
     out.images = await imageCronStep(env, { deadline: Math.min(Date.now() + IMAGE_CRON_BUDGET_MS, cronStart + CRON_LIMIT_MS - INTAKE_END_MARGIN_MS) });
   } catch (e) {
     out.images_error = e instanceof Error ? e.name : 'error';
+  }
+
+  // 3-d. 権利の確認（§AK-6。1 回 5 件まで・1 件ずつ。取りに行くのは一覧と台帳の静的な url だけ。fake が許される環境では外へ出ない fetch）
+  try {
+    out.rights = await rightsStep(env, { deadline: cronStart + CRON_LIMIT_MS - INTAKE_END_MARGIN_MS, fetchImpl: await getFeedFetch(env, portCtx) });
+  } catch (e) {
+    out.rights_error = e instanceof Error ? e.name : 'error';
   }
 
   // 入口（§K-4, §K-5）。pause 中は新しい外部呼び出しをしない（収集は runScout が、会議の起動は startMeeting が見る。会議の回収は行う）

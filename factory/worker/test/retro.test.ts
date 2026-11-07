@@ -8,7 +8,8 @@ import { PortError } from '../src/anthropic';
 import { createFakePort } from '../src/fake/anthropic';
 import type { Env } from '../src/env';
 import { buildPhase1Message, PHASE1_LOG, standardsLogLines } from '../src/jobs';
-import { viewableModels3d } from '../src/models3d';
+import { offerableModels3d } from '../src/rights';
+import { EMPTY_RIGHTS_GATE } from '../src/rights-store';
 import { buildReworkBrief, OLD_REASON_NOTE, reworkReasonChars } from '../src/publish';
 import {
   accumulateRetro,
@@ -47,8 +48,8 @@ import { decideRetroTip, getRetro } from '../src/routes/retro';
 import { d1, migratedDb, one, rows } from './d1-shim';
 import { intakePort } from './intake-port';
 import { routeCtx } from './topics-helpers';
-/** §AJ2-1: 注文票の一覧（buildPhase1Message の引数は必須。取り込み済みの立体モデルは無い = 埋め込めるものだけ） */
-const M3D_NONE = viewableModels3d(new Set());
+/** §AK-4 1: 注文票の一覧（buildPhase1Message の引数は必須。権利の記録が無い = 門番を通る立体モデルは無い） */
+const M3D_NONE = offerableModels3d(EMPTY_RIGHTS_GATE);
 
 const NOW = new Date('2026-11-06T03:00:00.000Z'); // JST 11/06 12:00
 const SINCE = '2026-11-01T00:00:00.000Z';

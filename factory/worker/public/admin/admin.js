@@ -741,26 +741,111 @@
     });
   }
 
-  // ---- 画面: 立体モデル（§AJ2-3。一覧の download を運営が提供元から取り込む）----
+  // ---- 画面: 立体モデル（§AJ2-3・§AK-5。権利を確かめ、通った GLB の件は確認の直後に取り込む。止める / 戻す）----
   var M3D_KIND_LABEL = { sketchfab: 'Sketchfab（埋め込み）', voyager: 'Smithsonian Voyager（埋め込み）', download: 'GLB ファイル' };
-  var M3D_FETCH_CONFIRM = '提供元から GLB を取り込みます（24 MiB まで）';
+  var M3D_CHECK_BODY = '提供元の記録を取りに行き、通ればファイルも取り込みます（GLB の件）';
+  var M3D_BLOCK_BODY = '学習者側の一覧と配信から外します';
   function model3dMiB(bytes) { return (Number(bytes || 0) / 1048576).toFixed(1); }
-  /** 状態の文言（GET /api/models3d の 1 件から） */
+  /** 状態の文言（GET /api/models3d の 1 件の state から。§AJ2 のまま。取り直しは「権利を確かめる」） */
   function model3dStateText(m) {
     var st = m && m.state;
     if (st === 'embed') return '埋め込み';
     if (st === 'hosted') return '取り込み済み（' + model3dMiB(m.bytes) + ' MiB・' + channelDate(m.fetched_at) + '）';
-    if (st === 'hosted_missing') return '取り込み済みだがファイルが無い（取り直してください）';
+    if (st === 'hosted_missing') return '取り込み済みだがファイルが無い（「権利を確かめる」で取り直します）';
     if (st === 'not_hosted') return '未取り込み';
     if (st === 'unavailable') return '取り込めない（配布の url が無い）';
     return String(st || '—');
   }
-  /** 操作のボタンの文言（not_hosted は「取り込む」、hosted / hosted_missing は「取り直す」。他は無し） */
-  function model3dActionLabel(m) {
-    var st = m && m.state;
-    if (st === 'not_hosted') return '取り込む';
-    if (st === 'hosted' || st === 'hosted_missing') return '取り直す';
-    return '';
+  /** §AK-5: 根拠の種類の日本語 */
+  var RIGHTS_KIND_TEXT = { api: '機械: 提供元の API', statement: '機械: 提供元の記述', 'cc-url': '機械: CC の URL（埋め込みだけ）', human: '人の記録' };
+  function rightsKindText(k) { return typeof k === 'string' && vhas(RIGHTS_KIND_TEXT, k) ? RIGHTS_KIND_TEXT[k] : '—'; }
+  /** §AK-5: fail_code の日本語（知らないコードはそのまま） */
+  function rightsFailText(code) {
+    var c = typeof code === 'string' ? code : '';
+    if (c.indexOf('fetch_failed:') === 0) return '提供元から取れませんでした';
+    if (c === 'too_large') return '提供元のページが大きすぎます';
+    if (c === 'bad_response') return '提供元の応答が読めません';
+    if (c === 'uploader_mismatch') return '投稿者が一覧と違います';
+    if (c === 'uploader_missing') return '一覧に投稿者がありません';
+    if (c === 'embed_mismatch' || c === 'page_mismatch' || c === 'uid_mismatch') return '提供元の情報が一覧と違います';
+    if (c === 'attribution_mismatch') return '出典の書き方が投稿者の名前と合いません';
+    if (c === 'no_cc_url') return 'ページに CC の URL がありません';
+    if (c === 'ambiguous_cc_url') return 'ページに CC の URL が 2 つ以上あります';
+    if (c.indexOf('title_') === 0) return 'ページの題名が一覧と違います';
+    if (c.indexOf('source_') === 0) return 'ページの Source の行が一覧と違います';
+    if (c === 'third_party_marker') return '第三者の権利の印があります';
+    if (c === 'download_url_not_linked') return 'ページにファイルのリンクがありません';
+    if (c.indexOf('statement_missing:') === 0) return '提供元の決まりの文が見つかりません';
+    if (c.indexOf('evidence_') === 0 || c === 'subject_mismatch') return '根拠のページが対象と合いません';
+    return c || '—';
+  }
+  /** 取り込みの失敗（import: の後ろ・応答の import.error）の日本語 */
+  function model3dImportErrorText(error) {
+    var c = typeof error === 'string' ? error : '';
+    if (c === 'too_large') return '24 MiB を超えています';
+    if (c.indexOf('bad_glb:') === 0) return 'GLB の形が合いません（' + c.slice('bad_glb:'.length) + '）';
+    if (c.indexOf('fetch_failed:') === 0) return '提供元から取れませんでした（' + c.slice('fetch_failed:'.length) + '）';
+    return c || '失敗しました';
+  }
+  /** §AK-4 4・§AK-5: 門番で止まった理由（rightsReasonOf の値）の日本語 */
+  var RIGHTS_REASON_TEXT = { ok: '確認済み', no_record: '未確認', invalid: '記録が壊れています', subject_changed: '一覧が変わりました（確かめ直し待ち）', blocked: '止めています', unverified: '確認できていません', mismatch: '対象が一致しません', license: 'ライセンスの決まりで出せません' };
+  function rightsReasonText(r) { return typeof r === 'string' && vhas(RIGHTS_REASON_TEXT, r) ? RIGHTS_REASON_TEXT[r] : (typeof r === 'string' && r ? r : '未確認'); }
+  /** 記録の status の日本語（「戻す」の確認文） */
+  var RIGHTS_STATUS_TEXT = { verified: '確認済み', stale: '取り直し失敗', mismatch: '対象が一致しません', unverified: '確認できていません', human: '人の記録' };
+  function rightsStatusText(s) { return typeof s === 'string' && vhas(RIGHTS_STATUS_TEXT, s) ? RIGHTS_STATUS_TEXT[s] : '未確認'; }
+  function rightsOf(m) { return m && isObj(m.rights) ? m.rights : {}; }
+  /** §AK-5: 権利の列の文（1 行ずつ。止めている札は rightsCellHtml が足す）。r = GET /api/models3d の 1 件の rights */
+  function rightsStateText(r) {
+    r = isObj(r) ? r : {};
+    var out = [];
+    if (r.record === 'none') out.push('未確認');
+    else if (r.record === 'invalid') out.push('記録が壊れています');
+    else out.push(String(r.label || '不明') + '（' + rightsKindText(r.evidence_kind) + '）');
+    if (r.reason === 'subject_changed') out.push('一覧が変わりました（確かめ直し待ち）');
+    if (r.check === 'unsupported') out.push('確かめ方が未登録（台帳に足す）');
+    if (r.status === 'stale') out.push('取り直し失敗: ' + rightsFailText(r.fail_code));
+    else if (r.status === 'mismatch') out.push('対象が一致しません: ' + rightsFailText(r.fail_code));
+    else if (r.status === 'unverified') out.push(r.fail_code ? '確認できていません: ' + rightsFailText(r.fail_code) : '確認できていません');
+    if (isObj(r.last_import_fail) && typeof r.last_import_fail.result === 'string') out.push('取り込み失敗: ' + model3dImportErrorText(r.last_import_fail.result.replace(/^import:/, '')));
+    var modes = isObj(r.modes) ? r.modes : {};
+    if (r.status === 'verified' && !modes.host && !modes.embed) out.push('提供できません（' + String(r.label || '不明') + '）');
+    return out;
+  }
+  /** 権利の列の HTML（1 行目 = ライセンスと根拠、2 行目以降は注記、止めている時は赤の札） */
+  function rightsCellHtml(r) {
+    r = isObj(r) ? r : {};
+    var lines = rightsStateText(r);
+    return '<span class="m3d-rights-main">' + esc(lines[0]) + '</span>' + (r.blocked === true ? ' ' + pill('止めている', 'red') : '') +
+      lines.slice(1).map(function (t) { return '<span class="m3d-note">' + esc(t) + '</span>'; }).join('');
+  }
+  /** 確認日（checked_at。無ければ最後の試行 last_attempt_at） */
+  function rightsDateText(r) {
+    r = isObj(r) ? r : {};
+    if (typeof r.checked_at === 'string' && r.checked_at) return channelDate(r.checked_at);
+    if (typeof r.last_attempt_at === 'string' && r.last_attempt_at) return '最後の試行 ' + channelDate(r.last_attempt_at);
+    return '—';
+  }
+  /** §AK-5: 「権利を確かめる」の toast（res = POST …/check の応答、blocked = その行が止めてあるか） */
+  function rightsCheckToast(res, blocked) {
+    var s = res && res.status, label = res && typeof res.label === 'string' ? res.label : '不明', msg;
+    var modes = res && isObj(res.modes) ? res.modes : {};
+    var imp = res && isObj(res.import) ? res.import : null;
+    if (s === 'verified') {
+      if (imp && (imp.status === 'fetched' || imp.status === 'unchanged')) msg = '取り込みました（' + model3dMiB(imp.bytes) + ' MiB）';
+      else if (imp) msg = '確かめましたが取り込めませんでした（' + model3dImportErrorText(imp.error) + '）';
+      else msg = blocked || modes.host || modes.embed ? '確かめました（' + label + '）' : '確かめましたが提供できません（' + label + '）';
+    } else if (s === 'human') msg = '人の記録を書きました';
+    else if (s === 'human_unchanged') msg = '人の記録に変わりはありません';
+    else if (s === 'failed') msg = '確かめられませんでした（' + rightsFailText(res.fail_code) + '）';
+    else if (s === 'skipped') msg = res.reason === 'busy' ? 'いま別の確認が走っています' : '確かめ方が未登録（台帳に足す）';
+    else if (s === 'lost_claim') msg = '確認が長引いたので結果を捨てました。もう一度';
+    else msg = '完了しました';
+    return msg + (blocked ? '（止めているので出ません）' : '');
+  }
+  /** 「戻す」の確認文 */
+  function rightsUnblockBody(r) {
+    r = isObj(r) ? r : {};
+    return '最後の記録のとおりに戻します（' + String(r.label || '不明') + '・' + rightsStatusText(r.status) + '）';
   }
   function models3dLoadingHtml() { return '<h1>立体モデル</h1><p class="loading" data-m3d-loading="1">読み込み中…</p>'; }
   function models3dErrorHtml(msg) {
@@ -771,30 +856,18 @@
   function models3dPageHtml(d) {
     var list = models3dListOf(d);
     var rows = list.map(function (m, i) {
+      var r = rightsOf(m);
       var title = typeof m.page_url === 'string' && /^https:\/\//.test(m.page_url)
         ? '<a href="' + esc(m.page_url) + '" target="_blank" rel="noopener noreferrer">' + esc(m.title) + '</a>' : esc(m.title);
-      var label = model3dActionLabel(m);
-      var btn = label ? '<button type="button" class="btn small" data-m3d-fetch="' + i + '">' + esc(label) + '</button>' : '';
-      return '<tr data-m3d-id="' + esc(m.id) + '" data-m3d-state="' + esc(m.state) + '"><td>' + title + '</td><td>' + esc(m.org) + '</td><td>' + esc(m.license) + '</td><td>' +
-        esc(M3D_KIND_LABEL[m.kind] || m.kind) + '</td><td>' + esc(model3dStateText(m)) + '</td><td>' + btn + '</td></tr>';
+      var btns = (r.check !== 'unsupported' ? '<button type="button" class="btn small" data-m3d-check="' + i + '">権利を確かめる</button>' : '') +
+        (r.blocked === true ? '<button type="button" class="btn small" data-m3d-unblock="' + i + '">戻す</button>' : '<button type="button" class="btn small" data-m3d-block="' + i + '">止める</button>');
+      return '<tr data-m3d-id="' + esc(m.id) + '" data-m3d-state="' + esc(m.state) + '"' + (r.blocked === true ? ' data-m3d-blocked="1"' : '') + '><td>' + title + '</td><td>' + esc(m.org) + '</td><td class="m3d-rights">' +
+        rightsCellHtml(r) + '</td><td>' + esc(rightsDateText(r)) + '</td><td>' + esc(M3D_KIND_LABEL[m.kind] || m.kind) + '</td><td>' + esc(model3dStateText(m)) + '</td><td class="m3d-ops">' + btns + '</td></tr>';
     }).join('');
     return '<h1>立体モデル</h1>' +
-      '<div class="card"><p class="muted">一覧（factory/models3d/catalog.json）の立体モデルです。GLB ファイルの件は、ここで取り込むと確認画面と学習者側で回して見られます（1 件 24 MiB まで）。</p>' +
-      (list.length ? '<div class="table-wrap"><table class="m3d-table"><thead><tr><th>題名</th><th>提供元</th><th>ライセンス</th><th>種類</th><th>状態</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+      '<div class="card"><p class="muted">一覧（factory/models3d/catalog.json）の立体モデルです。工場が権利の記録を確かめたものだけが、注文票・確認画面・学習者側に出ます（10 分ごとに少しずつ自動で確かめます）。GLB ファイルの件は、権利が通った直後に取り込みます（1 件 24 MiB まで）。</p>' +
+      (list.length ? '<div class="table-wrap"><table class="m3d-table"><thead><tr><th>題名</th><th>提供元</th><th>権利</th><th>確認日</th><th>種類</th><th>状態</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
         : '<p class="muted" data-m3d-empty="1">一覧に立体モデルがありません。</p>') + '</div>';
-  }
-  /** 取り込みの成功の toast（unchanged は「変わっていません」） */
-  function model3dFetchToast(res) {
-    if (res && res.status === 'unchanged') return '変わっていません';
-    return '取り込みました（' + model3dMiB(res && res.bytes) + ' MiB）';
-  }
-  /** 取り込みの失敗の文（応答の error から。知らない error は fallback = 応答の error の文） */
-  function model3dFetchErrorText(body, fallback) {
-    var code = body && typeof body.error === 'string' ? body.error : '';
-    if (code === 'too_large') return '24 MiB を超えています';
-    if (code.indexOf('bad_glb:') === 0) return 'GLB の形が合いません（' + code.slice('bad_glb:'.length) + '）';
-    if (code.indexOf('fetch_failed:') === 0) return '提供元から取れませんでした（' + code.slice('fetch_failed:'.length) + '）';
-    return fallback || code || '失敗しました';
   }
   function viewModels3d(view) {
     view.innerHTML = models3dLoadingHtml();
@@ -803,26 +876,36 @@
       if (location.hash !== here) return;
       var list = models3dListOf(d);
       view.innerHTML = models3dPageHtml({ models: list });
-      Array.prototype.forEach.call(view.querySelectorAll('[data-m3d-fetch]'), function (b) {
-        var m = list[Number(b.getAttribute('data-m3d-fetch'))];
-        if (!m) return;
-        b.addEventListener('click', function () {
-          action(b, {
-            title: M3D_FETCH_CONFIRM,
-            body: m.title + '（' + m.org + '）',
-            okText: model3dActionLabel(m) || '取り込む', busyText: '取り込み中…',
-            run: function () {
-              return api('POST', '/api/models3d/' + encodeURIComponent(m.id) + '/fetch').then(null, function (e) {
-                var err = new Error(model3dFetchErrorText(e && e.body, e && e.message));
-                err.status = e && e.status;
-                throw err;
-              });
-            },
-            success: model3dFetchToast,
-            after: function () { if (location.hash === here) viewModels3d(view); },
-            fail: function () { if (location.hash === here) viewModels3d(view); }
-          });
+      var again = function () { if (location.hash === here) viewModels3d(view); };
+      var bind = function (attr, make) {
+        Array.prototype.forEach.call(view.querySelectorAll('[' + attr + ']'), function (b) {
+          var m = list[Number(b.getAttribute(attr))];
+          if (!m) return;
+          b.addEventListener('click', function () { action(b, make(m)); });
         });
+      };
+      bind('data-m3d-check', function (m) {
+        var blocked = rightsOf(m).blocked === true;
+        return {
+          title: m.title + '（' + m.org + '）の権利を確かめる', body: M3D_CHECK_BODY, okText: '確かめる', busyText: '確かめ中…',
+          run: function () { return api('POST', '/api/rights/models3d/' + encodeURIComponent(m.id) + '/check'); },
+          success: function (res) { return rightsCheckToast(res, blocked); },
+          after: again, fail: again
+        };
+      });
+      bind('data-m3d-block', function (m) {
+        return {
+          title: m.title + '（' + m.org + '）を止める', body: M3D_BLOCK_BODY, okText: '止める', busyText: '止めています…',
+          run: function () { return api('POST', '/api/rights/models3d/' + encodeURIComponent(m.id) + '/block'); },
+          success: '止めました（学習者側の一覧と配信から外しました）', after: again, fail: again
+        };
+      });
+      bind('data-m3d-unblock', function (m) {
+        return {
+          title: m.title + '（' + m.org + '）を戻す', body: rightsUnblockBody(rightsOf(m)), okText: '戻す', busyText: '戻しています…',
+          run: function () { return api('POST', '/api/rights/models3d/' + encodeURIComponent(m.id) + '/unblock'); },
+          success: '戻しました', after: again, fail: again
+        };
       });
     }, function (e) {
       if (location.hash !== here) return;
@@ -2842,15 +2925,19 @@
         videoMetaHtml(v, vc) + '<p>本人のアップと言える理由: ' + esc(v.rights_note) + '</p></div>';
     }).join('') + '</div>';
   }
-  /** §AJ-4: 「利用条件」の補足の立体モデル（一覧の題名・提供元・ライセンス・出典の書き方。一覧に無い id は出さない） */
+  /**
+   * §AJ-4・§AK-5: 「利用条件」の補足の立体モデル（題名・提供元と「ライセンス: <label>（<license_url>）。出典の書き方: <attribution>。根拠: <根拠>」。
+   * 一覧に無い id は出さない。権利の確認で止まっている版（rights_blocked）は理由の文だけ）
+   */
   function models3dTermsHtml(d) {
     var meta = models3dMetaOf(d);
     return models3dOf(d && d.version && d.version.material).map(function (x) {
       var id = typeof x.id === 'string' ? x.id : '', m = model3dMetaFor(meta, id);
       if (!m) return '';
+      var head = '<div class="rv-term" data-model3d-term="' + esc(id) + '"><p><b>立体モデル ' + esc(id) + '</b> ' + esc(m.title) + '（' + esc(m.org) + '）</p>';
+      if (m.rights_blocked === true) return head + '<p class="err" data-rights-blocked="1">' + esc(model3dBlockedText(m)) + '</p></div>';
       var link = model3dPageLink(m);
-      return '<div class="rv-term" data-model3d-term="' + esc(id) + '"><p><b>立体モデル ' + esc(id) + '</b> ' + esc(m.title) + '（' + esc(m.org) + '）</p>' +
-        '<p>ライセンス: ' + esc(m.license) + '。出典の書き方: ' + esc(m.attribution) + '</p>' + (link ? '<p>' + link + '</p>' : '') + '</div>';
+      return head + '<p>' + model3dRightsLineHtml(m) + '</p>' + (link ? '<p>' + link + '</p>' : '') + '</div>';
     }).join('');
   }
   /** #rv-machine の中身（純関数） */
@@ -2994,18 +3081,29 @@
   /** §AJ2-3: 取り込んだ立体モデル（kind download）の自前の表示。file_url の形が合わなければ「まだ取り込まれていません」。src は models3d_meta の値だけ */
   function model3dViewerHtml(m, id) {
     var u = m && typeof m.file_url === 'string' ? m.file_url : '';
-    if (!MODEL3D_FILE_URL_RE.test(u)) return '<p class="mp-missing">立体モデル ' + esc(id) + ' はまだ取り込まれていません（<a href="#/models3d">立体モデル</a> のページで取り込んでください）</p>';
+    if (!MODEL3D_FILE_URL_RE.test(u)) return '<p class="mp-missing">立体モデル ' + esc(id) + ' はまだ取り込まれていません（<a href="#/models3d">立体モデル</a> のページで「権利を確かめる」と取り込みます）</p>';
     return '<model-viewer src="' + esc(u) + '" alt="' + esc(m.title) + '" camera-controls touch-action="pan-y" loading="eager"></model-viewer>';
   }
-  /** §AJ-4: 子どもの画面の立体モデル 1 件（x = material の models3d の 1 件、meta = models3d_meta。値はすべてエスケープ） */
+  /** §AK-5: 「ライセンス: <label>（<license_url>）。出典の書き方: <attribution>。根拠: <根拠の日本語>」（値はエスケープ済みの HTML） */
+  function model3dRightsLineHtml(m) {
+    var url = m && typeof m.license_url === 'string' ? m.license_url : '';
+    return 'ライセンス: ' + esc(m.license) + (url ? '（' + esc(url) + '）' : '') + '。出典の書き方: ' + esc(m.attribution) + '。根拠: ' + esc(rightsKindText(m.rights_kind));
+  }
+  /** §AK-4 4: 門番で止まった版の文（理由は rights_reason の日本語） */
+  function model3dBlockedText(m) { return '権利の確認で止まっています（' + rightsReasonText(m && m.rights_reason) + '）'; }
+  /**
+   * §AJ-4: 子どもの画面の立体モデル 1 件（x = material の models3d の 1 件、meta = models3d_meta。値はすべてエスケープ）。
+   * §AK-4 4: rights_blocked の版は <iframe> も <model-viewer> も出さず理由の文だけ
+   */
   function model3dPreviewHtml(x, meta, pa) {
     var id = typeof x.id === 'string' ? x.id : '';
     var m = model3dMetaFor(meta, id);
     var body;
     if (!m) body = '<p class="mp-missing">立体モデル ' + esc(id) + ' は一覧に無いため、埋め込みません</p>';
+    else if (m.rights_blocked === true) body = '<p class="mp-missing" data-rights-blocked="1">立体モデル ' + esc(id) + ' は出しません。' + esc(model3dBlockedText(m)) + '</p>';
     else {
       body = (m.kind === 'download' ? model3dViewerHtml(m, id) : (model3dEmbedHtml(m) || '<p class="mp-missing">立体モデルの埋め込みの形が正しくないため、埋め込みません</p>')) +
-        '<p class="mp-model3d-cap">' + esc(m.title) + '（' + esc(m.org) + '・' + esc(m.license) + '）' + model3dPageLink(m) + '</p>';
+        '<p class="mp-model3d-cap">' + esc(m.title) + '（' + esc(m.org) + '）' + model3dRightsLineHtml(m) + model3dPageLink(m) + '</p>';
     }
     return '<div class="mp-model3d' + pa.cls + '" data-media="model3d" data-media-key="' + esc(id) + '"' + pa.attr + '>' + pa.btns + body +
       (typeof x.why === 'string' && x.why ? '<p class="mp-model3d-why"><span class="mp-k">見方</span>' + esc(x.why) + '</p>' : '') + '</div>';
@@ -4633,11 +4731,15 @@
     if (p[0] === 'topics' && window.FactoryTopics) return window.FactoryTopics.mount(view, { api: api, toast: toast, confirm: confirmDialog });
     view.innerHTML = '<p class="muted">ページが見つかりません。<a href="#/materials">素材へ</a></p>';
   }
-  // §AJ2-3: 立体モデルのページと子どもの画面の自前の表示の純関数（テストから呼ぶ。画面の動作には使わない）
+  // §AJ2-3・§AK-5: 立体モデルのページ（権利の列・操作の文）と子どもの画面の自前の表示の純関数（テストから呼ぶ。画面の動作には使わない）
   window.FactoryAdminModels3d = {
     MODEL3D_FILE_URL_RE: MODEL3D_FILE_URL_RE, model3dPreviewHtml: model3dPreviewHtml, model3dViewerHtml: model3dViewerHtml,
     models3dPageHtml: models3dPageHtml, models3dLoadingHtml: models3dLoadingHtml, models3dErrorHtml: models3dErrorHtml,
-    model3dStateText: model3dStateText, model3dActionLabel: model3dActionLabel, model3dFetchToast: model3dFetchToast, model3dFetchErrorText: model3dFetchErrorText
+    model3dStateText: model3dStateText, model3dImportErrorText: model3dImportErrorText,
+    rightsFailText: rightsFailText, rightsKindText: rightsKindText, rightsStateText: rightsStateText, rightsCellHtml: rightsCellHtml,
+    rightsReasonText: rightsReasonText, rightsStatusText: rightsStatusText, rightsDateText: rightsDateText, rightsCheckToast: rightsCheckToast,
+    rightsUnblockBody: rightsUnblockBody, model3dRightsLineHtml: model3dRightsLineHtml, model3dBlockedText: model3dBlockedText,
+    M3D_CHECK_BODY: M3D_CHECK_BODY, M3D_BLOCK_BODY: M3D_BLOCK_BODY
   };
   // 状況帯（上部）の純関数（テストから呼ぶ）
   window.FactoryAdminStatus = {

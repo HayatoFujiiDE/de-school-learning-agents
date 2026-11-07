@@ -12,11 +12,13 @@ import type { Env } from '../src/env';
 import { createFakePort } from '../src/fake/anthropic';
 import { grayPng } from '../src/fake/openai';
 import { buildPhase1Message, reconcileJob, startJob } from '../src/jobs';
-import { models3dSectionLines, viewableModels3d } from '../src/models3d';
+import { offerableModels3d } from '../src/rights';
+import { EMPTY_RIGHTS_GATE, loadRightsGate } from '../src/rights-store';
 import { PREV_FILES_MAX, PREV_FILE_MAX_BYTES, PREV_MOUNT_DIR, carryRecordsOf, prevResources, prevSectionLines } from '../src/rework';
 import { SOURCE_CAPTURES_FILE, loadSourceCaptures, type SourceCapturesFile } from '../src/verify';
 import { d1, migratedDb, one, rows } from './d1-shim';
 import { goodFiles, goodMaterial } from './helpers';
+import { seedAllGood, seedGood, seedHostedSha } from './rights-helpers';
 
 const DAY = 86_400_000;
 const URL_A = 'https://minecraft.wiki/w/Redstone_Dust';
@@ -223,30 +225,53 @@ describe('§S-8-1 付けるファイルの選び方（prevResources）', () => {
   });
 });
 
-/** §AJ2-1: startJob は viewableModels3d(取り込み済みの id) を渡す。この test の D1 には取り込みの行が無い = 埋め込めるものだけ */
-const M3D_NONE = viewableModels3d(new Set());
+/** §AK-4 1: startJob は offerableModels3d(await loadRightsGate(env)) を渡す。この test の D1 には権利の記録が無い = 門番を通る立体モデルは無い（節ごと出ない） */
+const M3D_NONE = offerableModels3d(EMPTY_RIGHTS_GATE);
 
-describe('§AJ2-1 startJob: 注文票の一覧は viewableModels3d(取り込み済みの id)', () => {
+describe('§AK-4 1 startJob: 注文票の一覧は権利の門番を通ったもの', () => {
   const ROVER = 'nasa-perseverance-rover';
   const SHA = 'a'.repeat(64);
+  const KEY = `models3d/${ROVER}/${SHA}.glb`;
   const seedHosted = () =>
     db
       .prepare('INSERT INTO models3d_files (catalog_id, sha256, bytes, r2_key, draco, fetched_at, fetched_by) VALUES (?, ?, 10, ?, 1, ?, ?)')
-      .run(ROVER, SHA, `models3d/${ROVER}/${SHA}.glb`, iso(DAY), 'ops@example.invalid');
+      .run(ROVER, SHA, KEY, iso(DAY), 'ops@example.invalid');
 
-  it('D1 の行と R2 の object がある download は注文票に出る（buildPhase1Message に viewableModels3d を渡した文と同じ）', async () => {
+  it('権利の記録が無ければ注文票に立体モデルの節が無い（deploy 直後の fail-closed）', async () => {
+    seedRework({ parent: null });
+    const s = startPort();
+    expect((await startJob(env, s.port, 'jr')).status).toBe(201);
+    expect(textOf(s.calls[0]).includes('# 使ってよい立体モデル（一覧）')).toBe(false);
+  });
+
+  it('記録 + D1 の行 + R2 の object + rights_hosted がある download は注文票に出る（buildPhase1Message に門番の一覧を渡した文と同じ）', async () => {
+    await seedAllGood(db);
     seedHosted();
-    r2.set(`models3d/${ROVER}/${SHA}.glb`, new Uint8Array([1, 2, 3]));
+    seedHostedSha(db, ROVER, SHA);
+    r2.set(KEY, new Uint8Array([1, 2, 3]));
     seedRework({ parent: null });
     const s = startPort();
     expect((await startJob(env, s.port, 'jr')).status).toBe(201);
     const text = textOf(s.calls[0]);
     expect(text).toContain(`\n- ${ROVER}: `);
-    expect(text).toBe(await buildPhase1Message(env.DB, BRIEF, [3], null, 'm1', viewableModels3d(new Set([ROVER]))));
+    expect(text).toContain('\n- omnh-allosaurus: ');
+    expect(text).toBe(await buildPhase1Message(env.DB, BRIEF, [3], null, 'm1', offerableModels3d(await loadRightsGate(env))));
   });
 
-  it('D1 に行があっても R2 に object が無ければ出ない（取り込み済みではない）', async () => {
+  it('D1 に行と rights_hosted があっても R2 に object が無ければ出ない（取り込み済みではない）', async () => {
+    await seedAllGood(db);
     seedHosted();
+    seedHostedSha(db, ROVER, SHA);
+    seedRework({ parent: null });
+    const s = startPort();
+    expect((await startJob(env, s.port, 'jr')).status).toBe(201);
+    expect(textOf(s.calls[0]).includes(ROVER)).toBe(false);
+  });
+
+  it('D1 の行と R2 の object があっても rights_hosted にその sha が無ければ出ない（確認のもとで取り込んだ sha ではない）', async () => {
+    await seedAllGood(db);
+    seedHosted();
+    r2.set(KEY, new Uint8Array([1, 2, 3]));
     seedRework({ parent: null });
     const s = startPort();
     expect((await startJob(env, s.port, 'jr')).status).toBe(201);
@@ -288,7 +313,9 @@ describe('§S-8-1 startJob: resources を付ける条件と最初の文の区画
     expect(text).toContain(`## 開き直さなくてよい出典\n`);
     expect(text).toContain(`\n- ${URL_A}\n`);
     // §AJ-2 a: 前の版の区画の後・編集基準の前に「使ってよい立体モデル（一覧）」の節
-    expect(text).toContain(section.join('\n') + '\n' + models3dSectionLines(M3D_NONE).join('\n') + '\n# 編集基準');
+    // §AK-4 1: 権利の記録が無い D1 では立体モデルの節が無く、前の版の区画の直後が編集基準
+    expect(M3D_NONE).toEqual([]);
+    expect(text).toContain(section.join('\n') + '\n# 編集基準');
     expect(text.replace(section.join('\n') + '\n', '')).toBe(await buildPhase1Message(env.DB, BRIEF, [3], null, null, M3D_NONE));
   });
 
@@ -526,6 +553,49 @@ function outputs2(material: Record<string, unknown> = goodMaterial()) {
   );
   return files;
 }
+
+describe('§AK-4 2・§AK-7 13 取り込み（reconcileJob → validateOutputs）の立体モデルは権利の門番を通る', () => {
+  const ALLO_PAGE = 'https://sketchfab.com/3d-models/allosaurus-900868a0aa0b47e58571f5f5ae20094c';
+  /** material.json に omnh-allosaurus を 1 件書き、sources.json に立体モデルの出典の行（s3）を足した出力 */
+  const outputsWithModel = () => {
+    const m = goodMaterial();
+    (m.parts as Array<Record<string, unknown>>)[0].models3d = [{ id: 'd1', catalog_id: 'omnh-allosaurus', why: '骨盤と後ろあしを回して見る', source_id: 's3' }];
+    const files = outputs2(m);
+    const src = JSON.parse(new TextDecoder().decode(files.get('sources.json')!)) as { sources: Array<Record<string, unknown>> };
+    src.sources.push({ id: 's3', url: ALLO_PAGE, title: 'アロサウルス（大阪市立自然史博物館）', accessed_at: '2026-11-07', quoted_excerpt: '', license: 'CC BY 4.0', is_primary: false });
+    files.set('sources.json', enc.encode(JSON.stringify(src)));
+    return files;
+  };
+  const seedDraft = () => {
+    seedParent();
+    db.prepare(
+      `INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, session_id, brief_md, created_at, updated_at)
+       VALUES ('jd', 'm1', 'draft', 'claude-sonnet-5-5', 'making', 'running', 'sesn_jd', 'b', ?, ?)`,
+    ).run(iso(0), iso(0));
+  };
+
+  it('権利の記録の無い項目を書いた material.json は bad_model3d:…:catalog で落ちる（版を作らない）', async () => {
+    seedDraft();
+    await rec('jd', 25_000, ingestPort(outputsWithModel()).port);
+    expect(String(one(db, 'SELECT last_error FROM factory_jobs WHERE id = ?', 'jd').last_error)).toBe('bad_model3d:p1:0:catalog');
+    expect(rows(db, 'SELECT id FROM material_versions WHERE job_id = ?', 'jd')).toEqual([]);
+  });
+
+  it('記録がある（門番を通る）項目は通り、版の material_json に立体モデルが残る', async () => {
+    seedDraft();
+    await seedGood(db, 'omnh-allosaurus');
+    expect(await rec('jd', 25_000, ingestPort(outputsWithModel()).port)).toBe('versioned');
+    const mj = JSON.parse(String(one(db, 'SELECT material_json FROM material_versions WHERE job_id = ?', 'jd').material_json));
+    expect(mj.parts[0].models3d).toEqual([{ id: 'd1', catalog_id: 'omnh-allosaurus', why: '骨盤と後ろあしを回して見る', source_id: 's3' }]);
+  });
+
+  it('止めた記録の項目は記録があっても落ちる', async () => {
+    seedDraft();
+    await seedGood(db, 'omnh-allosaurus', { blocked: true });
+    await rec('jd', 25_000, ingestPort(outputsWithModel()).port);
+    expect(String(one(db, 'SELECT last_error FROM factory_jobs WHERE id = ?', 'jd').last_error)).toBe('bad_model3d:p1:0:catalog');
+  });
+});
 
 describe('§S-8-2 取り込みの引き継ぎ（jobs.ts → citations）', () => {
   const seedRunning = () => {

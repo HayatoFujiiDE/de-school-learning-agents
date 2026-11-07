@@ -7,7 +7,7 @@ type V = string | number | null;
 
 export function migratedDb(): DatabaseSync {
   const db = new DatabaseSync(':memory:');
-  for (const f of ['0001_init.sql', '0002_intake.sql', '0003_review_triage.sql', '0004_image_gen.sql', '0005_topics.sql', '0006_retro.sql', '0007_machine_orders.sql', '0008_topic_run_diag.sql', '0009_review_auto.sql', '0010_ops_requests.sql', '0011_ops_reingest.sql', '0012_ops_reverify.sql', '0013_ops_tip_retire.sql', '0014_ops_material_redo.sql', '0015_ops_raise_budget.sql', '0016_models3d_files.sql']) db.exec(readFileSync(new URL(`../migrations/${f}`, import.meta.url), 'utf8'));
+  for (const f of ['0001_init.sql', '0002_intake.sql', '0003_review_triage.sql', '0004_image_gen.sql', '0005_topics.sql', '0006_retro.sql', '0007_machine_orders.sql', '0008_topic_run_diag.sql', '0009_review_auto.sql', '0010_ops_requests.sql', '0011_ops_reingest.sql', '0012_ops_reverify.sql', '0013_ops_tip_retire.sql', '0014_ops_material_redo.sql', '0015_ops_raise_budget.sql', '0016_models3d_files.sql', '0017_rights.sql']) db.exec(readFileSync(new URL(`../migrations/${f}`, import.meta.url), 'utf8'));
   return db;
 }
 
