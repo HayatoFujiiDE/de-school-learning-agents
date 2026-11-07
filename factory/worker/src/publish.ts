@@ -155,8 +155,10 @@ const REWORK_REASON_HEAD_RE = /^## 差し戻し理由（v\d+）$/;
 export const OLD_REASON_NOTE = '（古い理由は短くしています。全文は前の版で対応済み）';
 /** 作り直しで全文のまま残す直近の節の数（今回の理由は別に全文） */
 export const REWORK_REASON_KEEP_FULL = 2;
-/** それより古い節の本文の上限（文字） */
+/** それより古い節の本文の上限（文字）。節の中の「## 追記」は切らない */
 export const REWORK_REASON_OLD_CHARS = 400;
+/** 差し戻しの時のオーナーの追記の見出し（buildReworkBrief が書く形） */
+const APPEND_HEAD = '## 追記';
 
 function splitReworkBrief(brief: string): { base: string[]; sections: string[][] } {
   const lines = brief.split('\n');
@@ -177,20 +179,25 @@ export function reworkReasonChars(brief: string | null | undefined): number {
 
 /**
  * 差し戻しの rework job の brief（人の差し戻しと自動の差し戻しで同じ形）。
- * 前の brief に積み重なった「## 差し戻し理由（vN）」の節は、直近 2 回分を全文のまま、それより古い節を本文 400 字までに切り、
+ * 前の brief に積み重なった「## 差し戻し理由（vN）」の節は、直近 2 回分を全文のまま、それより古い節を理由の本文 400 字までに切り（節の中の「## 追記」は全文残す）、
  * 「（古い理由は短くしています。…）」の 1 行を付ける（contract-S v2 C）。今回の理由は全文。節が 2 つ以下なら従来と 1 文字も変わらない
  */
 export function buildReworkBrief(origBrief: string | null | undefined, version: number, note: string, append = ''): string {
-  const tail = ['', `## 差し戻し理由（v${version}）`, note, ...(append.trim() ? ['', '## 追記', append] : [])];
+  const tail = ['', `## 差し戻し理由（v${version}）`, note, ...(append.trim() ? ['', APPEND_HEAD, append] : [])];
   const orig = origBrief ?? '';
   const { base, sections } = splitReworkBrief(orig);
   if (sections.length <= REWORK_REASON_KEEP_FULL) return [orig, ...tail].join('\n');
   const baseLines = base.filter((l) => l !== OLD_REASON_NOTE);
   while (baseLines.length && baseLines[baseLines.length - 1].trim() === '') baseLines.pop();
   const old = sections.slice(0, sections.length - REWORK_REASON_KEEP_FULL).map((s) => {
-    const body = s.slice(1).join('\n').replace(/\s+$/, '');
+    // 切るのは差し戻し理由の本文だけ。節の中の「## 追記」（オーナーの brief_append。brief にしか残らない）は古い節でも全文残す
+    const ai = s.indexOf(APPEND_HEAD, 1);
+    const reasonLines = ai < 0 ? s.slice(1) : s.slice(1, ai);
+    const body = reasonLines.join('\n').replace(/\s+$/, '');
     const chars = Array.from(body);
-    return [s[0], chars.length > REWORK_REASON_OLD_CHARS ? chars.slice(0, REWORK_REASON_OLD_CHARS).join('') : body, ''].join('\n');
+    const cut = chars.length > REWORK_REASON_OLD_CHARS ? chars.slice(0, REWORK_REASON_OLD_CHARS).join('') : body;
+    const append = ai < 0 ? [] : ['', APPEND_HEAD, s.slice(ai + 1).join('\n').replace(/\s+$/, '')];
+    return [s[0], cut, ...append, ''].join('\n');
   });
   const recent = sections.slice(sections.length - REWORK_REASON_KEEP_FULL).map((s) => s.join('\n'));
   return [baseLines.join('\n'), '', OLD_REASON_NOTE, ...old, ...recent, ...tail].join('\n');

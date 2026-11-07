@@ -198,28 +198,30 @@ export const PHASE1_LOG = { total: 40, otherCount: 15, otherChars: 600 } as cons
 
 /**
  * 最初の文の「これまでの回答と差し戻し理由」の行（contract-S v2 C 2）。
- * この素材の回答・差し戻し理由は全件・全文（オーナーの指示そのものなので落とさない）。ほかの素材の分と素材の無い追記は新しい順に 15 件・1 件 600 字まで。
- * 合わせて 40 件が上限（この素材の分を先に数える）。materialId が無ければ全部「ほか」として扱う
+ * この素材の回答・差し戻し理由と、全体の編集基準の追記（material_id が NULL の行。/api/standards から足したもの）は全件・全文
+ * （オーナーの指示そのものなので落とさない。新しい順に混ぜて先に数える）。ほかの素材の分は新しい順に 15 件・1 件 600 字まで。
+ * 合わせて 40 件が上限（優先の分を先に数える）。materialId が無ければ、全体の追記だけを優先にして、素材のある行は全部「ほか」として扱う
  */
 export async function standardsLogLines(db: D1Database, materialId: string | null): Promise<string[]> {
-  type LogRow = { kind: string; question: string | null; answer: string };
-  const own = materialId
-    ? await all<LogRow>(
-        db,
-        stmt(
-          "SELECT kind, question, answer FROM standards_log WHERE kind IN ('question','return_reason','note') AND material_id = ? ORDER BY created_at DESC LIMIT ?",
+  type LogRow = { kind: string; question: string | null; answer: string; material_id: string | null };
+  const KINDS = "kind IN ('question','return_reason','note')";
+  const prior = await all<LogRow>(
+    db,
+    materialId
+      ? stmt(
+          `SELECT kind, question, answer, material_id FROM standards_log WHERE ${KINDS} AND (material_id = ? OR material_id IS NULL) ORDER BY created_at DESC LIMIT ?`,
           materialId,
           PHASE1_LOG.total,
-        ),
-      )
-    : [];
-  const otherLimit = Math.min(PHASE1_LOG.otherCount, PHASE1_LOG.total - own.length);
+        )
+      : stmt(`SELECT kind, question, answer, material_id FROM standards_log WHERE ${KINDS} AND material_id IS NULL ORDER BY created_at DESC LIMIT ?`, PHASE1_LOG.total),
+  );
+  const otherLimit = Math.min(PHASE1_LOG.otherCount, PHASE1_LOG.total - prior.length);
   const others =
     otherLimit > 0
       ? await all<LogRow>(
           db,
           stmt(
-            `SELECT kind, question, answer FROM standards_log WHERE kind IN ('question','return_reason','note')${materialId ? ' AND (material_id IS NULL OR material_id <> ?)' : ''}
+            `SELECT kind, question, answer, material_id FROM standards_log WHERE ${KINDS} AND material_id IS NOT NULL${materialId ? ' AND material_id <> ?' : ''}
              ORDER BY created_at DESC LIMIT ?`,
             ...(materialId ? [materialId] : []),
             otherLimit,
@@ -230,16 +232,17 @@ export async function standardsLogLines(db: D1Database, materialId: string | nul
     const chars = Array.from(s);
     return chars.length > PHASE1_LOG.otherChars ? chars.slice(0, PHASE1_LOG.otherChars).join('') + '…' : s;
   };
-  const line = (l: LogRow, mine: boolean) => {
-    const f = mine ? oneLine : (s: string) => cut(oneLine(s));
-    const who = mine ? 'この素材の' : '';
+  /** full: 全文で出す（この素材の分・全体の追記）。who: 行の頭の「この素材の」 */
+  const line = (l: LogRow, full: boolean) => {
+    const f = full ? oneLine : (s: string) => cut(oneLine(s));
+    const who = l.material_id !== null && l.material_id === materialId ? 'この素材の' : '';
     return l.kind === 'question'
       ? `- ${who}Q: ${f(l.question ?? '')} / A: ${f(l.answer)}`
       : l.kind === 'return_reason'
         ? `- ${who}差し戻し: ${f(l.answer)}`
         : `- ${who}追記: ${f(l.answer)}`;
   };
-  return [...own.map((l) => line(l, true)), ...others.map((l) => line(l, false))];
+  return [...prior.map((l) => line(l, true)), ...others.map((l) => line(l, false))];
 }
 
 /**
@@ -271,7 +274,7 @@ export async function buildPhase1Message(
     ...(prev ? prevSectionLines(prev.names, prev.reopenFree) : []),
     '# 編集基準',
     EDITORIAL_STANDARDS.trim(),
-    `## これまでの回答と差し戻し理由（この素材の分は全件・全文、ほかの素材は新しい順に ${PHASE1_LOG.otherCount} 件・1 件 ${PHASE1_LOG.otherChars} 字まで。合わせて最大 ${PHASE1_LOG.total} 件）`,
+    `## これまでの回答と差し戻し理由（この素材の分と全体の追記は全件・全文、ほかの素材は新しい順に ${PHASE1_LOG.otherCount} 件・1 件 ${PHASE1_LOG.otherChars} 字まで。合わせて最大 ${PHASE1_LOG.total} 件）`,
     ...(lines.length ? lines : ['- （まだありません）']),
     '',
     ...makerNoteLines(notes),

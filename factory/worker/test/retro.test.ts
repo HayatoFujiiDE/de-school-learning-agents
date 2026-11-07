@@ -33,6 +33,7 @@ import {
   WASTE_KINDS,
   RETRO_SYSTEM,
   RETRO_SCHEMA,
+  RETRO_PENDING_EST_CENTS,
   maskUrls,
   parseReturnThemes,
   submitRetro,
@@ -547,7 +548,7 @@ describe('段 a〜d（node:sqlite の実 DB + stub port）', () => {
     expect(retro(raw, id).status).toBe('ready');
   }
 
-  it('c 送信: Batch 1 件（sonnet・json_schema・max_tokens 2048）。入力は数字・列挙値・ホストだけ。CAS で 2 回目は送らない', async () => {
+  it('c 送信: Batch 1 件（sonnet・json_schema・max_tokens 4096。v2 レビュー F3 で 2048 から上げた）。入力は数字・列挙値・ホストだけ。CAS で 2 回目は送らない', async () => {
     await readyRow();
     seedTip(raw, { id: 'tip-a' });
     seedTip(raw, { id: 'tip-p', status: 'proposed', decided_by: null, activated_at: null });
@@ -558,7 +559,7 @@ describe('段 a〜d（node:sqlite の実 DB + stub port）', () => {
     const reqs = (p.last.createBatch as { requests: Array<{ custom_id: string; params: Record<string, unknown> }> }).requests;
     expect(reqs).toHaveLength(1);
     expect(reqs[0].custom_id).toBe('j1');
-    expect(reqs[0].params).toMatchObject({ model: RETRO_MODEL, max_tokens: 2048, output_config: { format: { type: 'json_schema' } } });
+    expect(reqs[0].params).toMatchObject({ model: RETRO_MODEL, max_tokens: 4096, output_config: { format: { type: 'json_schema' } } });
     const input = (reqs[0].params.messages as Array<{ content: string }>)[0].content;
     expect(input).toContain('<job>');
     expect(input).toContain('"id":"tip-a"');
@@ -581,7 +582,7 @@ describe('段 a〜d（node:sqlite の実 DB + stub port）', () => {
     expect(await submitRetro(env, p.port, { deadline: deadline(), now: NOW })).toBe('j1:submitted');
   });
 
-  it('c 送信: 月の上限は CAS の中でも確かめる（合計 299・上限 300 で 2 件続けて送ると、未回収 1 件 × 2¢ の見込みで 2 件目は送らない）', async () => {
+  it('c 送信: 月の上限は CAS の中でも確かめる（合計 299・上限 300 で 2 件続けて送ると、未回収 1 件 × 見込みで 2 件目は送らない）', async () => {
     await readyRow('j1');
     await readyRow('j2');
     raw.prepare("INSERT INTO cost_ledger (id, day, kind, ref_id, cents, created_at) VALUES ('l1', '2026-11-02', 'retro', 'jx', 299, ?)").run(SINCE);
@@ -589,6 +590,18 @@ describe('段 a〜d（node:sqlite の実 DB + stub port）', () => {
     expect(await submitRetro(env, p.port, { deadline: deadline(), now: NOW })).toBe('j1:submitted');
     expect(await submitRetro(env, p.port, { deadline: deadline(), now: NOW })).toBe('j2:skipped');
     expect(retro(raw, 'j2')).toMatchObject({ status: 'skipped', last_error: 'monthly_cap' });
+    expect(p.calls.createBatch).toBe(1);
+  });
+
+  it('c 送信（v2 レビュー F3）: 未回収 1 件の見込みは max_tokens 4096 から 4¢。合計 296・上限 300 なら 2 件目は送らない（前の 2¢ なら送っていた）', async () => {
+    expect(RETRO_LIMITS.maxTokens).toBe(4096);
+    expect(RETRO_PENDING_EST_CENTS).toBe(4);
+    await readyRow('j1');
+    await readyRow('j2');
+    raw.prepare("INSERT INTO cost_ledger (id, day, kind, ref_id, cents, created_at) VALUES ('l1', '2026-11-02', 'retro', 'jx', 296, ?)").run(SINCE);
+    const p = intakePort();
+    expect(await submitRetro(env, p.port, { deadline: deadline(), now: NOW })).toBe('j1:submitted');
+    expect(await submitRetro(env, p.port, { deadline: deadline(), now: NOW })).toBe('j2:skipped');
     expect(p.calls.createBatch).toBe(1);
   });
 
@@ -1428,6 +1441,17 @@ describe('contract-S v2 C: 読ませる量の上限', () => {
     expect(buildReworkBrief(b4, 5, R(5))).toBe(buildReworkBrief(buildReworkBrief(b3, 4, R(4)), 5, R(5)));
   });
 
+  it('(d) v2 レビュー F1: 古い節に長い追記（brief_append）がある時、理由の本文だけ 400 字に切れ、「## 追記」は全文残る（何回作り直しても）', () => {
+    const LONG_APPEND = '追記の本文_' + 'か'.repeat(1500) + '\n2 行目の追記';
+    let b = buildReworkBrief('# 注文\n本文', 1, R(1), LONG_APPEND);
+    for (let n = 2; n <= 6; n++) b = buildReworkBrief(b, n, R(n));
+    expect(b.split(LONG_APPEND)).toHaveLength(2); // 全文が 1 回だけ
+    expect(b).toContain(`${head(1)}\n${R(1).slice(0, 400)}\n\n## 追記\n${LONG_APPEND}\n`);
+    expect(Array.from(b.split(head(1) + '\n')[1].split('\n')[0]).length).toBe(400);
+    expect(b.split(OLD_REASON_NOTE)).toHaveLength(2);
+    for (const n of [5, 6]) expect(b).toContain(`${head(n)}\n${R(n)}`);
+  });
+
   it('(d) 文字数の変化: 6 回の差し戻しで、積み重ねると約 6,000 字の理由が、直近 2 回 + 今回の全文と古い 3 節 × 400 字に収まる', () => {
     let b = '# 注文\n本文';
     for (let n = 1; n <= 6; n++) b = buildReworkBrief(b, n, R(n));
@@ -1438,7 +1462,8 @@ describe('contract-S v2 C: 読ませる量の上限', () => {
     for (const n of [4, 5, 6]) expect(b).toContain(R(n));
   });
 
-  it('(e) phase1: この素材の回答・差し戻し理由は全件・全文、ほかの素材は新しい順に 15 件・1 件 600 字まで。合わせて 40 件まで', async () => {
+  // v2 レビュー F2: 全体の追記（material_id が NULL）は「ほか」の枠でなく、この素材の分と同じく全文で先に入る（前は others[0] で 600 字の枠だった）
+  it('(e) phase1: この素材の回答・差し戻し理由と全体の追記は全件・全文、ほかの素材は新しい順に 15 件・1 件 600 字まで。合わせて 40 件まで', async () => {
     const raw = migratedDb();
     const db = d1(raw);
     const ins = raw.prepare("INSERT INTO standards_log (id, material_id, job_id, kind, question, answer, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?)");
@@ -1446,29 +1471,36 @@ describe('contract-S v2 C: 読ませる量の上限', () => {
     for (let i = 0; i < 20; i++) ins.run(`own${i}`, 'mown', 'return_reason', null, `自分の理由${i}:` + 'い'.repeat(1000), at(i));
     ins.run('ownq', 'mown', 'question', '色は？', '青で。' + 'う'.repeat(800), at(20));
     for (let i = 0; i < 30; i++) ins.run(`oth${i}`, `mo${i}`, 'return_reason', null, `ほかの理由${i}:` + 'え'.repeat(1000), at(60 + i));
-    ins.run('note', null, 'note', null, '全体の追記', at(95));
+    const GLOBAL = '- 追記: 全体の追記:' + 'お'.repeat(1500);
+    ins.run('note', null, 'note', null, '全体の追記:' + 'お'.repeat(1500), at(95));
     const lines = await standardsLogLines(db, 'mown');
-    expect(lines).toHaveLength(21 + 15);
+    expect(lines).toHaveLength(22 + 15);
+    expect(lines[0]).toBe(GLOBAL); // 全体の追記は 1,500 字のまま・新しい順に先頭
     const own = lines.filter((l) => l.startsWith('- この素材の'));
     expect(own).toHaveLength(21);
     for (let i = 0; i < 20; i++) expect(lines).toContain(`- この素材の差し戻し: 自分の理由${i}:` + 'い'.repeat(1000));
     expect(lines).toContain('- この素材のQ: 色は？ / A: 青で。' + 'う'.repeat(800));
-    const others = lines.slice(21);
-    expect(others[0]).toBe('- 追記: 全体の追記'); // 新しい順
-    for (const l of others.slice(1)) {
+    const others = lines.slice(22);
+    expect(others).toHaveLength(PHASE1_LOG.otherCount); // 全体の追記は 15 件の枠に数えない
+    for (const l of others) {
       expect(l.startsWith('- 差し戻し: ほかの理由')).toBe(true);
       expect(Array.from(l.replace('- 差し戻し: ', '')).length).toBe(PHASE1_LOG.otherChars + 1); // 600 字 + …
     }
-    expect(others.some((l) => l.includes('ほかの理由15:'))).toBe(false); // 古い方は入らない（新しい 14 件 + 追記）
+    expect(others.some((l) => l.includes('ほかの理由15:'))).toBe(true);
+    expect(others.some((l) => l.includes('ほかの理由14:'))).toBe(false); // 古い方は入らない（新しい 15 件）
     const msg = await buildPhase1Message(db, 'brief', [3], null, 'mown');
     for (let i = 0; i < 20; i++) expect(msg).toContain(`自分の理由${i}:` + 'い'.repeat(1000));
-    // 素材が分からない時（前の呼び方）は全部「ほか」: 15 件・600 字
-    expect(await standardsLogLines(db, null)).toHaveLength(15);
-    // この素材の分が 40 件を超えたら、40 件で止まり、ほかの素材は入らない
+    expect(msg).toContain(GLOBAL);
+    // 素材が分からない時（前の呼び方）: 全体の追記は全文、素材のある行は全部「ほか」で 15 件・600 字
+    const none = await standardsLogLines(db, null);
+    expect(none).toHaveLength(1 + 15);
+    expect(none[0]).toBe(GLOBAL);
+    // 優先の分（この素材 + 全体の追記）が 40 件を超えたら、40 件で止まり、ほかの素材は入らない
     for (let i = 20; i < 45; i++) ins.run(`own${i}`, 'mown', 'return_reason', null, `自分の理由${i}`, at(100 + i));
     const full = await standardsLogLines(db, 'mown');
     expect(full).toHaveLength(PHASE1_LOG.total);
-    expect(full.every((l) => l.startsWith('- この素材の'))).toBe(true);
+    expect(full.every((l) => l.startsWith('- この素材の') || l === GLOBAL)).toBe(true);
+    expect(full).toContain(GLOBAL);
   });
 });
 
@@ -1625,6 +1657,17 @@ describe('contract-S v2 追加 A: 差し戻し理由の本文を <returns> で�
   it('maskUrls: https?:// と www. の並びを [URL] に', () => {
     expect(maskUrls('見て https://a.example/x?y=1 と HTTP://B.example と www.c.example/d。')).toBe('見て [URL] と [URL] と [URL]。');
     expect(maskUrls('URL なし')).toBe('URL なし');
+  });
+
+  it('maskUrls（v2 レビュー F4）: URL は ASCII の URL の文字で止まり、後ろの日本語・全角・句読点を消さない。全角の ｗｗｗ． とメールアドレスも伏せる', () => {
+    expect(maskUrls('https://a.example/x?y=1を確認して、直す')).toBe('[URL]を確認して、直す');
+    expect(maskUrls('www.b.example/c、図を直す。')).toBe('[URL]、図を直す。');
+    expect(maskUrls('（https://c.example/d）の図')).toBe('（[URL]）の図');
+    expect(maskUrls('https://e.example/fｘｙ全角')).toBe('[URL]ｘｙ全角');
+    expect(maskUrls('ｗｗｗ．ｅｘａｍｐｌｅ．ｃｏｍ／ａを見る')).toBe('[URL]を見る');
+    expect(maskUrls('ｈｔｔｐｓ：／／ｅｘ．ｊｐ。')).toBe('[URL]。');
+    expect(maskUrls('連絡は foo.bar+x@www.example.co.jp まで、または a@b.jp')).toBe('連絡は [MAIL] まで、または [MAIL]');
+    expect(maskUrls('メールは書いていない @ だけ')).toBe('メールは書いていない @ だけ');
   });
 
   it('画面: checklist に ng が無い行は「AI が読んだ観点」を出し、ng がある行はチェックリストの観点を出す。evidence はエスケープ', () => {

@@ -28,7 +28,8 @@ export const RETRO_LIMITS = {
   collectPerTick: 3,
   /** c: 1 日（Asia/Tokyo）の送信の件数 */
   dayCount: 20,
-  maxTokens: 2048,
+  /** 出力の上限（§S v2 追加 A で return_themes が増えたので 2048 → 4096） */
+  maxTokens: 4096,
   /** 入力文の上限（文字） */
   inputChars: 60_000,
   recent: 10,
@@ -1184,9 +1185,16 @@ export async function buildRetroInput(db: D1Database, jobId: string, metricsJson
   return { text, tipIds: tipLines.map((t) => t.id) };
 }
 
-/** 差し戻し理由の中の URL を [URL] に（§S v2 追加 A。出力の検査と同じ https?:// と www.） */
+/** メールアドレス（ASCII）。URL より先に [MAIL] にする（www. を含むドメインが [URL] に化けない） */
+const MAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+/** URL: https?:// か www. から、ASCII の URL の文字（RFC 3986 の非予約・予約・%）の範囲だけ。日本語・全角・和文の句読点の手前で止まる */
+const URL_MASK_RE = /(?:https?:\/\/|www\.)[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]*/gi;
+/** 全角で書いた URL（ｈｔｔｐｓ：／／・ｗｗｗ．）: 全角の英数字と URL の記号の範囲だけ */
+const URL_MASK_WIDE_RE = /(?:[ｈＨ][ｔＴ][ｔＴ][ｐＰ][ｓＳ]?：／／|[ｗＷ]{3}．)[０-９Ａ-Ｚａ-ｚ．／－＿：？＃＝＆％～]*/g;
+
+/** 差し戻し理由の中の URL を [URL]・メールアドレスを [MAIL] に（§S v2 追加 A。出力の検査と同じ https?:// と www.、全角の ｗｗｗ． も） */
 export function maskUrls(s: string): string {
-  return s.replace(/(?:https?:\/\/|www\.)[^\s<>"'）」』】、。]*/gi, '[URL]');
+  return s.replace(MAIL_RE, '[MAIL]').replace(URL_MASK_RE, '[URL]').replace(URL_MASK_WIDE_RE, '[URL]');
 }
 
 /**
@@ -1477,8 +1485,13 @@ function tokyoDayRange(now: Date): [string, string] {
 export const DAY_COUNT_SQL =
   "(SELECT COUNT(*) FROM job_retros r2 WHERE r2.status IN ('submitted','ended','failed') AND json_extract(r2.collect_json, '$.submitted_at') >= ? AND json_extract(r2.collect_json, '$.submitted_at') < ?)";
 
-/** 未回収（submitted）1 件の費用の見込み（セント）。送信の CAS で月の上限を数える時に使う */
-export const RETRO_PENDING_EST_CENTS = 2;
+/** 見込みのうち入力の分（セント）。前の固定の見込み 2¢ から、出力 2048 tokens を使い切った分（約 1¢）を引いた残り */
+const RETRO_PENDING_INPUT_EST_CENTS = 1;
+/**
+ * 未回収（submitted）1 件の費用の見込み（セント）。送信の CAS で月の上限を数える時に使う。
+ * 入力の分 + 出力を max_tokens まで使い切った時の費用（Batch の Sonnet）を切り上げる。max_tokens 4096 で 1 + 2.048 → 4¢（前は 2¢ の固定値）
+ */
+export const RETRO_PENDING_EST_CENTS = Math.ceil(RETRO_PENDING_INPUT_EST_CENTS + sonnetBatchMicroDollars({ output_tokens: RETRO_LIMITS.maxTokens }) / 10_000);
 
 /**
  * 月の上限（送信の CAS の中でもう一度確かめる）: 当月の cost_ledger（kind='retro'）の合計 + 未回収の submitted の件数 × 2 < 上限。
