@@ -23,7 +23,7 @@
 司令塔の裁定（決定の細部）:
 - 仮説の割合（決定 2）は、主張が 5 件以上の版でだけ数える（§R-49 (g) の「5 件未満は割合で判定しない」と同じ）。5 件未満の版の仮説は印だけ。
 - 読み手の学年は小学 3 年生〜中学 3 年生（ふじさんの指定。2026-11-07「学年は小学３年から中３」）。小学生表示 = 小学 3〜6 年生、中学生表示 = 中学 1〜3 年生（V-4 d・V-10）。読みやすさの基準を、それぞれのいちばん下の学年（小学 3 年生・中学 1 年生が自分で読める）に置くのは司令塔の裁定。
-- 節の名前と migration の番号（2026-11-07 夜）: 別のセッションが同じ日に §U（機械用の注文の入口。`docs/plans/machine-orders/contract-U.md`・`migrations/0007_machine_orders.sql`）を着地させたので、この契約は §U から **§V** に付け替え（ファイル名・見出し・節の番号 `V-数字`）、migration は **`0008_review_auto.sql`** にする。実装担当への指示書（brief）に残る `U-数字` は `V-数字` と読み替える。
+- 節の名前と migration の番号（2026-11-07 夜）: 別のセッションが同じ日に §U（機械用の注文の入口。`docs/plans/machine-orders/contract-U.md`・`migrations/0007_machine_orders.sql`）を着地させたので、この契約は §U から **§V** に付け替え（ファイル名・見出し・節の番号 `V-数字`）、migration は **`0009_review_auto.sql`** にする（0008 も別のセッションの `0008_topic_run_diag.sql` が先に着地した。2026-11-07 朝）。実装担当への指示書（brief）に残る `U-数字` は `V-数字` と読み替える。
 - 人の承認は読み手係の未了で止めない（契約の再確認 B1 への裁定）: 一時停止中・日次上限の日は読み手係が走らないが、人は子どもの画面を見て公開してよい（決定 1 の「見て 1 回押す」は読み手係を前提にしない）。読み手係の結果を待つのは自動公開だけ（V-6 e・V-7 e・V-9 c）。
 - 主張が 1 件以上で confirmed が 0 件の新しい検証は、主張の数に関係なく fix（`check:none_confirmed`。V-6 c）。「5 件未満は割合で判定しない」は割合の話で、「確かめられた主張が 1 件もない」は割合ではない。
 - 確認済みチャンネルの key は oEmbed の `author_url`。handle の持ち主が変わる場合は追わない（気づいたら画面で外す。既知の限界）。
@@ -42,7 +42,7 @@
 - 動画・動かせるものを常に人が見る: 決定 3 で置き換え。
 - migration で確認待ちの版の印を消して仕分け直させる: migration と deploy の間に古い Worker の cron が印を書き戻せる。新しいコードの側で「新しい決まりで仕分けたか」を列（`triage_v`）で見分ける。
 
-## V-1 migration `migrations/0008_review_auto.sql`（`0007_machine_orders.sql` は別のセッションのもの。`test/d1-shim.ts` の一覧に 0007 と 0008 を足す）
+## V-1 migration `migrations/0009_review_auto.sql`（`0007_machine_orders.sql`・`0008_topic_run_diag.sql` は別のセッションのもの。`test/d1-shim.ts` の一覧に 0007・0008・0009 を足す）
 
 1. `cost_ledger.kind` に `'reader'` を足す。0006 と同じ手順（新しい表を作る → 全列を写す → DROP → RENAME → 索引を同じ定義で作り直す）。作り直す索引は、その時点の `cost_ledger` の索引すべて（実装担当が migrations を読んで列挙する。テストで、索引の名前・UNIQUE・式・WHERE が前後で同じことと、既存の行が全列そのまま残ることを確かめる）。
 2. 列と表（既存の行のデータを書き換える文は入れない）:
@@ -133,7 +133,7 @@ c. 節の区切りの無害化（`src/videos.ts` の `neutralizeInputText`）
 
 d. strict の文法が大きすぎた時の逃げ道
 - Messages API が 400 で、本文に `compiled grammar` を含むエラーを返した時（同期は例外、Batch は結果の `errored`）: settings に `verify_strict = '0'` を書く（upsert）。ログに `{at:'verify', error:'schema_too_large'}`。Batch の `errored` は、今の `decideTurn` がエラーの本文を捨てている（エラーの種類だけ見る）ので、`compiled grammar` を見分けられるようにエラーの message を判定まで運ぶ（Batch の回収のテストに、`errored` の本文が `compiled grammar` の場合を足す）。
-- その試行が strict つきで出したものなら（同期は呼ぶ時の値、Batch は `plan.json` の `strict`）、版を `pending` に戻し、`verification_attempts` を 1 減らす（0 未満にしない。ほかの列の戻し方は今の失敗の扱いと同じ）。strict なしで出した試行が同じエラーになった時は、今の失敗の扱いのまま。
+- その試行が strict つきで出したものなら（同期は呼ぶ時の値、Batch は `plan.json` の `strict`。`plan.json` に `strict` が無い = 配備前の提出はすべて strict だったので strict つきとみなす。2 ターン目以降の提出では、`plan.json` が読めれば今回の `strict` の値を必ず書く）、かつ settings に `verify_strict='0'` を書けた時だけ、版を `pending` に戻し、`verification_attempts` を 1 減らす（0 未満にしない。ほかの列の戻し方は今の失敗の扱いと同じ。設定を書けなかった時は今の失敗の扱い = attempts を消費する。無限に繰り返さないため）。strict なしで出した試行が同じエラーになった時は、今の失敗の扱いのまま。
 - `verifierTools` は、settings の `verify_strict` が `'0'` の時 `report_verdicts` に `strict` を付けない（schema は渡す）。形は `validateVerdicts` が確かめる。値は試行の最初（Batch は提出のたび）に読む。
 - 有界: 失うのは、settings を書くまでに strict つきで出していた試行の費用と時間（最大で `VERIFY_INFLIGHT` 件）。その試行は attempts を消費しない。
 
@@ -179,7 +179,7 @@ c. 入力（user の 1 メッセージ）
 ```
 - `<material>` の値は 1 行にして切る（題名 200 字・要約と最初にやることと見どころは各 400 字・alt は各 200 字で図は 20 枚まで・部品は 20 個まで）。「サポーターの見守り」は、`conditions.supporter_check` か、どれかの part の `needs_supporter_check` が true なら「要」、どちらも false と書かれていれば「不要」。
 - 変奏は material の parts の `variants` の `.md` を、part の順 → variants の順に入れる。本文は R2 から読む。R2 に無い（`get` が null）変奏は入れずに `not_read` に path を入れる。R2 の読み出しが例外を投げた時は「入力を作る途中の失敗」（下。API を呼ばない）。
-- 入力の合計が 80,000 字を超える時は、入る所までの変奏を入れ、残りは `not_read` に入れる（切り詰めない）。
+- `<material>` の節は 20,000 字で切る（超える分は末尾を切り捨て「（以下省略）」を足す。Astra の指摘への裁定: 部品 18 個 × 図 20 枚の alt で節だけで 80,000 字を超えうる）。入力の合計が 80,000 字を超える時は、入る所までの変奏を入れ、残りは `not_read` に入れる（切り詰めない）。
 - 無害化（`reader.ts` の関数。純関数）: 値と本文の中の `<material` `</material` `<variants` `</variants` の `<` を全角に、`##` で始まる行の頭に全角空白を足す。資料の文字列で節の区切りを偽れないことをテストで確かめる。
 - 型の名前は 活動レシピ / 作例と見本 / 説明と図解 / 動かせるもの / 見る / 今日のお題 / 基礎学習の足場 / 世界との接続（1〜8）。
 - 入力を作る途中で失敗した時（R2 の読み出しの例外など）は、API を呼ばずに「API が応答した失敗」と同じ扱いにし、取り置きを 0 にする。
@@ -417,7 +417,7 @@ b. `triageStep` の対象と書き込み
 c. 承認の述語に足す条件（`src/publish.ts` の approve。§B-6 の述語 P_APPROVE はそのまま残し、同じ batch の全文に AND で足す）
 - `reader_guard: {status, token}`: `AND EXISTS (SELECT 1 FROM material_versions WHERE id = ? AND reader_status = ? AND COALESCE(reader_token, '') = ?)`。人の承認・機械の承認の両方に付ける。
 - `trusted_keys: string[]`: 判定で頼ったチャンネルごとに `AND EXISTS (SELECT 1 FROM trusted_channels WHERE channel_key = ?)`。両方に付ける。
-- `require_auto_publish: true`（機械の承認だけ）: `AND (SELECT value FROM settings WHERE key = 'auto_publish') = '1'`。
+- `require_auto_publish: true`（機械の承認だけ）: `AND (SELECT value FROM settings WHERE key = 'auto_publish') = '1' AND COALESCE((SELECT value FROM settings WHERE key = 'paused'), '0') <> '1'`（入口で paused を見た後に一時停止されても、コミットの時点で一時停止中なら 0 行。Astra の指摘への裁定）。
 - 条件が成り立たなければ batch は 0 行（人の承認は 409 `conflict`。画面は読み直す）。
 
 d. 自動公開（決定 1 のスイッチ。`autoPublishStep`。triageStep の後に呼ぶ）
@@ -441,7 +441,7 @@ g. cron の順: 起動 → 取り込み → **読み手係（V-4）** → 検証
 ## V-8 API（`src/routes/review.ts` ほか。認証は §B-1 の admin と同じ）
 
 - `GET /api/review/:version_id` に足す: `triage`（V-6 b。`pending_on` を含む）/ `reader: {status, gen, findings, learning, conditions, summary, not_read, cost_cents}`（`gen` = `reader_token`。`done` でない時は findings 等が null）/ `verification.apps`（`[{path, verdict, reason}]` か null）/ `claims[].presented_as`（4 値か null）/ `auto_publish: boolean`。
-- `GET /api/review`（一覧）の各行に足す: `gate`, `pending_on`, `fix`, `ask`, `note`。`auto_ok` は 6 項目のうち ok の数（0〜6）。`needs_review` は `fix + ask`。並びは今のまま（`needs_review` の多い順 → 作成の古い順）。一覧の computeTriage が R2 を読むのは動画のある版だけ（同じ `video_id` の公式の情報は 1 リクエストの中で 1 回だけ読む）。
+- `GET /api/review`（一覧）の各行に足す: `gate`, `pending_on`, `fix`, `ask`, `note`。`auto_ok` は 6 項目のうち ok の数（0〜6）。`needs_review` は `fix + ask`。並びは今のまま（`needs_review` の多い順 → 作成の古い順）。一覧の computeTriage が R2 を読むのは動画のある版だけ（公式の情報の鍵は版の `r2_prefix` + `video_id` なので、版をまたいで使い回さない。読む回数は動画のある版 × その動画の数に有界）。
 - `POST /api/review/:version_id/decision`: V-7 e。approve の `checklist` は、`triage.auto[k]='ok'` の項目を省略できる（6 項目とも）。それ以外の項目は今までどおり必須。return / reject は今のまま。どの判断でも `machine_gate` を記録する。
 - `POST /api/review/:version_id/reread`: V-4 h。
 - `GET /api/review/stats` → `{auto_publish: boolean, clean: {approve, return, reject}, streak, auto_published}`。`clean.*` は `machine_gate='clean'` で `reviewer_email` が `system:` で始まらない判断の数。`streak` は、その判断を新しい順（`created_at DESC, id DESC`）に見て approve が続いた数。`auto_published` は `reviewer_email='system:auto-publish'` の数。
@@ -527,4 +527,4 @@ f. 操作のループ（ui-interaction-completeness）
 - (u8) 承認: 6 項目とも auto ok なら checklist を空で承認できる / `video_channel_new` があるのに `trust_channels` が足りないと 400、足りていれば `trusted_channels` に 1 行入り、`trusted_gen` が進み、ほかの確認待ちの版が仕分け直され、その動画の項目が消える / 承認が 0 行の時はチャンネルも足されず `trusted_gen` も進まない / 仕分けの項目に無い key を `trust_channels` に入れても書かれない / `reader_gen` が違えば 409 / 読み手係が pending（一時停止中）の版は承認でき、`machine_gate='pending'` が残る / 承認の間に読み手係が済んでいれば 409 `conflict` / 結果が読めない検証は 400 `checks_pending` / `auto_triage_pending` の 409 が今も効く / blocking の項目がある版は 400 / stats の数え方（streak は approve が途切れた所まで）/ channels の一覧と外す（外すのは 1 つの batch。外した後に確認待ちの版が仕分け直され `trusted_gen` が進む。無い key は `{deleted:false}` で何も変わらない）。
 - (u9) 画面: gate の 3 通り・見てほしい所 0 件 / N 件で描画 / 項目の OK・直してもらうで「公開する」の可否と理由の文が変わる / blocking の項目に「このまま出す」が無い / 検証の id か読み手係の世代が変わると項目の状態が戻る / 送信の payload（省略する項目・trust_channels・reader_gen）/ 太字と番号つきの一覧が出る / 「さわってみよう」の見出し / 印 OFF で番号の印・札が出ない / 一覧の 3 区画とスイッチ / キー N・P・O。smoke は数える DOM を新しい画面に合わせて直す。
 - (u9 追加) 読み手チェック待ちの版で「公開する」が押せて理由が「公開できます（読み手チェックはまだです）」/ 400 `channel_trust_required` で項目へ動く・`checks_pending` で読み直す / 検証 failed の帯の文。
-- (u10) 既存のテストは、意味が変わった所（§L-3 の自動 OK・画面の DOM・取得記録の入れ方）を新しい決まりに合わせて直し、それ以外は緑のまま。migration 0008 のテスト（既存の行・索引の定義）。tsc・vitest・smoke・check-no-fake の verdict を報告する。
+- (u10) 既存のテストは、意味が変わった所（§L-3 の自動 OK・画面の DOM・取得記録の入れ方）を新しい決まりに合わせて直し、それ以外は緑のまま。migration 0009 のテスト（既存の行・索引の定義）。tsc・vitest・smoke・check-no-fake の verdict を報告する。

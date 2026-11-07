@@ -1,4 +1,4 @@
-// 契約 V-1・V-11 u10: 0006 までの状態に行を入れてから 0008 を当て、cost_ledger の行・索引 4 つの定義が同じで、kind = reader と新しい列・表が入る
+// 契約 V-1・V-11 u10: 0006 までの状態に行を入れてから 0009 を当て、cost_ledger の行・索引 4 つの定義が同じで、kind = reader と新しい列・表が入る
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
@@ -31,7 +31,7 @@ describe('migration 0008', () => {
     expect(idxBefore).toHaveLength(4);
     const versionBefore = db.prepare('SELECT * FROM material_versions').all();
 
-    db.exec(sql('0008_review_auto.sql'));
+    db.exec(sql('0009_review_auto.sql'));
 
     expect(db.prepare('SELECT * FROM cost_ledger ORDER BY id').all()).toEqual(before);
     expect(idx()).toEqual(idxBefore);

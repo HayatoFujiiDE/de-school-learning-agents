@@ -61,7 +61,7 @@ const approve = (mid: string, vid: string, wid: string) =>
   );
 
 beforeEach(() => {
-  // 契約 V-1: review_decisions.machine_gate など 0008 までの列を使うので、全部の migration を当てた DB で確かめる
+  // 契約 V-1: review_decisions.machine_gate など 0009 までの列を使うので、全部の migration を当てた DB で確かめる
   db = migratedDb();
 });
 

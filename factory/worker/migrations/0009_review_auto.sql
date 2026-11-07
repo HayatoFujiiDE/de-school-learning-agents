@@ -1,4 +1,4 @@
--- 契約 §V-1（確認を機械に寄せる・子どもの画面で見る）
+-- 契約 §V-1（確認を機械に寄せる・子どもの画面で見る。0008 はお題の run の観測 contract-T v2.8）
 -- 1. cost_ledger.kind に 'reader'（読み手係 §V-4）を足す。CHECK は ALTER できないので 0006 と同じ手順で作り直す。
 --    DROP TABLE で既存の索引 4 つ（idx_cost_day / idx_cost_ledger_vb / idx_cost_ledger_image_job / idx_cost_ledger_topic）も消えるので、同じ定義で作り直す
 CREATE TABLE cost_ledger_v6 (
