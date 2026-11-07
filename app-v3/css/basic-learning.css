@@ -1,0 +1,22 @@
+/* 教材入口だけを追加。既存マップの寸法・遷移は変更しない。 */
+.bl-library{margin:24px 0;padding:24px;border:1px solid var(--line);border-radius:var(--radius);background:var(--white)}
+.bl-library-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:48px;cursor:pointer}
+.bl-library-head:before{content:'＋';font-size:20px;color:var(--green)}
+.bl-library[open]>.bl-library-head:before{content:'−'}
+.bl-library-head:focus-visible{outline:3px solid var(--green);outline-offset:5px}
+.bl-library-title{font-size:20px;font-weight:700}.bl-library-range{font-size:13px;color:var(--muted)}
+.bl-library h2,.bl-library h3{margin:0}
+.bl-library h2{font-size:20px}.bl-library h3{font-size:17px}
+.bl-preview{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:3px 7px}
+.bl-library-intro{margin:10px 0 20px;line-height:1.8}
+.bl-subjects{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+.bl-subject{min-width:0;padding:18px;background:var(--paper);border-radius:12px}
+.bl-grades{list-style:none;padding:0;margin:14px 0 0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.bl-grade{display:flex;align-items:center;justify-content:center;min-height:48px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--white);color:var(--ink);font-weight:600;text-decoration:none;text-align:center}
+.bl-grade:hover{border-color:var(--green);background:var(--green-soft)}
+.bl-grade:focus-visible,.bl-course-link:focus-visible{outline:3px solid var(--green);outline-offset:3px}
+.bl-save-note,.bl-map-note{font-size:13px;color:var(--muted);line-height:1.8}
+.bl-save-note{margin:18px 0 0}.bl-map-note{margin:12px 0 18px}
+.bl-course-link{color:var(--green);text-underline-offset:3px;display:inline-flex;align-items:center;min-height:48px;padding:8px 0;line-height:1.6}
+@media(max-width:1120px){.bl-subjects{grid-template-columns:1fr}.bl-grades{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:450px){.bl-library{padding:16px}.bl-subject{padding:14px}.bl-grades{grid-template-columns:repeat(2,minmax(0,1fr))}}

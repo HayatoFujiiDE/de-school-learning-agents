@@ -770,7 +770,7 @@
     return (head ? head + ' ' : '') + sc.text + (sc.with ? T('mp_with', { name: sc.with }) : '');
   }
   function basicLine(n) {
-    if (!n.material) return T('mp_no_material');
+    if (!n.material) return DES.basicLearning.href(n.sub, n.grade) ? DES.basicLearning.available() : T('mp_no_material');
     var d = lastDate(MPD.unit(n.code), MPD.progress);
     return d ? T('mp_basic_done', { date: d }) : T('mp_basic_next');
   }
@@ -915,7 +915,7 @@
       H('div', { class: 'page-head mp-head' }, [H('div', null, [H('h1', { tabindex: '-1', 'data-fk': 'mp-h' }, T('map')),
         H('p', null, view === 'concepts' && tab === 'links' ? [H('span', { class: 'mp-ref' }, T('mp_ref_view')), H('span', null, T('mp_head_sub'))] : T('mp_head_sub'))])]),
       switches(tab, view, tab === 'basics')
-    ])];
+    ]), DES.basicLearning.note()];
   }
 
   // ---------- 線の見本（凡例とチップの中。色だけに頼らず形で分ける: 基本 = 細い実線 / これから作れそう = 破線） ----------
@@ -1472,8 +1472,10 @@
         if (after.length) ord.push(H('p', { class: 'mp-ord-k' }, T('mp_d_after')), relList(after.map(function (id) { return relBtn(g, id, view); })));
         kids.push(sec(T('mp_k_order'), ord));
       }
-      // 算数は「基礎学習で見る」、他教科は教材がこれからの 1 文（リンクなし）
+      // マップ内の見本と、別ページで学ぶ教材の入口を分ける。
       if (n.material) ops.push(H('a', { class: 'btn small orange', href: '#map/u/' + n.code, 'data-action': 'mp-unit', 'data-id': n.code }, [H('span', null, T('mp_see_basic'))]));
+      var materialLink = DES.basicLearning.link(n.sub, n.grade, 'btn small');
+      if (materialLink) ops.push(materialLink);
       // 全体の中で見る（§AH-2）: その単元だけを目立たせて全体の画面へ（札が 1 つだけ飛ぶ）
       ops.push(btn(T('mp_inall'), 'mp-inall', { id: n.code, icon: 'grid' }));
       ops.push(btn(T('mp_talk'), 'mp-talk', { id: n.id, icon: 'chat' }));
@@ -1877,10 +1879,10 @@
       touchMark(g, c, u)
     ]);
   }
-  // 理科・国語・社会の単元の札（点線の枠・「基礎学習の教材はこれから」）。マスから来た時のフォーカス先（tabindex=-1）
+  // 他教科の札。materialはマップの見本計算用のまま、教材入口は独立して決める。
   function extCard(g, u, c) {
     return H('li', { class: 'mpo-xcard', 'data-unit': u.code }, [H('div', { class: 'mpo-xin', tabindex: '-1', 'data-fk': 'mpo-x:' + u.code, role: 'group', 'aria-label': pick(u.name) }, [
-      H('span', { class: 'mpo-xname' }, pick(u.name)), H('span', { class: 'mpo-xline' }, T('mp_no_material')), touchMark(g, c, u)
+      H('span', { class: 'mpo-xname' }, pick(u.name)), DES.basicLearning.link(u.sub, u.grade) || H('span', { class: 'mpo-xline' }, T('mp_no_material')), touchMark(g, c, u)
     ])]);
   }
   function basicsKey(cov, ov) { return [DES.mode(), ov.pct, cov.units.map(function (c) { return c.id + ':' + c.state + ':' + c.madeIds.join(','); }).join('|')].join('#'); }
@@ -1891,13 +1893,13 @@
     if (cur && cur._key === key) return;
     cov.units.forEach(function (c) { by[c.id] = c; });
     var kids = head('basics');
+    kids.splice(1, 0, DES.basicLearning.render());
     kids.push(H('section', { class: 'mpo-all', 'aria-labelledby': 'mpo-h' }, [H('h2', { id: 'mpo-h' }, T('mp_all_h')), overviewBand(cov), overviewLegend(cov)]));
     // 算数（§Y-3 の作り）: 全体 % は見出し横に「算数 4 年の基礎学習」と対象を明記
     var math = [
       H('div', { class: 'mp-prog-head' }, [H('h2', { id: 'mp-prog-h' }, pick(MPD.SUBJECT)), H('span', { class: 'mp-overall' }, T('mp_overall', { pct: ov.pct }))]),
       H('p', { class: 'mp-legend' }, [H('span', { class: 'mp-sq p', 'aria-hidden': 'true' }), H('span', { class: 'mp-sq e', 'aria-hidden': 'true' }), H('span', null, T('mp_legend'))])
     ];
-    if (isBlank(MPD.units, MPD.progress)) math.push(H('p', { class: 'mp-zero' }, T('mp_zero')));
     MPD.areas.forEach(function (area) {
       math.push(H('section', { class: 'mp-area', 'aria-labelledby': 'mp-area-' + area.id }, [
         H('h3', { id: 'mp-area-' + area.id }, pick(area.name)),
@@ -1952,11 +1954,12 @@
     main.appendChild(H('div', { class: 'map-page mp-unit', 'data-view': 'unit', 'data-unit': u.code }, [
       H('p', { class: 'mp-back' }, [H('a', { class: 'link-btn', href: from ? viewHash(from) : '#map/basics', 'aria-label': from ? T('mp_back_to', { view: backLabel }) : T('mp_back_basics') }, [H('span', { 'aria-hidden': 'true' }, '←'), H('span', null, backLabel)])]),
       H('div', { class: 'mp-headrow is-unit' }, [H('h1', { tabindex: '-1', 'data-fk': 'mp-uh:' + u.code }, pick(u.name)), switches('basics')]),
+      DES.basicLearning.note(),
       H('p', { class: 'mp-where' }, T('mp_unit_where', { area: pick(area.name) })),
       H('div', { class: 'mp-ubar is-head' }, [band(u), H('span', { class: 'mp-pct' }, pr.pct + '%')]),
       H('section', { class: 'mp-sec', 'aria-labelledby': 'mp-items-h' }, [H('h2', { id: 'mp-items-h' }, T('mp_items_h')), items]),
       H('section', { class: 'mp-sec', 'aria-labelledby': 'mp-ulinks-h' }, [H('h2', { id: 'mp-ulinks-h' }, T('mp_links_h'))].concat(linkKids)),
-      H('div', { class: 'mp-ops' }, [btn(T('mp_start_basic'), 'mp-start', { kls: 'orange', id: 'unit:' + u.code }), btn(T('mp_talk'), 'mp-talk', { id: 'unit:' + u.code, icon: 'chat' })])
+      H('div', { class: 'mp-ops' }, [DES.basicLearning.link(u.sub, u.grade, 'btn orange'), btn(T('mp_talk'), 'mp-talk', { id: 'unit:' + u.code, icon: 'chat' })])
     ]));
   }
 
@@ -2702,7 +2705,6 @@
     if (window.location.hash !== h) window.location.hash = h;
   };
   A['mp-show'] = function (el) { MP.show(el.getAttribute('data-id')); };
-  A['mp-start'] = function () { DES.app.toast(T('mp_start_toast')); };
 
   // Esc: しるしの見方 → 詳細パネル（選択）→ 大きく見る の順に 1 つずつ閉じる（§AC-4 / AC-6）。窓の大きさが変わったら枠の高さ・流れの線も
   MP.bind = function () {
