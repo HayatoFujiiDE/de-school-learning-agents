@@ -71,6 +71,7 @@ export const TOPIC_REASON_LABELS: Record<string, string> = {
   // run の失敗の理由（v2.6。記録のタブ）
   save_failed: 'できたお題を保存できませんでした（費用は実際の額だけ）',
   abandoned: '途中で止まりました',
+  max_tokens: '書いている途中で長さの上限に当たりました',
   ...Object.fromEntries(Object.entries(TOPIC_FLAG_LABELS).map(([k, v]) => [`flagged:${k}`, v])),
 };
 

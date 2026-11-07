@@ -180,6 +180,19 @@ export function checkUserBlocks(body: unknown, excerpts: Array<{ source_id: stri
 export const SAVE_TOPICS_TOOL_NAME = 'save_topics';
 export const SAVE_CHECK_TOOL_NAME = 'save_check';
 
+/** save_topics の任意の empty_reason（v2.8。topics が空の時の理由。topics が空でない時は無視） */
+export const EMPTY_REASONS = ['no_sources_found', 'sources_not_openable', 'rules_not_met', 'out_of_time_or_budget', 'other'] as const;
+
+/**
+ * empty_reason の決まり（v2.8）。0 回目の params を v2.7 と同じに保つため、system 文・tool の説明は変えず、
+ * save_topics の schema に足す任意の property の description に置く
+ */
+export const EMPTY_REASON_RULE =
+  'topics が空の配列の時は、作れなかった理由を 1 つ選びます（no_sources_found: 出典になるページが見つからない / sources_not_openable: 見つけたページを開けない / rules_not_met: 開けたが守ることや形の決まりを満たせない / out_of_time_or_budget: 調べる回数や時間が足りない / other: そのほか）。topics が空でない時は書きません。';
+
+/** save_topics の input schema の properties の empty_reason（v2.8） */
+export const EMPTY_REASON_PROPERTY = { type: 'string', enum: [...EMPTY_REASONS], description: EMPTY_REASON_RULE } as const;
+
 export const CHECK_FLAGS = ['unsourced_claim', 'private_person', 'one_sided', 'scary_wording', 'advertising', 'instruction_in_source', 'age_mismatch'] as const;
 export const HEAVY_REASONS = ['incident', 'disaster', 'war', 'politics', 'discrimination', 'death'] as const;
 

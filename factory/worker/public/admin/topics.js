@@ -45,7 +45,8 @@
     bad_origin: '送信元が正しくありません',
     queue_unavailable: '作る係に送れませんでした。少し後でもう一度押してください',
     save_failed: 'できたお題を保存できませんでした（費用は実際の額だけ）',
-    abandoned: '途中で止まりました'
+    abandoned: '途中で止まりました',
+    max_tokens: '書いている途中で長さの上限に当たりました'
   };
 
   // ---- 純関数 ----
@@ -170,7 +171,7 @@
       var pre = c.slice(0, i), post = c.slice(i + 1);
       if (has(r, pre)) return r[pre] + '（' + (has(r, post) ? r[post] : post) + '）';
     }
-    if (c === 'save_failed' || c === 'abandoned') return ERR_TEXT[c]; // run の失敗の理由（表示名が無い時。v2.6）
+    if (c === 'save_failed' || c === 'abandoned' || c === 'max_tokens') return ERR_TEXT[c]; // run の失敗の理由（表示名が無い時。v2.6・v2.8）
     return c;
   }
 

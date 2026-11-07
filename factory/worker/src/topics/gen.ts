@@ -5,6 +5,8 @@
 // v2.6: 取る（reserveTopicRun）と走る（runTaken）を分けた。cron は続けて呼ぶ（runTopicRun）。手動は route が取り、queue の受け手が走る（executeTopicRun）。
 // v2.7: 呼び出しは 1 回 + 続き（pause_turn・結果の無いサーバーツール・end_turn への催促 1 回）を合計 3 回まで。回数・締め切り・費用（取り置き額）の 3 つで有限。
 //       呼び出しごとに {at:'topic_call'} を 1 行（数と種類だけ。本文は出さない）。台帳は実額で精算する。
+// v2.8: run を閉じる時に topic_runs.diag_json へ呼び出しごとの数と保存の数・理由コードを書く（diag.ts。閉じる文と同じ UPDATE）。
+//       stop_reason が max_tokens の応答は save_topics があっても使わず failed: max_tokens（台帳は実額）。
 
 import type { Message, MessageCreateParamsNonStreaming, MessageParam, Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { PortError, type CallOpts, type FactoryPort } from '../anthropic';
@@ -13,9 +15,10 @@ import { cfg, type Env } from '../env';
 import { TOPIC_FEEDS } from '../generated/topic-sources';
 import { microToCents, sonnetMicroDollars, WEB_SEARCH_CENTS } from '../ledger';
 import { acceptableFeedType, parseFeed } from '../scout';
+import { buildRunDiag, type DiagCall, type RunDiagInput } from './diag';
 import { checkSourceUrl, quoteOutcome } from './fetch-source';
 import { TOPIC_KIND_LABELS, type TopicKind } from './locale';
-import { EXTEND_KIND_LABEL, genSystem, genUserBlocks, SAVE_TOPICS_TOOL_NAME, type FeedHeadline } from './prompts';
+import { EMPTY_REASON_PROPERTY, EXTEND_KIND_LABEL, genSystem, genUserBlocks, SAVE_TOPICS_TOOL_NAME, type FeedHeadline } from './prompts';
 import { addDays, isRealDate, TOPIC_BODY_JSON_SCHEMA, validateTopicBody, type TopicBody } from './schema';
 import {
   deriveReserveStmt,
@@ -239,8 +242,8 @@ export function isPendingServerTool(content: readonly unknown[]): boolean {
 
 const SAFE_CODE = /^[a-z_]{1,40}$/;
 
-/** 1 回の呼び出しのログの数（本文・URL は入れない。種類の名前と数だけ） */
-export function topicCallStats(msg: Pick<Message, 'content' | 'usage' | 'stop_reason'>): {
+/** 1 回の呼び出しのログの数（本文・URL は入れない。種類の名前と数だけ）。fallback は形の合わない名前の代わり（ログは 'unknown'・diag は 'other'） */
+export function topicCallStats(msg: Pick<Message, 'content' | 'usage' | 'stop_reason'>, fallback = 'unknown'): {
   stop_reason: string;
   in: number;
   out: number;
@@ -259,18 +262,18 @@ export function topicCallStats(msg: Pick<Message, 'content' | 'usage' | 'stop_re
   let fetchUses = 0;
   for (const raw of msg.content as unknown as RawBlock[]) {
     if (!raw || typeof raw !== 'object') continue;
-    const t = typeof raw.type === 'string' && SAFE_CODE.test(raw.type) ? raw.type : 'unknown';
+    const t = typeof raw.type === 'string' && SAFE_CODE.test(raw.type) ? raw.type : fallback;
     blocks[t] = (blocks[t] ?? 0) + 1;
     if (raw.type === 'server_tool_use' && raw.name === 'web_fetch') fetchUses++;
     if (raw.type === 'web_fetch_tool_result') {
       const c = raw.content as { type?: unknown; error_code?: unknown } | null;
       if (c?.type === 'web_fetch_tool_result_error') {
-        const code = typeof c.error_code === 'string' && SAFE_CODE.test(c.error_code) ? c.error_code : 'unknown';
+        const code = typeof c.error_code === 'string' && SAFE_CODE.test(c.error_code) ? c.error_code : fallback;
         fetchErrors[code] = (fetchErrors[code] ?? 0) + 1;
       }
     }
   }
-  const stop = typeof msg.stop_reason === 'string' && SAFE_CODE.test(msg.stop_reason) ? msg.stop_reason : String(msg.stop_reason === null ? 'null' : 'unknown');
+  const stop = typeof msg.stop_reason === 'string' && SAFE_CODE.test(msg.stop_reason) ? msg.stop_reason : msg.stop_reason === null ? 'null' : fallback;
   return {
     stop_reason: stop,
     in: n(u.input_tokens),
@@ -301,15 +304,17 @@ export function classifyCallError(e: unknown): { code: string; noCharge: boolean
 // ---------------------------------------------------------------------------------------------
 // 本体
 
-function runFinishStmt(p: { runId: string; token: string; now: string; status: 'done' | 'failed'; error: string | null; made: number; dropped: number }): Stmt {
+/** run を閉じる文。diag は v2.8 の観測（buildRunDiag の値。null なら列は NULL）。同じ UPDATE に入れるので、diag で閉じ方は変わらない */
+function runFinishStmt(p: { runId: string; token: string; now: string; status: 'done' | 'failed'; error: string | null; made: number; dropped: number; diag: string | null }): Stmt {
   return stmt(
-    `UPDATE topic_runs SET status = ?, error = ?, made = ?, dropped = ?, cents = COALESCE((SELECT cents FROM cost_ledger WHERE kind = 'topic' AND ref_id = ?), 0), updated_at = ?
+    `UPDATE topic_runs SET status = ?, error = ?, made = ?, dropped = ?, cents = COALESCE((SELECT cents FROM cost_ledger WHERE kind = 'topic' AND ref_id = ?), 0), diag_json = ?, updated_at = ?
      WHERE id = ? AND status = 'calling' AND token = ? AND lease_until > ?`,
     p.status,
     p.error,
     p.made,
     p.dropped,
     genLedgerRef(p.runId),
+    p.diag,
     p.now,
     p.runId,
     p.token,
@@ -430,7 +435,7 @@ export async function executeTopicRun(
     taken = { runId, token: fresh, slotDay: row.slot_day, today: row.slot_day, parent };
   } catch (e) {
     console.log(JSON.stringify({ at: 'topic_run', run_id: runId, input_error: e instanceof Error ? e.name : 'error' }));
-    const run = await closeFailed(db, runId, current, 'input_failed', { noCharge: true });
+    const run = await closeFailed(db, runId, current, 'input_failed', { noCharge: true }, 0, 0, undefined, buildRunDiag(emptyDiag()));
     return run ? { status: 'failed', run } : { status: 'stale' };
   }
   return runTaken(env, port, req, taken, { deadline: opts.deadline, fetchImpl, now: opts.now });
@@ -450,6 +455,8 @@ async function closeFailed(
   dropped = 0,
   /** run の終わりのログに足す数（v2.7: 呼び出しの回数と実額） */
   extra?: { turns: number; cents: number },
+  /** v2.8 の観測（buildRunDiag の値） */
+  diag: string | null = null,
 ): Promise<RunDbRow | null> {
   const ref = genLedgerRef(runId);
   const t = nowIso();
@@ -458,7 +465,7 @@ async function closeFailed(
   // 確定は実額そのもの（v2.7。取り置き額で丸めない。超えた時の topic_over_reserve は今のまま）
   if (charge.noCharge) stmts.push(ledgerSettleActualStmt(ref, 0, P));
   else if (charge.actualCents !== undefined) stmts.push(overReserveStmt(ref, charge.actualCents, t, P), ledgerSettleActualStmt(ref, charge.actualCents, P));
-  stmts.push(runFinishStmt({ runId, token, now: t, status: 'failed', error: code, made, dropped }));
+  stmts.push(runFinishStmt({ runId, token, now: t, status: 'failed', error: code, made, dropped, diag }));
   try {
     await conditionalBatch(db, stmts);
   } catch (e) {
@@ -469,6 +476,9 @@ async function closeFailed(
   console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: run?.status ?? null, error: run?.error ?? null, ...(extra ?? {}) }));
   return run;
 }
+
+/** モデルを呼ぶ前に閉じる時の観測（v2.8。呼び出し 0 回） */
+const emptyDiag = (): RunDiagInput => ({ turns: 0, nudged: false, calls: [], stop: null, saveCalled: false, offered: 0, droppedReasons: {} });
 
 const RUN_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const PARENT_ID_RE = /^tp_[A-Za-z0-9_-]{1,100}$/;
@@ -582,9 +592,19 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
   const { runId, token, slotDay, today, parent } = taken;
   const ref = genLedgerRef(runId);
 
+  // 呼び出しの状態（v2.7）。v2.8 の観測（diag_json）もここから組み立てるので、閉じるどの経路より前に置く
+  let nudged = false;
+  let turns = 0;
+  /** save_topics が無いまま止めた理由（no_output のログ。cost_cap だけは run の error にもする）/ max_tokens（v2.8） */
+  let stopWhy: string | null = null;
+  const diagCalls: DiagCall[] = [];
+  const save: Pick<RunDiagInput, 'saveCalled' | 'offered' | 'droppedReasons' | 'emptyReason'> = { saveCalled: false, offered: 0, droppedReasons: {} };
+  /** 今の観測（v2.8）。組み立ての失敗は null（列は NULL・閉じ方は変わらない） */
+  const diagNow = (): string | null => buildRunDiag({ turns, nudged, calls: diagCalls, stop: stopWhy, ...save });
+
   /** failed で閉じる（closeFailed）。台帳: noCharge なら 0・actualCents があれば実額・どちらでもなければ取り置き額のまま */
   const finishFailed = async (code: string, noCharge: boolean, made = 0, dropped = 0, actualCents?: number, extra?: { turns: number; cents: number }): Promise<RunOutcome> => {
-    const run = (await closeFailed(db, runId, token, code, { noCharge, actualCents }, made, dropped, extra))!;
+    const run = (await closeFailed(db, runId, token, code, { noCharge, actualCents }, made, dropped, extra, diagNow()))!;
     return { status: 'failed', run };
   };
 
@@ -645,7 +665,13 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
           name: SAVE_TOPICS_TOOL_NAME,
           description:
             'できあがったお題を保存します。最後に 1 回だけ呼びます。topics は本文の配列で、形は schema のとおりです。出典（sources）は web_fetch で開けたページだけで、quote はそのページの文を一字も変えずに写します。',
-          input_schema: { type: 'object', additionalProperties: false, required: ['topics'], properties: { topics: { type: 'array', items: TOPIC_BODY_JSON_SCHEMA } } } as unknown as Tool['input_schema'],
+          // v2.8: 任意の empty_reason（topics が空の時の理由。enum。決まりの文は property の description）
+          input_schema: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['topics'],
+            properties: { topics: { type: 'array', items: TOPIC_BODY_JSON_SCHEMA }, empty_reason: EMPTY_REASON_PROPERTY },
+          } as unknown as Tool['input_schema'],
           // strict は付けない: 本番で 400「The compiled grammar is too large」（v2.5 の裁定。CONTRACT-factory §T 末尾）。
           // 形は保証されないので、Worker の validateTopicBody が 1 本ずつ確かめ、合わない本は捨てる（dropped）
           // v2.7: tools の最後に cache_control（tools の前半をキャッシュする）。tools は続きでも変えない（変えるとキャッシュが全部無効）
@@ -682,10 +708,6 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
   const contents: unknown[][] = [];
   let totalCents = 0;
   let lastCents = 0;
-  let nudged = false;
-  let turns = 0;
-  /** save_topics が無いまま止めた理由（no_output のログ。cost_cap だけは run の error にもする） */
-  let stopWhy: string | null = null;
   for (let turn = 0; ; turn++) {
     const callParams: MessageCreateParamsNonStreaming = turn === 0 ? params : { ...params, messages: [...messages] };
     const callOpts: CallOpts = { deadline: Math.min(opts.deadline, Date.now() + TOPIC_GEN_TIMEOUT_MS), maxTimeoutMs: TOPIC_GEN_TIMEOUT_MS, maxRetries: 0 };
@@ -715,18 +737,31 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
     const content = Array.isArray(msg.content) ? (msg.content as unknown[]) : [];
     contents.push(content);
     messages.push({ role: 'assistant', content: content as MessageParam['content'] });
+    const ms = Date.now() - t0;
     try {
-      console.log(JSON.stringify({ at: 'topic_call', run_id: runId, turn, ...topicCallStats({ ...msg, content: content as Message['content'] }), ms: Date.now() - t0 }));
+      console.log(JSON.stringify({ at: 'topic_call', run_id: runId, turn, ...topicCallStats({ ...msg, content: content as Message['content'] }), ms }));
     } catch {
       // ログの組み立ての失敗で run を止めない
     }
-    if (content.some((b) => (b as RawBlock)?.type === 'tool_use' && (b as RawBlock).name === SAVE_TOPICS_TOOL_NAME)) break;
+    try {
+      // v2.8 の観測（blocks は入れない。知らない名前は 'other'）
+      const { blocks: _blocks, ...st } = topicCallStats({ ...msg, content: content as Message['content'] }, 'other');
+      diagCalls.push({ turn, ...st, ms });
+    } catch {
+      // 観測の組み立ての失敗で run を止めない
+    }
     const stop = msg.stop_reason;
+    // v2.8: 出力の上限で止まった応答は、save_topics の tool_use があっても途中で切れているので使わない（failed: max_tokens）
+    if (stop === 'max_tokens') {
+      stopWhy = 'max_tokens';
+      break;
+    }
+    if (content.some((b) => (b as RawBlock)?.type === 'tool_use' && (b as RawBlock).name === SAVE_TOPICS_TOOL_NAME)) break;
     let next: 'continue' | 'nudge' | null = null;
     if (stop === 'pause_turn' || (stop === 'tool_use' && isPendingServerTool(content))) next = 'continue';
     else if (stop === 'end_turn' && !nudged) next = 'nudge';
     if (next === null) {
-      // max_tokens / refusal / 催促の後の end_turn / その他: 続けない
+      // refusal / 催促の後の end_turn / その他: 続けない（max_tokens は上で failed: max_tokens）
       stopWhy = `stop_${typeof stop === 'string' && SAFE_CODE.test(stop) ? stop : 'unknown'}`;
       break;
     }
@@ -761,16 +796,26 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
     const allContent = contents.flat();
     let call: { input?: unknown } | undefined;
     for (const b of allContent) if ((b as RawBlock)?.type === 'tool_use' && (b as RawBlock).name === SAVE_TOPICS_TOOL_NAME) call = b as { input?: unknown };
+    const topicsOf = (c: { input?: unknown } | undefined): unknown[] =>
+      Array.isArray((c?.input as { topics?: unknown } | undefined)?.topics) ? ((c!.input as { topics: unknown[] }).topics as unknown[]) : [];
+    if (call) {
+      // v2.8 の観測: 呼んだか・入っていた本数（max_tokens の時も数えるだけ。中身は使わない）
+      save.saveCalled = true;
+      save.offered = topicsOf(call).length;
+    }
     const t = nowIso();
     const P = runPred(runId, token, t);
     const settle = [overReserveStmt(ref, actual, t, P), ledgerSettleActualStmt(ref, actual, P)];
-    if (!call) {
-      const error = stopWhy === 'cost_cap' ? 'cost_cap' : 'no_output';
+    if (!call || stopWhy === 'max_tokens') {
+      // v2.8: max_tokens は save_topics があっても使わない（途中で切れた入力を topics: [] と読まない）。台帳は実額
+      const error = stopWhy === 'max_tokens' ? 'max_tokens' : stopWhy === 'cost_cap' ? 'cost_cap' : 'no_output';
       console.log(JSON.stringify({ at: 'topic_run', run_id: runId, no_output: stopWhy ?? 'unknown', ...runLog }));
-      await conditionalBatch(db, [...settle, runFinishStmt({ runId, token, now: t, status: 'failed', error, made: 0, dropped: 0 })]);
+      await conditionalBatch(db, [...settle, runFinishStmt({ runId, token, now: t, status: 'failed', error, made: 0, dropped: 0, diag: diagNow() })]);
       saved = { noOutput: true };
     } else {
-      const items = Array.isArray((call.input as { topics?: unknown } | undefined)?.topics) ? ((call.input as { topics: unknown[] }).topics as unknown[]) : [];
+      const items = topicsOf(call);
+      // v2.8: topics が空の時だけ empty_reason を観測に入れる（空でない時は無視。知らない値は diag が 'other' にする）
+      if (items.length === 0) save.emptyReason = (call.input as { empty_reason?: unknown } | undefined)?.empty_reason;
       const fetched = genFetchTexts(allContent);
       const max = runMaxCount(req);
       const childSlot = addDays(today, 1);
@@ -785,6 +830,7 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
         const why = accepted.length >= max ? ['over_max'] : !kindOk(k) ? ['kind_mismatch'] : validateTopicBody(raw, { slotDay: sd });
         if (why.length > 0) {
           console.log(JSON.stringify({ at: 'topic_run', run_id: runId, dropped_index: i + 1, reasons: why.slice(0, 20) }));
+          for (const w of why.slice(0, 20)) save.droppedReasons[w] = (save.droppedReasons[w] ?? 0) + 1;
           dropped++;
           return;
         }
@@ -807,7 +853,7 @@ async function runTaken(env: Env, port: FactoryPort, req: RunRequest, taken: Tak
       for (const a of accepted) inserts.push(...(await insertTopicStmts(a, t, P)));
       const made = accepted.length;
       const status = made > 0 ? 'done' : 'failed';
-      const r = await conditionalBatch(db, [...inserts, ...settle, runFinishStmt({ runId, token, now: t, status, error: made > 0 ? null : 'no_valid_topic', made, dropped })]);
+      const r = await conditionalBatch(db, [...inserts, ...settle, runFinishStmt({ runId, token, now: t, status, error: made > 0 ? null : 'no_valid_topic', made, dropped, diag: diagNow() })]);
       saved = { noOutput: false, ok: r.ok, made, dropped };
     }
   } catch (e) {
