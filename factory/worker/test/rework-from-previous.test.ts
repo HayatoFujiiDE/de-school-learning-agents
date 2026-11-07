@@ -426,7 +426,8 @@ function ingestPort(outputs: Map<string, Uint8Array>, o: { events?: unknown[]; p
     id: `file_${i}`,
     filename: p.slice(p.lastIndexOf('/') + 1),
     size_bytes: outputs.get(p)!.byteLength,
-    created_at: new Date(Date.now() - 1000 + i).toISOString(),
+    // 職人の出力は session を作った後に作られる（session より前のファイルは §S-8 の resources として出力から外すため。2026-11-07）
+    created_at: new Date(Date.now() + 60_000 + i).toISOString(),
   }));
   const bodies = new Map(metas.map((m, i) => [m.id, [...outputs.values()][i]]));
   const parentReads: string[] = [];

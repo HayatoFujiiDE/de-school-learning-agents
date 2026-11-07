@@ -643,6 +643,15 @@ export async function cancelJob(env: Env, port: FactoryPort, jobId: string): Pro
 // reingest（§B-4-e）: 取り込みで失敗した job を、session を作らずに取り込み直す。failed → running の唯一の経路（§C-2、§R-43）
 
 /** 述語（§B-4-e 1）。CAS の WHERE にもそのまま入れる */
+/** files.list の created_at が session の作成より前か（§S-8 の resources を出力から外す）。どちらかが読めなければ false（今までどおり数える） */
+export function isBeforeSession(fileCreatedAt: string | null | undefined, sessionCreatedAt: string | null | undefined): boolean {
+  if (!fileCreatedAt || !sessionCreatedAt) return false;
+  const f = Date.parse(fileCreatedAt);
+  const s = Date.parse(sessionCreatedAt);
+  if (!Number.isFinite(f) || !Number.isFinite(s)) return false;
+  return f < s;
+}
+
 export const REINGEST_PREDICATE_SQL = "status = 'failed' AND error = 'invalid_outputs' AND session_id IS NOT NULL";
 
 /** 同じ素材に、この job（別名 self）より created_at が新しい job が無い（§B-4-e 1。後の注文を古い成果物で上書きしない） */
@@ -1703,6 +1712,9 @@ class Reconciler {
           await this.extend();
           const p = await this.port.listFilesPage(sid, list.cursor, this.call);
           for (const f of p.data) {
+            // §S-8 の作り直しで session に渡した前の版のファイル（resources）も files.list に出る。session を作る前に作られたものは出力ではないので数えない
+            // （2026-11-07: 渡したファイルと職人が書き直したファイルが同じ名前で並び、duplicate_basename で作り直しが全部 failed になっていた）
+            if (isBeforeSession(f.created_at, job.session_created_at)) continue;
             const path = normalizeOutputPath(f.filename);
             if (path) list.items.push({ file_id: f.id, filename: path, size: f.size_bytes, created_at: f.created_at });
           }

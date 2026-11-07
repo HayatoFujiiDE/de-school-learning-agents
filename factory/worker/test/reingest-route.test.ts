@@ -23,7 +23,7 @@ let r2: Map<string, Uint8Array>;
 let env: Env;
 const sent: string[] = [];
 
-function makePort(outputs: Map<string, Uint8Array>): FactoryPort {
+function makePort(outputs: Map<string, Uint8Array>, seeded: Map<string, Uint8Array> = new Map()): FactoryPort {
   const metas: FileMeta[] = [...outputs.keys()].map((p, i) => ({
     id: `file_${i}`,
     filename: basename(p), // 本物の Files API はディレクトリを落とす
@@ -31,6 +31,12 @@ function makePort(outputs: Map<string, Uint8Array>): FactoryPort {
     created_at: new Date(Date.parse(T) + i).toISOString(),
   }));
   const bodies = new Map(metas.map((m, i) => [m.id, [...outputs.values()][i]]));
+  // §S-8 で session に渡した前の版のファイル: session を作る前（T より前）の created_at で files.list に出る（本番 2026-11-07 の実測）
+  [...seeded.entries()].forEach(([p, b], i) => {
+    const m = { id: `seed_${i}`, filename: basename(p), size_bytes: b.byteLength, created_at: new Date(Date.parse(T) - 1000 + i).toISOString() };
+    metas.push(m);
+    bodies.set(m.id, b);
+  });
   const events = [
     { id: 'sevt_1', type: 'user.define_outcome' },
     { id: 'sevt_2', type: 'span.outcome_evaluation_end', result: 'satisfied', explanation: 'ok' },
@@ -181,6 +187,34 @@ describe('POST /api/jobs/:id/reingest', () => {
 });
 
 describe('listed: files.list に同じ filename が 2 件（§B-4-d listed・§R-45 (a)）', () => {
+  it('§S-8: session を作る前に作られたファイル（前の版の resources）は出力に数えない。同じ名前が並んでも duplicate_basename にしない', async () => {
+    db.prepare(
+      "INSERT INTO materials (id, slug, title, kinds_json, work_status, publish_status, brief_md, created_at, updated_at) VALUES ('m1', 'm-1', 't', '[3]', 'making', 'none', 'b', ?, ?)",
+    ).run(T, T);
+    db.prepare(
+      `INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, session_id, session_created_at, brief_md, created_at, updated_at)
+       VALUES ('j1', 'm1', 'rework', 'claude-opus-5-5', 'making', 'running', 'sesn_1', ?, 'b', ?, ?)`,
+    ).run(T, T, T);
+    const outputs = goodFiles();
+    const seeded = new Map([...outputs.entries()].map(([p]) => [p, new TextEncoder().encode('前の版')]));
+    const result = await reconcileJob(env, makePort(outputs, seeded), 'j1', { deadline: Date.now() + 25_000 });
+    expect(result).not.toBe('failed:invalid_outputs');
+    expect(one(db, "SELECT error FROM factory_jobs WHERE id = 'j1'").error).toBeNull();
+  });
+
+  it('§S-8: session_created_at が無い時は今までどおり数える（前の版のファイルと同じ名前なら duplicate_basename）', async () => {
+    db.prepare(
+      "INSERT INTO materials (id, slug, title, kinds_json, work_status, publish_status, brief_md, created_at, updated_at) VALUES ('m1', 'm-1', 't', '[3]', 'making', 'none', 'b', ?, ?)",
+    ).run(T, T);
+    db.prepare(
+      `INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, session_id, brief_md, created_at, updated_at)
+       VALUES ('j1', 'm1', 'rework', 'claude-opus-5-5', 'making', 'running', 'sesn_1', 'b', ?, ?)`,
+    ).run(T, T);
+    const outputs = goodFiles();
+    const seeded = new Map([['adapt-rules.md', new TextEncoder().encode('前の版')]]);
+    expect(await reconcileJob(env, makePort(outputs, seeded), 'j1', { deadline: Date.now() + 25_000 })).toBe('failed:invalid_outputs');
+  });
+
   it('新しい方に寄せずに failed（invalid_outputs、last_error=duplicate_basename:<name>）。R2 には何も置かない', async () => {
     db.prepare(
       "INSERT INTO materials (id, slug, title, kinds_json, work_status, publish_status, brief_md, created_at, updated_at) VALUES ('m1', 'm-1', 't', '[3]', 'making', 'none', 'b', ?, ?)",
