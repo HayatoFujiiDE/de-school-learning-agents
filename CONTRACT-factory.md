@@ -1390,3 +1390,14 @@ v3.5（2026-11-04 段階 0 の実測。最初の本物の session sesn_01Jfui3ap
 ## §AK 権利の門番: 外から来た資料は、機械が確かめた権利の記録が無ければ学習者に届かない（v3.17。2026-11-07 凍結 v3 → v3.1（Astra 実装レビュー B1〜B4）→ v3.2（2 回目の残りを司令塔の裁定で反映））
 
 本文（正本）は `docs/plans/rights/contract-AK.md`（AK-0〜AK-9）。立体モデルの 6 つの出口（注文票・取り込み検査・学習者側の一覧・確認画面・取り込み・配信）は、D1 `rights_records` の記録（一覧の対象の指紋 `subject_sha256` に結ぶ）を固定の表 `rightsModes`（`src/rights.ts`）で見て、複製して配る（host）か提供元の埋め込み（embed）かを決める。ライセンスの種類は提供元の API の `license.url`・ページの CC の URL・台帳の固定の記述から機械が導き（人・LLM・画面は code を書かない）、確かめ方は台帳 `src/rights-providers.ts`（Sketchfab = api・NASA = statement・DBCLS = cc-url（embed だけ）・Smithsonian = 人の記録（embed だけ））。host は `api` / `statement` の記録で、確認の直後に claim を持ったまま取り込んだ sha（`rights_hosted`）だけ。取り込みの route `POST /api/models3d/<id>/fetch` は廃止（§AJ2-2 の改訂）。確認は cron の段 3-d（1 回 5 件まで）と `POST /api/rights/models3d/<id>/check`、運営は止める / 戻すができる。migration 0017（記録は消さない）。v3.1: 提供元の HTML は状態を区別する字句解析器で読み（正の判定は解析結果だけ・負の判定は生 HTML とも照らす・閉じていない構造は fail-closed）、取り込みの有効化は claim を持ち止めていない時だけの 1 つの batch、指紋違いの取り直しは 1 時間空ける。v3.2: 第三者の印は生 HTML を大文字小文字を区別せずに見る・CDATA と生テキスト要素の自己終了は読まない・cron の候補は最後の試行の古い順の 1 本・「戻す」は未試行に戻す。職人の定義は変えない（`ant apply` 不要）。動画・出典の引用・本文の丸写し・LLM の権利係は範囲外（AK-8）。
+
+## §AL 素材の形 v2 — 本文 1 本 + バディ向けの構造化データ + 中身の質の機械検査（v3.18。2026-11-08 凍結）
+
+本文（正本）は `docs/plans/material-v2/contract-AL.md`（AL-0〜AL-10）。計画は `docs/plans/material-v2/plan-v1.md`。`schema_version` 2 の版について §E / §E-1 / §E-4 / §D-3 / §F-2 / §B-7・契約 V の V-4 / V-5 / V-6 g / V-9・契約 MC の MC-1 3・§R-6 に優先する（schema 1 の版は既存の節のまま）。
+
+- 本文は中学生向け 1 本（`parts/<id>/body.md`。600 字目安・1000 字以内。「やってみる → 気づく → ことば」）。小学生版・短い/長い・ゲーム版の必須をやめる。面白さの芯 `spark`（子どもには見せない）・問いの種 `questions_for_kids`（答えの claim id つき）・関心別の入口 `interest_entries`・任意の遊びの形 `play.md`・`summary` 1 本
+- 取り込みは schema 1 と 2 を両受け（形の分岐は `src/checks/shape.ts`）。schema 2 に `variants` があれば拒否。止める条件は §F-2 の列挙 + schema 2 の必須キー・型だけ
+- 子ども向け本文の機械検査に `goal_word` / `body_too_long` / `body_too_short` / `questions_missing`（fix）と `first_paragraph_not_action`（note）。目標語の正本は `src/checks/goalwords.ts` と 4 文書のマーカー行（lock test）
+- 読み手係は row の schema で 2 系統。schema 2 は `READER_SYSTEM_V2` + `quality` 4 キー必須・`reader_json` に `v: 2`。入力 0 件なら API を呼ばず失敗
+- 配信 API に `schema_version` / `summary` / `spark` / `body_url` / `play_url` / `questions_for_kids` / `interest_entries`。確認画面は schema 2 で切替なし・バディ用の枠（同じ PR）
+- 着地: precheck → 完走/取消 → `paused=1` → 再検査 → deploy → `ant apply` → `paused=0`。rollback は配信中の schema 2 の版を先に解消する

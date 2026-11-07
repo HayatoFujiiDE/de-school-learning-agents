@@ -346,8 +346,8 @@ describe('§Q-2 allowlist と rubric（生成ファイルに反映済み）', ()
     expect(ALLOWLIST).toEqual({ domains: src.domains, primary_hosts: src.primary_hosts, hosts: src.hosts });
   });
 
-  it('rubric common.md の 13 が videos の形式（why・rights_note・出典の行）を見る', () => {
-    expect(RUBRIC_COMMON).toMatch(/\n13\. [^\n]*videos[^\n]*why[^\n]*rights_note[^\n]*https:\/\/www\.youtube\.com\/watch\?v=\{youtube_id\}/);
+  it('rubric common.md の 19 が videos の形式（why・rights_note・出典の行）を見る', () => {
+    expect(RUBRIC_COMMON).toMatch(/\n19\. [^\n]*videos[^\n]*why[^\n]*rights_note[^\n]*https:\/\/www\.youtube\.com\/watch\?v=\{youtube_id\}/);
     expect(RUBRIC_COMMON).toBe(readFileSync(new URL('../../claude/rubrics/common.md', import.meta.url), 'utf8'));
   });
 });

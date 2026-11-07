@@ -131,9 +131,9 @@ describe('§AJ-2 b・c 職人の定義と rubric', () => {
     expect(maker).toContain('    "videos": [],\n    "models3d": [],\n');
   });
 
-  it('rubric: common.md の 17 と kind-3.md の 1 行（生成ファイルに反映済み）', () => {
+  it('rubric: common.md の 23 と kind-3.md の 1 行（生成ファイルに反映済み）', () => {
     expect(RUBRIC_COMMON).toContain(
-      '17. material.json の parts[].models3d があれば、各件に catalog_id と why（見方）があり、source_id の出典の行の url が一覧の出典の url と同じ（形式だけ。モデルの中身は人が見る）\n',
+      '23. material.json の parts[].models3d があれば、各件に catalog_id と why（見方）があり、source_id の出典の行の url が一覧の出典の url と同じ（形式だけ。モデルの中身は人が見る）\n',
     );
     expect(RUBRIC_KINDS[3]).toContain(
       '- 実物の形・骨格・大きさの比べ方が大事な題材で、一覧に合う立体モデルがあれば、回して見られる立体モデルを 1 つ添えている（無ければ generate_image の立体の絵でよい）\n',
