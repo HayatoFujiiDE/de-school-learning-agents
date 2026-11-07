@@ -464,10 +464,16 @@ describe('入力（契約 V-4 c）', () => {
     const r = await buildReaderInput(m, async (p) => `本文 ${p} ${'ほ'.repeat(5_000)}`);
     expect(r.text.length).toBeLessThanOrEqual(80_000);
     expect(r.included.length).toBeGreaterThanOrEqual(1);
-    expect(r.included.length + r.notRead.length).toBe(18);
+    // 節を切った時は not_read の先頭に material.json（読み手係は後ろの部品を見ていない → 仕分けで reader_partial の ask になる）
+    expect(r.notRead[0]).toBe('material.json');
+    expect(r.notRead.filter((p) => p === 'material.json')).toHaveLength(1);
+    expect(r.included.length + r.notRead.length).toBe(18 + 1);
     expect(r.text.match(/<\/material>/g)).toHaveLength(1);
-    // 小さい material は切らない
+    // 小さい material は切らず、not_read に material.json は入らない
     expect(materialSection(goodMaterial())).not.toContain(READER_MATERIAL_CUT_MARK);
+    const small = await buildReaderInput(goodMaterial(), async () => null);
+    expect(small.notRead).not.toContain('material.json');
+    expect(small.notRead).toEqual(VARIANTS);
   });
 
   it('資料の中の </variants>・<material>・## 見出しで節の区切りを偽れない', async () => {
