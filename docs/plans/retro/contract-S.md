@@ -110,3 +110,35 @@ system（固定文）に入れること: 役割（費用の振り返り）/ 入�
 - 残した点: failed で終わった後に取り込み直されて done になった job は、failed の時点の 1 回だけ振り返る。
 - LLM へ渡す入力は、数字と決まった言葉だけ（2026-11-06 出荷前の点検）: ホスト名は h1〜h10 の番号に置き換える（本当の名前は DB と運営画面だけ）。道具名・error_code・stop_reason・採点の結果は、コードの中の一覧にあるものだけ、他は other。
 - 自動で入れる前に機械的な検査（autoAdoptBlocked）を通す: 質を下げる言い回し・指示の上書きに見える言い回し・ドメインのような並びや記号を含む文は、quality_risk が none でも自動で入れず proposed にする（画面に「自動では入れませんでした」と出す）。人が [入れる] を押す時は検査しない。
+
+## v2 の裁定（2026-11-07）— PDCA を「作り直し」まで届かせる
+
+オーナー: 「制作のループの中で改善係が改善点を発見してちゃんと PDCA 回るように」「設計に改善できるところ・やりすぎな所もチェック」。設計の相談役の判定は「今の改善係は回らない」で、理由は 3 つ:
+1. **差し戻しの事実が届かない**: 登録は検証の完了時で、差し戻しはその後。qualityFacts は review_decisions を読まない。
+2. **物差しが 1 job の費用**で、主因の「1 教材が承認されるまでの合計・作り直しの回数」ではない。tipEffect は draft と rework を混ぜていた。
+3. **自動で効く経路が maker_note だけ**で、主因の「読ませる量」（buildReworkBrief の積み重ね、全教材の差し戻し理由 40 件を phase1 へ）に届かない。
+本番の例: 教材 580e3109 = job 6（作り直し 5）・3141¢、差し戻し 6 件（note 平均 996 字）、承認 0。job_retros 1 行、retro_tips 0 行。
+
+v2 は次の A〜D。本節は §S-2 a・§S-3・§S-4・§S-5 3・§S-6 の該当箇所に優先する。
+
+- **A 作り直しの台帳**（LLM なし）: `reworkLedger(env, limit=30)`。素材ごとに 題・job 数・rework 数・list_cost_cents の合計・最初の job の作成〜最後の job の更新・review_decisions の return / approve / reject の数・自動の差し戻し（reviewer_email = `system:auto-triage`）の数・最新の差し戻しの checklist の ng 観点キー（ng が無ければ `unclassified`、差し戻しが無ければ空）・最新の版の status。最後の job の更新が新しい順、retro_since に関係なく全部。`GET /api/retro` の `rework_ledger`。画面の「改善係の記録」の先頭に「作り直しの台帳」の表（教材・作った回数・作り直し・費用・差し戻し・承認・最新の差し戻しの観点）。費用が平均より多く上位 3 位以内の行に印（背景・左の線・「費用が多い」）。教材の名前は `#/material/:id` への入口。空の時は「まだ注文はありません」。
+- **B 差し戻しを改善係の入力へ**:
+  1. 段 a の登録の条件: done の job は「その job が作った版に review_decisions（approve / return / reject。自動の差し戻しを含む）がある」か「job の updated_at から 6 時間」。検証の完了は 6 時間の側に吸収した（検証が終わっても、確認の決定の前には振り返らない）。failed は今のまま。
+  2. metrics_json に `review` を足す（数・列挙値・観点キーだけ）: この版の番号・この版の最新の決定（approve / return / reject / none）・直前の版（parent_version_id）の差し戻しの ng 観点キー・素材の job 数 / rework 数 / return / 自動の return / approve / reject の数（台帳と同じ SQL）・この job の brief の中の差し戻し理由の節の文字数。素材の合計の費用は `material.list_cost_cents_total`（台帳と同じ SQL）。phase1 に入った差し戻し理由の文字数は記録が無く分からないので足さない。
+  3. `<recent>` の要約に素材の番号（この job の素材が m1、ほかは出てきた順に m2〜m10、それより後は other。素材の id は渡さない）・版番号・rework か・決定。`<job>` に `material_ref: "m1"`。
+  4. WASTE_KINDS に `rework_round`（画面は「作り直しの回数」）。RETRO_SYSTEM の「提案してよい方向」に「差し戻されやすい観点に下書きの段で先回りする（質を上げる方向）」「作り直しで読ませる量を小さく保つ」。質を下げる方向の禁止はそのまま。
+- **C 読ませる量の上限**（worker_code。改善係に提案させずに最初から入れる。質を下げないことを最優先し、自分の教材の理由は落とさない）:
+  1. `buildReworkBrief`: 前の brief に積み重なった「## 差し戻し理由（vN）」の節が 3 つ以上ある時、直近 2 回分は全文、それより古い節は本文 400 字までに切り、「（古い理由は短くしています。全文は前の版で対応済み）」の 1 行を付ける（何回作り直しても 1 行）。今回の理由は全文。節が 2 つ以下なら従来と 1 文字も変わらない。切るのは 4 回目の差し戻し（前の節が v1〜v3）からで、その時 v1 が 400 字になる。
+  2. phase1 の「これまでの回答と差し戻し理由」: この素材の分（回答・差し戻し理由）は全件・全文、ほかの素材の分と素材の無い追記は新しい順に 15 件・1 件 600 字まで（切った時は末尾に …）。合わせて 40 件が上限（この素材の分を先に数える）。startJob が素材の id を渡す。
+- **D 物差しの修正とやりすぎの削り**:
+  1. tipEffect の母集団は draft の job だけ。「後」は job の始まり（`COALESCE(session_created_at, created_at)`。最初の文を組み立てた時刻に近い方）が activated_at より後。前 5 件・後 5 件。jobs_since（画面の「入れた後に始まって終わった下書きの注文」）も同じ数え方。
+  2. **自動でやめるのをやめる**（§S-5 3 を置き換え）。tip_reviews の retire は result_json に残し、画面の「やめる提案」に出すだけ（人が [やめる] を押す）。理由: 標本が小さく、LLM の感想で決まるため。result_json の `retired` は形を保つため空の配列。
+  3. 画面の工夫ごとに前後の数字（件数・費用の平均・「未確認 + 食い違い」の割合）。前・後のどちらかが 5 件未満なら「まだ比べられません」。
+  4. 会議の standards_suggestions・improvement_notes・URL の hash・autoAdoptBlocked は変えない。
+- **変えないこと**: LLM へ渡すのは数・列挙値・観点キー・番号だけ（note の本文・題・URL・素材の id は渡さない。§S-0）。外部費用は増やさない（Batch 1 件 / job・日 20 件・月の上限は今のまま）。職人の定義（factory/claude/agents/*.md）は触らない。
+
+既存のテストの期待値を変えたもの（理由）:
+- 「a 登録」「b 集計」「a→d」: done の job に確認の決定を足した（B 1 で登録の条件が変わったため）。
+- 「d 回収: 自動で入れた工夫を…retire でやめる」→「(g) retire で active は retired にならない」、「retro_auto_adopt=0 …」の auto3 を retired → active（D 2）。
+- shouldAutoRetire の単体テスト 6 件を消した（関数ごと消したため。D 2）。
+- WASTE_LABEL に rework_round を足した（B 4）。画面の「入れてから終わった注文 n 件」を「入れた後に始まって終わった下書きの注文 n 件」に（D 1 で数え方が変わったため）。

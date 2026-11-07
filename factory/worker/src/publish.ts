@@ -118,9 +118,82 @@ export interface ReturnArgs {
   rework_budget_cents: number;
 }
 
-/** 差し戻しの rework job の brief（人の差し戻しと自動の差し戻しで同じ形） */
+/** 確認のチェックリストの観点（POST /api/review/:vid/decision の checklist のキー。routes/review.ts が再 export する） */
+export const CHECKLIST_KEYS = [
+  'content_and_evidence',
+  'explanation_and_expression',
+  'relation_to_learning',
+  'conditions_of_use',
+  'artifact_behavior',
+  'terms_of_use',
+] as const;
+
+/**
+ * 差し戻しの checklist_json から ng の観点キー（CHECKLIST_KEYS の順）。読めない・ng が 1 つも無ければ ['unclassified']。
+ * note の本文は見ない（観点キーだけ。§S-0）
+ */
+export function checklistNgKeys(checklistJson: string | null | undefined): string[] {
+  let o: unknown = null;
+  try {
+    o = checklistJson ? JSON.parse(checklistJson) : null;
+  } catch {
+    o = null;
+  }
+  const rec = o && typeof o === 'object' && !Array.isArray(o) ? (o as Record<string, unknown>) : null;
+  const keys = rec
+    ? CHECKLIST_KEYS.filter((k) => {
+        const item = Object.prototype.hasOwnProperty.call(rec, k) ? rec[k] : undefined;
+        return !!item && typeof item === 'object' && (item as Record<string, unknown>).result === 'ng';
+      })
+    : [];
+  return keys.length ? [...keys] : ['unclassified'];
+}
+
+/** brief の中の差し戻し理由の節の見出し（buildReworkBrief が書く形） */
+const REWORK_REASON_HEAD_RE = /^## 差し戻し理由（v\d+）$/;
+/** 古い節を短くした時に 1 行だけ付ける文 */
+export const OLD_REASON_NOTE = '（古い理由は短くしています。全文は前の版で対応済み）';
+/** 作り直しで全文のまま残す直近の節の数（今回の理由は別に全文） */
+export const REWORK_REASON_KEEP_FULL = 2;
+/** それより古い節の本文の上限（文字） */
+export const REWORK_REASON_OLD_CHARS = 400;
+
+function splitReworkBrief(brief: string): { base: string[]; sections: string[][] } {
+  const lines = brief.split('\n');
+  const heads: number[] = [];
+  lines.forEach((l, i) => {
+    if (REWORK_REASON_HEAD_RE.test(l)) heads.push(i);
+  });
+  if (!heads.length) return { base: lines, sections: [] };
+  const sections = heads.map((h, i) => lines.slice(h, i + 1 < heads.length ? heads[i + 1] : lines.length));
+  return { base: lines.slice(0, heads[0]), sections };
+}
+
+/** brief の中の差し戻し理由の節（見出しから最後まで）の文字数。節が無ければ 0（振り返りの数字 §S v2） */
+export function reworkReasonChars(brief: string | null | undefined): number {
+  const { sections } = splitReworkBrief(brief ?? '');
+  return Array.from(sections.map((s) => s.join('\n')).join('\n')).length;
+}
+
+/**
+ * 差し戻しの rework job の brief（人の差し戻しと自動の差し戻しで同じ形）。
+ * 前の brief に積み重なった「## 差し戻し理由（vN）」の節は、直近 2 回分を全文のまま、それより古い節を本文 400 字までに切り、
+ * 「（古い理由は短くしています。…）」の 1 行を付ける（contract-S v2 C）。今回の理由は全文。節が 2 つ以下なら従来と 1 文字も変わらない
+ */
 export function buildReworkBrief(origBrief: string | null | undefined, version: number, note: string, append = ''): string {
-  return [origBrief ?? '', '', `## 差し戻し理由（v${version}）`, note, ...(append.trim() ? ['', '## 追記', append] : [])].join('\n');
+  const tail = ['', `## 差し戻し理由（v${version}）`, note, ...(append.trim() ? ['', '## 追記', append] : [])];
+  const orig = origBrief ?? '';
+  const { base, sections } = splitReworkBrief(orig);
+  if (sections.length <= REWORK_REASON_KEEP_FULL) return [orig, ...tail].join('\n');
+  const baseLines = base.filter((l) => l !== OLD_REASON_NOTE);
+  while (baseLines.length && baseLines[baseLines.length - 1].trim() === '') baseLines.pop();
+  const old = sections.slice(0, sections.length - REWORK_REASON_KEEP_FULL).map((s) => {
+    const body = s.slice(1).join('\n').replace(/\s+$/, '');
+    const chars = Array.from(body);
+    return [s[0], chars.length > REWORK_REASON_OLD_CHARS ? chars.slice(0, REWORK_REASON_OLD_CHARS).join('') : body, ''].join('\n');
+  });
+  const recent = sections.slice(sections.length - REWORK_REASON_KEEP_FULL).map((s) => s.join('\n'));
+  return [baseLines.join('\n'), '', OLD_REASON_NOTE, ...old, ...recent, ...tail].join('\n');
 }
 
 export interface ReturnOptions {

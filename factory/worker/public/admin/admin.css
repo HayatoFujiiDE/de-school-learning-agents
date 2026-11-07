@@ -497,6 +497,13 @@ body.floor-wide .view { max-width: 1600px; padding-left: 12px; padding-right: 12
 .retro-cmp th, .retro-cmp td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
 .retro-cmp td:last-child { white-space: normal; }
 .retro-recent summary { cursor: pointer; font-weight: 600; }
+/* 作り直しの台帳（§S v2 A）。費用の多い行は背景と左の線で目立たせる */
+.retro-ledger { border-collapse: collapse; width: 100%; }
+.retro-ledger th, .retro-ledger td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.retro-ledger tbody th { white-space: normal; min-width: 10em; overflow-wrap: anywhere; font-weight: 600; }
+.retro-ledger td:last-child { white-space: normal; min-width: 8em; }
+.retro-ledger tr.retro-hot { background: var(--ai-soft); }
+.retro-ledger tr.retro-hot th { box-shadow: inset 4px 0 0 var(--red); }
 .retro-floor h2 { margin: 0 0 8px; font-size: 18px; }
 .retro-facts { margin: 0 0 12px; }
 .retro-facts li { margin: 2px 0; }
