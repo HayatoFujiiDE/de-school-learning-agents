@@ -37,6 +37,8 @@ describe('§AJ-2 a 注文票の一覧の節', () => {
     const withSection = await buildPhase1Message(db, 'brief', [3, 4]);
     const empty = await buildPhase1Message(db, 'brief', [3, 4], null, null, []);
     expect(empty.includes(HEAD)).toBe(false);
+    // 変更前の形を固定した対照（Astra MINOR）: 一覧が空なら注文票の直後が編集基準（builder 同士の比較に頼らない）
+    expect(empty).toContain('# 注文票\nbrief\n\n# 編集基準');
     expect(withSection.replace(models3dSectionLines().join('\n') + '\n', '')).toBe(empty);
     // download だけの一覧も節を出さない
     const onlyDownload = MODELS3D.filter((e) => e.kind === 'download');
