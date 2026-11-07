@@ -57,3 +57,16 @@
 
 - Sketchfab は 2026-08-12 に Epic Games から KitBash へ売却。埋め込み・oEmbed（`https://sketchfab.com/oembed?url=`）・CC ライセンスのダウンロードは変わっていない。「無料ダウンロードはいずれ終える」と 2024 年に予告あり（時期は未定）。消える備えとして、CC0 / CC BY のものは将来 GLB を取ってきて自前で見せる（download への移行）
 - Smithsonian の 3d.si.edu は自動取得を断る（403）。確認はブラウザか検索の抜粋で行う。埋め込み用の `3d-api.si.edu` は 200 を返す
+
+## 取り込み（複製して自前で配る）の権利（2026-11-07 確認）
+
+埋め込み（Sketchfab / Smithsonian Voyager の公式の iframe）は提供元のサーバーがそのまま見せるので、複製の権利は要らない。**取り込み（`download`。GLB を工場の R2 に置いて配る）は複製と公衆送信にあたるので、提供元が再配布を許しているものだけ**を一覧に載せる。
+
+| 提供元 | 根拠（確かめたページ） | 取り込んでよいか | 条件 |
+|---|---|---|---|
+| NASA 3D Resources | https://science.nasa.gov/3d-resources/ （「free to download and use」）・配布元 GitHub `nasa/NASA-3D-Resources` の README（「free and without copyright」）・利用の決まり https://www.nasa.gov/nasa-brand-center/images-and-media/ | よい（教育・情報目的は明示。商用も条件つきで可） | 出典を書く（各ページの Source の行をそのまま `attribution` に）・NASA の推薦と誤解させない・NASA のロゴや記章を自分の商品・宣伝・ブランドに使わない（模型の表面に写っているロゴは実物の再現なので問題にしない）・第三者の著作物と明記されたものは別途許諾が要る（Source が NASA 以外の名前なら一覧に載せる前に確かめる）・「著作権の対象外」は米国内の話で、日本での扱いは NASA の許諾文に依る |
+| DBCLS BodyParts3D | 配布元の最新の README（CC BY 4.0） | よい（CC BY 4.0 は複製・改変・商用を許す） | 出典とライセンスの表示・形式を変えた（OBJ → GLB）ことを書く・古い版（CC BY-SA 2.1 JP）は使わない |
+| Sketchfab の CC0 / CC BY | Data API の `license.slug` | 将来取り込むなら可（CC0 は条件なし・CC BY は出典の表示） | Sketchfab の「Standard」等の独自ライセンスは再配布不可なので載せない |
+| Smithsonian 3D（CC0） | 記録のページの表示 | 可 | 記録の表示を正とする（ファイルの中の著作権表示と字面が違う点は `contract-AJ.md` 未確認の点） |
+
+NC（非営利限定）は埋め込みでも取り込みでも載せない（将来の月額販売と合わない）。
