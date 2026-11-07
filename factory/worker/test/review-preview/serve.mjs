@@ -3,6 +3,7 @@
 // 版は 4 通り（fixtures.mjs）: vfix-0001 見てほしい所がある / vclean-0001 全部通った / vpend-0001 機械の確認中 / vrdr-0001 読み手チェック待ち。
 // 一覧（#/review）・判断の数・自動公開のスイッチ・確認済みのチャンネル（#/videos）・立体モデル（#/models3d）も作り物を返す（POST はメモリの中だけ）。
 // §AJ2: FACTORY_PREVIEW_GLB=<探査車の .glb のパス> を付けると #/review/vm3d-0001 の d3 が回せる（無ければ「読み込めませんでした」）。
+// 上部の状況帯は ?status=alert で異常の作り物（statusFixture）。
 // ?shot=<名前> を付けると driver.js が画面を操作してから document.title を "ready" にする（headless Chrome で撮るため）。
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
@@ -23,6 +24,32 @@ const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.md': 'text/markdown; charset=utf-8', '.json': 'application/json', '.wasm': 'application/wasm' };
 // §AJ2-3: FACTORY_PREVIEW_GLB=<手元の .glb のパス> がある時だけ、作り物の版の探査車（vm3d-0001 の d3）の配信の url でそのファイルを返す（GLB は repo に入れない）
 const PREVIEW_GLB = process.env.FACTORY_PREVIEW_GLB || '';
+
+// 上部の状況帯（/api/status）の作り物は 2 通り: normal（通常）/ alert（停止中・今日の上限超え・定期処理 48 分前・画像の停止・予備の鍵）。
+// 選び方: ページの url の ?status=alert（fetch の Referer から読む）か、環境変数 FACTORY_PREVIEW_STATUS=alert。時刻は応答のたびに今から作る。
+function statusVariant(req) {
+  try {
+    const v = new URL(req.headers.referer || '', 'http://127.0.0.1').searchParams.get('status');
+    if (v === 'alert' || v === 'normal') return v;
+  } catch { /* Referer が無い・読めない */ }
+  return process.env.FACTORY_PREVIEW_STATUS === 'alert' ? 'alert' : 'normal';
+}
+function statusFixture(variant) {
+  const ago = (min) => new Date(Date.now() - min * 60_000).toISOString();
+  const base = {
+    paused: false, paused_note: null, running_jobs: 1, max_concurrent: 2, queued_jobs: 3, today_cents: 9555, daily_cap_cents: 20000, agent_configured: true, last_cron_at: ago(3),
+    scout: { last_run_at: ago(300), last_status: 'done', last_error: null, month_cents: 0, month_cap_cents: 2000, running: false, x_search_configured: false },
+    meeting: { last_at: ago(1500), last_status: 'ended', last_error: null, month_cents: 0, month_cap_cents: 1000, pending_batch: false },
+    images: { halted: null, month_cents: 170, month_cap_cents: 10000, holds_open: 0, dispatched: 0, backup_configured: true, backup_last_used_at: null },
+    videos: { enabled: true, configured: true, month_cents: 40, month_cap_cents: 1000, u_cents: 10, model: 'fixture' },
+  };
+  if (variant !== 'alert') return base;
+  return {
+    ...base, paused: true, paused_note: '費用の確認のため止めています', today_cents: 21040, last_cron_at: ago(48),
+    scout: { ...base.scout, month_cents: 1700 },
+    images: { ...base.images, halted: 'manual', month_cents: 8400, backup_last_used_at: ago(60 * 26) },
+  };
+}
 
 /** base の下のファイルだけを返す（.. で外へ出ない） */
 function inside(base, rel) {
@@ -54,9 +81,7 @@ createServer((req, res) => {
     const f = inside(ADMIN, path.slice('/admin/'.length));
     return f ? send(res, 200, readFileSync(f), TYPES[extname(f)] || 'application/octet-stream') : send(res, 404, 'not found', 'text/plain');
   }
-  if (path === '/api/status') {
-    return json(res, 200, { paused: false, running_jobs: 0, max_concurrent: 2, queued_jobs: 0, today_cents: 120, daily_cap_cents: 3000, agent_configured: true, last_cron_at: '2026-11-06T09:40:00.000Z', scout: {}, meeting: {}, images: null, videos: null });
-  }
+  if (path === '/api/status') return json(res, 200, statusFixture(statusVariant(req)));
   if (path === '/api/review') return json(res, 200, { versions: listRows() });
   if (path === '/api/review/stats') return json(res, 200, { auto_publish: state.auto_publish, clean: { approve: 12, return: 1, reject: 0 }, streak: 9, auto_published: state.auto_publish ? 3 : 0 });
   if (path === '/api/review/auto-publish' && req.method === 'POST') return readBody(req).then((b) => { state.auto_publish = !!(b && b.on); json(res, 200, { auto_publish: state.auto_publish }); });

@@ -47,9 +47,11 @@ describe('停止の理由の文（§O-5 d verbatim）', () => {
 });
 
 describe('状況帯の画像の行', () => {
-  it('動いている時: 「画像: 今月 N¢ / 3000¢（U で数えた記帳）」と #/images へのリンク。停止の文は無い', () => {
+  it('動いている時: 「画像 $N / $上限（概算）」（帯の中は $。¢ は出さない）と #/images へのリンク。停止の文は無い', () => {
     const h = I.imagesBandHtml({ halted: null, month_cents: 280, month_cap_cents: 3000 });
-    expect(h).toContain('画像: 今月 <b>280¢</b> / 3000¢<span class="muted">（U で数えた記帳）</span>');
+    expect(h).toContain('>画像 $2.80 / $30（概算）</a>');
+    expect(h).not.toContain('¢');
+    expect(h).not.toContain('U で数えた記帳');
     expect(n(h, /data-img-band="1"/g)).toBe(1);
     expect(n(h, /data-img-halted="1"/g)).toBe(0);
     expect(n(h, /href="#\/images"/g)).toBe(1);

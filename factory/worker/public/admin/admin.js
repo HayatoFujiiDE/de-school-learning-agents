@@ -257,18 +257,140 @@
   }
 
   // ---- 状況（上部帯）----
+  // 3 行の 1 枚: 行 1 = 稼働・今日の費用・今すぐ（常時。ボタンが乗る）/ 行 2 = 注意（0 件なら描かない）/ 行 3 = 今月の内訳（常時）。
+  // 帯の中の金額は全部 $（fmtCents）。上限は整数ドルなら小数を落とす。¢ は #/images・#/videos の画面にだけ残す。
+  /** 定期処理（cron）の最終からの経過の閾値（分）。ここ 1 か所だけで決める */
+  var CRON_LATE_MIN = 20, CRON_STALE_MIN = 60;
+  /** 今日の費用のメーターの段階（上限に対する割合。判定は >=） */
+  var COST_NEAR = 0.8;
+  var statusTimer = null; // 相対時間を 1 分ごとに直す単一のタイマー（loadStatus のたびに clear → set）
+  var statusLast = null; // { s, alerts }: タイマーが描き直しに使う最後の /api/status の応答と、描いた注意行
+  /** 上限の表示: 整数ドルなら小数を落とす（$200）。0 / 未定義は — */
+  function fmtCap(c) {
+    var v = Number(c);
+    if (c === null || c === undefined || !isFinite(v)) return '—';
+    return v % 100 === 0 ? '$' + (v / 100) : fmtCents(v);
+  }
+  /** 使った額（2 桁）。null / 未定義は — */
+  function fmtUsed(c) { return c === null || c === undefined || !isFinite(Number(c)) ? '—' : fmtCents(c); }
+  /** 定期処理の最終からの経過（純関数）。未来の時刻（時計のずれ）は 0 分扱い。null / 読めない時刻は stale */
+  function cronAge(lastIso, nowMs) {
+    var ts = lastIso ? Date.parse(String(lastIso)) : NaN;
+    if (!isFinite(ts)) return { text: '記録なし', level: 'stale' };
+    var ms = Math.max(0, nowMs - ts), min = Math.floor(ms / 60000);
+    var text = min < 1 ? 'たった今' : min < 60 ? min + ' 分前' : min < 1440 ? Math.floor(min / 60) + ' 時間前' : Math.floor(min / 1440) + ' 日前';
+    var level = ms > CRON_STALE_MIN * 60000 ? 'stale' : ms > CRON_LATE_MIN * 60000 ? 'late' : 'ok';
+    return { text: text, level: level };
+  }
+  /** 上限に対する段階: 'ok'（80% 未満）/ 'near'（80% 以上）/ 'over'（100% 以上）。上限 0 / 未定義は null */
+  function capLevel(used, cap) {
+    var c = Number(cap), u = Number(used || 0);
+    if (!(c > 0)) return null;
+    return u >= c ? 'over' : u >= c * COST_NEAR ? 'near' : 'ok';
+  }
+  /** 今日の費用のメーター（CSP で style 属性が使えないので、幅は 5% 刻みのクラス）。上限 0 / 未定義ならバー無し */
+  function costMeterHtml(used, cap) {
+    var lv = capLevel(used, cap);
+    if (!lv) return '';
+    var pct = Number(used || 0) / Number(cap) * 100;
+    var step = Math.max(0, Math.min(100, Math.floor(pct / 5) * 5));
+    return '<span class="meter" role="meter" aria-label="今日の費用（上限に対する割合）" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + esc(Math.min(100, Math.round(pct))) + '" data-meter="' + lv + '">' +
+      '<span class="meter-fill m-' + lv + ' w' + step + '"></span></span>';
+  }
+  /** 注意行の 1 件 */
+  function alertItem(level, html) { return { level: level, html: html }; }
+  function alertLi(a) { return '<li class="sa-item sa-' + a.level + '">' + a.html + '</li>'; }
+  function goLink(href, text) { return ' <a class="sa-go" href="' + href + '">' + esc(text) + ' ›</a>'; }
+  /** 注意行に出す件（純関数）。赤を先に、同じ色の中は並べた順 */
+  function statusAlerts(s, nowMs) {
+    var out = [];
+    if (s.paused) out.push(alertItem('red', '停止中です。新しい制作と検証は始まりません' + (s.paused_note ? '（メモ: ' + esc(s.paused_note) + '）' : '')));
+    var dl = capLevel(s.today_cents, s.daily_cap_cents), money = '（' + fmtUsed(s.today_cents) + ' / ' + fmtCap(s.daily_cap_cents) + '）';
+    if (dl === 'over') out.push(alertItem('red', '今日の費用が上限に達しました' + money + '。新しい制作は日付が変わるまで始まりません'));
+    else if (dl === 'near') out.push(alertItem('yellow', '今日の費用が上限に近づいています' + money));
+    var ca = cronAge(s.last_cron_at, nowMs), last = s.last_cron_at ? '（最終 ' + esc(fmtTime(s.last_cron_at)) + '）' : '（記録がありません）';
+    if (ca.level === 'stale') out.push(alertItem('red', '定期処理が 1 時間以上動いていません' + last));
+    else if (ca.level === 'late') out.push(alertItem('yellow', '定期処理が遅れています' + last));
+    if (!s.agent_configured) out.push(alertItem('red', '職人（agent）が設定されていません'));
+    var sc = s.scout || {}, mt = s.meeting || {};
+    if (sc.last_status === 'failed') out.push(alertItem('red', '収集の最後の実行が' + esc(RUN_LABEL.failed) + 'しました（' + esc(fmtTime(sc.last_run_at)) + '）' + goLink('#/proposals', '提案箱を見る')));
+    if (mt.last_status === 'failed' || mt.last_status === 'expired') out.push(alertItem('red', '会議の最後の実行が' + esc(RUN_LABEL[mt.last_status]) + 'しました（' + esc(fmtTime(mt.last_at)) + '）' + goLink('#/proposals', '提案箱を見る')));
+    out = out.concat(imagesAlerts(s.images, nowMs));
+    [['収集', sc], ['会議', mt]].forEach(function (p) {
+      var lv = capLevel(p[1].month_cents, p[1].month_cap_cents);
+      if (lv === 'near' || lv === 'over') out.push(alertItem('yellow', '今月の' + p[0] + 'の費用が上限' + (lv === 'over' ? 'に達しました' : 'に近づいています') + '（' + fmtUsed(p[1].month_cents) + ' / ' + fmtCap(p[1].month_cap_cents) + '）'));
+    });
+    return out.filter(function (a) { return a.level === 'red'; }).concat(out.filter(function (a) { return a.level !== 'red'; }));
+  }
+  /** 行 2（注意）。0 件なら空文字（行ごと描かない）。赤が 1 件でもあれば赤地 */
+  function statusAlertsHtml(s, nowMs) {
+    var list = statusAlerts(s, nowMs);
+    if (!list.length) return '';
+    var red = list.some(function (a) { return a.level === 'red'; });
+    return '<div class="status-alerts ' + (red ? 'sa-box-red' : 'sa-box-yellow') + '" data-status-alerts="' + (red ? 'red' : 'yellow') + '">' +
+      '<b class="sa-title">注意 ' + list.length + ' 件</b><ul class="sa-list">' + list.map(alertLi).join('') + '</ul></div>';
+  }
+  /** 行 1（稼働・今日の費用・今すぐ） */
+  function statusMainHtml(s, nowMs) {
+    var ca = cronAge(s.last_cron_at, nowMs);
+    var sc = s.scout || {}, mt = s.meeting || {};
+    var scoutBusy = !!sc.running, meetBusy = !!mt.pending_batch;
+    var pausedTitle = ' title="停止中は実行できません"';
+    return '<div class="status-main">' +
+      '<div class="sm-sec sm-run">' +
+        '<span class="sm-state"><span class="dot ' + (s.paused ? 'red' : 'green') + '" aria-hidden="true"></span><b>' + (s.paused ? '停止中' : '動いています') + '</b></span>' +
+        '<span class="item">制作中 <b>' + esc(s.running_jobs) + '</b> / ' + esc(s.max_concurrent) + '</span>' +
+        '<span class="item">順番待ち <b>' + esc(s.queued_jobs) + '</b></span>' +
+        '<span class="item" title="定期処理の最終 ' + esc(fmtTime(s.last_cron_at)) + '">定期処理 <span id="cron-rel" class="cron-rel ' + ca.level + '" data-cron-rel="1">' + esc(ca.text) + '</span></span>' +
+        '<button type="button" class="btn small' + (s.paused ? ' primary' : '') + '" id="pause-btn">' + (s.paused ? '再開' : '止める') + '</button>' +
+      '</div>' +
+      '<div class="sm-sec sm-cost"><span class="sm-label">今日の費用</span>' + costMeterHtml(s.today_cents, s.daily_cap_cents) +
+        '<span class="sm-num"><b>' + fmtUsed(s.today_cents) + '</b> / ' + fmtCap(s.daily_cap_cents) + '</span></div>' +
+      '<div class="sm-sec sm-now">' +
+        '<button type="button" class="btn small" id="scout-btn"' + (scoutBusy || s.paused ? ' disabled' : '') + (s.paused ? pausedTitle : '') + '>' + (scoutBusy ? '収集中…' : '収集を今すぐ') + '</button>' +
+        '<button type="button" class="btn small" id="meeting-btn"' + (meetBusy || s.paused ? ' disabled' : '') + (s.paused ? pausedTitle : '') + '>' + (meetBusy ? '結果待ち' : '会議を今すぐ') + '</button>' +
+      '</div></div>';
+  }
+  /** 行 3（今月の内訳）の収集・会議の 1 項目。最終が失敗なら赤 pill */
+  function intakeMonthItem(name, o, bad) {
+    return '<span class="item">' + name + ' ' + fmtUsed(o.month_cents || 0) + ' / ' + fmtCap(o.month_cap_cents) +
+      (bad ? ' ' + pill(RUN_LABEL[o.last_status] || o.last_status, 'red') : '') + '</span>';
+  }
+  /** 行 3（今月の内訳）。images / videos が無い応答（古い Worker）ではその項目を出さない */
+  function statusMonthHtml(s) {
+    var sc = s.scout || {}, mt = s.meeting || {};
+    return '<div class="status-month"><span class="sm-label">今月</span>' +
+      intakeMonthItem('収集', sc, sc.last_status === 'failed') +
+      intakeMonthItem('会議', mt, mt.last_status === 'failed' || mt.last_status === 'expired') +
+      imagesMonthHtml(s.images) + videosBandHtml(s.videos) + '</div>';
+  }
+  /** #status の中身全部（純関数）。注意行の容器（#status-alerts）は常に置き、aria-live はこの容器だけ */
+  function statusBandHtml(s, nowMs) {
+    var now = typeof nowMs === 'number' ? nowMs : Date.now();
+    return statusMainHtml(s, now) +
+      '<div id="status-alerts" class="status-alerts-slot" aria-live="polite">' + statusAlertsHtml(s, now) + '</div>' +
+      statusMonthHtml(s);
+  }
+  /** 1 分ごと: 相対時間の文字と色、注意行（中身が変わった時だけ。読み上げを毎分起こさない）を直す */
+  function tickStatus() {
+    if (!statusLast) return;
+    var now = Date.now(), s = statusLast.s;
+    var rel = $('#cron-rel');
+    if (rel) { var ca = cronAge(s.last_cron_at, now); rel.textContent = ca.text; rel.className = 'cron-rel ' + ca.level; }
+    var box = $('#status-alerts');
+    if (box) {
+      var h = statusAlertsHtml(s, now);
+      if (h !== statusLast.alerts) { box.innerHTML = h; statusLast.alerts = h; }
+    }
+  }
   function loadStatus() {
     var el = $('#status');
     return api('GET', '/api/status').then(function (s) {
-      el.innerHTML =
-        '<span class="item">' + (s.paused ? pill('停止中', 'red') : pill('動いています', 'green')) + (s.paused && s.paused_note ? ' <span class="muted">' + esc(s.paused_note) + '</span>' : '') + '</span>' +
-        '<span class="item">制作中 <b>' + esc(s.running_jobs) + '</b> / ' + esc(s.max_concurrent) + '</span>' +
-        '<span class="item">順番待ち <b>' + esc(s.queued_jobs) + '</b></span>' +
-        '<span class="item">今日の費用 <b>' + fmtCents(s.today_cents) + '</b> / 上限 ' + fmtCents(s.daily_cap_cents) + '</span>' +
-        '<span class="item">職人 ' + (s.agent_configured ? pill('設定済み', 'green') : pill('未設定', 'red')) + '</span>' +
-        '<span class="item muted">cron 最終 ' + esc(fmtTime(s.last_cron_at)) + '</span>' +
-        '<button type="button" class="btn small" id="pause-btn">' + (s.paused ? '再開' : '止める') + '</button>' +
-        intakeStatusHtml(s) + imagesBandHtml(s.images) + videosBandHtml(s.videos);
+      var now = Date.now();
+      el.innerHTML = statusBandHtml(s, now);
+      clearInterval(statusTimer);
+      statusLast = { s: s, alerts: statusAlertsHtml(s, now) };
+      statusTimer = setInterval(tickStatus, 60000);
       bindIntakeButtons(s);
       var btn = $('#pause-btn');
       btn.addEventListener('click', function () {
@@ -282,21 +404,14 @@
         });
       });
     }, function (e) {
+      clearInterval(statusTimer);
+      statusTimer = null;
+      statusLast = null;
       el.innerHTML = '<span class="err">状況を読み込めませんでした: ' + esc(e.message) + '</span>';
     });
   }
 
-  // ---- 状況欄: 収集・会議（§K-7）----
-  function intakeStatusHtml(s) {
-    var sc = s.scout || {}, mt = s.meeting || {};
-    var scoutBusy = !!sc.running, meetBusy = !!mt.pending_batch;
-    return '<span class="item">収集 ' + (sc.last_status ? pill(RUN_LABEL[sc.last_status] || sc.last_status, sc.last_status === 'failed' ? 'red' : '') : '<span class="muted">未実行</span>') +
-        ' <span class="muted">今月 ' + fmtCents(sc.month_cents) + ' / 上限 ' + fmtCents(sc.month_cap_cents) + '</span>' +
-        ' <button type="button" class="btn small" id="scout-btn"' + (scoutBusy || s.paused ? ' disabled' : '') + '>' + (scoutBusy ? '収集中…' : '収集を今すぐ') + '</button></span>' +
-      '<span class="item">会議 ' + (mt.last_status ? pill(RUN_LABEL[mt.last_status] || mt.last_status, mt.last_status === 'failed' || mt.last_status === 'expired' ? 'red' : '') : '<span class="muted">未実行</span>') +
-        ' <span class="muted">今月 ' + fmtCents(mt.month_cents) + ' / 上限 ' + fmtCents(mt.month_cap_cents) + '</span>' +
-        ' <button type="button" class="btn small" id="meeting-btn"' + (meetBusy || s.paused ? ' disabled' : '') + '>' + (meetBusy ? '結果待ち' : '会議を今すぐ') + '</button></span>';
-  }
+  // ---- 状況欄: 収集・会議（§K-7）。ボタンは行 1、今月の額は行 3 ----
   function bindIntakeButtons(s) {
     var sb = $('#scout-btn');
     if (sb) sb.addEventListener('click', function () {
@@ -358,16 +473,34 @@
     // 未来の日時（端末の時計のずれ）は 7 日以内に数えない（Astra レビューの指摘）
     return isFinite(ts) && nowMs - ts >= 0 && nowMs - ts <= BACKUP_RECENT_MS;
   }
-  /** 状況帯の 1 行（§O-5 e）。images が無い応答（古い Worker）では何も出さない。nowMs はテストの時だけ渡す */
+  /** 状況帯の行 3 の画像の項目（§O-5 e）。images が無い応答（古い Worker）では何も出さない。#/images へのリンクはここの 1 本 */
+  function imagesMonthHtml(im) {
+    if (!im || typeof im !== 'object') return '';
+    return '<a class="item" href="#/images" data-img-band="1" title="予約額で数えた記帳。OpenAI の実際の請求とは違うことがあります">画像 ' +
+      fmtUsed(im.month_cents) + ' / ' + fmtCap(im.month_cap_cents) + '（概算）</a>';
+  }
+  /** 状況帯の行 2（注意）の画像の件（純関数）。停止中は赤（行き先リンク付き）・予備の鍵を 7 日以内に使った は黄・月の上限 80% 以上は黄。
+   * #/images へのリンクは注意の中で 1 本まで（行 3 と合わせて 2 本まで）: 停止中なら停止の行が持ち、予備の鍵の行はリンクにしない */
+  function imagesAlerts(im, nowMs) {
+    if (!im || typeof im !== 'object') return [];
+    var now = typeof nowMs === 'number' ? nowMs : Date.now();
+    var out = [];
+    if (im.halted) out.push(alertItem('red', '<span class="item" data-img-halted="1">画像の生成を止めています（' + esc(haltText(im.halted)) + '）</span>' + goLink('#/images', '画像の停止を見る')));
+    if (backupUsedRecently(im.backup_last_used_at, now)) {
+      var mark = pill('画像: 予備の鍵を使いました（' + fmtTime(im.backup_last_used_at) + '）', 'orange');
+      out.push(alertItem('yellow', im.halted
+        ? '<span class="item" data-img-backup-band="1">' + mark + '</span>'
+        : '<a class="item" href="#/images" data-img-backup-band="1">' + mark + ' <span class="sa-go">画像の生成を見る ›</span></a>'));
+    }
+    var lv = capLevel(im.month_cents, im.month_cap_cents);
+    if (lv === 'near' || lv === 'over') out.push(alertItem('yellow', '今月の画像の記帳が上限' + (lv === 'over' ? 'に達しました' : 'に近づいています') + '（' + fmtUsed(im.month_cents) + ' / ' + fmtCap(im.month_cap_cents) + '）'));
+    return out;
+  }
+  function imagesAlertHtml(im, nowMs) { return imagesAlerts(im, nowMs).map(alertLi).join(''); }
+  /** 状況帯の画像の部分（行 3 の項目 + 行 2 の件）。images が無い応答では何も出さない。nowMs はテストの時だけ渡す */
   function imagesBandHtml(im, nowMs) {
     if (!im || typeof im !== 'object') return '';
-    var now = typeof nowMs === 'number' ? nowMs : Date.now();
-    return '<span class="item" data-img-band="1">画像: 今月 <b>' + cents(im.month_cents) + '</b> / ' + cents(im.month_cap_cents) + '<span class="muted">（U で数えた記帳）</span></span>' +
-      (im.halted ? '<span class="item" data-img-halted="1">' + pill('画像の生成を止めています（' + haltText(im.halted) + '）', 'red') + '</span>' : '') +
-      (backupUsedRecently(im.backup_last_used_at, now)
-        ? '<a class="item" href="#/images" data-img-backup-band="1">' + pill('画像: 予備の鍵を使いました（' + fmtTime(im.backup_last_used_at) + '）', 'orange') + '</a>'
-        : '') +
-      '<a class="item" href="#/images">' + (im.halted ? '画像の停止を見る' : '画像の生成') + '</a>';
+    return imagesMonthHtml(im) + imagesAlertHtml(im, nowMs);
   }
   /** 確認画面のサムネイルの下の 1 行（§O-7 6）: 「生成: {accuracy}・{prompt の先頭 80 字}」 */
   function genCaption(g) {
@@ -4449,9 +4582,14 @@
     models3dPageHtml: models3dPageHtml, models3dLoadingHtml: models3dLoadingHtml, models3dErrorHtml: models3dErrorHtml,
     model3dStateText: model3dStateText, model3dActionLabel: model3dActionLabel, model3dFetchToast: model3dFetchToast, model3dFetchErrorText: model3dFetchErrorText
   };
+  // 状況帯（上部）の純関数（テストから呼ぶ）
+  window.FactoryAdminStatus = {
+    CRON_LATE_MIN: CRON_LATE_MIN, CRON_STALE_MIN: CRON_STALE_MIN, cronAge: cronAge, capLevel: capLevel, fmtCap: fmtCap, costMeterHtml: costMeterHtml,
+    statusAlerts: statusAlerts, statusAlertsHtml: statusAlertsHtml, statusMainHtml: statusMainHtml, statusMonthHtml: statusMonthHtml, statusBandHtml: statusBandHtml
+  };
   window.FactoryAdminVideos = { videosBandHtml: videosBandHtml, videosAdminHtml: videosAdminHtml, videosLoadingHtml: videosLoadingHtml, videosErrorHtml: videosErrorHtml };
   window.FactoryAdminImages = {
-    HALT_TEXT: HALT_TEXT, haltText: haltText, imagesBandHtml: imagesBandHtml, imagesHtml: imagesHtml,
+    HALT_TEXT: HALT_TEXT, haltText: haltText, imagesBandHtml: imagesBandHtml, imagesMonthHtml: imagesMonthHtml, imagesAlertHtml: imagesAlertHtml, imagesHtml: imagesHtml,
     imagesLoadingHtml: imagesLoadingHtml, imagesErrorHtml: imagesErrorHtml, genCaption: genCaption
   };
   if (window.__FACTORY_ADMIN_NO_BOOT__) return; // smoke が純関数だけを読む時
