@@ -1861,7 +1861,8 @@
         '</div>';
     } else {
       var saved = savedAnswerOf(j, q.id);
-      html += '<div class="aq-answer"><span class="aq-label">あなたの回答</span>' + (saved !== null ? '<p>' + esc(saved) + '</p>' : '<p class="muted">回答はありません</p>') + '</div>';
+      var autoAns = isAutoAnswer(saved);
+      html += '<div class="aq-answer"' + (autoAns ? ' data-auto-answer="1"' : '') + '><span class="aq-label">' + (autoAns ? '機械の自動回答（職人の既定案のとおり）' : 'あなたの回答') + '</span>' + (saved !== null ? '<p>' + esc(saved) + '</p>' : '<p class="muted">回答はありません</p>') + '</div>';
     }
     return html + '</div></section>';
   }
@@ -1911,6 +1912,19 @@
       '<button type="button" class="btn" id="reload-btn">再読み込み</button></div></details>';
   }
 
+  /** 契約 V-12: 自動回答の本文は固定の前置き「（自動回答・職人の既定案のとおり）」で始まる（人の回答と見分ける唯一の印） */
+  function isAutoAnswer(saved) { return typeof saved === 'string' && saved.indexOf('（自動回答') === 0; }
+  /** 回答済みの質問を見ている時（input / resend 以外）の案内。「今ここで答えを求められている」と読めないようにする */
+  function answeredNoteHtml(j, qs, mode) {
+    if (mode === 'input' || mode === 'resend' || !qs.length) return '';
+    var anyAuto = qs.some(function (q) { return isAutoAnswer(savedAnswerOf(j, q.id)); });
+    var txt = 'この質問はもう答えてあり、ここで答える操作はありません。';
+    if (anyAuto) txt += '機械の差し戻しからの作り直しなので、機械が職人の既定案で自動で答えました。';
+    if (j.status === 'done') txt += 'できあがった版は「素材へ」から確認画面で見られます。';
+    else if (j.status === 'running' || j.status === 'creating') txt += '職人が制作中です。';
+    return '<div class="aq-note" data-answered-note="1">' + esc(txt) + '</div>';
+  }
+
   function jobHtml(j, mode, draft, machineOrder) {
     var qs = j.questions || [];
     var kind = KIND_TEXT[j.kind] || j.kind || '—';
@@ -1929,7 +1943,7 @@
       foot = '<div class="rv-foot" id="aq-foot"><div class="row rv-foot-row"><span>回答は保存済みです</span>' +
         '<div class="rv-btns aq-btns"><button type="button" class="btn primary" id="ans-btn">もう一度送る</button></div></div></div>';
     }
-    return '<p class="aq-crumb"><a href="#/material/' + esc(j.material_id) + '" id="job-crumb">素材へ</a></p>' + head + jobAlertHtml(j) +
+    return '<p class="aq-crumb"><a href="#/material/' + esc(j.material_id) + '" id="job-crumb">素材へ</a></p>' + head + jobAlertHtml(j) + answeredNoteHtml(j, qs, mode) +
       (mode === 'resend' ? '<div class="aq-note">回答は保存済みです。送信が終わっていません</div>' : '') +
       (qs.length ? '<form id="ans-form" class="aq-list" novalidate>' + qs.map(function (q, i) { return questionCardHtml(q, i, mode, j, draft[q.id]); }).join('') + '</form>' : '') +
       '<details class="card rv-sec" id="job-brief"><summary><h2>注文票を見る</h2></summary>' + renderMd(j.brief_md) + '</details>' +
