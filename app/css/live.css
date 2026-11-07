@@ -14,3 +14,90 @@
 .live-store-ops .live-store-ask{color:var(--ink);font-weight:600}
 .live-store .btn{min-height:44px}
 html[data-mode="es"] .live-store .btn{min-height:48px}
+
+/* ---- L3 ---- 今日のお題・作品展示（contract-LS §LS-13） */
+/* 入口の数（作る・ためす = 作ってみる だけ / + 実物を探す、対話 = 3〜4）。n3 は today.css、4 つは既定の列のまま */
+.td-entry-grid.n1{grid-template-columns:minmax(0,1fr);max-width:360px}
+.td-entry-grid.n2{grid-template-columns:repeat(2,minmax(0,1fr));max-width:720px}
+/* 見つけた写真（本物の写真。DES.photo.pick）: 残した写真の一覧・ダイアログの見本・あしあとの縮図で同じ img */
+.td-photo{display:block;width:100%;height:auto;aspect-ratio:1.6;object-fit:cover;border-radius:8px;border:1px solid var(--line);background:#fcfbf8}
+.td-found-preview{margin:0 0 12px;max-width:320px}
+/* 読み込み中・0 件・取れなかった の 1 文（左揃え・アイコンなし。§I） */
+.today-page .td-status{margin:4px 0 0}
+.odai-sec .td-status{margin-top:0}
+/* 作品展示の見出しの下の 3 文目（この端末の作品だけが並ぶ） */
+.gl-local-note{margin-top:2px}
+@media(max-width:700px){
+.td-entry-grid.n1,.td-entry-grid.n2{max-width:none}
+}
+
+/* ---- L5 ---- 自己理解（#self。contract-LS §LS-15） */
+/* 名前が無い時、アバターの円の中は self のアイコン（絵の読込失敗・「絵を使わない」の時に見える） */
+.sx-av-letter .ico{display:block;stroke-width:1.4}
+.sx-av.main .sx-av-letter .ico{width:72px;height:72px}
+.sx-av.preview .sx-av-letter .ico{width:60px;height:60px}
+.sx-av.thumb .sx-av-letter .ico{width:26px;height:26px}
+/* #self-sheet の「呼んでほしい名前」（.sx-rnote と同じ入力欄の形） */
+.sx-name-field{display:grid;gap:8px;min-width:0}
+.sx-name-field label{font-size:12px;font-weight:600}
+.sx-name-input{width:100%;min-height:44px;padding:0 12px;border:1px solid #d8ddd1;border-radius:9px;background:#fff;font-size:13px;color:var(--ink)}
+html[data-mode="es"] .sx-name-input{min-height:48px;font-size:14px}
+
+/* ---- L1 ---- */
+/* 話す・予定（contract-LS §LS-11）。モックに無い新しい部品だけ。既存クラスの値は変えない */
+/* 接続の状態の行（welcome の p の下・12px muted）+ 接続を確認 */
+.chat-welcome .service-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px;font-size:12px;color:var(--muted);line-height:1.7}
+.chat-welcome .service-line[hidden]{display:none}
+/* message-list の上の 1 文（つながっていない / 保存の問題 / 会話の上限）と、届いたが保存できない返事 */
+.chat-page .live-notices{display:grid;gap:8px}
+.chat-page .notice{display:grid;gap:8px;justify-items:start;margin:0;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#fff;font-size:12px;line-height:1.8;color:var(--ink)}
+.chat-page .notice.unsaved{background:var(--sand)}
+.chat-page .notice.unsaved .bubble{background:#fff;border:1px solid var(--line);border-radius:0 14px 14px 14px;padding:12px 15px;max-width:100%;font-size:13px;line-height:1.95;white-space:pre-wrap;overflow-wrap:anywhere}
+.chat-page .notice .btn.small{min-height:44px}
+/* 日付の区切り（11px muted・左揃え） */
+.message-list .day-sep{font-size:11px;color:var(--muted);line-height:1.6;margin:0}
+/* 送れなかった発言の理由・返事待ちの案内（11px muted） */
+.message .msg-error{font-size:11px;color:var(--muted);line-height:1.7;max-width:85%;overflow-wrap:anywhere}
+.message .msg-body>.btn.small{min-height:44px}
+.message.buddy.pending .bubble{color:var(--muted)}
+/* #plan の「ほかの日を見る」（日付見出しの下の小リンク） */
+.plan-page .other-days{font-size:11px}
+html[data-mode="es"] .chat-page .notice .btn.small,html[data-mode="es"] .message .msg-body>.btn.small{min-height:48px}
+html[data-mode="es"] .message-list .day-sep,html[data-mode="es"] .message .msg-error{font-size:12px}
+
+/* ---- L2 ---- 作る・作品（contract-LS §LS-12）。make.css / works.css の値は変えず、本物の写真・届いた素材・見本のラベル・送れない時の 1 文だけ足す */
+/* 本物の写真（img.mk-photo）は線画（.mk-art 240×150）と同じ枠の比率で置く */
+img.mk-photo{display:block;width:100%;height:auto;aspect-ratio:240/150;object-fit:cover;background:#fcfbf8}
+.photo-main img.mk-photo{border-radius:10px;max-height:220px;object-fit:contain}
+.photo-thumb img.mk-photo{border-radius:6px;border:1px solid var(--line)}
+.project-thumb img.mk-photo,.work-preview.has-photo img.mk-photo,.sf-thumb.has-photo img.mk-photo{height:100%}
+.work-preview.has-photo{display:block}
+.sf-view .work-preview.has-photo img.mk-photo{height:100%;max-height:220px;object-fit:contain;background:transparent}
+.sf-compare .work-preview.has-photo img.mk-photo,.compare-item img.mk-photo{object-fit:contain}
+.cap-thumb img.mk-photo{border-radius:6px}
+/* 見本のラベル（見本の 6 枚・こんなのも作れる 12 件） */
+.mk-sample-pill{justify-self:start}
+.mk-pill-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.mk-pill-row .pj-chip{justify-self:auto}
+/* 工場から届いた素材（カードは .pj-card の部品。絵は無い） */
+.mat-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+.mat-ops{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+.mat-ops .btn{margin-top:0}
+@media(max-width:1120px){.mat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){.mat-grid{grid-template-columns:minmax(0,1fr)}}
+/* 素材を読む（#make-dialog の本文。markdown の最小の変換） */
+.mk-md{gap:10px}
+.mk-md h3,.mk-md h4,.mk-md h5,.mk-md h6{font-size:15px;line-height:1.6}
+.mk-md h4,.mk-md h5,.mk-md h6{font-size:14px}
+.mk-md p,.mk-md li{font-size:13px;line-height:1.85;overflow-wrap:anywhere}
+.mk-md ul,.mk-md ol{padding-left:1.4em;display:grid;gap:4px}
+.mk-md ul{list-style:disc}
+.mk-md ol{list-style:decimal}
+.mk-md a{color:var(--own);text-decoration:underline}
+.mk-md .pj-safety{justify-self:start}
+html[data-mode="es"] .mk-md p,html[data-mode="es"] .mk-md li{font-size:14px}
+/* 相談列: 今はバディに送れない時の 1 文（composer の下） */
+.mk-composer .mk-cannot{font-size:11px;color:var(--muted);line-height:1.6;margin-top:6px}
+html[data-mode="es"] .mk-composer .mk-cannot{font-size:12px}
+/* 「何を作った」は本人の言葉（LS-18-13）: キャプチャーの枠を本人の言葉の見た目に */
+.ai-read-box.is-own{background:#fff;border:1px solid var(--line);border-left:3px solid var(--own);border-radius:0 12px 12px 0}

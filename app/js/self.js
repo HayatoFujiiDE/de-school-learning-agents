@@ -1,11 +1,13 @@
-/* 自己理解（#self）— docs/plans/self-page/contract-V.md。
-   文言とデータは DES.selfData（self-data.js）だけから引く。本人の文・データ文は textContent で描く。
-   状態: localStorage 'des3.self'（try/catch。失敗時はメモリで続ける）。
-   純関数 DES.self.reduce(state, action) / DES.self.validate(raw) は DOM に触らない（node の vm で読める）。 */
+/* 自己理解（#self）— docs/plans/self-page/contract-V.md（見た目・操作）+ contract-LS §LS-15 / §18-23・24・27（データの出所）。
+   文言は DES.selfData（self-data.js）と DES.i18n（下の add）から引く。本人の文・記録の文は textContent で描く。
+   中身の出所: 本人の言葉（own）= 本人が「書く」で書いたもの（des.live.self）/ 記録（record）= 本人の記録から機械的に導く（DES.self.records()）/
+   どちらも無い観点だけ gap「まだ分からない」。バディの見立て（ai）は生成の仕組みが無いので出さない（aiItems は空）。
+   保存: DES.store.register('self', …)（des.live.self）。名前とアバターの正本は DES.state.profile（L0。self の保存に持たない）。
+   純関数 DES.self.reduce(state, action) / DES.self.validate(raw) / DES.self.deriveRecords(src) は DOM に触らない（node の vm で読める）。 */
 window.DES = window.DES || {};
 (function () {
   'use strict';
-  var KEY = 'des3.self';
+  var BASIC_KEY = 'des.basic-learning.v1';
   var SELF = window.DES.self = {};
   var HAIRS = ['h1', 'h2', 'h3', 'none'], COLORS = ['c1', 'c2', 'c3', 'c4'];
   var RX = ['pending', 'agreed', 'edited', 'away'];
@@ -38,22 +40,41 @@ window.DES = window.DES || {};
   function isId(v) { return isStr(v) && ID_RE.test(v); }
   function cpVer(v) { return { text: v.text, at: v.at }; }
   function clean(t) { return String(t == null ? '' : t).replace(/^\s+|\s+$/g, '').slice(0, MAXLEN); }
-  function today() {
-    var d = DS().data, t = d && d.today;
-    return isStr(t) && t.length >= 10 ? t.slice(5, 10) : (SD() && SD().asOf) || '01-01';
+  // 新しい記録の日時は ISO（DES.clock.iso。表示は JST の M/D）
+  function nowIso() { var C = DS().clock; return C && C.iso ? C.iso() : new Date().toISOString(); }
+  // 'YYYY-MM-DD' / ISO（JST の日付に直す）/ 古い 'MM-DD' → 'M/D'
+  function jstDay(v) {
+    if (!isStr(v)) return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+    if (v.indexOf('T') > 0) {
+      var t = Date.parse(v);
+      if (isNaN(t)) return null;
+      var C = DS().clock;
+      return C && C.today ? C.today(new Date(t)) : new Date(t + 9 * 3600000).toISOString().slice(0, 10);
+    }
+    return null;
   }
+  function mdOf(v) {
+    var d = jstDay(v);
+    if (d) return (+d.slice(5, 7)) + '/' + (+d.slice(8, 10));
+    if (isStr(v) && /^\d{2}-\d{2}$/.test(v)) return (+v.slice(0, 2)) + '/' + (+v.slice(3, 5));
+    return '';
+  }
+  function todayMd() { var d = DS().data, t = d && d.today; return mdOf(isStr(t) ? t : nowIso()); }
   // 新しい id は dispatch 側で作って action に入れる（reduce は時刻・連番を読まない。V-10 の 3）
   var seq = 0;
   function newId() { seq += 1; return 'n' + Date.now().toString(36) + '-' + seq; }
   SELF.newId = newId;
 
-  function items() { return (SD() && SD().items) || []; }
-  function itemById(id) { var a = items(); for (var i = 0; i < a.length; i++) if (a[i].id === id) return a[i]; return null; }
-  function isAi(id) { var it = itemById(id); return !!(it && it.src === 'ai' && it.kind !== 'door'); }
-  function isDoor(id) { var it = itemById(id); return !!(it && it.kind === 'door'); }
+  // バディの見立て（ai・door）: 生成の仕組みが無いので空（LS-15）。見立ての返事の遷移（agree / fix / away …）はこの一覧の id にだけ効く
+  function aiItems() { return []; }
+  function aiById(id) { var a = aiItems(); for (var i = 0; i < a.length; i++) if (a[i].id === id) return a[i]; return null; }
+  function isAi(id) { var it = aiById(id); return !!(it && it.src === 'ai' && it.kind !== 'door'); }
+  function isDoor(id) { var it = aiById(id); return !!(it && it.kind === 'door'); }
   function bothTexts(t) { return isStr(t) ? [t] : [t.js, t.es]; }
   function axisById(id) { var a = (SD() && SD().axes) || []; for (var i = 0; i < a.length; i++) if (a[i].id === id) return a[i]; return null; }
-  function dataScenes() { return (SD() && SD().kufu && SD().kufu.scenes) || []; }
+  // データの場面・工夫（固定の k1 / k2）は持たない（LS-15）。場面は本人が書いたものだけ
+  function dataScenes() { return []; }
   function dataScene(id) { var a = dataScenes(); for (var i = 0; i < a.length; i++) if (a[i].id === id) return a[i]; return null; }
   function dataIdea(id) {
     var a = dataScenes();
@@ -62,17 +83,16 @@ window.DES = window.DES || {};
   }
   function findBy(arr, id) { for (var i = 0; i < arr.length; i++) if (arr[i].id === id) return arr[i]; return null; }
 
+  // 初回は空（固定の見立て・記録・場面を入れない）。アバターは profile（18-23）なのでここに持たない
   function defaults() {
-    var a = (SD() && SD().avatar && SD().avatar.initial) || { hair: 'h1', color: 'c1' };
-    return { v: 1, avatar: { hair: a.hair, color: a.color }, rx: {}, notes: [], door: {}, kufu: { scenes: [], ideas: {}, own: [] }, log: [], draft: null };
+    return { v: 1, rx: {}, notes: [], door: {}, kufu: { scenes: [], ideas: {}, own: [] }, log: [], draft: null };
   }
 
-  // 形の違うキーは捨てて既定に戻す（壊れた JSON でも画面が出る）
+  // 形の違うキーは捨てて既定に戻す（壊れた JSON でも画面が出る）。古い保存値の avatar は読まない
   SELF.validate = function (raw) {
     var s = defaults(), v = raw;
     if (isStr(v)) { try { v = JSON.parse(v); } catch (e) { return s; } }
     if (!isObj(v)) return s;
-    if (isObj(v.avatar) && HAIRS.indexOf(v.avatar.hair) >= 0 && COLORS.indexOf(v.avatar.color) >= 0) s.avatar = { hair: v.avatar.hair, color: v.avatar.color };
     if (isObj(v.rx)) Object.keys(v.rx).forEach(function (k) {
       var r = v.rx[k];
       if (!isId(k) || !isObj(r) || RX.indexOf(r.state) < 0 || !Array.isArray(r.vers) || !r.vers.every(isVer)) return;
@@ -295,11 +315,6 @@ window.DES = window.DES || {};
         if (!x || x.gone) return false;
         x.gone = true;
         return true;
-      case 'avatar':
-        if (HAIRS.indexOf(a.hair) < 0 || COLORS.indexOf(a.color) < 0) return false;
-        if (s.avatar.hair === a.hair && s.avatar.color === a.color) return false;
-        s.avatar = { hair: a.hair, color: a.color };
-        return true;
       case 'draft':
         if (a.draft === null) { if (s.draft === null) return false; s.draft = null; return true; }
         if (!isObj(a.draft) || !isStr(a.draft.target) || !KEY_RE.test(a.draft.target) || !isStr(a.draft.mode) || !isStr(a.draft.text)) return false;
@@ -315,16 +330,147 @@ window.DES = window.DES || {};
     if (a.type === 'undo') return SELF.validate(a.prev);
     var s = SELF.validate(state);
     curLid = isId(a.lid) ? a.lid : null;
-    // 日付は action から（dispatch が必ず入れる）。無い action には日付を付けない
+    // 日時は action から（dispatch が ISO を必ず入れる）。無い action には日付を付けない
     var changed = step(s, a, isStr(a.at) ? a.at : '');
     curLid = null;
     return changed ? s : state;
   };
 
+  // ---------- 記録（record）の導出（LS-15 / 18-18 / 18-27）。AI の推定ではなく、本人の記録から機械的に作る ----------
+  // 体験（exp）← 作品と活動 / 習熟（mas）← 基礎学習の記録（読むだけ）/ 関心（int）← 目標 3 枠と「明日にとっておいた」取り組み。志向性・心理は無し
+  var COURSES = ['math4', 'math5', 'math6', 'math7', 'math8', 'math9', 'jp4', 'jp5', 'jp6', 'jp7', 'jp8', 'jp9',
+    'science4', 'science5', 'science6', 'science7', 'science8', 'science9'];
+  // コース名（BL.courseRegistry が無くても出せる小さな表）: 「算数 4 年」「数学 中 1」「国語 5 年」「理科 中 1」
+  function courseLabel(id) {
+    var m = /^(math|jp|science)([4-9])$/.exec(id);
+    if (!m) return null;
+    var g = +m[2], subj = m[1] === 'math' ? (g >= 7 ? '数学' : '算数') : (m[1] === 'jp' ? '国語' : '理科');
+    return subj + ' ' + (g >= 7 ? '中 ' + (g - 6) : g + ' 年');
+  }
+  // progress のキー（ref = <code> か 'jp5/<code>' 等。core.js の ref(unit) と同じ）→ コース。registry があれば codes で、無ければ code の形で
+  function courseOfRef(ref, reg) {
+    if (!isStr(ref)) return null;
+    var m = /^(jp[5-9])\/[0-9A-Z]{16}$/.exec(ref);
+    if (m) return m[1];
+    if (reg && reg[ref]) return reg[ref];
+    if (/^82502[456][0-9A-Z]{10}$/.test(ref)) return 'math' + ref.charAt(5);
+    if (/^83502[123][0-9A-Z]{10}$/.test(ref)) return 'math' + (6 + (+ref.charAt(5)));
+    if (/^82102C[0-9A-Z]{10}$/.test(ref)) return 'jp4';
+    if (/^82602[456][0-9A-Z]{10}$/.test(ref)) return 'science' + ref.charAt(5);
+    var s = /^836[12]2([123])[0-9A-Z]{10}$/.exec(ref);
+    return s ? 'science' + (6 + (+s[1])) : null;
+  }
+  // BL.courseRegistry（基礎学習のページを同じ窓で読んだ時だけある）→ { ref: courseId }。jp5〜9 は 'jpN/' 付きなので形で引ける
+  function registryRefs() {
+    var BL = typeof window !== 'undefined' && window.BL, c = BL && BL.courseRegistry && BL.courseRegistry.courses, out = null;
+    if (!isObj(c)) return null;
+    COURSES.forEach(function (id) {
+      if (/^jp[5-9]$/.test(id) || !isObj(c[id]) || !Array.isArray(c[id].codes)) return;
+      c[id].codes.forEach(function (code) { if (isStr(code)) { out = out || {}; if (!out[code]) out[code] = id; } });
+    });
+    return out;
+  }
+  // 基礎学習の記録 → [{ course, n }]（touched = answers が 1 つ以上。done は問題数が分からないので出さない。18-18）
+  function basicTouched(basic, reg) {
+    var cnt = {};
+    if (!isObj(basic) || !isObj(basic.progress)) return [];
+    Object.keys(basic.progress).forEach(function (ref) {
+      var e = basic.progress[ref], c;
+      if (!isObj(e) || !isObj(e.answers) || !Object.keys(e.answers).length) return;
+      c = courseOfRef(ref, reg);
+      if (c) cnt[c] = (cnt[c] || 0) + 1;
+    });
+    return COURSES.filter(function (id) { return cnt[id]; }).map(function (id) { return { course: id, n: cnt[id] }; });
+  }
+  function rid(prefix, id) { return (prefix + String(id == null ? '' : id).replace(/[^A-Za-z0-9_-]/g, '_')).slice(0, 64); }
+  function strip(t) { return String(t == null ? '' : t).replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, ''); }
+  function stamp(at) { var m = mdOf(at); return m ? '（' + m + '）' : ''; }
+  // 純関数: src = { works, activities, goals, marks, basic, registry, titleOf(catalogId), kept } → [{ id, axis, text, at }]（at は ISO / 'YYYY-MM-DD' / null）
+  SELF.deriveRecords = function (src) {
+    src = src || {};
+    var out = [], exp = [], works = Array.isArray(src.works) ? src.works : [], acts = Array.isArray(src.activities) ? src.activities : [];
+    var madeActs = {};
+    works.forEach(function (w) {
+      if (!isObj(w)) return;
+      var t = strip(w.title);
+      if (isStr(w.actId)) madeActs[w.actId] = true;
+      if (!t) return;
+      var at = isStr(w.createdAt) && jstDay(w.createdAt) ? w.createdAt : (isStr(w.date) && jstDay(w.date) ? w.date : null);
+      exp.push({ id: rid('r-w-', w.id), axis: 'exp', text: t + ' を作った' + stamp(at), at: at });
+    });
+    // 作品に残した活動は作品の行だけ。手を動かした（変化が 1 つ以上ある）活動だけ
+    acts.forEach(function (a) {
+      if (!isObj(a) || madeActs[a.id] || !Array.isArray(a.changes) || !a.changes.length) return;
+      var t = strip(a.title);
+      if (!t) return;
+      var c0 = a.changes[0], at = isStr(a.createdAt) && jstDay(a.createdAt) ? a.createdAt : (isObj(c0) && isStr(c0.at) && jstDay(c0.at) ? c0.at : null);
+      exp.push({ id: rid('r-a-', a.id), axis: 'exp', text: t + ' を作った' + stamp(at), at: at });
+    });
+    // 体験は新しい順（日付の無いものは後ろ）
+    exp.sort(function (x, y) {
+      var a = x.at ? Date.parse(x.at) : -Infinity, b = y.at ? Date.parse(y.at) : -Infinity;
+      return b - a;
+    });
+    // 関心: 目標 3 枠（本人が決めた text）→「明日にとっておいた」取り組み
+    (Array.isArray(src.goals) ? src.goals : []).forEach(function (g) {
+      if (!isObj(g) || !isStr(g.text) || !strip(g.text)) return;
+      var label = strip(g.label);
+      out.push({ id: rid('r-g-', g.id), axis: 'int', text: (label ? label + ' · ' : '') + strip(g.text), at: null });
+    });
+    var marks = isObj(src.marks) ? src.marks : {}, titleOf = typeof src.titleOf === 'function' ? src.titleOf : function () { return null; };
+    Object.keys(marks).forEach(function (id) {
+      if (!isObj(marks[id]) || marks[id].tomorrow !== true) return;
+      var t = strip(titleOf(id));
+      if (t) out.push({ id: rid('r-t-', id), axis: 'int', text: t + ' · ' + (src.kept || '明日にとっておいた'), at: null });
+    });
+    out = out.concat(exp);
+    // 習熟: 基礎学習のコースごとにふれた単元の数
+    basicTouched(src.basic, src.registry || null).forEach(function (b) {
+      out.push({ id: rid('r-m-', b.course), axis: 'mas', text: courseLabel(b.course) + ' の単元に ' + b.n + ' こふれた', at: null });
+    });
+    return out;
+  };
+  function readBasic() {
+    try {
+      var ls = typeof window !== 'undefined' && window.localStorage, raw = ls ? ls.getItem(BASIC_KEY) : null;
+      if (raw == null) return null;
+      var v = JSON.parse(raw);
+      return isObj(v) && isObj(v.progress) ? v : null;
+    } catch (e) { return null; }
+  }
+  function catalogTitle(id) {
+    var P = DS().plan, it = P && P.item ? P.item(id) : null;
+    if (it && isStr(it.title)) return it.title;
+    var cat = (DS().data && DS().data.catalog) || [];
+    for (var i = 0; i < cat.length; i++) for (var j = 0; j < (cat[i].items || []).length; j++) if (cat[i].items[j].id === id) return cat[i].items[j].title;
+    return null;
+  }
+  // 公開: 今の本人の記録から record を導く（L6 の手がかりが読む）
+  SELF.records = function () {
+    var S = DS().state || {};
+    return SELF.deriveRecords({
+      works: S.works, activities: S.activities, goals: S.goals, marks: S.catalogMarks, basic: readBasic(), registry: registryRefs(),
+      titleOf: catalogTitle, kept: DS().t ? DS().t('kept_tomorrow') : null
+    }).map(function (r) { return { id: r.id, axis: r.axis, text: r.text, at: r.at }; });
+  };
+
+  // ---------- 保存の鍵（des.live.self）と live の文言 ----------
+  if (DS().store && DS().store.register) {
+    DS().store.register('self', function (v) { return isObj(v) && v.v === 1; }, defaults);
+  }
+  if (DS().i18n && DS().i18n.add) {
+    DS().i18n.add({
+      sx_empty_comment: ['まだ見立てはおいていないよ。作る・基礎学習・自分の言葉を書くと、ここに手がかりがたまっていく', 'まだ見立てはおいていないよ。つくる・きそ学習・自分のことばを書くと、ここに手がかりがたまっていく'],
+      sx_share: ['サポーターも見られる', 'サポーターも見られるよ'],
+      sx_name_label: ['呼んでほしい名前', 'よんでほしい名前'],
+      sx_t_name: ['名前を変えた', '名前をかえた']
+    });
+  }
+
   // ---------- 表示の部品 ----------
   if (typeof document === 'undefined') return;
 
-  var st = null;
+  var st = null, stRef = null;
   var ui = { open: null, edit: null, fold: {}, awayOpen: {}, hist: null, reply: null, flash: null, kmenu: null, howwas: null, rnote: {}, kfold: {}, focus: null, restore: true, pick: null, failed: {} };
   SELF.ui = ui;
   SELF.state = function () { return st; };
@@ -340,25 +486,35 @@ window.DES = window.DES || {};
   // 引用符つき属性値の selector 用（改行・引用符・\ をエスケープ）
   function q(v) { return window.CSS && CSS.escape ? CSS.escape(String(v)) : String(v).replace(/[\\"]/g, '\\$&').replace(/[\n\r\f]/g, ' '); }
   function md(d, time) {
-    if (!isStr(d)) return '';
-    var p = d.split('-'), s = (+p[0]) + '/' + (+p[1]);
+    var s = mdOf(d);
+    if (!s) return '';
     return time ? s + ' ' + time : s;
   }
   function onSelf() { var A = DS().app; return !!(A && A.route && A.route() === 'self'); }
 
-  function load() {
-    var r = null, failed = false;
-    try { r = window.localStorage.getItem(KEY); } catch (e) { failed = true; }
-    st = SELF.validate(r);
-    if (failed) markFail();
+  // DES.state.self（DES.store が des.live.self から読んだ値）を形の検査に通して使う。
+  // 別タブの変更で DES.store.load() が読み直すと別のオブジェクトになるので、その時だけ取り込み直す（true を返す）
+  function syncFromStore() {
+    var S = DS().state;
+    if (!S) { if (!st) st = SELF.validate(null); return false; }
+    if (st && S.self === stRef) return false;
+    st = SELF.validate(S.self);
+    S.self = st; stRef = st;
+    return true;
   }
   function markFail() {
     var D = DS();
     if (D.state) D.state.saveFailed = true;
     if (D.app && D.app.renderSaveState) D.app.renderSaveState();
   }
+  // 1 つの鍵だけ書く（l0-notes: DES.store.save('self')。false = 保存できなかった → save_fail の印。画面はメモリで続く）
   function persist() {
-    try { window.localStorage.setItem(KEY, JSON.stringify(st)); return true; } catch (e) { markFail(); return false; }
+    var D = DS();
+    if (D.state) D.state.self = st;
+    stRef = st;
+    var ok = !!(D.store && D.store.save && D.store.save('self'));
+    if (!ok) markFail();
+    return ok;
   }
   function rerender() { if (onSelf()) DS().app.render(); }
   function setDraft(d) { var n = SELF.reduce(st, { type: 'draft', draft: d }); if (n !== st) { st = n; persist(); } }
@@ -366,7 +522,7 @@ window.DES = window.DES || {};
   // 状態を変える唯一の経路: reduce → 保存 → 再描画 → トースト（戻す 5 秒）
   function dispatch(action, o) {
     o = o || {};
-    if (!isStr(action.at)) action.at = today();
+    if (!isStr(action.at)) action.at = nowIso();
     if (!isStr(action.lid)) action.lid = newId();
     var prev = st, next = SELF.reduce(st, action);
     if (next === st) return false;
@@ -397,12 +553,33 @@ window.DES = window.DES || {};
   }
 
   // ---------- 読み取り ----------
+  // カードの行 = 記録（record）→ 見立て（ai。今は空）→ どちらも無い観点だけ gap。描画のたびに作り直す（記録は他ページ・別タブで変わる）
+  var itemCache = null;
+  function hasOwn(axis) { return st.notes.some(function (n) { return !n.gone && n.axis === axis; }); }
+  function buildItems() {
+    var recs = SELF.records(), out = [], per = {};
+    recs.forEach(function (r) {
+      per[r.axis] = (per[r.axis] || 0) + 1;
+      // 3 件を超えた分は「ほか n 件」に入れる（モックの体験カードと同じ畳み方）
+      out.push({ id: r.id, axis: r.axis, src: 'record', date: r.at || null, text: r.text, group: r.axis === 'mas' ? 'grew' : null, fold: per[r.axis] > 3 });
+    });
+    out = out.concat(aiItems());
+    ((SD() && SD().axes) || []).forEach(function (ax) {
+      if (per[ax.id] || hasOwn(ax.id)) return;
+      // 本人の言葉も記録も無い観点: 「まだ分からない」（凡例チップ）+ その観点の書き出しのヒント（axes[].ph）。開くと書く欄（contract-V の gap と同じ）
+      out.push({ id: 'gap-' + ax.id, axis: ax.id, src: 'gap', text: ax.ph, group: ax.groups ? ax.groups[0].id : null });
+    });
+    return out;
+  }
+  function items() { if (!itemCache) itemCache = buildItems(); return itemCache; }
+  function itemById(id) { var a = items(); for (var i = 0; i < a.length; i++) if (a[i].id === id) return a[i]; return null; }
   function rxOf(id) { return st.rx[id] || { state: 'pending', vers: [], cur: -1 }; }
   function aiText(it) { var r = rxOf(it.id); return r.state === 'edited' ? r.vers[r.cur].text : ST(it.text); }
   function itemText(it) { return it.src === 'ai' ? aiText(it) : ST(it.text); }
   function isAwayItem(it) { return it.src === 'ai' && (it.kind === 'door' ? st.door[it.id] === 'not_now' : rxOf(it.id).state === 'away'); }
   function notesOn(on) { return st.notes.filter(function (n) { return !n.gone && n.on === on; }); }
-  function notesGroup(axis, group) { return st.notes.filter(function (n) { return !n.gone && n.on === null && n.axis === axis && n.group === group; }); }
+  // 注記の相手（記録）が消えた時は観点の末尾に出す（本人の言葉は消さない）
+  function notesGroup(axis, group) { return st.notes.filter(function (n) { return !n.gone && (n.on === null || !itemById(n.on)) && n.axis === axis && n.group === group; }); }
   function noteText(n) { return n.vers[n.cur].text; }
   function lastLog(id, act) { for (var i = st.log.length - 1; i >= 0; i--) if (st.log[i].item === id && st.log[i].act === act) return st.log[i]; return null; }
   function ownScene(id) { return findBy(st.kufu.scenes, id); }
@@ -594,7 +771,7 @@ window.DES = window.DES || {};
     if (it.src === 'ai' && it.kind === 'door') {
       var added = st.door[it.id] === 'added';
       kids.push(H('div', { class: 'sx-react' }, added ? [H('a', { class: 'link-btn', href: '#plan' }, TX('see_plan') + ' →')] : [
-        H('button', { type: 'button', class: 'btn small', 'data-action': 'grid-add', 'data-id': it.activity, 'data-door': it.id, 'data-fk': 'dooradd:' + it.id }, DS().t('add_to_plan')),
+        H('button', { type: 'button', class: 'btn small', 'data-action': 'sx-dooradd', 'data-id': it.id, 'data-fk': 'dooradd:' + it.id }, DS().t('add_to_plan')),
         H('button', { type: 'button', class: 'btn small', 'data-action': 'grid-ask', 'data-id': it.activity, 'data-fk': 'doorask:' + it.id }, DS().t('ask_short')),
         btn(KX('not_now'), 'sx-doornot', it.id)
       ]));
@@ -683,7 +860,9 @@ window.DES = window.DES || {};
     if (ax.groups) {
       ax.groups.forEach(function (g) {
         var rows = rowsOf(its.filter(function (i) { return i.group === g.id; })).concat(groupTail(g.id));
-        body.push(H('div', { class: 'sx-group' }, [H('h3', { class: 'sx-group-h' }, ST(g.head)), H('div', { class: 'sx-list' }, rows)]));
+        // 中身の無い小見出しは出さない（初回は空のため）
+        if (!rows.length) return;
+        body.push(H('div', { class: 'sx-group' }, [H('h3', { class: 'sx-group-h' }, ST(g.head, { md: todayMd() })), H('div', { class: 'sx-list' }, rows)]));
       });
       var tail = groupTail(null);
       if (tail.length) body.push(H('div', { class: 'sx-list sx-tail' }, tail));
@@ -723,17 +902,9 @@ window.DES = window.DES || {};
     ].concat(body));
   }
 
-  // 真ん中のバディの話しかけ（V-5）
+  // 真ん中のバディの話しかけ（V-5）: 見立てが無い間は 1 文だけ（LS-15 / 18-24 sx_empty_comment）。返事を促すリンクは見立てがある時だけ
   function commentInfo() {
-    var c = SD().comment, first = null, replied = 0;
-    c.ask.forEach(function (id) { if (rxOf(id).state === 'pending') { if (!first) first = id; } else replied += 1; });
-    if (first) {
-      if (!replied && first === c.ask[0]) return { text: ST(c.first), link: ST(c.link), action: 'sx-goto', id: first };
-      return { text: ST(c.next, { text: aiText(itemById(first)).slice(0, 20) }), link: ST(c.link), action: 'sx-goto', id: first };
-    }
-    var k1 = ideasOfScene('k1').some(function (x) { var s = ideaState(x.id).status; return s === 'trying' || s === 'result'; });
-    if (!k1) return { text: ST(c.kufu), link: ST(c.link_kufu), action: 'sx-goto-kufu', id: 'k1' };
-    return { text: ST(c.done) };
+    return { text: DS().t('sx_empty_comment') };
   }
   function budEl() {
     var c = commentInfo();
@@ -746,8 +917,20 @@ window.DES = window.DES || {};
     ]);
   }
 
-  function avatarEl(av, kls, alt) {
-    var wrap = H('span', { class: 'sx-av ' + kls }, [H('span', { class: 'sx-av-letter', 'aria-hidden': 'true' }, SD().avatar.initialLetter)]);
+  // 名前とアバターの正本は profile（L0 の store。18-23）。profile.avatar が null の間は選べる絵の initial
+  function profile() { var p = DS().state && DS().state.profile; return isObj(p) ? p : { name: null, avatar: null }; }
+  function profName() { var n = profile().name; n = isStr(n) ? n.replace(/^\s+|\s+$/g, '') : ''; return n || null; }
+  function profAvatar() {
+    var a = profile().avatar, ini = (SD() && SD().avatar && SD().avatar.initial) || { hair: 'h1', color: 'c1' };
+    if (isObj(a) && a.none === true) return { hair: 'none', color: ini.color };
+    if (isObj(a) && a.hair !== 'none' && HAIRS.indexOf(a.hair) >= 0 && COLORS.indexOf(a.color) >= 0) return { hair: a.hair, color: a.color };
+    return { hair: ini.hair, color: ini.color };
+  }
+  function avatarAlt(name) { return name ? TX('avatar_alt', { name: name }) : TX('avatar_alt_none'); }
+  // 円の中の文字: 名前の 1 文字目（無ければ self のアイコン）。絵の読込失敗・「絵を使わない」の時に見える
+  function avatarEl(av, kls, alt, name) {
+    var nm = name === undefined ? profName() : name;
+    var wrap = H('span', { class: 'sx-av ' + kls }, [H('span', { class: 'sx-av-letter', 'aria-hidden': 'true' }, nm ? Array.from(nm)[0] : icon('self'))]);
     if (av.hair === 'none') {
       if (alt) { wrap.setAttribute('role', 'img'); wrap.setAttribute('aria-label', alt); }
       return wrap;
@@ -761,7 +944,7 @@ window.DES = window.DES || {};
   }
   function hubEl() {
     return H('div', { class: 'self-hub' }, [H('div', { class: 'self-hub-inner' }, [
-      avatarEl(st.avatar, 'main', TX('avatar_alt')),
+      avatarEl(profAvatar(), 'main', avatarAlt(profName())),
       H('p', { class: 'sx-name' }, DS().data.child.name),
       H('button', { type: 'button', class: 'btn ghost small', 'data-action': 'sx-avatar', 'data-fk': 'avatar-change', 'aria-haspopup': 'dialog', 'aria-label': TX('avatar_h') }, TX('avatar_change'))
     ])]);
@@ -843,7 +1026,8 @@ window.DES = window.DES || {};
       ]));
     }
     if (d.basis) left.push(basisBlock(TX('basis'), d.basis));
-    right.push(H('p', { class: 'ks-buddy' }, [bud(18, 'neutral'), H('span', null, sc.own ? KX('new_scene_buddy') : ST(d.buddy))]));
+    // 本人が書いた場面へのバディの固定返事（new_scene_buddy）は出さない（LS-15）。データの場面（今は無い）だけ buddy の 1 行
+    if (!sc.own && d.buddy) right.push(H('p', { class: 'ks-buddy' }, [bud(18, 'neutral'), H('span', null, ST(d.buddy))]));
     // 本人の場面の紐づけ（Y-8 の 6）: チップ + 作業台を開く だけ（試してみる・hint は出さない）
     var sLink = sc.own ? makeLink('scene:' + sc.id) : null;
     if (sLink) right.push(makeLinkRow(sLink, 'scene:' + sc.id));
@@ -926,7 +1110,7 @@ window.DES = window.DES || {};
         H('div', { class: 'self-head-text' }, [H('h1', null, DS().t('self')), H('p', { class: 'sx-intro' }, ST(t.intro))]),
         H('div', { class: 'self-head-side' }, [
           H('div', { class: 'sx-legend' }, [srcChip('own'), srcChip('record'), srcChip('ai'), srcChip('gap')]),
-          H('span', { class: 'date-stamp' }, ST(t.as_of))
+          H('span', { class: 'date-stamp' }, ST(t.as_of, { md: todayMd() }))
         ])
       ]),
       // V-10: 3 列の独立した縦積み（左 = 関心 → 体験 / 中央 = 本人 + バディ / 右 = 志向性 → 心理 → 習熟）。
@@ -940,7 +1124,7 @@ window.DES = window.DES || {};
           H('div', { class: 'self-col col-r' }, [ax('ori'), ax('psy'), ax('mas')])
         ]),
       kufuEl(),
-      H('p', { class: 'privacy-line' }, [H('span', { class: 'privacy-note' }, [icon('lock'), H('span', null, ST(t.share))])])
+      H('p', { class: 'privacy-line' }, [H('span', { class: 'privacy-note' }, [icon('lock'), H('span', null, DS().t('sx_share'))])])
     ]);
   }
 
@@ -961,7 +1145,10 @@ window.DES = window.DES || {};
   }
 
   SELF.render = function (main) {
-    if (!st) load();
+    // 別タブで des.live.self が変わった時: 入力中の編集欄の文は画面の値を保つ（18-28 (d)。保存はしない）
+    var liveTa = ui.edit ? main.querySelector('textarea[data-sx-input]') : null, liveKey = liveTa && liveTa.getAttribute('data-sx-input'), liveVal = liveTa ? liveTa.value : null;
+    if (syncFromStore() && liveKey && ui.edit && ui.edit.key === liveKey) st.draft = { target: liveKey, mode: liveKey.slice(0, liveKey.indexOf(':')), text: liveVal.slice(0, MAXLEN) };
+    itemCache = null;
     if (ui.restore) restoreDraft();
     var ae = document.activeElement, fk = null, sel = null;
     if (ae && ae !== document.body && main.contains(ae)) {
@@ -1021,7 +1208,8 @@ window.DES = window.DES || {};
       case 'fix': a = { type: 'fix', id: id, text: t }; o = { toast: TX('t_fixed'), reply: { id: id, key: 'reply_fixed' }, focus: 'row:' + id, flash: id }; break;
       case 'on':
         it = itemById(id);
-        a = { type: 'noteAdd', nid: nid, axis: it.axis, group: it.group || null, on: id, text: t };
+        // gap に書いた言葉は観点の本人の言葉になる（書くと gap は消えるので、gap には付けない）
+        a = { type: 'noteAdd', nid: nid, axis: it.axis, group: it.group || null, on: it.src === 'gap' ? null : id, text: t };
         o = { toast: TX('t_added'), focus: 'row:note:' + nid, flash: 'note:' + nid, undoFocus: 'row:' + id }; break;
       case 'add':
         a = { type: 'noteAdd', nid: nid, axis: id, group: id === 'psy' ? 'now' : null, on: null, text: t };
@@ -1052,9 +1240,12 @@ window.DES = window.DES || {};
     if (b) b.disabled = !t || same;
     if (h) h.hidden = !same;
   }
-  // 話すの下書きへ足す（既存 DES.talk.prefill と同じ流れ: 末尾に改行して足す → トースト prefilled → 話すの入力欄へ）
+  // 話すの下書きへ足す（末尾に改行して足す → トースト prefilled → 話すの入力欄へ）。
+  // 話す（L1）が文をそのまま足す口 DES.talk.prefillText(text) を持てばそれを使う。DES.talk.prefill(title) は
+  // 「「{title}」をやってみたい」に包むため、ここの下書き（文そのもの）には使えない → 無い間は同じ流れの自前実装
   function toTalk(line) {
     var D = DS();
+    if (D.talk && typeof D.talk.prefillText === 'function') { D.talk.prefillText(line); return; }
     D.app.closePlanDialog();
     D.app.change(function () {
       var S = D.state, cur = ((S.draft && S.draft.text) || '').replace(/\s+$/, '');
@@ -1101,12 +1292,14 @@ window.DES = window.DES || {};
     dispatch({ type: 'agree', id: id }, { toast: TX('t_agree'), focus: 'row:' + id, flash: id });
   };
   A['sx-away'] = function (el) {
-    var id = aid(el), it = itemById(id);
+    var id = aid(el), it = aiById(id);
+    if (!it) return;
     leaveEdit(); ui.open = null; closeTransient();
     dispatch({ type: 'away', id: id }, { toast: TX('t_not_now'), reply: { id: id, key: 'reply_not_now', axis: it.axis }, focus: 'awaybtn:' + it.axis, undoFocus: 'row:' + id });
   };
   A['sx-back'] = function (el) {
-    var id = aid(el), it = itemById(id);
+    var id = aid(el), it = aiById(id);
+    if (!it) return;
     closeTransient();
     dispatch({ type: 'back', id: id }, { toast: TX('t_back'), focus: 'row:' + id, flash: id, undoFocus: 'awaybtn:' + it.axis });
   };
@@ -1131,7 +1324,7 @@ window.DES = window.DES || {};
     rerender();
   };
   A['sx-talk'] = function (el) {
-    var it = itemById(aid(el));
+    var it = aiById(aid(el));
     if (it) toTalk('「' + aiText(it).slice(0, 30) + '」');
   };
   A['sx-fold'] = function (el) { var ax = aid(el); closeTransient(); ui.fold[ax] = !ui.fold[ax]; ui.focus = 'fold:' + ax; rerender(); };
@@ -1143,17 +1336,29 @@ window.DES = window.DES || {};
     dispatch({ type: 'noteDel', id: id }, { toast: TX('t_removed'), focus: n.on ? 'row:' + n.on : 'addbtn:' + n.axis, undoFocus: 'row:note:' + id, flash: 'note:' + id });
   };
   A['sx-doornot'] = function (el) {
-    var id = aid(el), it = itemById(id);
+    var id = aid(el), it = aiById(id);
+    if (!it) return;
     ui.open = null; closeTransient();
     dispatch({ type: 'door', id: id, val: 'not_now' }, { toast: TX('t_not_now'), focus: 'awaybtn:' + it.axis, undoFocus: 'row:' + id });
   };
+  // 予定に入れる（door）: L1 の DES.plan.act.addFirst が Promise（{ok, event} | {ok:false, reason}）を返す時はその結果で、
+  // 返さない（今の写し）時は予定の件数の差で、入ったときだけ door を added にする（18-27）
+  A['sx-dooradd'] = function (el) {
+    var id = aid(el), it = aiById(id), P = DS().plan, add = P && P.act && P.act.addFirst;
+    if (!it || !isDoor(id) || typeof add !== 'function') return;
+    function added() { ui.open = null; dispatch({ type: 'door', id: id, val: 'added' }, { focus: 'row:' + id, flash: id }); }
+    var before = countPlan(it.activity), r = add(it.activity);
+    if (r && typeof r.then === 'function') r.then(function (x) { if (x && x.ok) added(); }, function () { /* 失敗の文は予定の側がトーストで出す */ });
+    else setTimeout(function () { if (countPlan(it.activity) > before) added(); }, 0);
+  };
   A['sx-doorback'] = function (el) {
-    var id = aid(el), it = itemById(id);
+    var id = aid(el), it = aiById(id);
+    if (!it) return;
     closeTransient();
     dispatch({ type: 'doorBack', id: id }, { toast: TX('t_back'), focus: 'row:' + id, flash: id, undoFocus: 'awaybtn:' + it.axis });
   };
   A['sx-goto'] = function (el) {
-    var id = aid(el), it = itemById(id);
+    var id = aid(el), it = itemById(id) || aiById(id);
     if (!it) return;
     leaveEdit(); closeTransient();
     ui.open = id;
@@ -1274,18 +1479,23 @@ window.DES = window.DES || {};
     dlg.appendChild(H('div', { class: 'dialog-head' }, [H('h2', { id: 'self-sheet-h' }, TX('avatar_h')),
       H('button', { class: 'icon-btn', type: 'button', 'data-action': 'dialog-close', 'aria-label': DS().t('close') }, [icon('close')])]));
     dlg.appendChild(H('div', { class: 'dialog-body' }, [
-      H('div', { class: 'sx-av-preview' }, [avatarEl(p, 'preview', TX('avatar_alt'))]),
+      H('div', { class: 'sx-av-preview' }, [avatarEl(p, 'preview', avatarAlt(cleanName(p.name)), cleanName(p.name))]),
+      // 呼んでほしい名前（12 字まで・空なら名前なし。保存先は profile.name）
+      H('div', { class: 'sx-name-field' }, [
+        H('label', { for: 'sx-name-input' }, DS().t('sx_name_label')),
+        H('input', { type: 'text', id: 'sx-name-input', class: 'sx-name-input', maxlength: String(NAME_MAX), autocomplete: 'off', 'data-sx-name': '1', value: p.name || '' })
+      ]),
       H('fieldset', { class: 'sx-fieldset' }, [
         H('legend', null, TX('avatar_hair')),
         H('div', { class: 'sx-hairs' }, av.hairs.map(function (h) {
           return H('label', { class: 'radio-card' }, [
             H('input', { type: 'radio', name: 'sx-hair', value: h.id, checked: p.hair === h.id }),
-            avatarEl({ hair: h.id, color: p.color }, 'thumb', ''),
+            avatarEl({ hair: h.id, color: p.color }, 'thumb', '', cleanName(p.name)),
             H('span', null, ST(h))
           ]);
         }).concat([H('label', { class: 'radio-card' }, [
           H('input', { type: 'radio', name: 'sx-hair', value: 'none', checked: p.hair === 'none' }),
-          avatarEl({ hair: 'none', color: p.color }, 'thumb', ''),
+          avatarEl({ hair: 'none', color: p.color }, 'thumb', '', cleanName(p.name)),
           H('span', null, TX('avatar_none'))
         ])]))
       ]),
@@ -1305,28 +1515,55 @@ window.DES = window.DES || {};
       H('button', { class: 'btn small', type: 'button', 'data-action': 'dialog-close' }, TX('cancel'))
     ]));
   }
+  var NAME_MAX = 12;
+  // 名前: 前後の空白を落として 12 字（文字単位）まで。空は null
+  function cleanName(v) {
+    var t = isStr(v) ? v.replace(/[\u0000-\u001f\u007f]/g, '').replace(/^\s+|\s+$/g, '') : '';
+    t = Array.from(t).slice(0, NAME_MAX).join('');
+    return t || null;
+  }
+  function sameAvatar(a, b) {
+    if (a === null || b === null) return a === b;
+    return a.none === true ? b.none === true : (b.none !== true && a.hair === b.hair && a.color === b.color);
+  }
   A['sx-avatar'] = function (el) {
     var dlg = sheet();
     if (!dlg) return;
     // 開いている編集欄・行は先に閉じる（変更ありの下書きは残る）。dialog の裏に編集欄を残さない
     leaveEdit(); ui.open = null; closeTransient();
     rerender();
-    ui.pick = { hair: st.avatar.hair, color: st.avatar.color };
+    var av = profAvatar();
+    ui.pick = { hair: av.hair, color: av.color, name: profName() || '' };
     fillSheet();
     DS().app.openDialog(dlg, el);
     var c = dlg.querySelector('input[name="sx-hair"]:checked');
     if (c) c.focus();
   };
+  // これにする: 名前とアバターを profile に書く（DES.app.change の 1 経路 → サイドバーの名前も変わる）。戻す = 前の profile へ
   A['sx-avatar-ok'] = function () {
-    var dlg = sheet(), p = ui.pick;
-    DS().app.closeDialog(dlg);
-    if (p) dispatch({ type: 'avatar', hair: p.hair, color: p.color }, { toast: TX('t_avatar'), focus: 'avatar-change' });
+    var dlg = sheet(), p = ui.pick, D = DS();
+    D.app.closeDialog(dlg);
+    if (!p || !D.state) return;
+    var prev = profile(), prevSaved = { name: isStr(prev.name) ? prev.name : null, avatar: isObj(prev.avatar) ? JSON.parse(JSON.stringify(prev.avatar)) : null };
+    var avatar = p.hair === 'none' ? { none: true } : { hair: p.hair, color: p.color }, name = cleanName(p.name);
+    // 比べる相手は今出ている絵（profile が null の間は initial）。どちらも変わらなければ何もしない
+    var shown = profAvatar(), shownSaved = shown.hair === 'none' ? { none: true } : { hair: shown.hair, color: shown.color };
+    var avChanged = !sameAvatar(shownSaved, avatar), nameChanged = cleanName(prevSaved.name) !== name;
+    if (!avChanged && !nameChanged) return;
+    D.app.change(function () { D.state.profile = { name: name, avatar: avatar }; }, { focus: 'avatar-change' });
+    D.app.toast(avChanged ? TX('t_avatar') : D.t('sx_t_name'), {
+      label: TX('undo'),
+      fn: function () { D.app.change(function () { D.state.profile = prevSaved; }, { focus: 'avatar-change' }); }
+    });
   };
 
   // ---------- 入力の受け口 ----------
   document.addEventListener('input', function (e) {
     var t = e.target;
-    if (!t || !t.getAttribute || !st) return;
+    if (!t || !t.getAttribute) return;
+    // シートの名前は「これにする」まで保存しない（髪型・色を変えて描き直しても残るよう ui.pick に持つ）
+    if (t.getAttribute('data-sx-name')) { if (ui.pick) ui.pick.name = t.value; return; }
+    if (!st) return;
     var key = t.getAttribute('data-sx-input');
     if (key) {
       setDraft({ target: key, mode: key.slice(0, key.indexOf(':')), text: t.value });
@@ -1348,6 +1585,8 @@ window.DES = window.DES || {};
     if (t.name === 'sx-hair') ui.pick.hair = t.value;
     else if (t.name === 'sx-color') ui.pick.color = t.value;
     else return;
+    var ni = dlg.querySelector('[data-sx-name]');
+    if (ni) ui.pick.name = ni.value;
     fillSheet();
     var n = dlg.querySelector('input[name="' + q(t.name) + '"][value="' + q(t.value) + '"]');
     if (n) n.focus();
@@ -1380,14 +1619,6 @@ window.DES = window.DES || {};
   document.addEventListener('click', function (e) {
     var t = e.target;
     if (!t || !t.closest || !st) return;
-    // 予定に入れる（door）: 既存 grid-add の結果を見て、入ったときだけ door を added にする
-    var g = t.closest('.self-page [data-action="grid-add"]');
-    if (g && !g.disabled) {
-      var act = g.getAttribute('data-id'), door = g.getAttribute('data-door'), before = countPlan(act);
-      setTimeout(function () {
-        if (countPlan(act) > before) { ui.open = null; dispatch({ type: 'door', id: door, val: 'added' }, { focus: 'row:' + door, flash: door }); }
-      }, 0);
-    }
     // 工夫の more メニューは外側のクリックで閉じる
     if (ui.kmenu && !t.closest('.kmenu') && !t.closest('[data-action="sx-kmenu"]')) {
       ui.kmenu = null;
