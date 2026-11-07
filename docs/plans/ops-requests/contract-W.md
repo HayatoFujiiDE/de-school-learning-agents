@@ -35,3 +35,11 @@
 - 断られた時は failed で、result に `{ refused: <コード> }`。
 - 道具: `scripts/ops-request.sh reingest <job_id>`。
 - 理由: §S-8 の取り込みの不具合で failed になった作り直し 2 件（出力は session に残っている）を、作り直しをやり直さずに取り戻すため。
+
+## §W-3 検証し直し（2026-11-07 追加）
+
+- kind `version_reverify`、payload `{ version_id }`（uuid の形だけ。余計な項目・形違いは bad_payload）。migration 0012 で CHECK を広げた（表を作り直して行を写す）。
+- opsTick は route の `POST /api/review/:version_id/reverify` と同じ `claimReverify`（`src/reverify.ts`。route と共有）を呼ぶ（review の版・検証が done / failed の時だけ pending に戻す、の述語も同じ）。attempts を 0 に、verify_* と triaged_verification_id を初期化するだけで、検証は次の cron の検証の段が行う。成功は done で、result に `{ version_id, verification_status: 'pending' }`。
+- 断られた時は failed で、result に `{ refused: <コード> }`（`not_found` / `not_in_review` / `verification_running` / `conflict`）。
+- 道具: `scripts/ops-request.sh reverify <version_id>`。
+- 理由: §S-8-3 の画像の使い回しで検証が part_missing になった版 2 件を、直した後に人の操作なしで検証し直すため。

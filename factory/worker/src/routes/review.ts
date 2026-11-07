@@ -3,6 +3,7 @@ import { all, cas, conditionalBatch, first, getSetting, isUniqueViolation, nowIs
 import { JOB_MODEL, cfg, consoleUrl } from '../env';
 import { isNonEmptyString, json, parseJsonField, readBody, type RouteCtx } from '../http';
 import { getJob, startJob } from '../jobs';
+import { claimReverify } from '../reverify';
 import { buildReject, buildReturn, buildReworkBrief, CHECKLIST_KEYS, publishSwitch } from '../publish';
 import { CHECK_KEYS, readReaderResult, type CheckKey } from '../checks/triage';
 import { videoSourceIds } from '../checks/citations';
@@ -456,26 +457,9 @@ export async function decide(c: RouteCtx, vid: string): Promise<Response> {
 }
 
 export async function reverify(c: RouteCtx, vid: string): Promise<Response> {
-  const db = c.env.DB;
-  const v = await getVersion(db, vid);
-  if (!v) return json(404, { error: 'not_found' });
-  if (v.status !== 'review') return json(409, { error: 'not_in_review' });
-  if (v.verification_status === 'running') return json(409, { error: 'verification_running' });
-  const okReset = await cas(
-    db,
-    stmt(
-      `UPDATE material_versions SET verification_status = 'pending', verification_token = NULL, verification_attempts = 0,
-         verify_phase = NULL, verify_phase_at = NULL, verify_batch_id = NULL, verify_turn = 0, verify_pauses = 0, verify_micro = 0, verify_collect_errors = 0,
-         triaged_verification_id = NULL
-       WHERE id = ? AND status = 'review' AND verification_status IN ('done','failed')`,
-      vid,
-    ),
-  );
-  if (!okReset) {
-    const now2 = await getVersion(db, vid);
-    if (now2?.verification_status === 'pending') return json(200, { version_id: vid, verification_status: 'pending' });
-    return json(409, { error: now2?.verification_status === 'running' ? 'verification_running' : 'conflict' });
-  }
+  // 述語と UPDATE は運用の依頼箱の version_reverify（§W-3）と共有（src/reverify.ts）
+  const r = await claimReverify(c.env.DB, vid);
+  if (!r.ok) return json(r.status, { error: r.error });
   return json(200, { version_id: vid, verification_status: 'pending' });
 }
 

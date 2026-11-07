@@ -229,3 +229,111 @@ describe('§W-2 job_reingest: invalid_outputs で failed の job を running に
     expect(jobStatus()).toBe('failed');
   });
 });
+
+describe('§W-3 version_reverify: review の版の検証を pending に戻す（route の reverify と同じ claimReverify）', () => {
+  const VID = '5f0e8a51-3c7d-4b2a-9e61-0d4c2b7a9f13';
+  const T0 = '2026-11-07T02:00:00.000Z';
+  const addReverify = (id: string, payload: unknown, createdAt = new Date().toISOString()) => {
+    db.prepare("INSERT INTO ops_requests (id, kind, payload_json, status, result_json, created_at, updated_at) VALUES (?, 'version_reverify', ?, 'pending', NULL, ?, ?)").run(
+      id,
+      JSON.stringify(payload),
+      createdAt,
+      createdAt,
+    );
+  };
+  const seedVersion = (o: { status?: string; verification?: string } = {}) => {
+    db.prepare("INSERT INTO materials (id, slug, title, kinds_json, work_status, publish_status, brief_md, created_at, updated_at) VALUES ('m1', 'm-1', 't', '[3]', 'idle', 'none', 'b', ?, ?)").run(T0, T0);
+    db.prepare(
+      `INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, session_id, brief_md, created_at, updated_at) VALUES ('j1', 'm1', 'rework', 'claude-opus-5-5', 'making', 'done', 'sesn_1', 'b', ?, ?)`,
+    ).run(T0, T0);
+    db.prepare(
+      `INSERT INTO material_versions (id, material_id, version, job_id, session_id, r2_prefix, content_sha256, material_json, claims_json, adapt_rules_md,
+         checks_json, public_paths_json, status, verification_status, verification_attempts, verification_token,
+         verify_phase, verify_phase_at, verify_batch_id, verify_turn, verify_pauses, verify_micro, verify_collect_errors, triaged_verification_id, created_at)
+       VALUES (?, 'm1', 1, 'j1', 'sesn_1', 'p/', 'x', '{}', '{}', '', '{}', '[]', ?, ?, 3, 'tok', 'collecting', ?, 'batch_1', 2, 1, 500, 1, 'ver_1', ?)`,
+    ).run(VID, o.status ?? 'review', o.verification ?? 'failed', T0, T0);
+  };
+  const version = () => db.prepare('SELECT * FROM material_versions WHERE id = ?').get(VID) as Record<string, unknown>;
+
+  it('(a) review で検証 failed の版 → pending・attempts 0・verify_* と triaged_verification_id を初期化。依頼は done・result に version_id と pending', async () => {
+    seedVersion();
+    addReverify('w1', { version_id: VID });
+    const o = await opsTick(envWith());
+    expect(version()).toMatchObject({
+      status: 'review',
+      verification_status: 'pending',
+      verification_attempts: 0,
+      verification_token: null,
+      verify_phase: null,
+      verify_phase_at: null,
+      verify_batch_id: null,
+      verify_turn: 0,
+      verify_pauses: 0,
+      verify_micro: 0,
+      verify_collect_errors: 0,
+      triaged_verification_id: null,
+    });
+    expect(req('w1').status).toBe('done');
+    expect(result('w1')).toEqual({ version_id: VID, verification_status: 'pending' });
+    expect(o.request).toEqual({ id: 'w1', kind: 'version_reverify', status: 'done' });
+    expect(sent).toHaveLength(0);
+  });
+
+  it('(b) status が review でない版 → failed・refused: not_in_review。版はそのまま', async () => {
+    seedVersion({ status: 'approved', verification: 'done' });
+    addReverify('w1', { version_id: VID });
+    await opsTick(envWith());
+    expect([req('w1').status, result('w1')]).toEqual(['failed', { refused: 'not_in_review' }]);
+    expect(version()).toMatchObject({ verification_status: 'done', verification_attempts: 3, verify_phase: 'collecting' });
+  });
+
+  it('(c) 検証が走っている版 → refused: verification_running', async () => {
+    seedVersion({ verification: 'running' });
+    addReverify('w1', { version_id: VID });
+    await opsTick(envWith());
+    expect([req('w1').status, result('w1')]).toEqual(['failed', { refused: 'verification_running' }]);
+    expect(version()).toMatchObject({ verification_status: 'running', verification_token: 'tok' });
+  });
+
+  it('(d) 無い id → refused: not_found', async () => {
+    addReverify('w1', { version_id: VID });
+    await opsTick(envWith());
+    expect([req('w1').status, result('w1')]).toEqual(['failed', { refused: 'not_found' }]);
+  });
+
+  it('(e) 形の違う payload（uuid でない・余計な項目・JSON でない）は bad_payload。版はそのまま', async () => {
+    seedVersion();
+    addReverify('w1', { version_id: "x' OR 1=1" });
+    await opsTick(envWith());
+    expect(result('w1')).toEqual({ error: 'bad_payload' });
+    addReverify('w2', { version_id: VID, extra: 1 });
+    await opsTick(envWith());
+    expect(result('w2')).toEqual({ error: 'bad_payload' });
+    addReverify('w3', 'not json');
+    db.prepare("UPDATE ops_requests SET payload_json = 'not json' WHERE id = 'w3'").run();
+    await opsTick(envWith());
+    expect(result('w3')).toEqual({ error: 'bad_payload' });
+    expect(version()).toMatchObject({ verification_status: 'failed', verification_attempts: 3 });
+  });
+
+  it('(f) 1 tick に 1 件（kind をまたいでも古い順に 1 件だけ）', async () => {
+    seedVersion();
+    addReverify('w_old', { version_id: VID }, ago(2_000));
+    addReq('r_new', { purpose: 'gen', kind: 'talk' }, ago(1_000));
+    await opsTick(envWith());
+    expect([req('w_old').status, req('r_new').status]).toEqual(['done', 'pending']);
+    expect(sent).toHaveLength(0);
+    await opsTick(envWith());
+    expect([req('w_old').status, req('r_new').status]).toEqual(['done', 'done']);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('migration 0012: kind に version_reverify が入り、知らない kind は CHECK で落ちる', () => {
+    addReverify('w1', { version_id: VID });
+    expect(req('w1').status).toBe('pending');
+    const t = new Date().toISOString();
+    expect(() =>
+      db.prepare("INSERT INTO ops_requests (id, kind, payload_json, status, result_json, created_at, updated_at) VALUES ('w2', 'version_delete', '{}', 'pending', NULL, ?, ?)").run(t, t),
+    ).toThrow(/CHECK constraint failed/);
+  });
+});

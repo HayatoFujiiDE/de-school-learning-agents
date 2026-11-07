@@ -40,6 +40,7 @@
 - material.json の files の image_id は、**同じ素材の、前の job が作った画像**を指してよい（取り込みで受け付ける。別の素材の画像は今までどおり拒む）。
 - 1 注文 8 枚の上限は、今回の job が新しく作った枚数だけを数える（今のまま）。
 - 画像のファイルは今までどおり outputs に置かない。取り込みは image_id から版の R2 に写す。
+- 検証係の入力（verify.ts figureInfo）と確認画面の generated_images も同じ決まりで前の job の画像を引く（2026-11-07。揃っていなかったため検証が part_missing で止まった）。
 
 ## §S-8-4 職人の決まり（material-maker.md。apply が要る）
 
