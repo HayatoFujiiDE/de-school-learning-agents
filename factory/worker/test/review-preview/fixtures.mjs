@@ -1,0 +1,129 @@
+// 確認画面の作り物のデータ 4 通り（契約 §V-9 f・§V-11 (u9)）。detail.json（見てほしい所がある版）を土台に、
+// 全部通った版（gate clean）・機械の確認中の版（pending_on = verification）・読み手チェック待ちの版（pending_on = reader）を作る。serve.mjs と test/review-preview.test.ts が共通で使う。
+// 実在の組織・人・ページではない。
+import { readFileSync } from 'node:fs';
+
+const BASE = JSON.parse(readFileSync(new URL('./detail.json', import.meta.url), 'utf8'));
+const copy = (x) => JSON.parse(JSON.stringify(x));
+const CHANNEL = 'https://www.youtube.com/@fixture-science';
+
+/** 見てほしい所がある版（fix 4・ask 2・note 2） */
+export function attention() {
+  return copy(BASE);
+}
+
+/** 全部通った版: 出典・利用条件・動かせるもの・チャンネル・読み手係がすべて問題なし（note だけ残る） */
+export function clean() {
+  const d = copy(BASE);
+  d.version.id = 'vclean-0001';
+  d.version.version = 4;
+  d.version.created_at = '2026-11-06T10:00:00.000Z';
+  d.material.title = '赤血球のしごと（全部通った版）';
+  d.version.checks.child_text = [];
+  const src = Object.fromEntries(d.sources.map((s) => [s.source_id, s]));
+  Object.assign(src.s2, { quote_found: 1, check_detail: 'ok' });
+  Object.assign(src.s4, { license: 'CC BY 4.0' });
+  Object.assign(src.s6, { url_was_fetched: 1, quote_found: 1, check_detail: 'ok' });
+  const c6 = d.claims.find((c) => c.id === 'c6');
+  Object.assign(c6, { source_ids: ['s1'], reason: 's1 に手首で脈を感じる記述がある', opened_urls: ['https://example.org/body/blood/red-cells'] });
+  d.verification.apps = [{ path: 'parts/p2/p2-app.html', verdict: 'ok', reason: 'スライダーを動かすと赤い粒の速さが変わる。外部の読み込みは無い' }];
+  d.verification_id = d.verification.id = 'verclean-0001';
+  d.verification_history = [{ id: 'verclean-0001', attempt: 1, contradicted: 0, created_at: '2026-11-06T10:30:00.000Z' }];
+  d.reader = { ...d.reader, gen: 'rd-clean-0001', findings: d.reader.findings.filter((f) => f.severity === 'note'), summary: '短い文で書かれていて、小学生でも自分で読み進められる。' };
+  const notes = d.triage.items.filter((x) => x.severity === 'note');
+  d.triage = {
+    ...d.triage,
+    verification_id: 'verclean-0001',
+    reader_gen: 'rd-clean-0001',
+    gate: 'clean',
+    auto: { content_and_evidence: 'ok', explanation_and_expression: 'ok', relation_to_learning: 'ok', conditions_of_use: 'ok', artifact_behavior: 'ok', terms_of_use: 'ok' },
+    items: [
+      ...notes,
+      { id: 'reader:p2es-structure-1', kind: 'reader', key: 'explanation_and_expression', severity: 'note', cause: 'structure', title: '流れが分かりにくい', detail: d.reader.findings[0].note, path: d.reader.findings[0].path, quote: d.reader.findings[0].quote, suggestion: d.reader.findings[0].suggestion },
+    ],
+    counts: { fix: 0, ask: 0, note: 3, claims_ok: 7, sources_ok: 6 },
+    needs_review: 0,
+    bad: false,
+    reasons: [],
+    action: 'none',
+    auto_rounds: 0,
+    trusted_keys: [CHANNEL],
+    // §L-3 互換の出力（triageVersion と一致することを test/review-preview.test.ts が確かめる）
+    groups: [{ cause: 'not_confirmed', source_id: 's6', url: 'https://example.org/stats/blood-cell-counts', verifier_opened_urls: [], claim_ids: ['c2'] }, { cause: 'not_confirmed', source_id: 's2', url: 'https://example.org/cells/nucleus-and-oxygen-capacity-of-mammalian-erythrocytes', verifier_opened_urls: ['https://example.org/cells/nucleus-overview'], claim_ids: ['c5'] }],
+    ok_counts: { claims: 5, sources: 4 },
+  };
+  return d;
+}
+
+/** 機械の確認中の版（pending_on = verification）: 検証係が動いている。検証の結果が無いので、主張・動かせるもの・動画の項目はまだ作られない */
+export function pending() {
+  const d = clean();
+  d.version.id = 'vpend-0001';
+  d.version.version = 5;
+  d.version.created_at = '2026-11-06T11:00:00.000Z';
+  d.version.verification_status = 'running';
+  d.version.verify_phase = 'submitted';
+  d.material.title = '赤血球のしごと（確認中の版）';
+  d.verification = null;
+  d.verification_id = null;
+  d.verification_history = [];
+  d.claims = d.claims.map((c) => ({ ...c, verdict: null, reason: null, opened_urls: [], presented_as: null }));
+  d.reader = { ...d.reader, gen: 'rd-pend-0001' };
+  d.triage = {
+    ...d.triage,
+    verification_id: null,
+    reader_gen: 'rd-pend-0001',
+    gate: 'pending',
+    pending_on: ['verification'],
+    auto: { content_and_evidence: 'review', explanation_and_expression: 'review', relation_to_learning: 'ok', conditions_of_use: 'ok', artifact_behavior: 'review', terms_of_use: 'review' },
+    items: [],
+    counts: { fix: 0, ask: 0, note: 0, claims_ok: 7, sources_ok: 6 },
+    groups: [],
+    ok_counts: { claims: 7, sources: 6 },
+  };
+  return d;
+}
+
+/** 読み手チェック待ちの版（pending_on = reader）: 検証は済んだが読み手係が動いている。見てほしい所 0 件・読み手係の 3 項目は review のまま（§V-6 e: 人は公開できる） */
+export function readerWait() {
+  const d = clean();
+  d.version.id = 'vrdr-0001';
+  d.version.version = 6;
+  d.version.created_at = '2026-11-06T12:00:00.000Z';
+  d.material.title = '赤血球のしごと（読み手チェック待ちの版）';
+  d.reader = { status: 'running', gen: 'rd-wait-0001', findings: null, learning: null, conditions: null, summary: null, not_read: null, cost_cents: 0 };
+  d.triage = {
+    ...d.triage,
+    reader_gen: 'rd-wait-0001',
+    gate: 'pending',
+    pending_on: ['reader'],
+    auto: { ...d.triage.auto, explanation_and_expression: 'review', relation_to_learning: 'review', conditions_of_use: 'review' },
+    items: d.triage.items.filter((x) => x.kind === 'claim'),
+    counts: { fix: 0, ask: 0, note: 2, claims_ok: 7, sources_ok: 6 },
+  };
+  return d;
+}
+
+export const ALL = { attention, clean, pending, readerWait };
+
+/** 一覧（GET /api/review）の行。並びはサーバーと同じ（needs_review の多い順 → 古い順） */
+export function listRows() {
+  return [attention(), clean(), readerWait(), pending()].map((d) => {
+    const auto = d.triage.auto;
+    return {
+      version_id: d.version.id,
+      material_id: d.version.material_id,
+      version: d.version.version,
+      verification_status: d.version.verification_status,
+      created_at: d.version.created_at,
+      title: d.material.title,
+      gate: d.triage.gate,
+      pending_on: d.triage.pending_on,
+      fix: d.triage.counts.fix,
+      ask: d.triage.counts.ask,
+      note: d.triage.counts.note,
+      needs_review: d.triage.counts.fix + d.triage.counts.ask,
+      auto_ok: Object.keys(auto).filter((k) => auto[k] === 'ok').length,
+    };
+  });
+}

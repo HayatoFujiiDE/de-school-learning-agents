@@ -71,7 +71,12 @@
     cap_reached: '動画の記帳が月または日の上限に届いています',
     too_many_active: '職人に渡している工夫が 8 件あります。先にどれかをやめてから入れてください',
     state_conflict: '他の操作で状態が変わりました。読み込み直してください',
-    bad_request: '送った内容が正しくありません'
+    bad_request: '送った内容が正しくありません',
+    // §V-7 e・§V-4 h
+    channel_trust_required: '初めてのチャンネルを確かめてから公開してください',
+    checks_pending: '機械の確認が終わってから公開してください',
+    stale_reader: '読み手チェックが新しくなりました。画面を読み直します',
+    reader_running: '読み手チェックが動いています'
   };
 
   var $ = function (sel, root) { return (root || document).querySelector(sel); };
@@ -195,11 +200,18 @@
     }
     return res + src.slice(last);
   }
-  /** opts（任意）: { cites: [] , known } を渡すと、主張 id の参照を本文から外して opts.cites に集める（教材として見る時。コードの中は触らない） */
+  /**
+   * opts（任意）: { cites: [] , known } を渡すと、主張 id の参照を本文から外して opts.cites に集める（教材として見る時。コードの中は触らない）。
+   * opts.bold（教材の記法 v1 §V-5）: コードの外の対になった **…** を太字にする（対にならない ** はそのまま見せる）。ほかの画面の md は今までどおり
+   */
   function inlineMd(s, opts) {
     var t = esc(s);
-    if (opts && opts.cites) {
-      t = t.split(/(`[^`]+`)/).map(function (seg, i) { return i % 2 ? seg : stripCites(seg, opts.known, opts.cites); }).join('');
+    if (opts && (opts.cites || opts.bold)) {
+      t = t.split(/(`[^`]+`)/).map(function (seg, i) {
+        if (i % 2) return seg;
+        if (opts.cites) seg = stripCites(seg, opts.known, opts.cites);
+        return opts.bold ? seg.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>') : seg;
+      }).join('');
     }
     t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
     t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, function (_m, text, href) {
@@ -475,12 +487,63 @@
         '<li><code>text_head</code>: Gemini の記録の先頭 300 字</li>' +
         '<li><code>error_code</code>: 失敗の固定コード（成功は null）</li></ul></div>';
   }
+  // §V-9 e: 確認済みのチャンネル（人が「本人のアップ」と確かめた YouTube のチャンネル。外すと次から「初めてのチャンネル」として人に出る）
+  function channelDate(t) {
+    var m = typeof t === 'string' ? /^(\d{4})-(\d{2})-(\d{2})/.exec(t) : null;
+    return m ? Number(m[1]) + '/' + Number(m[2]) + '/' + Number(m[3]) : (t ? String(t) : '—');
+  }
+  /** #vc-channels の中身（GET /api/channels の応答から描く純関数）。null = 読み込み中、文字列 = 読めなかった理由 */
+  function channelsHtml(d) {
+    var head = '<h2>確認済みのチャンネル</h2><p class="muted">公開の時に「本人のアップ」と確かめたチャンネルです。ここにあるチャンネルの動画は、次から人の確認なしで通ります。</p>';
+    if (d === null || d === undefined) return head + '<p class="loading" data-channels-loading="1">読み込み中…</p>';
+    if (typeof d === 'string') return head + '<p class="err">読み込めませんでした: ' + esc(d) + '</p><p><button type="button" class="btn" id="vc-retry">もう一度読み込む</button></p>';
+    var list = (d && Array.isArray(d.channels) ? d.channels : []).filter(function (c) { return c && typeof c.channel_key === 'string'; });
+    if (!list.length) return head + '<p class="muted" data-channels-empty="1">確認済みのチャンネルはまだありません。</p>';
+    return head + '<ul class="vc-list">' + list.map(function (c, i) {
+      var name = typeof c.channel_name === 'string' && c.channel_name ? c.channel_name : c.channel_key;
+      var url = typeof c.channel_url === 'string' ? c.channel_url : '';
+      var link = url && safeAuthorHref(url) ? '<a href="' + esc(url) + '" rel="noopener noreferrer" target="_blank">' + esc(name) + '</a>' : '<b>' + esc(name) + '</b>';
+      return '<li class="vc-item" data-channel-key="' + esc(c.channel_key) + '"><span class="vc-name">' + link + '</span>' +
+        '<span class="vc-url muted">' + esc(url) + '</span><span class="vc-date muted">確かめた日 ' + esc(channelDate(c.created_at)) + '</span>' +
+        '<button type="button" class="btn small" data-channel-del="' + i + '">外す</button></li>';
+    }).join('') + '</ul>';
+  }
+  function loadChannels(here) {
+    var box = $('#vc-channels');
+    if (!box) return;
+    box.innerHTML = channelsHtml(null);
+    api('GET', '/api/channels').then(function (d) {
+      if (location.hash !== here || !$('#vc-channels')) return;
+      var list = (d && Array.isArray(d.channels) ? d.channels : []).filter(function (c) { return c && typeof c.channel_key === 'string'; });
+      box.innerHTML = channelsHtml({ channels: list });
+      Array.prototype.forEach.call(box.querySelectorAll('[data-channel-del]'), function (b) {
+        var c = list[Number(b.getAttribute('data-channel-del'))];
+        if (!c) return;
+        b.addEventListener('click', function () {
+          action(b, {
+            title: 'チャンネル「' + (c.channel_name || c.channel_key) + '」を確認済みから外します',
+            body: '外した後、このチャンネルの動画は次から「初めてのチャンネル」として人に出ます。公開済みの教材は変わりません。',
+            okText: '外す', busyText: '外しています…',
+            run: function () { return api('DELETE', '/api/channels?key=' + encodeURIComponent(c.channel_key)); },
+            success: 'チャンネル「' + (c.channel_name || c.channel_key) + '」を外しました',
+            after: function () { loadChannels(here); }
+          });
+        });
+      });
+    }, function (e) {
+      if (location.hash !== here || !$('#vc-channels')) return;
+      box.innerHTML = channelsHtml(e.message || '失敗しました');
+      var r = $('#vc-retry');
+      if (r) r.addEventListener('click', function () { loadChannels(here); });
+    });
+  }
   function viewVideos(view) {
     view.innerHTML = videosLoadingHtml();
     var here = location.hash;
     api('GET', '/api/videos/status').then(function (d) {
       if (location.hash !== here) return;
-      view.innerHTML = videosAdminHtml(d);
+      view.innerHTML = videosAdminHtml(d) + '<div class="card" id="vc-channels"></div>';
+      loadChannels(here);
       var eb = $('#video-enable-btn');
       eb.addEventListener('click', function () {
         action(eb, {
@@ -1460,6 +1523,8 @@
             return '<li data-auto-decision="1">' + esc(fmtTime(r.created_at)) + ' ' + pill('自動の差し戻し', 'yellow') +
               (r.note ? '<details><summary>理由を見る</summary><p class="pre">' + esc(r.note) + '</p></details>' : '') + '</li>';
           }
+          // §V-9 d: 機械の承認（自動公開のスイッチ）
+          if (r.reviewer_email === AUTO_PUBLISHER) return '<li data-auto-decision="publish">' + esc(fmtTime(r.created_at)) + ' ' + pill('自動で公開', 'green') + '</li>';
           return '<li>' + esc(fmtTime(r.created_at)) + ' ' + esc(DECISION_LABEL[r.decision] || r.decision) + ' ' + esc(r.reviewer_email) + (r.note ? ' — ' + esc(r.note) : '') + '</li>';
         }).join('') + '</ul>' : '<p class="muted">記録はありません</p>') + '</div>' +
         '<p class="muted">素材の削除・編集はこの版では提供していません（契約の範囲外）。</p>';
@@ -1822,13 +1887,36 @@
   };
   var CK_LABEL = {};
   CHECKLIST.forEach(function (c) { CK_LABEL[c[0]] = c[1]; });
-  var HUMAN_KEYS = ['explanation_and_expression', 'relation_to_learning', 'conditions_of_use'];
-  var AUTO_KEYS = ['content_and_evidence', 'artifact_behavior', 'terms_of_use'];
-  var AUTO_HINT = {
-    content_and_evidence: '機械と検証係では確かめきれませんでした（上の「要確認」を見てください）',
-    artifact_behavior: '機械検査に赤印があります（下の「詳細」を見てください）',
-    terms_of_use: '利用条件が分からない出典があります'
+  // §V-9: 仕分け v2 の 6 項目（どれも機械が OK にできる。並びは CHECKLIST と同じ）
+  var MK_KEYS = CHECKLIST.map(function (c) { return c[0]; });
+  // 読み手係の結果で決まる 3 項目（§V-6 d。読み手チェックの未了で review のままになる）
+  var READER_KEYS = ['explanation_and_expression', 'relation_to_learning', 'conditions_of_use'];
+  // ゲートの印（§V-9 a 1.）。attention の {n} は見てほしい所の数。pending の文は pending_on と検証の状態で変える
+  var GATE_TEXT = {
+    clean: '機械の確認: 全部通りました', attention: '見てほしい所 {n} 件',
+    pending: '機械の確認中', verify_failed: '検証ができていません（再検証を押してください）', reader_only: '読み手チェック待ち（待たずに公開もできます）'
   };
+  var GATE_CLS = { clean: 'green', attention: 'orange', pending: 'gray' };
+  var READER_STATE_TEXT = { pending: '順番を待っています', running: '動いています', done: '済み', failed: 'できませんでした' };
+  // note の主張の札（§V-9 b。仮説として書いてある・たとえ）
+  var NOTE_TAG = { hypothesis_hedged: '仮説として書いてある', analogy: 'たとえ' };
+  // 送信の checklist の note（§V-9 c）
+  var CK_NOTE_CHECKED = '見てほしい所を確認';
+  var CK_NOTE_NO_READER = '読み手チェックなしで見た';
+  // 「公開する」が押せない理由の文（§V-9 c。verbatim）
+  var WHY_TEXT = {
+    not_review: '確認待ちの版ではありません',
+    verify: '検証が終わるのを待つ',
+    contradicted: '食い違いの主張がある（直してもらってください）',
+    primary: '職人が開けていない一次資料がある（直してもらってください）',
+    reverify: '自動の再検証を待っています',
+    auto_return: '自動の差し戻しを待っています',
+    open: '見てほしい所があと {n} 件（OK にするか、直してもらうを選ぶ）',
+    redo: '『直してもらう』にした所があります（直してもらうを押してください）',
+    ok: '公開できます',
+    ok_reader: '公開できます（読み手チェックはまだです）'
+  };
+  var MEDIA_LABEL = { figure: '図', app: '動かせるもの', video: '動画' };
   var WAIT_TEXT = { paused: '検証待ち（停止中）', daily_cap: '検証待ち（日次上限）', inflight: '検証待ち（順番）' };
   var IMAGE_RE = /\.(svg|png|webp)$/i;
   // 検証係の図ごとの判定（§O-12 d）: [文, pill の色]
@@ -1984,10 +2072,8 @@
     var okRange = isSec(s) && isSec(e) && s < e;
     var embed = ytEmbedHtml(v) || '<p class="err" data-video-bad="1">動画の id か区間の形が正しくないため、埋め込みません</p>';
     return '<div class="rv-video" data-video="' + esc(v.id) + '"><p><b>動画 ' + esc(v.id) + '</b> ' + esc(v.title) + '</p>' + embed +
-      '<p>区間 ' + (okRange ? esc(fmtSec(s)) + '〜' + esc(fmtSec(e)) : '<span class="muted">不明</span>') + ' ・ チャンネル ' + esc(v.channel) + '</p>' +
-      videoMetaHtml(v, vc) +
+      '<p>区間 ' + (okRange ? esc(fmtSec(s)) + '〜' + esc(fmtSec(e)) : '<span class="muted">不明</span>') + '</p>' +
       '<p>見どころ: ' + esc(v.why) + '</p>' +
-      '<p>本人のアップと言える理由: ' + esc(v.rights_note) + '</p>' +
       videoNotesHtml(v, vc) + videoVerdictHtml(v, vc) + '</div>';
   }
   /** 「説明と表現」の下の動画（0 本なら出さない）。d は review API の応答（video_notes・verification.videos を読む） */
@@ -2007,33 +2093,83 @@
   var ACTIVE_JOB = ['queued', 'creating', 'running', 'needs_answer', 'budget_reached'];
   var DECISION_LABEL = { approve: '承認', 'return': '差し戻し', reject: '却下' };
   var AUTO_REVIEWER = 'system:auto-triage';
-
-  /** triage（§L-3 の output）を読む。API が triage を返さない時は「仕分けなし」= 6 項目すべてを人が見る */
-  function triageOf(d) {
-    var t = d && d.triage;
-    if (!t || typeof t !== 'object') {
-      return { present: false, auto: {}, groups: [], ok_counts: { claims: (d && d.claims || []).length, sources: (d && d.sources || []).length }, needs_review: null, action: 'none', reasons: [] };
-    }
-    var groups = Array.isArray(t.groups) ? t.groups : [];
-    return {
-      present: true, auto: t.auto || {}, groups: groups, ok_counts: t.ok_counts || { claims: 0, sources: 0 },
-      needs_review: typeof t.needs_review === 'number' ? t.needs_review : groups.length,
-      action: t.action || 'none', reasons: t.reasons || [], verification_id: t.verification_id || null
-    };
-  }
-  /** 人が答える項目: 人の 3 項目 + auto が review の項目（仕分けなしなら 6 項目すべて） */
-  function reviewItems(tri) {
-    return HUMAN_KEYS.concat(AUTO_KEYS.filter(function (k) { return tri.auto[k] !== 'ok'; }));
-  }
-  function autoOkKeys(tri) { return AUTO_KEYS.filter(function (k) { return tri.auto[k] === 'ok'; }); }
-  function itemOptions(k) { return k === 'conditions_of_use' ? ['ok', 'ng', 'na'] : ['ok', 'ng']; }
+  var AUTO_PUBLISHER = 'system:auto-publish';
+  var isObj = function (x) { return !!x && typeof x === 'object' && !Array.isArray(x); };
   function imageFiles(mat) {
     var out = [];
     ((mat && mat.parts) || []).forEach(function (p) { (p.files || []).forEach(function (f) { if (f && IMAGE_RE.test(f.path || '')) out.push(f.path); }); });
     return out;
   }
-  function newReviewState() { return { ck: {}, mode: null, note: '', append: '', draftShown: false, pv: defaultPv(), stickies: [], stickySeq: 0, flowedLines: [] }; }
+  /** 版ごとの画面の状態。items = 見てほしい所の状態（id → ok / redo）・itemGen = その世代・cursor = N / P で選んだ項目 */
+  function newReviewState() {
+    return { mode: null, note: '', append: '', draftShown: false, pv: defaultPv(), stickies: [], stickySeq: 0, flowedLines: [], items: Object.create(null), itemGen: null, cursor: -1, redoFlowed: [] };
+  }
   function hasDraft(st) { return !!((st.note || '').trim() || (st.append || '').trim()); }
+
+  /**
+   * triage（§V-6 b）を読む。items が無い応答（古い Worker・仕分けの前）は「機械の確認中」（pending_on = verification）として扱う（§V-9 f）。
+   * shown = 見てほしい所（severity が fix / ask。triage の順）。groups は出典カードの判定に残す（§L-3 互換）
+   */
+  function triageOf(d) {
+    var t = d && isObj(d.triage) ? d.triage : null;
+    var items = t && Array.isArray(t.items) ? t.items.filter(function (x) { return isObj(x) && typeof x.id === 'string'; }) : null;
+    var auto = {};
+    MK_KEYS.forEach(function (k) { var x = t && isObj(t.auto) ? t.auto[k] : null; auto[k] = x === 'ok' || x === 'review' ? x : null; });
+    var gate = items && (t.gate === 'clean' || t.gate === 'attention' || t.gate === 'pending') ? t.gate : 'pending';
+    var pendingOn = [];
+    if (gate === 'pending') {
+      if (items && Array.isArray(t.pending_on)) pendingOn = t.pending_on.filter(function (x, i, a) { return (x === 'verification' || x === 'reader') && a.indexOf(x) === i; });
+      else if (items) {
+        // pending_on の無い応答: 版の状態から決める（§V-6 e と同じ規則）
+        var v = (d && d.version) || {}, rs = readerOf(d).status;
+        if (v.verification_status !== 'done' || !d.verification_id) pendingOn.push('verification');
+        if (rs === 'pending' || rs === 'running') pendingOn.push('reader');
+      }
+      if (!pendingOn.length) pendingOn = ['verification']; // 理由が読めない pending は止める側に倒す
+    }
+    var shown = (items || []).filter(function (x) { return x.severity === 'fix' || x.severity === 'ask'; });
+    return {
+      present: !!items, hasGroups: !!t && Array.isArray(t.groups), gate: gate, pending_on: pendingOn, auto: auto,
+      items: items || [], shown: shown, groups: t && Array.isArray(t.groups) ? t.groups : [],
+      ok_counts: t && isObj(t.ok_counts) ? t.ok_counts : { claims: (d && d.claims || []).length, sources: (d && d.sources || []).length },
+      needs_review: shown.length,
+      action: t && (t.action === 'auto_return' || t.action === 'reverify') ? t.action : 'none',
+      reasons: t && Array.isArray(t.reasons) ? t.reasons : [],
+      verification_id: t && typeof t.verification_id === 'string' ? t.verification_id : null,
+      trusted_keys: strArr(t && t.trusted_keys)
+    };
+  }
+  /** 読み手係の結果（§V-8 reader）。無い応答（古い Worker）は status null */
+  function readerOf(d) {
+    var r = d && isObj(d.reader) ? d.reader : null;
+    return {
+      present: !!r, status: r && vhas(READER_STATE_TEXT, r.status) ? r.status : null,
+      gen: r && typeof r.gen === 'string' ? r.gen : null,
+      findings: r && Array.isArray(r.findings) ? r.findings.filter(isObj) : [],
+      learning: r && isObj(r.learning) ? r.learning : null, conditions: r && isObj(r.conditions) ? r.conditions : null,
+      summary: r && typeof r.summary === 'string' ? r.summary : '', not_read: strArr(r && r.not_read)
+    };
+  }
+  function readerText(d) { var s = readerOf(d).status; return s ? READER_STATE_TEXT[s] : 'まだありません'; }
+
+  // ---- 見てほしい所の状態（§V-9 c: open / ok / redo。検証の id + 読み手係の世代に結び付ける）----
+  function itemGenOf(d) { return String((d && d.verification_id) || '') + '|' + String(readerOf(d).gen || ''); }
+  /** st の項目の状態（世代が違えば空 = 全部 open。st は変えない） */
+  function statesFor(st, d) { return st && st.items && st.itemGen === itemGenOf(d) ? st.items : Object.create(null); }
+  function stateIn(states, id) { var v = vhas(states, id) ? states[id] : 'open'; return v === 'ok' || v === 'redo' ? v : 'open'; }
+  /** 世代が変わっていたら項目の状態を全部 open に戻す（再検証・読み直しの後に古い OK を引き継がない） */
+  function syncItemGen(st, d) {
+    var g = itemGenOf(d);
+    if (st.itemGen !== g || !st.items) { st.itemGen = g; st.items = Object.create(null); st.cursor = -1; st.redoFlowed = []; }
+    return st;
+  }
+  /** 項目を ok / redo にする。同じ状態をもう一度押したら open に戻す。blocking の項目は ok にできない・ask の項目は redo にしない */
+  function toggleItem(st, d, item, to) {
+    syncItemGen(st, d);
+    if (!item || (to === 'ok' && item.blocking) || (to === 'redo' && item.severity !== 'fix')) return st;
+    st.items[item.id] = stateIn(st.items, item.id) === to ? 'open' : to;
+    return st;
+  }
 
   /** 検証の状態の文（§L-6 1.）。待ちの理由は API が版に verify_wait_reason を出す時だけ、または停止中が分かる時だけ付ける */
   function verifyState(v, status) {
@@ -2049,129 +2185,383 @@
     }
     return { text: String(vs || '—'), cls: 'gray' };
   }
+  /** 判定帯のゲートの印の文（§V-9 a 1.） */
+  function gateText(d, tri) {
+    if (tri.gate === 'attention') return GATE_TEXT.attention.replace('{n}', tri.shown.length);
+    if (tri.gate === 'clean') return GATE_TEXT.clean;
+    if (tri.pending_on.indexOf('verification') >= 0) return d.version && d.version.verification_status === 'failed' ? GATE_TEXT.verify_failed : GATE_TEXT.pending;
+    return GATE_TEXT.reader_only;
+  }
 
-  /** 承認できるか。why の target は該当箇所の要素 id（押すとスクロール） */
+  /**
+   * 「公開する」が押せるか（§V-9 c）。why は押せない理由（verbatim の文と、押すと動く先の要素 id）。text は状態の 1 行。
+   * 読み手チェックの未了（pending_on が ['reader']）では止めない（readerWait = true で「読み手チェックはまだです」を添える）
+   */
   function approveState(d, st) {
     var v = d.version || {}, tri = triageOf(d), why = [];
-    if (v.status !== 'review') return { enabled: false, why: [{ text: '確認待ちの版ではありません', target: 'rv-band' }] };
-    var items = reviewItems(tri);
-    var missing = items.filter(function (k) { return !(st.ck[k] && st.ck[k].result); });
-    var ng = items.filter(function (k) { return st.ck[k] && st.ck[k].result === 'ng'; });
-    if (missing.length) why.push({ text: missing.map(function (k) { return CK_LABEL[k]; }).join('・') + ' を選ぶ', target: 'ck-' + missing[0] });
-    if (ng.length) why.push({ text: 'NG があります（差し戻すか却下してください）', target: 'ck-' + ng[0] });
-    if (v.verification_status !== 'done' || !d.verification_id) why.push({ text: '検証が終わるのを待つ', target: 'rv-band' });
-    if (d.verification && d.verification.contradicted > 0) why.push({ text: '食い違いの主張がある（差し戻してください）', target: 'rv-groups' });
-    if (tri.present && tri.action !== 'none') why.push({ text: tri.action === 'reverify' ? '自動の再検証を待っています' : '自動の差し戻しを待っています', target: 'rv-band' });
-    return { enabled: why.length === 0, why: why };
-  }
-
-  /** decision に送る checklist。auto が ok の項目は省略する（§L-5）。差し戻し・却下は答えた項目だけ */
-  function checklistPayload(d, st, forApprove) {
-    var tri = triageOf(d), out = {}, n = 0;
-    reviewItems(tri).forEach(function (k) {
-      var c = st.ck[k];
-      if (!c || !c.result) { if (forApprove) out[k] = { result: null, note: '' }; return; }
-      out[k] = { result: c.result, note: c.result === 'ng' ? (c.note || '') : '' };
-      n++;
+    if (v.status !== 'review') return { enabled: false, why: [{ text: WHY_TEXT.not_review, target: 'rv-band' }], text: WHY_TEXT.not_review, readerWait: false };
+    if (v.verification_status !== 'done' || !d.verification_id || tri.pending_on.indexOf('verification') >= 0) why.push({ text: WHY_TEXT.verify, target: 'rv-band' });
+    var first = function (pred) { for (var i = 0; i < tri.shown.length; i++) if (pred(tri.shown[i])) return i; return -1; };
+    var bOther = first(function (x) { return x.blocking === true && x.cause !== 'primary_source_unfetched'; });
+    var bPrim = first(function (x) { return x.blocking === true && x.cause === 'primary_source_unfetched'; });
+    if (bOther >= 0) why.push({ text: WHY_TEXT.contradicted, target: 'rv-it-' + bOther });
+    if (bPrim >= 0) why.push({ text: WHY_TEXT.primary, target: 'rv-it-' + bPrim });
+    if (tri.action === 'reverify') why.push({ text: WHY_TEXT.reverify, target: 'rv-band' });
+    else if (tri.action === 'auto_return') why.push({ text: WHY_TEXT.auto_return, target: 'rv-band' });
+    var states = statesFor(st, d), open = 0, firstOpen = -1, redo = -1;
+    tri.shown.forEach(function (x, i) {
+      var s = stateIn(states, x.id);
+      if (s === 'open') { open++; if (firstOpen < 0) firstOpen = i; }
+      if (s === 'redo' && redo < 0) redo = i;
     });
-    return forApprove || n ? out : null;
+    if (open) why.push({ text: WHY_TEXT.open.replace('{n}', open), target: 'rv-it-' + firstOpen });
+    if (redo >= 0) why.push({ text: WHY_TEXT.redo, target: 'return-btn' });
+    var readerWait = tri.pending_on.indexOf('reader') >= 0;
+    return { enabled: !why.length, why: why, readerWait: readerWait, text: why.length ? why[0].text : readerWait ? WHY_TEXT.ok_reader : WHY_TEXT.ok };
   }
 
-  /** キー → 命令（§L-6 キー）。env: { inInput, dialogOpen, busy, draft } */
-  var SHIFT_DIGIT = { '!': 1, '@': 2, '"': 2, '#': 3 };
+  /**
+   * decision に送る checklist（§V-9 c）。承認は triage.auto[k] が ok でない項目だけ。
+   * note: 読み手チェックの未了で review のままの 3 項目は「読み手チェックなしで見た」、それ以外は「見てほしい所を確認」。差し戻し・却下は送らない（null）
+   */
+  function checklistPayload(d, st, forApprove) {
+    if (!forApprove) return null;
+    var tri = triageOf(d), out = {}, readerWait = tri.pending_on.indexOf('reader') >= 0;
+    MK_KEYS.forEach(function (k) {
+      if (tri.auto[k] === 'ok') return;
+      out[k] = { result: 'ok', note: readerWait && READER_KEYS.indexOf(k) >= 0 ? CK_NOTE_NO_READER : CK_NOTE_CHECKED };
+    });
+    return out;
+  }
+  /** 承認で確認済みにするチャンネル: ok にした「初めてのチャンネル」の項目の channel_key（§V-9 c） */
+  function trustChannelsOf(d, st) {
+    var states = statesFor(st, d), out = [];
+    triageOf(d).shown.forEach(function (x) {
+      if (x.cause === 'video_channel_new' && typeof x.channel_key === 'string' && x.channel_key && stateIn(states, x.id) === 'ok' && out.indexOf(x.channel_key) < 0) out.push(x.channel_key);
+    });
+    return out;
+  }
+  /** POST …/decision の本文（§V-8・§V-7 e） */
+  function decisionPayload(d, st, decision) {
+    var p = { decision: decision, checklist: checklistPayload(d, st, decision === 'approve'), note: decision === 'approve' ? '' : decisionNote(st, decision), verification_id: d.verification_id };
+    if (decision === 'approve') { p.trust_channels = trustChannelsOf(d, st); p.reader_gen = readerOf(d).gen; }
+    if (decision === 'return') p.brief_append = st.append;
+    return p;
+  }
+
+  /** キー → 命令（§V-9 c キー）。env: { inInput, dialogOpen, busy, draft }。1〜3 はやめた */
   function keyCommand(e, env) {
     if (!e || e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return null;
     if (env.inInput || env.dialogOpen || env.busy) return null;
-    var key = e.key || '', code = e.code || '';
-    var m = /^(?:Digit|Numpad)([1-3])$/.exec(code);
-    var n = m ? Number(m[1]) : (/^[1-3]$/.test(key) ? Number(key) : 0);
+    var key = e.key || '';
     if (key === '?') return { cmd: 'help' };
-    if (e.shiftKey) {
-      if (!n && SHIFT_DIGIT[key]) n = SHIFT_DIGIT[key];
-      return n ? { cmd: 'set', index: n - 1, result: 'ng' } : null;
-    }
-    if (n) return { cmd: 'set', index: n - 1, result: 'ok' };
+    if (e.shiftKey) return null;
     var k = key.toLowerCase();
     if (k === 'a') return { cmd: 'approve' };
     if (k === 'r') return { cmd: 'return' };
     if (k === 'x') return { cmd: 'reject' };
     if (k === 'j' || k === 'k') return env.draft ? { cmd: 'draft_block' } : { cmd: 'nav', dir: k === 'j' ? 1 : -1 };
+    if (k === 'n' || k === 'p') return { cmd: 'item_step', dir: k === 'n' ? 1 : -1 };
+    if (k === 'o') return { cmd: 'item_ok' };
     return null;
   }
-  /** 状態だけを変える命令（set / draft_block）を適用する。他の命令は呼び出し側が実行する */
-  function applyCommand(st, cmd) {
+  /** 状態だけを変える命令（draft_block・item_step・item_ok）を適用する。d は版の応答（項目の命令に要る）。他の命令は呼び出し側が実行する */
+  function applyCommand(st, cmd, d) {
     if (!cmd) return st;
-    if (cmd.cmd === 'set' && HUMAN_KEYS[cmd.index]) setItem(st, HUMAN_KEYS[cmd.index], cmd.result);
     if (cmd.cmd === 'draft_block') st.draftShown = true;
+    if ((cmd.cmd === 'item_step' || cmd.cmd === 'item_ok') && d) {
+      syncItemGen(st, d);
+      var shown = triageOf(d).shown;
+      if (!shown.length) return st;
+      var c = typeof st.cursor === 'number' && st.cursor >= 0 && st.cursor < shown.length ? st.cursor : -1;
+      if (cmd.cmd === 'item_step') st.cursor = c < 0 ? (cmd.dir > 0 ? 0 : shown.length - 1) : (c + cmd.dir + shown.length) % shown.length;
+      else if (c >= 0 && !shown[c].blocking) st.items[shown[c].id] = 'ok'; // O は OK にするだけ（戻すのはボタンで）
+    }
     return st;
-  }
-  function setItem(st, k, result) {
-    var prev = st.ck[k] || { result: null, note: '' };
-    st.ck[k] = { result: result, note: prev.note || '' };
   }
 
   function linkOrText(url) {
     if (!url) return '<span class="muted">なし</span>';
     return /^https?:\/\//.test(url) ? '<a class="pre" href="' + esc(url) + '" rel="noopener noreferrer" target="_blank">' + esc(url) + '</a>' : '<span class="pre">' + esc(url) + '</span>';
   }
-  function groupHtml(g, i, d, cardOf) {
-    var claimById = {};
-    (d.claims || []).forEach(function (c) { claimById[c.id] = c; });
-    var src = (d.sources || []).filter(function (s) { return s.source_id === g.source_id; })[0];
-    var opened = Array.isArray(g.verifier_opened_urls) ? g.verifier_opened_urls : [];
-    var sameUrl = !!g.url && opened.length === 1 && opened[0] === g.url;
-    var claimsHtml = (g.claim_ids || []).map(function (id) {
-      var c = claimById[id] || { id: id };
-      return '<li><b>' + esc(id) + '</b> ' + esc(c.text || '') + (c.verdict ? ' ' + pill(c.verdict, VERDICT_CLASS[c.verdict]) : '') +
-        (c.reason ? '<div class="muted">検証係: ' + esc(c.reason) + '</div>' : '') + '</li>';
-    }).join('');
-    return '<div class="rv-group" data-rv-group="' + i + '" id="rv-group-' + i + '"><h3>' + esc(CAUSE_TEXT[g.cause] || g.cause) + '</h3>' +
-      '<p>出典 <b>' + (g.source_id ? esc(g.source_id) : 'なし') + '</b>' + (src && src.title ? ' <span class="muted">' + esc(src.title) + '</span>' : '') + '</p>' +
-      '<p>職人が書いた URL: ' + linkOrText(g.url) + '</p>' +
-      '<p>検証係が開いた URL: ' + (sameUrl ? '<span class="muted">同じ URL</span>' : opened.length ? '<span class="rv-urls">' + opened.map(linkOrText).join('<br>') + '</span>' : '<span class="muted">なし</span>') + '</p>' +
-      (claimsHtml ? '<ul class="rv-claims">' + claimsHtml + '</ul>' : '<p class="muted">関係する主張はありません（出典だけの問題）</p>') +
-      (cardOf && g.source_id && g.source_id in cardOf ? '<p class="rv-goto"><button type="button" class="linkish" data-goto="' + cardOf[g.source_id] + '">出典カードで見る →</button></p>'
-        : cardOf && !g.source_id ? '<p class="rv-goto"><button type="button" class="linkish" data-goto="rv-src-orphan">出典のない主張のカードで見る →</button></p>' : '') + '</div>';
+
+  // ---- 項目の場所（§V-9 b）: 主張 = その主張の印が付いた段落 / path が変奏 = quote を含む段落 / material.json = 枠の頭 / 図・動かせるもの・動画 = その部品 ----
+  function partsOf(d) { var m = d && d.version && d.version.material; return m && Array.isArray(m.parts) ? m.parts.map(function (p) { return isObj(p) ? p : {}; }) : []; }
+  function variantsOf(p) { return (p && Array.isArray(p.variants) ? p.variants : []).filter(function (v) { return isObj(v) && typeof v.path === 'string'; }); }
+  /** 空白と * # ` を取り除く（quote と段落の部分一致に使う） */
+  function normQ(s) { return String(s === null || s === undefined ? '' : s).replace(/[\s*#`]/g, ''); }
+  /** 変奏 → 切り替えの選び方 */
+  function variantSel(vr) { return { aud: vr.audience === 'secondary' ? 'secondary' : 'elementary', len: vr.length === 'long' ? 'long' : 'short', game: vr.game === true }; }
+  /** md の段落と箇条（previewBodyHtml の data-para と同じ番号）: [{ cites, text }] */
+  function paraList(md, known) {
+    var out = [];
+    mdBlocks(md).forEach(function (b) {
+      (b.t === 'p' ? [b.raw] : b.t === 'ul' || b.t === 'ol' ? b.items : []).forEach(function (raw) {
+        var cites = [];
+        out.push({ cites: cites, text: stripCites(raw, known, cites) });
+      });
+    });
+    return out;
+  }
+  /** 項目が子どもの画面のどこを指すか（場所の無い項目は null） */
+  function itemTarget(it, d) {
+    var parts = partsOf(d), i, j;
+    if (it.kind === 'claim' && typeof it.claim_id === 'string' && it.claim_id) return { t: 'claim', claim_id: it.claim_id };
+    if (typeof it.video_id === 'string' && it.video_id) {
+      for (i = 0; i < parts.length; i++) if ((Array.isArray(parts[i].videos) ? parts[i].videos : []).some(function (v) { return isObj(v) && v.id === it.video_id; })) return { t: 'media', media: 'video', key: it.video_id, pi: i };
+      return null;
+    }
+    var path = typeof it.path === 'string' ? it.path : '';
+    if (!path) return null;
+    if (path === 'material.json') return it.quote ? { t: 'head', q: normQ(it.quote) } : null;
+    for (i = 0; i < parts.length; i++) {
+      var fs = Array.isArray(parts[i].files) ? parts[i].files : [];
+      for (j = 0; j < fs.length; j++) {
+        if (!isObj(fs[j]) || fs[j].path !== path) continue;
+        if (/\.html$/i.test(path)) return { t: 'media', media: 'app', key: path, pi: i };
+        if (IMAGE_RE.test(path)) return { t: 'media', media: 'figure', key: path, pi: i };
+      }
+      var vs = variantsOf(parts[i]);
+      for (j = 0; j < vs.length; j++) if (vs[j].path === path) return { t: 'quote', path: path, q: normQ(it.quote), pi: i, vr: vs[j] };
+    }
+    return null;
+  }
+  function framesOf(pv) { pv = pv || defaultPv(); return pv.compare ? [pv, pv.cmp] : [pv]; }
+  /**
+   * 項目の場所（純関数）。md = path → 本文（読めた変奏だけ）、frames = 表示中の切り替え。
+   * → { label, t: 'para'|'media'|'head', pi, path, para, sel, inView, fi, media, key, q } か null。表示中の変奏に無い時の label は「中学生・長い にあります」
+   */
+  function locateItem(it, d, md, frames) {
+    var tg = itemTarget(it, d);
+    if (!tg) return null;
+    if (tg.t === 'media') return { t: 'media', media: tg.media, key: tg.key, pi: tg.pi, label: MEDIA_LABEL[tg.media], inView: true, fi: 0 };
+    if (tg.t === 'head') return { t: 'head', q: tg.q, label: '要約・最初にやること', inView: true, fi: 0 };
+    var parts = partsOf(d), known = claimIndexOf(d), cand = [];
+    if (tg.t === 'quote') cand.push({ pi: tg.pi, vr: tg.vr });
+    else {
+      // 主張: 表示中の変奏 → ほかの変奏（部品の順・変奏の順）
+      frames.forEach(function (sel) { parts.forEach(function (p, pi) { var vr = pickVariant(p, sel); if (vr) cand.push({ pi: pi, vr: vr }); }); });
+      parts.forEach(function (p, pi) { variantsOf(p).forEach(function (vr) { cand.push({ pi: pi, vr: vr }); }); });
+    }
+    function at(c, n) {
+      var fi = frames.map(function (sel) { var vr = pickVariant(parts[c.pi], sel); return vr ? vr.path : null; }).indexOf(c.vr.path);
+      var lab = variantLabel(c.vr);
+      return { t: 'para', pi: c.pi, path: c.vr.path, para: n, sel: variantSel(c.vr), inView: fi >= 0, fi: fi < 0 ? 0 : fi,
+        label: fi >= 0 ? lab + (n >= 0 ? ' ' + (n + 1) + ' 段落目' : '') : lab + ' にあります' };
+    }
+    for (var i = 0; i < cand.length; i++) {
+      var text = md && vhas(md, cand[i].vr.path) ? md[cand[i].vr.path] : null;
+      if (typeof text !== 'string') continue;
+      var ps = paraList(text, known);
+      for (var j = 0; j < ps.length; j++) {
+        if (tg.t === 'claim' ? ps[j].cites.indexOf(tg.claim_id) >= 0 : !!tg.q && normQ(ps[j].text).indexOf(tg.q) >= 0) return at(cand[i], j);
+      }
+    }
+    return tg.t === 'quote' ? at(cand[0], -1) : null;
+  }
+  /** 見てほしい所ごとの場所（shown の順） */
+  function locateAll(d, st, md) {
+    var frames = framesOf(st && st.pv);
+    return triageOf(d).shown.map(function (it) { return locateItem(it, d, md, frames); });
+  }
+  /** 子どもの画面の印の材料（純関数）: 見てほしい所（番号・状態）と、note の主張の札 */
+  function pinsOf(d, st) {
+    var tri = triageOf(d), states = statesFor(st, d);
+    var p = { claims: Object.create(null), quotes: [], media: [], head: [], notes: Object.create(null) };
+    tri.shown.forEach(function (it, i) {
+      var pin = { id: it.id, num: i + 1, state: stateIn(states, it.id) };
+      var tg = itemTarget(it, d);
+      if (!tg) return;
+      if (tg.t === 'claim') (p.claims[tg.claim_id] = p.claims[tg.claim_id] || []).push(pin);
+      else if (tg.t === 'quote' && tg.q) p.quotes.push({ path: tg.path, q: tg.q, pin: pin });
+      else if (tg.t === 'media') p.media.push({ media: tg.media, key: tg.key, pin: pin });
+      else if (tg.t === 'head' && tg.q) p.head.push({ q: tg.q, pin: pin });
+    });
+    tri.items.forEach(function (it) {
+      if (it.severity === 'note' && typeof it.claim_id === 'string' && vhas(NOTE_TAG, it.cause) && !vhas(p.notes, it.claim_id)) p.notes[it.claim_id] = NOTE_TAG[it.cause];
+    });
+    return p;
+  }
+  var PIN_STATE_TEXT = { open: 'まだ決めていません', ok: 'OK にしました', redo: '直してもらう' };
+  /** 番号の印（押すと右の一覧のその項目へ）。ok は緑のチェック、redo は橙の「直」 */
+  function pinBtnHtml(pin) {
+    return '<button type="button" class="mp-pin is-' + pin.state + '" data-pin-goto="' + esc(pin.id) + '" aria-label="見てほしい所 ' + pin.num + '（' + PIN_STATE_TEXT[pin.state] + '）">' +
+      (pin.state === 'ok' ? '✓' : pin.state === 'redo' ? '直' : pin.num) + '</button>';
+  }
+  /** 印の付いた部品の属性と印のボタン（pins が空なら何も付けない） */
+  function pinAttrs(pins) {
+    if (!pins.length) return { cls: '', attr: '', btns: '' };
+    var all = function (s) { return pins.every(function (x) { return x.state === s; }); };
+    return {
+      cls: ' has-pin' + (all('ok') ? ' pin-ok' : pins.some(function (x) { return x.state === 'redo'; }) ? ' pin-redo' : ''),
+      attr: ' data-pin="' + pins.map(function (x) { return x.num; }).join(' ') + '"',
+      btns: '<span class="mp-pins">' + pins.map(pinBtnHtml).join('') + '</span>'
+    };
+  }
+  function pinsFor(list, pred) { var out = []; (list || []).forEach(function (x) { if (pred(x) && out.indexOf(x.pin) < 0) out.push(x.pin); }); return out; }
+
+  // ---- 右の一覧: 見てほしい所（§V-9 a 2.）----
+  function itBtn(attr, i, on, label) {
+    return '<button type="button" class="btn small' + (on ? ' on' : '') + '" ' + attr + '="' + i + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + label + '</button>';
+  }
+  function itemCardHtml(it, i, state, loc, isReview, cur) {
+    var sev = it.severity === 'fix' ? 'fix' : 'ask', btns = [];
+    if (isReview) {
+      if (sev === 'ask') btns.push(itBtn('data-it-ok', i, state === 'ok', state === 'ok' ? '✓ OK にしました（戻す）' : 'OK にする'));
+      else {
+        if (!it.blocking) btns.push(itBtn('data-it-ok', i, state === 'ok', state === 'ok' ? '✓ このまま出す（戻す）' : 'このまま出す'));
+        btns.push(itBtn('data-it-redo', i, state === 'redo', state === 'redo' ? '直してもらう（戻す）' : '直してもらう'));
+      }
+    }
+    if (loc) btns.push('<button type="button" class="btn small rv-it-goto" data-it-goto="' + i + '">場所を見る</button>');
+    var str = function (x) { return typeof x === 'string' ? x : ''; };
+    return '<li class="rv-it sev-' + sev + ' is-' + state + (cur ? ' is-cur' : '') + '" id="rv-it-' + i + '" data-item-id="' + esc(it.id) + '" data-sev="' + sev + '" data-state="' + state + '" tabindex="-1">' +
+      '<p class="rv-it-head"><span class="rv-it-num" aria-hidden="true">' + (state === 'ok' ? '✓' : state === 'redo' ? '直' : i + 1) + '</span>' +
+        '<span class="sr-only">見てほしい所 ' + (i + 1) + '（' + PIN_STATE_TEXT[state] + '）</span><b class="rv-it-title">' + esc(str(it.title)) + '</b></p>' +
+      (loc ? '<p class="rv-it-where">' + esc(loc.label) + '</p>' : '') +
+      (str(it.channel_name) ? '<p class="rv-it-ch">チャンネル「' + esc(it.channel_name) + '」</p>' : '') +
+      (str(it.quote) && it.kind !== 'claim' ? '<p class="rv-it-quote">「' + esc(it.quote) + '」</p>' : '') +
+      (str(it.detail) ? '<p class="rv-it-detail">' + esc(it.detail) + '</p>' : '') +
+      (str(it.suggestion) ? '<p class="rv-it-sug">直し方の案: ' + esc(it.suggestion) + '</p>' : '') +
+      (it.blocking && isReview ? '<p class="rv-it-blk">このまま出すことはできません</p>' : '') +
+      (btns.length ? '<div class="rv-it-btns">' + btns.join('') + '</div>' : '') + '</li>';
+  }
+  /** gate が pending の時の文（§V-9 a 2.。pending_on で変える） */
+  function pendingNoteHtml(d, tri) {
+    if (tri.pending_on.indexOf('verification') >= 0) {
+      return '<p class="rv-wait-t">機械の確認が終わるのを待っています</p><p class="muted rv-wait-s">検証: ' + esc(verifyState(d.version || {}, null).text) + ' ・ 読み手チェック: ' + esc(readerText(d)) + '</p>';
+    }
+    return '<p class="rv-wait-t">読み手チェックを待っています。待たずに公開することもできます。</p><p class="muted rv-wait-s">読み手チェック: ' + esc(readerText(d)) + '</p>';
+  }
+  /** #rv-items の中身（純関数）。ctx.locs = locateAll の結果（無ければ md の要らない場所だけ出す） */
+  function itemsHtml(d, st, ctx) {
+    ctx = ctx || {};
+    var tri = triageOf(d), states = statesFor(st, d), isReview = !!d.version && d.version.status === 'review';
+    var locs = ctx.locs || locateAll(d, st, null);
+    var head = '<h2 class="rv-rail-h">見てほしい所（' + tri.shown.length + '）</h2>';
+    if (!tri.shown.length) {
+      return head + '<div id="rv-items-none" class="rv-none">' + (tri.gate === 'pending' ? pendingNoteHtml(d, tri) : '<p>見てほしい所はありません。子どもの画面を見て、よければ公開してください。</p>') + '</div>';
+    }
+    var cur = st && typeof st.cursor === 'number' && st.itemGen === itemGenOf(d) ? st.cursor : -1;
+    return head + (tri.gate === 'pending' ? '<div class="rv-wait">' + pendingNoteHtml(d, tri) + '</div>' : '') +
+      '<ol class="rv-its">' + tri.shown.map(function (it, i) { return itemCardHtml(it, i, stateIn(states, it.id), locs[i] || null, isReview, i === cur); }).join('') + '</ol>';
   }
 
-  function itemHtml(k, i, d, st, tri) {
-    var c = st.ck[k] || {};
-    var human = HUMAN_KEYS.indexOf(k);
-    var opts = itemOptions(k).map(function (r) {
-      var on = c.result === r;
-      return '<button type="button" class="btn small seg-' + r + (on ? ' on' : '') + '" data-set="' + k + '" data-val="' + r + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + (r === 'ok' ? 'OK' : r === 'ng' ? 'NG' : '該当なし') + '</button>';
+  // ---- 右の一覧: 機械が確かめたこと（§V-9 a 2.。6 項目を 1 行ずつ。開くと補足）----
+  var MK_ICON = { ok: '✓', review: '!', pending: '…' };
+  var MK_STATE_TEXT = { ok: '機械が OK にしました', review: '見てほしい所があります', pending: '機械の確認を待っています' };
+  /** 6 項目の状態（pending = gate が pending で、その項目の前提 §V-6 d がまだ成り立っていない） */
+  function machineStates(d) {
+    var tri = triageOf(d), rd = readerOf(d), mat = d.version && d.version.material;
+    var report = !!(d.verification && d.verification_id) && tri.pending_on.indexOf('verification') < 0;
+    var media = imageFiles(mat).length + videosOf(mat).length;
+    var srcN = (Array.isArray(d.sources) ? d.sources : []).length;
+    var pre = {
+      content_and_evidence: report, artifact_behavior: report,
+      terms_of_use: srcN > 0 && (!videosOf(mat).length || report),
+      explanation_and_expression: rd.status === 'done' && (!media || report),
+      relation_to_learning: rd.status === 'done', conditions_of_use: rd.status === 'done'
+    };
+    var out = {};
+    MK_KEYS.forEach(function (k) {
+      var a = tri.auto[k];
+      out[k] = (tri.gate === 'pending' && !pre[k]) || !a ? 'pending' : a;
+    });
+    return out;
+  }
+  function conditionsHtml(mat) {
+    var c = mat && isObj(mat.conditions) ? mat.conditions : null;
+    var none = '書かれていない';
+    var needs = (c && c.supporter_check === true) || partsOf({ version: { material: mat } }).some(function (p) { return p.needs_supporter_check === true; });
+    var ages = strArr(c && c.age_band).map(function (a) { return AGE_LABEL[a] || a; });
+    var row = function (k, v) { return '<div><dt>' + k + '</dt><dd>' + esc(v) + '</dd></div>'; };
+    return '<dl class="mk-dl">' + row('道具', strArr(c && c.tools).join('、') || none) + row('場所', c && typeof c.place === 'string' && c.place ? c.place : none) +
+      row('対象', ages.join('、') || none) + row('サポーターの見守り', needs ? '要' : c && c.supporter_check === false ? '不要' : none) + '</dl>';
+  }
+  var MK_VERDICT = { ok: ['問題なし', 'green'], problem: ['問題あり', 'red'], unclear: ['決められなかった', 'yellow'] };
+  function mkVerdictHtml(x) {
+    return x && isObj(x) && vhas(MK_VERDICT, x.verdict) ? pill(MK_VERDICT[x.verdict][0], MK_VERDICT[x.verdict][1]) + (typeof x.reason === 'string' && x.reason ? ' <span class="muted">' + esc(x.reason) + '</span>' : '') : '';
+  }
+  /** 「説明と表現」の補足の図（サムネイル・生成の情報・検証係の判定。§O-7 6・§O-12 d） */
+  function figsBlockHtml(d) {
+    var base = '/api/review/' + encodeURIComponent(d.version.id) + '/files/';
+    var imgs = imageFiles(d.version.material);
+    var gen = {};
+    (Array.isArray(d.generated_images) ? d.generated_images : []).forEach(function (g) { if (g && typeof g.path === 'string') gen[g.path] = g; });
+    var figs = figuresOf(d), figBy = {};
+    (figs || []).forEach(function (f) { if (f && typeof f.path === 'string') figBy[f.path] = f; });
+    var vids = videosOf(d.version.material);
+    return '<div class="rv-figs"><span class="muted">図・画像 ' + imgs.length + ' 枚' + (vids.length ? '・動画 ' + vids.length + ' 本' : '') +
+      (figs ? '（検証係の判定はサムネイルの下）' : '（この版の検証係は図を見ていません）') + '</span>' +
+      (imgs.length ? '<div class="thumbs">' + imgs.map(function (p) {
+        var a = '<a href="' + esc(base + p) + '" target="_blank" rel="noopener noreferrer" title="' + esc(p) + '"><img class="thumb" alt="' + esc(p) + '" src="' + esc(base + p) + '"></a>';
+        var g = Object.prototype.hasOwnProperty.call(gen, p) ? gen[p] : null;
+        var f = Object.prototype.hasOwnProperty.call(figBy, p) ? figBy[p] : null;
+        if (!g && !f) return a;
+        return '<div class="thumb-gen"' + (g ? ' data-gen="1"' : '') + '>' + a + (g ? '<p class="thumb-cap">' + esc(genCaption(g)) + '</p>' : '') + figVerdictHtml(f) + '</div>';
+      }).join('') + '</div>' : '') + '</div>';
+  }
+  /** 「利用条件」の補足の動画のチャンネル（チャンネル名・公式の情報・本人のアップと言える理由。§Q-11 8） */
+  function videoTermsHtml(vids, d, tri) {
+    if (!vids.length) return '';
+    var vc = videoCtxOf(d);
+    return '<div class="rv-terms" data-video-terms="1">' + vids.map(function (v) {
+      var isNew = tri.shown.some(function (x) { return x.cause === 'video_channel_new' && x.video_id === v.id; });
+      var m = vc.meta && typeof v.id === 'string' && vhas(vc.meta, v.id) ? vc.meta[v.id] : null;
+      var trusted = !!m && typeof m.author_url === 'string' && m.author_url && tri.trusted_keys.indexOf(m.author_url) >= 0;
+      var mark = !tri.present ? '' : isNew ? ' ' + pill('初めてのチャンネル', 'orange') : trusted ? ' ' + pill('確認済みのチャンネル', 'green') : '';
+      return '<div class="rv-term" data-video-term="' + esc(v.id) + '"><p><b>動画 ' + esc(v.id) + '</b> チャンネル ' + esc(v.channel) + mark + '</p>' +
+        videoMetaHtml(v, vc) + '<p>本人のアップと言える理由: ' + esc(v.rights_note) + '</p></div>';
+    }).join('') + '</div>';
+  }
+  /** #rv-machine の中身（純関数） */
+  function machineHtml(d) {
+    var tri = triageOf(d), rd = readerOf(d), sts = machineStates(d), mat = (d.version && d.version.material) || {};
+    var claims = Array.isArray(d.claims) ? d.claims.filter(isObj) : [];
+    var hasReport = !!(d.verification && d.verification_id);
+    var cnt = function (pred) { return claims.filter(pred).length; };
+    var figs = figuresOf(d) || [], imgs = imageFiles(mat), vids = videosOf(mat);
+    var vver = d.verification && Array.isArray(d.verification.videos) ? d.verification.videos : [];
+    var apps = d.verification && Array.isArray(d.verification.apps) ? d.verification.apps.filter(isObj) : null;
+    var appPaths = [];
+    partsOf(d).forEach(function (p) { (Array.isArray(p.files) ? p.files : []).forEach(function (f) { if (isObj(f) && typeof f.path === 'string' && /\.html$/i.test(f.path)) appPaths.push({ path: f.path, title: p.title }); }); });
+    var okN = function (arr) { return arr.filter(function (x) { return isObj(x) && x.verdict === 'ok'; }).length; };
+    var fixN = rd.findings.filter(function (f) { return f.severity === 'fix'; }).length, noteN = rd.findings.filter(function (f) { return f.severity === 'note'; }).length;
+    var srcs = Array.isArray(d.sources) ? d.sources : [];
+    var licUnknown = srcs.filter(function (s) { return !s || s.license === 'unknown'; }).length;
+    var anyNew = tri.shown.some(function (x) { return x.cause === 'video_channel_new'; });
+    var sum = {}, more = {};
+    sum.content_and_evidence = ['主張 ' + claims.length + ' 件: ' + (hasReport ? '確か ' + cnt(function (c) { return c.verdict === 'confirmed'; }) + '・仮説として書いてある ' + cnt(function (c) { return c.verdict === 'hypothesis' && c.presented_as === 'hedged'; }) + '・たとえ ' + cnt(function (c) { return c.verdict === 'hypothesis' && c.presented_as === 'analogy'; }) : '検証を待っています')];
+    more.content_and_evidence = '<p><button type="button" class="linkish rv-open-src" data-open-sources="1">根拠と出典を開く →</button></p>';
+    sum.explanation_and_expression = ['読み手チェック: ' + (rd.status === 'done' ? '直す所 ' + fixN + '・気づき ' + noteN : readerText(d))];
+    if (imgs.length) sum.explanation_and_expression.push('図 ' + imgs.length + ' 枚: 問題なし ' + okN(figs));
+    if (vids.length) sum.explanation_and_expression.push('動画 ' + vids.length + ' 本: 問題なし ' + okN(vver));
+    var notes = rd.findings.filter(function (f) { return f.severity === 'note'; });
+    more.explanation_and_expression = figsBlockHtml(d) +
+      (rd.status === 'done' ? '<div class="mk-reader" data-reader-notes="' + notes.length + '"><p class="mk-sub">読み手チェックの気づき</p>' +
+        (notes.length ? '<ul>' + notes.map(function (f) { return '<li>' + (typeof f.quote === 'string' && f.quote ? '「' + esc(f.quote) + '」 ' : '') + esc(f.note) + (typeof f.suggestion === 'string' && f.suggestion ? '<br><span class="muted">直し方の案: ' + esc(f.suggestion) + '</span>' : '') + '</li>'; }).join('') + '</ul>' : '<p class="muted">気づきはありません</p>') +
+        (rd.summary ? '<p class="mk-summary">' + esc(rd.summary) + '</p>' : '') + '</div>' : '') +
+      analogyGapsHtml(d) + videosHtml(vids, d);
+    sum.relation_to_learning = [rd.learning && typeof rd.learning.reason === 'string' && rd.learning.reason ? rd.learning.reason : '読み手チェック: ' + readerText(d)];
+    more.relation_to_learning = rd.learning ? '<p>' + mkVerdictHtml(rd.learning) + '</p>' : '';
+    sum.conditions_of_use = [rd.conditions && typeof rd.conditions.reason === 'string' && rd.conditions.reason ? rd.conditions.reason : '読み手チェック: ' + readerText(d)];
+    more.conditions_of_use = conditionsHtml(mat) + (rd.conditions ? '<p>' + mkVerdictHtml(rd.conditions) + '</p>' : '');
+    sum.artifact_behavior = [appPaths.length ? '動かせるもの ' + appPaths.length + ' 個: ' + (apps ? '問題なし ' + okN(apps) : '検証係はまだ見ていません') : '動かせるものはありません'];
+    more.artifact_behavior = appPaths.length ? '<ul class="mk-apps">' + appPaths.map(function (a) {
+      var x = (apps || []).filter(function (y) { return y.path === a.path; })[0];
+      return '<li data-app-verdict="' + esc(x && typeof x.verdict === 'string' ? x.verdict : 'none') + '"><b>' + esc(a.title || '動かせるもの') + '</b> ' + (x ? mkVerdictHtml(x) : '<span class="muted">判定がありません</span>') + '</li>';
+    }).join('') + '</ul>' : '';
+    sum.terms_of_use = ['出典 ' + srcs.length + ' 件' + (vids.length && tri.present && (anyNew || tri.trusted_keys.length) ? '・動画のチャンネル: ' + (anyNew ? '初めて' : '確認済み') : '')];
+    more.terms_of_use = (licUnknown ? '<p class="muted">利用条件が分からない出典があります（' + licUnknown + ' 件）</p>' : '') + videoTermsHtml(vids, d, tri);
+    var reread = rd.status === 'failed' && d.version && d.version.status === 'review'
+      ? '<p class="mk-reread"><button type="button" class="btn small" id="rv-reread">読み手チェックをやり直す</button></p>' : '';
+    return '<h2 class="rv-rail-h">機械が確かめたこと</h2>' + reread + MK_KEYS.map(function (k) {
+      var s = sts[k];
+      return '<details class="mk-row is-' + s + '" data-mk="' + k + '" data-mk-state="' + s + '"><summary><span class="mk-ic" aria-hidden="true">' + MK_ICON[s] + '</span>' +
+        '<span class="mk-name">' + esc(CK_LABEL[k]) + '</span><span class="sr-only">（' + MK_STATE_TEXT[s] + '）</span>' +
+        '<span class="mk-sum">' + sum[k].map(function (x) { return '<span>' + esc(x) + '</span>'; }).join('') + '</span></summary>' +
+        (more[k] ? '<div class="mk-more">' + more[k] + '</div>' : '') + '</details>';
     }).join('');
-    var extra = '';
-    if (k === 'explanation_and_expression') {
-      var base = '/api/review/' + encodeURIComponent(d.version.id) + '/files/';
-      var imgs = imageFiles(d.version.material);
-      var gen = {};
-      (Array.isArray(d.generated_images) ? d.generated_images : []).forEach(function (g) { if (g && typeof g.path === 'string') gen[g.path] = g; });
-      var figs = figuresOf(d), figBy = {};
-      (figs || []).forEach(function (f) { if (f && typeof f.path === 'string') figBy[f.path] = f; });
-      var vids = videosOf(d.version.material);
-      extra = '<div class="rv-figs"><span class="muted">図・画像 ' + imgs.length + ' 枚' + (vids.length ? '・動画 ' + vids.length + ' 本' : '') +
-        (figs ? '（検証係も図を見ています。判定はサムネイルの下。最後はあなたがすべて見てください）' : '（この版の検証係は図を見ていません。すべて見てください）') + '</span>' +
-        (imgs.length ? '<div class="thumbs">' + imgs.map(function (p) {
-          var a = '<a href="' + esc(base + p) + '" target="_blank" rel="noopener noreferrer" title="' + esc(p) + '"><img class="thumb" alt="' + esc(p) + '" src="' + esc(base + p) + '"></a>';
-          var g = Object.prototype.hasOwnProperty.call(gen, p) ? gen[p] : null;
-          var f = Object.prototype.hasOwnProperty.call(figBy, p) ? figBy[p] : null;
-          if (!g && !f) return a;
-          // 生成した絵はサムネイルの下に「生成: 正確さ・prompt の先頭 80 字」（§O-7 6）、その下に検証係の判定（§O-12 d）
-          return '<div class="thumb-gen"' + (g ? ' data-gen="1"' : '') + '>' + a + (g ? '<p class="thumb-cap">' + esc(genCaption(g)) + '</p>' : '') + figVerdictHtml(f) + '</div>';
-        }).join('') + '</div>' : '') + '</div>' + videosHtml(vids, d) + analogyGapsHtml(d);
-    }
-    // §Q-9.6: 動画のある版の「利用条件」は自動 OK にならない。理由の文を動画の文にする（出典の利用条件が分からない時は従来の文も残す）
-    var tuVideos = k === 'terms_of_use' && videosOf(d.version && d.version.material).length > 0;
-    if (tuVideos) {
-      var srcs = Array.isArray(d.sources) ? d.sources : [];
-      var tuLicense = !srcs.length || srcs.some(function (s) { return !s || s.license === 'unknown'; });
-      extra += (tri.present && tuLicense ? '<p class="muted">' + esc(AUTO_HINT.terms_of_use) + '</p>' : '') + '<p class="muted" data-video-terms="1">' + esc(VIDEO_CHECK_TEXT) + '</p>';
-    } else if (tri.present && AUTO_KEYS.indexOf(k) >= 0 && AUTO_HINT[k]) extra += '<p class="muted">' + esc(AUTO_HINT[k]) + '</p>';
-    return '<div class="rv-item" id="ck-' + k + '" data-ck="' + k + '"><div class="rv-item-head">' +
-      (human >= 0 ? '<span class="kbd" title="' + (human + 1) + ' = OK / Shift+' + (human + 1) + ' = NG">' + (human + 1) + '</span>' : '<span class="kbd blank"></span>') +
-      '<b>' + esc(CK_LABEL[k]) + '</b><span class="seg">' + opts + '</span></div>' + extra +
-      '<input type="text" class="rv-ngnote' + (c.result === 'ng' ? '' : ' hidden') + '" data-note="' + k + '" maxlength="2000" placeholder="NG の理由（メモ）" value="' + esc(c.note || '') + '"></div>';
   }
 
   // ---- 教材プレビュー（「教材として見る」。子どもが見る形 = app-v3 の見た目を .mat-preview に閉じ込めて出す）----
@@ -2187,7 +2577,7 @@
   function saveMarks(on) { try { window.localStorage.setItem(MARKS_KEY, on ? '1' : '0'); } catch (e) { /* 覚えられなくても表示は切り替わる */ } }
   function marksToggleHtml(on) {
     return '<button type="button" class="mp-marks' + (on ? ' on' : '') + '" data-mp-marks="1" aria-pressed="' + (on ? 'true' : 'false') + '" title="OFF にすると子どもが見るのと同じ見た目になります">' +
-      '<span class="mp-marks-box" aria-hidden="true">' + (on ? '✓' : '') + '</span>確認の印を見る<span class="mp-marks-state">' + (on ? 'ON' : 'OFF') + '</span></button>';
+      '<span class="mp-marks-box" aria-hidden="true">' + (on ? '✓' : '') + '</span>印を見る<span class="mp-marks-state">' + (on ? 'ON' : 'OFF') + '</span></button>';
   }
   /** 既定は「小学生・短い」1 枠。見比べの右の枠は「中学生・短い」から */
   function defaultPv() { return { aud: 'elementary', len: 'short', game: false, compare: false, cmp: { aud: 'secondary', len: 'short', game: false } }; }
@@ -2202,12 +2592,18 @@
     }
     return vars.filter(function (v) { return v.game !== true && v.audience === sel.aud && v.length === sel.len; })[0] || null;
   }
-  /** md を塊に分ける（renderMd と同じ規則: 見出し・段落・箇条書き・コード） */
+  /** md を塊に分ける（教材の記法 v1 §V-5: 見出し・段落・箇条書き・番号つき・コード）。番号つきは { t: 'ol', start } */
   function mdBlocks(src) {
     var lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
     var out = [], para = [], list = null, code = null;
     function flushPara() { if (para.length) { out.push({ t: 'p', raw: para.join(' ') }); para = []; } }
-    function flushList() { if (list) { out.push({ t: 'ul', items: list }); list = null; } }
+    function flushList() { if (list) { out.push(list); list = null; } }
+    function item(t, text, n) {
+      flushPara();
+      if (list && list.t !== t) flushList();
+      if (!list) list = t === 'ol' ? { t: 'ol', start: n, items: [] } : { t: 'ul', items: [] };
+      list.items.push(text);
+    }
     lines.forEach(function (line) {
       if (code !== null) {
         if (/^```/.test(line)) { out.push({ t: 'pre', text: code.join('\n') }); code = null; } else code.push(line);
@@ -2217,7 +2613,9 @@
       var h = /^(#{1,4})\s+(.*)$/.exec(line);
       if (h) { flushPara(); flushList(); out.push({ t: 'h', level: Math.min(h[1].length + 1, 4), raw: h[2] }); return; }
       var li = /^\s*[-*]\s+(.*)$/.exec(line);
-      if (li) { flushPara(); (list = list || []).push(li[1]); return; }
+      if (li) { item('ul', li[1]); return; }
+      var ol = /^\s*(\d{1,9})\.\s+(.*)$/.exec(line);
+      if (ol) { item('ol', ol[2], Number(ol[1])); return; }
       if (!line.trim()) { flushPara(); flushList(); return; }
       flushList(); para.push(line.trim());
     });
@@ -2227,7 +2625,7 @@
   }
   /** 段落の先頭 20 字（付箋の場所の目印。主張 id の参照と md の記号を除く） */
   function paraHead(raw, known) {
-    var t = stripCites(raw, known, []).replace(/`/g, '').replace(/\[([^\]]+)\]\((?:[^)]*)\)/g, '$1').replace(/\s+/g, ' ').trim();
+    var t = stripCites(raw, known, []).replace(/`/g, '').replace(/\*\*/g, '').replace(/\[([^\]]+)\]\((?:[^)]*)\)/g, '$1').replace(/\s+/g, ' ').trim();
     var cps = Array.from(t);
     return cps.length > 20 ? cps.slice(0, 20).join('') + '…' : t;
   }
@@ -2238,20 +2636,32 @@
     return '<iframe src="' + esc('https://www.youtube-nocookie.com/embed/' + v.youtube_id + '?start=' + s + '&end=' + e + '&rel=0') + '" title="' + esc(v.title) +
       '" allow="encrypted-media; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin" loading="lazy"></iframe>';
   }
-  /** 本文の中に置く図・動かせるもの・動画（図と動画は先頭の段落の直後、型 4 の app は本文の上） */
-  function previewMedia(part, fileBase) {
+  /**
+   * 本文の中に置く図・動かせるもの・動画（図と動画は先頭の段落の直後、型 4 の app は本文の上）。
+   * 動かせるものの上に子どもに見える見出し「さわってみよう」（§V-9 b）。o.marks と o.pins があれば、見てほしい所の部品に番号の印
+   */
+  function previewMedia(part, fileBase, o) {
+    o = o || {};
     var figs = [], apps = [], others = [];
+    var pinOf = function (media, key) { return pinAttrs(o.marks && o.pins ? pinsFor(o.pins.media, function (x) { return x.media === media && x.key === key; }) : []); };
     (Array.isArray(part.files) ? part.files : []).forEach(function (f) {
       if (!f || typeof f.path !== 'string') return;
       var src = esc(fileBase + f.path);
-      if (IMAGE_RE.test(f.path)) figs.push('<figure class="mp-fig"><img alt="' + esc(typeof f.alt === 'string' && f.alt ? f.alt : '図') + '" src="' + src + '"></figure>');
-      else if (/\.html$/i.test(f.path)) apps.push('<div class="mp-app"><iframe class="mp-app-frame" sandbox="allow-scripts" title="動かせるもの" src="' + src + '"></iframe></div>');
-      else others.push('<p class="mp-file"><a href="' + src + '" target="_blank" rel="noopener noreferrer">' + esc(f.path) + '</a></p>');
+      var pa;
+      if (IMAGE_RE.test(f.path)) {
+        pa = pinOf('figure', f.path);
+        figs.push('<figure class="mp-fig' + pa.cls + '" data-media="figure" data-media-key="' + esc(f.path) + '"' + pa.attr + '><img alt="' + esc(typeof f.alt === 'string' && f.alt ? f.alt : '図') + '" src="' + src + '">' + pa.btns + '</figure>');
+      } else if (/\.html$/i.test(f.path)) {
+        pa = pinOf('app', f.path);
+        apps.push('<div class="mp-app' + pa.cls + '" data-media="app" data-media-key="' + esc(f.path) + '"' + pa.attr + '><p class="mp-app-cap">さわってみよう</p>' + pa.btns +
+          '<iframe class="mp-app-frame" sandbox="allow-scripts" title="動かせるもの" src="' + src + '"></iframe></div>');
+      } else others.push('<p class="mp-file"><a href="' + src + '" target="_blank" rel="noopener noreferrer">' + esc(f.path) + '</a></p>');
     });
     var vids = (Array.isArray(part.videos) ? part.videos : []).map(function (v) {
       v = v && typeof v === 'object' ? v : {};
       var emb = ytEmbedHtml(v);
-      return '<div class="mp-video">' + (emb || '<p class="mp-missing">動画の id か区間の形が正しくないため、埋め込みません</p>') +
+      var pa = pinOf('video', v.id);
+      return '<div class="mp-video' + pa.cls + '" data-media="video" data-media-key="' + esc(v.id) + '"' + pa.attr + '>' + pa.btns + (emb || '<p class="mp-missing">動画の id か区間の形が正しくないため、埋め込みません</p>') +
         (v.why ? '<p class="mp-video-why"><span class="mp-k">見どころ</span>' + esc(v.why) + '</p>' : '') + '</div>';
     });
     var top = part.kind === 4 ? apps : [];
@@ -2259,38 +2669,38 @@
     return { top: top.join(''), after: after.join(''), end: others.join('') };
   }
   /**
-   * 1 つの変奏の本文（純関数）。o: { fileBase, marks, chips, stick, markIds, claimIdx, claimRef, frame, pi, stickies }
-   * - [cN] は出さない（inlineMd の中で外す）。marks の時だけ、要確認の段落を黄色にし、chips の時は段落末に主張 → 出典の印を出す
+   * 1 つの変奏の本文（純関数）。o: { fileBase, marks, stick, pins, path, claimIdx, frame, pi, stickies }
+   * - [cN] は出さない（inlineMd の中で外す）。**…** は太字・1. は番号つきの一覧（§V-5 教材の記法 v1）
+   * - marks の時だけ: 見てほしい所の段落に番号の印と薄い色、note の主張の段落に点線と札、「ここに付箋」。OFF は子どもが見るのと同じ見た目
    * - 段落と箇条には data-para（0 始まり）・data-head（先頭 20 字）・data-cl（主張の番号）を付ける
    */
   function previewBodyHtml(md, part, o) {
     o = o || {};
-    var known = o.claimIdx || {}, markIds = o.markIds || {}, ref = o.claimRef || {};
+    var known = o.claimIdx || {}, pins = o.marks && o.pins ? o.pins : null;
     var stuck = {};
     (o.stickies || []).forEach(function (s) { stuck[s.para_index] = (stuck[s.para_index] || 0) + 1; });
-    var media = previewMedia(part || {}, o.fileBase || '');
+    var media = previewMedia(part || {}, o.fileBase || '', o);
     var idx = 0;
-    function chipHtml(id) {
-      var r = vhas(ref, id) ? ref[id] : null;
-      var flag = vhas(markIds, id);
-      if (!r) return '<span class="mp-cite is-missing' + (flag ? ' is-flag' : '') + '">' + esc(id) + '（一覧にない主張）</span>';
-      return r.goto
-        ? '<button type="button" class="mp-cite' + (flag ? ' is-flag' : '') + '" data-goto="' + esc(r.goto) + '" title="' + esc(id + ' の出典カードへ') + '">' + esc(r.label) + '</button>'
-        : '<span class="mp-cite is-missing' + (flag ? ' is-flag' : '') + '">' + esc(r.label) + '</span>';
-    }
     function para(tag, raw) {
       var i = idx++, cites = [];
-      var inner = inlineMd(raw, { cites: cites, known: known });
-      var flagged = !!o.marks && cites.some(function (id) { return vhas(markIds, id); });
+      var inner = inlineMd(raw, { cites: cites, known: known, bold: true });
       var cl = cites.filter(function (id) { return vhas(known, id); }).map(function (id) { return known[id]; });
       var showStuck = !!o.marks && !!stuck[i]; // 印 OFF は子どもが見るのと同じ見た目（付箋そのものは消さない）
-      var cls = 'mp-para' + (flagged ? ' is-flag' : '') + (showStuck ? ' has-stick' : '');
+      var mine = [], tag2 = '';
+      if (pins) {
+        cites.forEach(function (id) { (vhas(pins.claims, id) ? pins.claims[id] : []).forEach(function (p) { if (mine.indexOf(p) < 0) mine.push(p); }); });
+        var plain = normQ(stripCites(raw, known, []));
+        pins.quotes.forEach(function (q) { if (q.path === o.path && plain.indexOf(q.q) >= 0 && mine.indexOf(q.pin) < 0) mine.push(q.pin); });
+        for (var c = 0; c < cites.length && !tag2; c++) if (vhas(pins.notes, cites[c])) tag2 = pins.notes[cites[c]];
+      }
+      var pa = pinAttrs(mine);
+      var cls = 'mp-para' + pa.cls + (tag2 ? ' is-note' : '') + (showStuck ? ' has-stick' : '');
       var tail = '';
-      if (o.marks && o.chips && cites.length) tail += '<span class="mp-cites">' + cites.map(chipHtml).join('') + '</span>';
+      if (tag2) tail += '<span class="mp-note-tag">' + esc(tag2) + '</span>';
       if (showStuck) tail += '<span class="mp-stuck" title="この段落の付箋">付箋 ' + stuck[i] + '</span>';
       if (o.marks && o.stick) tail += '<button type="button" class="mp-stick-btn" data-stick-open="' + i + '">ここに付箋</button>';
       return '<' + tag + ' class="' + cls + '" id="mp-p-' + (o.frame || 0) + '-' + (o.pi || 0) + '-' + i + '" data-para="' + i + '" data-head="' + esc(paraHead(raw, known)) + '"' +
-        (cl.length ? ' data-cl="' + cl.join(' ') + '"' : '') + '>' + inner + tail + '</' + tag + '>';
+        (cl.length ? ' data-cl="' + cl.join(' ') + '"' : '') + pa.attr + '>' + pa.btns + inner + tail + '</' + tag + '>';
     }
     var blocks = mdBlocks(md);
     var firstP = -1;
@@ -2298,26 +2708,15 @@
     var at = firstP >= 0 ? firstP : (blocks.length ? 0 : -1);
     var html = blocks.map(function (b, i) {
       var h;
-      if (b.t === 'h') h = '<h' + b.level + ' class="mp-h">' + inlineMd(b.raw, { cites: [], known: known }) + '</h' + b.level + '>';
+      if (b.t === 'h') h = '<h' + b.level + ' class="mp-h">' + inlineMd(b.raw, { cites: [], known: known, bold: true }) + '</h' + b.level + '>';
       else if (b.t === 'pre') h = '<pre class="mp-pre"><code>' + esc(b.text) + '</code></pre>';
       else if (b.t === 'ul') h = '<ul class="mp-ul">' + b.items.map(function (x) { return para('li', x); }).join('') + '</ul>';
+      else if (b.t === 'ol') h = '<ol class="mp-ol"' + (b.start !== 1 ? ' start="' + b.start + '"' : '') + '>' + b.items.map(function (x) { return para('li', x); }).join('') + '</ol>';
       else h = para('p', b.raw);
       return i === at ? h + media.after : h;
     }).join('');
     if (at < 0) html = media.after;
     return '<div class="mp-md">' + media.top + html + media.end + '</div>';
-  }
-  /** 主張 id → 段落末の印の文と行き先（出典カード）。出典が無い・一覧に無い時は「出典のない主張」のカードへ */
-  function claimRefsOf(d, model) {
-    var out = Object.create(null);
-    (Array.isArray(d && d.claims) ? d.claims : []).forEach(function (c) {
-      if (!c || typeof c.id !== 'string' || c.id in out) return;
-      var sids = strArr(c.source_ids);
-      var listed = sids.filter(function (sid) { return sid in model.cardOf; });
-      if (!listed.length) out[c.id] = { label: c.id + ' → 出典なし', goto: model.orphans.length ? 'rv-src-orphan' : '' };
-      else out[c.id] = { label: c.id + ' → ' + listed.join('・'), goto: model.cardOf[listed[0]] };
-    });
-    return out;
   }
   /** 切り替えの 1 組（学年・長さ・ゲーム版）。fi = 枠の番号（0 = 左 / 1 = 見比べの右） */
   function pvSwitchHtml(sel, fi) {
@@ -2342,10 +2741,12 @@
    * 理由の文に付箋の行を足す（書いてある理由は 1 字も変えず、その後ろに。区切りの改行だけ足す。上限を超える行は足さない）
    * → { note, added, lines }（lines = 足した行。却下の時に外すため）。1 件も足せなければ note は元のまま
    */
-  function stickyNoteText(note, stickies) {
+  function stickyNoteText(note, stickies) { return appendLines(note, stickies.map(stickyLine)); }
+  /** 理由の文に行を足す（書いてある理由は 1 字も変えず、その後ろに。区切りの改行だけ足す。上限を超える行は足さない）→ { note, added, lines } */
+  function appendLines(note, list) {
     var base = String(note || ''), out = base, added = 0, lines = [];
-    for (var i = 0; i < stickies.length; i++) {
-      var line = stickyLine(stickies[i]);
+    for (var i = 0; i < list.length; i++) {
+      var line = list[i];
       var next = out + (out && out.charAt(out.length - 1) !== '\n' ? '\n' : '') + line;
       if (next.length > NOTE_MAX) break;
       out = next; added++; lines.push(line);
@@ -2385,9 +2786,9 @@
     return null;
   }
   function stickyListHtml(stickies) {
-    if (!stickies.length) return '<p class="mp-stick-empty">付箋はまだありません。「確認の印を見る」を ON にして、段落の「ここに付箋」から付けられます。</p>';
+    if (!stickies.length) return '<p class="mp-stick-empty">付箋はまだありません。「印を見る」を ON にして、段落の「ここに付箋」から付けられます。</p>';
     var pending = stickies.filter(function (s) { return !s.flowed; }).length;
-    return '<div class="mp-stick-head"><b>付箋 ' + stickies.length + ' 件</b><span class="muted">' + (pending ? '「差し戻す」を押すと、まだ入れていない ' + pending + ' 件を理由欄に箇条書きで足します（書いてある理由は消しません）' : 'すべて理由欄に入れました') + '</span></div>' +
+    return '<div class="mp-stick-head"><b>付箋 ' + stickies.length + ' 件</b><span class="muted">' + (pending ? '「直してもらう」を押すと、まだ入れていない ' + pending + ' 件を理由欄に箇条書きで足します（書いてある理由は消しません）' : 'すべて理由欄に入れました') + '</span></div>' +
       '<ul class="mp-stick-list">' + stickies.map(function (s) {
         return '<li class="mp-stick-item" data-stick-item="' + s.id + '"><span class="mp-stick-kind">' + esc(STICK_LABEL[s.kind] || 'その他') + '</span>' +
           '<span class="mp-stick-where">' + esc(s.part_title || s.part_id) + '・' + esc(s.variant_label) + ' ' + (Number(s.para_index) + 1) + ' 段落目「' + esc(s.head) + '」</span>' +
@@ -2406,21 +2807,29 @@
       (kind ? '' : '<span class="muted mp-stick-hint">種類を選ぶと付けられます</span>') + '</span></span>';
   }
   /** 1 枠の骨組み（本文は DOM 側が md を読んでから previewBodyHtml で入れる） */
-  function previewFrameHtml(d, sel, fi) {
+  /**
+   * 1 枠の骨組み（本文は DOM 側が md を読んでから previewBodyHtml で入れる）。o: { marks, pins }（任意）。
+   * 要約・部品の題名・最初にやること（material.json の文）に、quote を含む見てほしい所があれば番号の印（§V-9 b）
+   */
+  function previewFrameHtml(d, sel, fi, o) {
+    o = o || {};
     var mat = (d.version && d.version.material) || {};
     var parts = Array.isArray(mat.parts) ? mat.parts : [];
     var aud = sel.game ? null : sel.aud;
     var summary = aud === 'secondary' ? mat.summary_secondary : mat.summary_elementary;
+    var headPin = function (text) { var q = normQ(text); return pinAttrs(o.marks && o.pins && q ? pinsFor(o.pins.head, function (x) { return q.indexOf(x.q) >= 0; }) : []); };
+    var ps = summary ? headPin(summary) : null;
     return '<div class="mat-preview" data-frame="' + fi + '" data-mode="' + (sel.aud === 'secondary' && !sel.game ? 'js' : 'es') + '">' +
       (fi > 0 ? '<div class="mp-frame-bar">' + pvSwitchHtml(sel, fi) + '</div>' : '') +
       '<p class="mp-now" data-mp-now="' + fi + '">いま表示: <b>' + esc(pvLabel(sel)) + '</b></p>' +
-      '<div class="mp-cover"><h2 class="mp-title">' + esc(mat.title || '') + '</h2>' + (summary ? '<p class="mp-summary">' + esc(summary) + '</p>' : '') + '</div>' +
+      '<div class="mp-cover"><h2 class="mp-title">' + esc(mat.title || '') + '</h2>' + (summary ? '<p class="mp-summary' + ps.cls + '" data-head-k="summary"' + ps.attr + '>' + ps.btns + esc(summary) + '</p>' : '') + '</div>' +
       parts.map(function (p, pi) {
         p = p && typeof p === 'object' ? p : {};
         var ep = p.entry_point && typeof p.entry_point === 'object' ? p.entry_point : {};
+        var pt = headPin(p.title), pe = ep.text ? headPin(ep.text) : null;
         return '<section class="mp-part" data-mp-part="' + pi + '">' +
-          '<div class="mp-part-head"><span class="mp-kind">' + esc(kindName(p.kind)) + '</span><h3 class="mp-part-title">' + esc(p.title || '') + '</h3></div>' +
-          (ep.text ? '<div class="mp-entry"><span class="mp-entry-k">最初にやること' + (vhas(ENTRY_LABEL, ep.type) ? '（' + ENTRY_LABEL[ep.type] + '）' : '') + '</span><p>' + esc(ep.text) + '</p></div>' : '') +
+          '<div class="mp-part-head"><span class="mp-kind">' + esc(kindName(p.kind)) + '</span><h3 class="mp-part-title' + pt.cls + '" data-head-k="title"' + pt.attr + '>' + pt.btns + esc(p.title || '') + '</h3></div>' +
+          (ep.text ? '<div class="mp-entry' + pe.cls + '" data-head-k="entry"' + pe.attr + '>' + pe.btns + '<span class="mp-entry-k">最初にやること' + (vhas(ENTRY_LABEL, ep.type) ? '（' + ENTRY_LABEL[ep.type] + '）' : '') + '</span><p>' + esc(ep.text) + '</p></div>' : '') +
           '<div class="mp-body" id="mp-body-' + fi + '-' + pi + '" data-mp-body="' + pi + '"><p class="mp-loading">読み込み中…</p></div></section>';
       }).join('') +
       (parts.length ? '' : '<p class="mp-missing">部品（parts）がありません</p>') + '</div>';
@@ -2516,7 +2925,7 @@
   function sourceIssueKeys(s, tri, citing, isVideo) {
     var keys = [];
     var add = function (k) { if (hasOwn(SRC_ISSUE, k) && keys.indexOf(k) < 0) keys.push(k); };
-    if (tri.present) {
+    if (tri.hasGroups) {
       tri.groups.forEach(function (g) { if (g && g.source_id === s.source_id) add(g.cause); });
     } else {
       if ((citing || []).some(function (c) { return c.verdict === 'contradicted'; })) add('contradicted');
@@ -2547,7 +2956,7 @@
       var head = issues.length ? SRC_ISSUE[issues[0]] : (s.is_primary ? SRC_OK : SRC_SECONDARY);
       var opened = [];
       tri.groups.forEach(function (g) { if (g && g.source_id === s.source_id) strArr(g.verifier_opened_urls).forEach(function (u) { if (opened.indexOf(u) < 0) opened.push(u); }); });
-      if (!tri.present) citing.forEach(function (c) { strArr(c.opened_urls).forEach(function (u) { if (opened.indexOf(u) < 0) opened.push(u); }); });
+      if (!tri.hasGroups) citing.forEach(function (c) { strArr(c.opened_urls).forEach(function (u) { if (opened.indexOf(u) < 0) opened.push(u); }); });
       return { source: s, order: i, cardId: 'rv-src-' + i, issues: issues, rank: head.rank, head: head, claims: citing, opened: opened, video: isVideo, problem: issues.length > 0 };
     });
     cards.sort(function (a, b) { return a.rank - b.rank || a.order - b.order; });
@@ -2632,7 +3041,7 @@
     var bad = model.cards.filter(function (c) { return c.problem; }), good = model.cards.filter(function (c) { return !c.problem; });
     var secondary = good.filter(function (c) { return !c.source.is_primary; }).length;
     var sum = model.total ? '出典 ' + model.total + ' 件のうち 問題 ' + model.problems + ' 件' : '出典はありません';
-    return '<div class="card sc-panel" id="rv-sources"><h2>出典と主張</h2>' +
+    return '<div class="sc-panel" id="rv-sources">' +
       '<p class="sc-sum">' + esc(sum) + (model.orphans.length ? ' ・ <span class="err">出典のない主張 ' + model.orphans.length + ' 件</span>' : '') + '</p>' +
       orphanCardHtml(model.orphans, claimIdx) + bad.map(function (c) { return sourceCardHtml(c, claimIdx); }).join('') +
       (good.length ? '<details class="sc-okbox" id="rv-src-ok"' + (bad.length || model.orphans.length ? '' : ' open') + '><summary>問題なし（出典 ' + good.length + ' 件' + (secondary ? '。うち補助の出典 ' + secondary + ' 件' : '') + '）</summary>' +
@@ -2656,82 +3065,89 @@
     return '<h3>主張（claims）</h3>' + claimsHtml + '<h3>出典（sources）</h3>' + sourcesHtml;
   }
 
-  /** 要確認の主張 id（本文の段落に黄色の印を付ける） */
-  function markIdsOf(tri) {
-    var ids = {};
-    tri.groups.forEach(function (g) { (g.claim_ids || []).forEach(function (id) { ids[id] = true; }); });
-    return ids;
+  /** 「直してもらう」にした項目 → 理由の行（§V-9 c: `- {title}{（場所）}: {detail}`。detail が空なら「: 」も付けない） */
+  function redoLine(it, loc) {
+    return '- ' + String(it.title || '') + (loc && loc.label ? '（' + loc.label + '）' : '') + (typeof it.detail === 'string' && it.detail ? ': ' + it.detail : '');
+  }
+  /** まだ理由に入れていない「直してもらう」の項目の行（純関数。locs = locateAll の結果） → [{ id, line }] */
+  function redoLines(d, st, locs) {
+    var states = statesFor(st, d), done = st && st.itemGen === itemGenOf(d) && Array.isArray(st.redoFlowed) ? st.redoFlowed : [];
+    var out = [];
+    triageOf(d).shown.forEach(function (it, i) {
+      if (stateIn(states, it.id) === 'redo' && done.indexOf(it.id) < 0) out.push({ id: it.id, line: redoLine(it, (locs || [])[i]) });
+    });
+    return out;
   }
 
-  /** 確認画面全体の HTML。ctx: { status, queue: [version_id...] } */
+  /** 確認画面全体の HTML（純関数）。ctx: { status, queue: [version_id...], marks, busy, locs } */
   function reviewHtml(d, st, ctx) {
     ctx = ctx || {};
     var v = d.version, tri = triageOf(d), isReview = v.status === 'review';
     var vstate = verifyState(v, ctx.status);
-    var okNames = autoOkKeys(tri).map(function (k) { return CK_LABEL[k]; });
     var queue = ctx.queue || [], pos = queue.indexOf(v.id);
-    var nr = tri.needs_review;
+    var marks = ctx.marks !== false;
+    var rs = readerOf(d).status;
+    var waiting = v.verification_status === 'pending' || v.verification_status === 'running' || rs === 'pending' || rs === 'running';
+    // 1. 判定帯（§V-9 a 1.）
     var band = '<div class="rv-band" id="rv-band" data-rv-band="1"><div class="row">' +
       '<b class="rv-title">' + esc(d.material ? d.material.title : '') + '</b><span class="muted">v' + esc(v.version) + '</span>' +
       (pos >= 0 ? '<span class="muted">' + (pos + 1) + ' / ' + queue.length + '</span>' : '') +
+      '<span class="pill rv-gate ' + GATE_CLS[tri.gate] + '" id="rv-gate" data-gate="' + tri.gate + '">' + esc(gateText(d, tri)) + '</span>' +
       (isReview ? '' : pill('この版は確認待ちではありません（' + v.status + '）', v.status === 'approved' ? 'green' : 'gray')) +
-      (nr === null ? pill('仕分けなし（全項目を見てください）', 'gray') : nr > 0 ? pill('要確認 ' + nr + ' 件', 'orange') : pill('要確認なし', 'green')) +
-      '<span class="pill ' + (okNames.length ? 'green' : 'gray') + '" id="rv-autook">自動で OK: ' + esc(okNames.length ? okNames.join('・') : 'なし') + '</span>' +
       '<span class="pill ' + vstate.cls + '" id="rv-vstate">' + esc(vstate.text) + '</span>' +
       (isReview && (v.verification_status === 'done' || v.verification_status === 'failed') ? '<button type="button" class="btn small" id="reverify-btn">再検証</button>' : '') +
-      (v.verification_status === 'pending' || v.verification_status === 'running' ? '<button type="button" class="btn small" id="rv-reload">読み込み直す</button>' : '') +
-      (tri.present && tri.action !== 'none' ? pill(tri.action === 'reverify' ? '自動の再検証を待っています' : '自動の差し戻しを待っています', 'yellow') : '') +
+      (waiting ? '<button type="button" class="btn small" id="rv-reload">読み込み直す</button>' : '') +
+      (tri.action !== 'none' ? pill(tri.action === 'reverify' ? WHY_TEXT.reverify : WHY_TEXT.auto_return, 'yellow') : '') +
       '<a href="#/material/' + esc(v.material_id) + '">素材へ</a>' +
       '<button type="button" class="btn small" id="rv-help" title="キーの一覧（?）">キー ?</button></div></div>';
-
-    var groupsBody;
-    if (!tri.present) groupsBody = '<p class="muted">仕分けの結果がありません。下の「出典と主張」のカードと「主張と出典の一覧」も見て、6 項目すべてを見てください。</p>';
-    else if (tri.groups.length) { var cardOf = sourceCardsOf(d).cardOf; groupsBody = tri.groups.map(function (g, i) { return groupHtml(g, i, d, cardOf); }).join(''); }
-    else groupsBody = '<p class="ok pill" id="rv-none">要確認なし</p><p class="muted">機械と検証係の確認で気になる所はありませんでした。下の項目だけ見てください。</p>';
-    if (tri.present && !d.verification_id) groupsBody += '<p class="muted">主張は検証が終わってから仕分けます（いまは出典だけの問題を出しています）。</p>';
-    var groups = '<details class="card rv-sec" id="rv-groups" open><summary><h2>要確認' + (tri.present ? '（' + tri.groups.length + '）' : '') + '</h2></summary>' + groupsBody + '</details>';
-
-    var srcModel = sourceCardsOf(d);
+    // 2. 舞台: 子どもの画面（主役）と右の一覧。本文は DOM 側が md を読んでから入れる（fillPreview）
     var pv = st.pv || defaultPv();
-    // 教材プレビュー（左）と出典と主張（右）。本文は DOM 側が md を読んでから入れる（renderPreview）
-    var body = '<div class="rv-study' + (pv.compare ? ' is-compare' : '') + '" id="rv-study"><section class="card rv-pv" id="rv-body">' +
-      '<div class="rv-pv-head"><h2>教材として見る</h2><div class="mp-tools"><div class="mp-bar" id="mp-bar" role="toolbar" aria-label="教材の見え方">' + pvSwitchHtml(pv, 0) + '</div>' +
-        marksToggleHtml(ctx.marks !== false) + '</div></div>' +
-      '<p class="muted rv-pv-lead">子どもが見る形で出しています。学年と長さを切り替えて、分かりにくい所・分かりやすい所を見てください。</p>' +
-      '<div class="mp-frames' + (pv.compare ? ' is-compare' : '') + '" id="mp-frames">' + (pv.compare ? [pv, pv.cmp] : [pv]).map(function (sel, fi) { return previewFrameHtml(d, sel, fi); }).join('') + '</div>' +
-      '<div class="mp-stickies" id="mp-stickies" aria-live="polite">' + stickyListHtml(st.stickies || []) + '</div></section>' +
-      '<aside class="rv-src-col" id="rv-src-col">' + (pv.compare ? '<p class="muted rv-src-note">見比べの間は、出典と主張の欄を下に移しています。</p>' : '') + sourcesPanelHtml(d, srcModel) + '</aside></div>';
-    var items = reviewItems(tri);
-    var check = isReview ? '<div class="card" id="rv-check"><h2>あなたが見る項目</h2>' + items.map(function (k, i) { return itemHtml(k, i, d, st, tri); }).join('') + '</div>' : '';
-    // 主張と出典の全件の表（問題のある行も含む。照合の生の値はここに残す）。「問題なし」は出典カードの側で問題の無いものだけを畳む
-    var folded = '<details class="card rv-sec" id="rv-ok"><summary><h2>主張と出典の一覧（全件・照合の記録。主張 ' + esc((d.claims || []).length) + ' 件・出典 ' + esc((d.sources || []).length) + ' 件）</h2></summary>' + tablesHtml(d) + '</details>' +
-      '<details class="card rv-sec" id="rv-detail"><summary><h2>詳細（機械検査・自己点検・変えてよい範囲・費用）</h2></summary>' + detailsHtml(d) + '</details>';
-
+    var po = { marks: marks, pins: pinsOf(d, st) };
+    var stickies = st.stickies || [];
+    var stage = '<div class="rv-stage' + (pv.compare ? ' is-compare' : '') + '" id="rv-stage">' +
+      '<section class="rv-body" id="rv-body" aria-label="子どもの画面">' +
+        '<div class="rv-pv-head"><div class="mp-bar" id="mp-bar" role="toolbar" aria-label="教材の見え方">' + pvSwitchHtml(pv, 0) + '</div>' + marksToggleHtml(marks) + '</div>' +
+        '<div class="mp-frames' + (pv.compare ? ' is-compare' : '') + '" id="mp-frames">' + framesOf(pv).map(function (sel, fi) { return previewFrameHtml(d, sel, fi, po); }).join('') + '</div>' +
+      '</section>' +
+      '<aside class="rv-rail" id="rv-rail" aria-label="見てほしい所と機械の確認">' +
+        '<section class="rv-rail-sec" id="rv-items">' + itemsHtml(d, st, ctx) + '</section>' +
+        '<section class="rv-rail-sec" id="rv-machine">' + machineHtml(d) + '</section>' +
+        '<section class="rv-rail-sec rv-stick-sec"><h2 class="rv-rail-h">付箋（<span id="rv-stick-n">' + stickies.length + '</span>）</h2>' +
+          '<div class="mp-stickies" id="mp-stickies" aria-live="polite">' + stickyListHtml(stickies) + '</div></section>' +
+      '</aside></div>';
+    // 3. 補足（畳んだ details）
+    var sup = '<div class="rv-sup" id="rv-sup">' +
+      '<details class="card rv-sec" id="rv-sources-sec"><summary><h2>根拠と出典（出典カード）</h2></summary>' + sourcesPanelHtml(d, sourceCardsOf(d)) + '</details>' +
+      '<details class="card rv-sec" id="rv-ok"><summary><h2>主張と出典の一覧（全件・照合の記録。主張 ' + esc((d.claims || []).length) + ' 件・出典 ' + esc((d.sources || []).length) + ' 件）</h2></summary>' + tablesHtml(d) + '</details>' +
+      '<details class="card rv-sec" id="rv-detail"><summary><h2>詳細（機械検査・自己点検・変えてよい範囲・費用）</h2></summary>' + detailsHtml(d) + '</details></div>';
+    // 4. 固定フッター（確認待ちの版だけ）
     var foot = '';
     if (isReview) {
-      var ap = approveState(d, st);
-      var busy = !!ctx.busy;
+      var ap = approveState(d, st), busy = !!ctx.busy;
+      var hasRedo = ap.why.some(function (w) { return w.text === WHY_TEXT.redo; });
       foot = '<div class="rv-foot" id="rv-foot">' +
         '<div id="rv-reason" class="rv-reason' + (st.mode ? '' : ' hidden') + '">' +
-          '<label class="field"><span id="d-note-label">' + (st.mode === 'reject' ? '却下の理由（必須）' : '差し戻しの理由（必須）') + '</span><textarea id="d-note" rows="2" maxlength="4000">' + esc(st.note) + '</textarea></label>' +
-          '<label class="field' + (st.mode === 'return' ? '' : ' hidden') + '" id="d-append-wrap"><span>差し戻し時の注文票への追記（任意）</span><textarea id="d-append" rows="2" maxlength="8000">' + esc(st.append) + '</textarea></label>' +
-          '<p class="muted">もう一度「' + (st.mode === 'reject' ? '却下する' : '差し戻す') + '」を押すと確認します。<button type="button" class="btn small" id="rv-reason-close">閉じる</button></p>' +
+          '<label class="field"><span id="d-note-label">' + reasonLabel(st.mode) + '</span><textarea id="d-note" rows="2" maxlength="4000">' + esc(st.note) + '</textarea></label>' +
+          '<label class="field' + (st.mode === 'return' ? '' : ' hidden') + '" id="d-append-wrap"><span>直してもらう時の注文票への追記（任意）</span><textarea id="d-append" rows="2" maxlength="8000">' + esc(st.append) + '</textarea></label>' +
+          '<p class="muted"><span id="d-again">' + reasonAgain(st.mode) + '</span> <button type="button" class="btn small" id="rv-reason-close">閉じる</button></p>' +
         '</div>' +
-        '<div class="row rv-foot-row">' +
-          '<button type="button" class="linkish rv-why" id="approve-why" data-target="' + esc(ap.why[0] ? ap.why[0].target : '') + '">' + esc(ap.enabled ? '承認できます' : '承認するには: ' + ap.why.map(function (w) { return w.text; }).join(' / ')) + '</button>' +
-          '<span id="rv-draft" class="err' + (st.draftShown && hasDraft(st) ? '' : ' hidden') + '">理由を書きかけです</span>' +
+        '<div class="rv-foot-row">' +
+          '<p class="rv-foot-st"><button type="button" class="linkish rv-why' + (ap.enabled ? ' is-ok' : '') + '" id="approve-why" data-target="' + esc(ap.why[0] ? ap.why[0].target : '') + '">' + esc(ap.text) + '</button>' +
+          '<span id="rv-draft" class="err' + (st.draftShown && hasDraft(st) ? '' : ' hidden') + '">理由を書きかけです</span></p>' +
           '<span class="rv-btns">' +
           '<button type="button" class="btn danger" id="reject-btn"' + (busy ? ' disabled' : '') + '>却下する <span class="kbd">X</span></button>' +
-          '<button type="button" class="btn" id="return-btn"' + (busy ? ' disabled' : '') + '>差し戻す <span class="kbd">R</span></button>' +
-          '<button type="button" class="btn primary" id="approve-btn"' + (ap.enabled && !busy ? '' : ' disabled') + '>承認する <span class="kbd">A</span></button>' +
+          '<button type="button" class="btn' + (hasRedo ? ' is-suggest' : '') + '" id="return-btn"' + (busy ? ' disabled' : '') + '>直してもらう <span class="kbd">R</span></button>' +
+          '<button type="button" class="btn primary" id="approve-btn"' + (ap.enabled && !busy ? '' : ' disabled') + '>公開する <span class="kbd">A</span></button>' +
           '</span></div></div>';
     }
-    return band + groups + body + check + folded + foot;
+    return band + stage + sup + foot;
   }
+  function reasonLabel(mode) { return mode === 'reject' ? '却下の理由（必須）' : '直してもらう理由（必須）'; }
+  function reasonAgain(mode) { return 'もう一度「' + (mode === 'reject' ? '却下する' : '直してもらう') + '」を押すと確認します。'; }
 
-  // ---- 確認画面の DOM 側（状態は版ごとに残す: 失敗・再取得でも入力を消さない §G-3）----
+  // ---- 確認画面の DOM 側（状態は版ごとに残す: 失敗・再取得でも入力・項目の状態・付箋を消さない §G-3・§V-9 f）----
   var reviewStates = {};
-  var reviewCtx = null; // { vid, d, st, status, queue, busy, view }
+  var reviewCtx = null; // { vid, d, st, status, queue, busy, view, marks, md, mdAll, locs }
   function stateFor(vid) { return reviewStates[vid] || (reviewStates[vid] = newReviewState()); }
 
   function fetchQueue() {
@@ -2755,14 +3171,17 @@
   function renderReview() {
     var c = reviewCtx, view = c.view, d = c.d, st = c.st;
     if (c.marks === undefined) c.marks = loadMarks();
+    syncItemGen(st, d);
+    c.locs = locateAll(d, st, c.mdAll || null);
     view.innerHTML = reviewHtml(d, st, c);
     document.body.classList.toggle('has-foot', d.version.status === 'review');
     document.body.classList.add('review-wide');
-    $('#rv-study').addEventListener('click', onStudyClick);
-    $('#rv-study').addEventListener('keydown', onStickyKey);
+    $('#rv-stage').addEventListener('click', onStudyClick);
+    $('#rv-stage').addEventListener('keydown', onStickyKey);
+    $('#rv-sup').addEventListener('click', onStudyClick);
     watchReviewChrome();
-    $('#rv-groups').addEventListener('click', onStudyClick);
     fillPreview();
+    loadAllMd();
     $('#rv-help').addEventListener('click', openKeys);
     var reload = $('#rv-reload');
     if (reload) reload.addEventListener('click', function () { route(); });
@@ -2775,58 +3194,83 @@
       }).then(function () { c.busy = false; });
     });
     if (d.version.status !== 'review') return;
-    Array.prototype.forEach.call(view.querySelectorAll('[data-set]'), function (b) {
-      b.addEventListener('click', function () { setItem(st, b.getAttribute('data-set'), b.getAttribute('data-val')); syncReview(); });
-    });
-    Array.prototype.forEach.call(view.querySelectorAll('input[data-note]'), function (inp) {
-      inp.addEventListener('input', function () { var k = inp.getAttribute('data-note'); if (st.ck[k]) st.ck[k].note = inp.value; });
-    });
     $('#d-note').addEventListener('input', function () { st.note = this.value; syncReview(); });
     $('#d-append').addEventListener('input', function () { st.append = this.value; syncReview(); });
     $('#rv-reason-close').addEventListener('click', function () { st.mode = null; syncReview(); });
-    $('#approve-why').addEventListener('click', function () { scrollToTarget(this.getAttribute('data-target')); });
+    $('#approve-why').addEventListener('click', function () { gotoWhy(this.getAttribute('data-target')); });
     $('#approve-btn').addEventListener('click', function () { runCommand({ cmd: 'approve' }); });
     $('#return-btn').addEventListener('click', function () { runCommand({ cmd: 'return' }); });
     $('#reject-btn').addEventListener('click', function () { runCommand({ cmd: 'reject' }); });
   }
 
-  /** 全部を描き直さずに、トグル・メモ欄・理由欄・承認の可否だけを反映する（textarea の入力とフォーカスを保つ） */
+  /** 全部を描き直さずに、見てほしい所・番号の印・理由欄・公開の可否だけを反映する（textarea の入力とフォーカス・iframe を保つ） */
   function syncReview() {
-    var c = reviewCtx, st = c.st, view = c.view;
-    Array.prototype.forEach.call(view.querySelectorAll('[data-set]'), function (b) {
-      var k = b.getAttribute('data-set'), on = !!(st.ck[k] && st.ck[k].result === b.getAttribute('data-val'));
-      b.classList.toggle('on', on);
-      b.setAttribute('aria-pressed', on ? 'true' : 'false');
-    });
-    Array.prototype.forEach.call(view.querySelectorAll('input[data-note]'), function (inp) {
-      var k = inp.getAttribute('data-note');
-      inp.classList.toggle('hidden', !(st.ck[k] && st.ck[k].result === 'ng'));
-    });
+    var c = reviewCtx;
+    if (!c) return;
+    var st = c.st;
+    syncItemGen(st, c.d);
+    renderItems();
+    paintPins();
+    if (c.d.version.status !== 'review' || !$('#rv-foot')) return;
     $('#rv-reason').classList.toggle('hidden', !st.mode);
     $('#d-append-wrap').classList.toggle('hidden', st.mode !== 'return');
-    $('#d-note-label').textContent = st.mode === 'reject' ? '却下の理由（必須）' : '差し戻しの理由（必須）';
+    $('#d-note-label').textContent = reasonLabel(st.mode);
+    $('#d-again').textContent = reasonAgain(st.mode);
     if (!hasDraft(st)) st.draftShown = false;
     $('#rv-draft').classList.toggle('hidden', !(st.draftShown && hasDraft(st)));
     var ap = approveState(c.d, st);
     $('#approve-btn').disabled = !ap.enabled || c.busy;
     $('#return-btn').disabled = c.busy;
+    $('#return-btn').classList.toggle('is-suggest', ap.why.some(function (w) { return w.text === WHY_TEXT.redo; }));
     $('#reject-btn').disabled = c.busy;
     var why = $('#approve-why');
-    why.textContent = ap.enabled ? '承認できます' : '承認するには: ' + ap.why.map(function (w) { return w.text; }).join(' / ');
+    why.textContent = ap.text;
+    why.classList.toggle('is-ok', ap.enabled);
     why.setAttribute('data-target', ap.why[0] ? ap.why[0].target : '');
     measureReviewChrome(); // 理由欄の開閉でフッターの高さが変わる
   }
+  /** 右の一覧の「見てほしい所」を描き直す（押したボタンのフォーカスを保つ） */
+  function renderItems() {
+    var c = reviewCtx, box = $('#rv-items');
+    if (!c || !box) return;
+    var a = document.activeElement, keep = null;
+    if (a && box.contains(a)) {
+      ['data-it-ok', 'data-it-redo', 'data-it-goto'].forEach(function (k) { if (a.hasAttribute(k)) keep = '[' + k + '="' + String(a.getAttribute(k)).replace(/[^0-9]/g, '') + '"]'; });
+      if (!keep && a.id) keep = '#' + a.id.replace(/[^\w-]/g, '');
+    }
+    box.innerHTML = itemsHtml(c.d, c.st, c);
+    if (keep) { var b = box.querySelector(keep); if (b) b.focus({ preventScroll: true }); }
+  }
+  /** 子どもの画面の番号の印を、本文を読み直さずに今の状態の色にする（iframe を読み直さない） */
+  function paintPins() {
+    var c = reviewCtx;
+    if (!c) return;
+    var tri = triageOf(c.d), states = statesFor(c.st, c.d), byId = Object.create(null);
+    tri.shown.forEach(function (it, i) { byId[it.id] = { id: it.id, num: i + 1, state: stateIn(states, it.id) }; });
+    Array.prototype.forEach.call(document.querySelectorAll('#mp-frames button.mp-pin[data-pin-goto]'), function (b) {
+      var id = b.getAttribute('data-pin-goto'), p = vhas(byId, id) ? byId[id] : null;
+      if (!p) return;
+      b.className = 'mp-pin is-' + p.state;
+      b.textContent = p.state === 'ok' ? '✓' : p.state === 'redo' ? '直' : String(p.num);
+      b.setAttribute('aria-label', '見てほしい所 ' + p.num + '（' + PIN_STATE_TEXT[p.state] + '）');
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('#mp-frames [data-pin]'), function (el) {
+      var ss = Array.prototype.map.call(el.querySelectorAll('.mp-pins > .mp-pin'), function (b) { var id = b.getAttribute('data-pin-goto'); return vhas(byId, id) ? byId[id].state : 'open'; });
+      el.classList.toggle('pin-ok', ss.length > 0 && ss.every(function (s) { return s === 'ok'; }));
+      el.classList.toggle('pin-redo', ss.some(function (s) { return s === 'redo'; }));
+    });
+  }
 
-  // 右の出典の欄（sticky）の上端と高さを、判定帯とフッターの実際の高さに合わせる（--rv-top / --rv-bottom）
+  // 右の一覧（sticky）の上端と高さを、判定帯とフッターの実際の高さに合わせる（--rv-top / --rv-bottom）
   var reviewRO = null;
   function measureReviewChrome() {
-    var study = $('#rv-study');
-    if (!study) return;
+    var stage = $('#rv-stage');
+    if (!stage) return;
     var band = $('#rv-band'), foot = $('#rv-foot');
     var top = (band ? band.getBoundingClientRect().height : 0) + 12;
     var bottom = (foot ? foot.getBoundingClientRect().height : 0) + 12; // fixed の要素は offsetParent が null なので高さだけで見る（隠れている時は 0）
-    study.style.setProperty('--rv-top', Math.ceil(top) + 'px');
-    study.style.setProperty('--rv-bottom', Math.ceil(bottom) + 'px');
+    stage.style.setProperty('--rv-top', Math.ceil(top) + 'px');
+    stage.style.setProperty('--rv-bottom', Math.ceil(bottom) + 'px');
   }
   /** 描画の時に測り、判定帯・フッターの大きさが変わった時（折り返し・理由欄の高さの変更）にも測り直す */
   function watchReviewChrome() {
@@ -2838,9 +3282,10 @@
     }
   }
 
-  function scrollToTarget(id) {
-    var el = id ? document.getElementById(id) : null;
+  /** 要素へスクロールして点滅（閉じている details の中なら開く） */
+  function flashEl(el) {
     if (!el) return;
+    for (var p = el.parentNode; p && p !== document; p = p.parentNode) if (p.tagName === 'DETAILS') p.open = true;
     if (el.tagName === 'DETAILS') el.open = true;
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     el.classList.remove('flash');
@@ -2848,11 +3293,18 @@
     el.classList.add('flash');
     setTimeout(function () { el.classList.remove('flash'); }, 1500);
   }
+  function scrollToTarget(id) { flashEl(id ? document.getElementById(id) : null); }
+  /** 「公開する」の理由の行を押した時: 項目なら選んで場所へ、それ以外はその要素へ */
+  function gotoWhy(target) {
+    var m = /^rv-it-(\d+)$/.exec(target || '');
+    if (m) { focusItem(Number(m[1])); return; }
+    scrollToTarget(target);
+  }
 
-  // ---- 教材プレビューの DOM 側（切り替え・本文の読み込み。md は版ごとに 1 回だけ読む）----
+  // ---- 子どもの画面の DOM 側（切り替え・本文の読み込み。md は版ごとに 1 回だけ読む）----
   function previewFrames(st) {
     var pv = st.pv || (st.pv = defaultPv());
-    return pv.compare ? [pv, pv.cmp] : [pv];
+    return framesOf(pv);
   }
   function mdFor(c, path) {
     c.md = c.md || Object.create(null);
@@ -2867,8 +3319,7 @@
     if (!c) return;
     var d = c.d, st = c.st, token = c.pvToken = (c.pvToken || 0) + 1;
     var parts = (d.version.material && Array.isArray(d.version.material.parts)) ? d.version.material.parts : [];
-    var tri = triageOf(d), model = sourceCardsOf(d);
-    var base = { fileBase: '/api/review/' + encodeURIComponent(c.vid) + '/files/', marks: c.marks !== false, chips: true, stick: true, markIds: markIdsOf(tri), claimIdx: claimIndexOf(d), claimRef: claimRefsOf(d, model) };
+    var base = { fileBase: '/api/review/' + encodeURIComponent(c.vid) + '/files/', marks: c.marks !== false, stick: true, pins: pinsOf(d, st), claimIdx: claimIndexOf(d) };
     previewFrames(st).forEach(function (sel, fi) {
       parts.forEach(function (p, pi) {
         var el = document.getElementById('mp-body-' + fi + '-' + pi);
@@ -2879,7 +3330,7 @@
           if (reviewCtx !== c || c.pvToken !== token) return;
           var o = {};
           for (var k in base) o[k] = base[k];
-          o.frame = fi; o.pi = pi;
+          o.frame = fi; o.pi = pi; o.path = vr.path;
           o.stickies = (st.stickies || []).filter(function (s) { return s.part_index === pi && s.variant_path === vr.path; });
           el.innerHTML = previewBodyHtml(t, p, o);
         }, function (e) {
@@ -2889,6 +3340,21 @@
       });
     });
   }
+  /** 全部の変奏の本文を読み、見てほしい所の場所（「小学生・短い 3 段落目」「中学生・長い にあります」）を出す */
+  function loadAllMd() {
+    var c = reviewCtx;
+    if (!c || !triageOf(c.d).shown.length) return;
+    var paths = [];
+    partsOf(c.d).forEach(function (p) { variantsOf(p).forEach(function (vr) { if (paths.indexOf(vr.path) < 0) paths.push(vr.path); }); });
+    Promise.all(paths.map(function (p) { return mdFor(c, p).then(function (t) { return [p, t]; }, function () { return [p, null]; }); })).then(function (rows) {
+      if (reviewCtx !== c) return;
+      var m = Object.create(null);
+      rows.forEach(function (r) { if (typeof r[1] === 'string') m[r[0]] = r[1]; });
+      c.mdAll = m;
+      c.locs = locateAll(c.d, c.st, m);
+      renderItems();
+    });
+  }
   /** 切り替えの後: 枠を描き直し、切り替えボタンの今の状態を出す */
   function renderPreview() {
     var c = reviewCtx;
@@ -2896,16 +3362,61 @@
     var wrap = $('#mp-frames'), bar = $('#mp-bar');
     if (!wrap) return;
     var frames = previewFrames(c.st), cmp = !!c.st.pv.compare;
+    var po = { marks: c.marks !== false, pins: pinsOf(c.d, c.st) };
     c.stickDraft = null;
     if (bar) bar.innerHTML = pvSwitchHtml(frames[0], 0);
-    wrap.innerHTML = frames.map(function (sel, fi) { return previewFrameHtml(c.d, sel, fi); }).join('');
+    wrap.innerHTML = frames.map(function (sel, fi) { return previewFrameHtml(c.d, sel, fi, po); }).join('');
     wrap.classList.toggle('is-compare', cmp);
-    var study = $('#rv-study');
-    if (study) study.classList.toggle('is-compare', cmp);
-    var col = $('#rv-src-col'), note = col && col.querySelector('.rv-src-note');
-    if (col && cmp && !note) col.insertAdjacentHTML('afterbegin', '<p class="muted rv-src-note">見比べの間は、出典と主張の欄を下に移しています。</p>');
-    if (note && !cmp) note.parentNode.removeChild(note);
+    var stage = $('#rv-stage');
+    if (stage) stage.classList.toggle('is-compare', cmp);
     fillPreview();
+    c.locs = locateAll(c.d, c.st, c.mdAll || null);
+    renderItems();
+  }
+  /** 見てほしい所のカードを選んで（印を付けて）右の一覧の中で見せる */
+  function focusItem(i) {
+    var c = reviewCtx;
+    if (!c) return;
+    c.st.cursor = i;
+    renderItems();
+    var el = document.getElementById('rv-it-' + i);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    el.focus({ preventScroll: true });
+  }
+  /** 見てほしい所の場所へ（表示中の変奏に無い時は、その変奏に切り替えてから） */
+  function gotoItem(i) {
+    var c = reviewCtx;
+    if (!c) return;
+    c.st.cursor = i;
+    renderItems();
+    var loc = (c.locs || [])[i];
+    if (!loc) { focusItem(i); return; }
+    if (loc.t === 'para' && !loc.inView) {
+      var pv = c.st.pv;
+      pv.aud = loc.sel.aud; pv.len = loc.sel.len; pv.game = loc.sel.game;
+      renderPreview();
+      toast('「' + pvLabel(pv) + '」に切り替えました');
+      mdFor(c, loc.path).then(function () {
+        setTimeout(function () { if (reviewCtx === c) scrollToLoc((c.locs || [])[i] || loc); }, 0);
+      }, function () { /* 読めない時は枠に理由が出る */ });
+      return;
+    }
+    scrollToLoc(loc);
+  }
+  function scrollToLoc(loc) {
+    var el = null, q = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+    if (loc.t === 'para') {
+      if (loc.para >= 0) el = document.getElementById('mp-p-' + loc.fi + '-' + loc.pi + '-' + loc.para);
+      if (!el) el = document.getElementById('mp-body-' + loc.fi + '-' + loc.pi);
+    } else if (loc.t === 'media') {
+      el = q('#mp-body-0-' + loc.pi + ' [data-media]').filter(function (x) { return x.getAttribute('data-media') === loc.media && x.getAttribute('data-media-key') === loc.key; })[0] ||
+        document.querySelector('.mat-preview[data-frame="0"] [data-mp-part="' + loc.pi + '"]');
+    } else if (loc.t === 'head') {
+      el = q('.mat-preview[data-frame="0"] [data-head-k]').filter(function (x) { return normQ(x.textContent).indexOf(loc.q) >= 0; })[0] || document.querySelector('.mat-preview[data-frame="0"] .mp-cover');
+    }
+    if (!el) { toast('場所が見つかりません。学年・長さを切り替えてください', true); return; }
+    flashEl(el);
   }
   function onStudyClick(e) {
     var c = reviewCtx;
@@ -2920,7 +3431,7 @@
       else if (key === 'compare') c.st.pv.compare = !c.st.pv.compare;
       else if (key === 'aud' || key === 'len') { sel[key] = val; sel.game = false; }
       renderPreview();
-      var again = document.querySelector('[data-pv="' + key + '"][data-pvf="' + fi + '"]' + (key === 'game' ? '' : '[data-val="' + val + '"]'));
+      var again = document.querySelector('[data-pv="' + key + '"][data-pvf="' + fi + '"]' + (key === 'game' || key === 'compare' ? '' : '[data-val="' + val + '"]'));
       if (again) again.focus();
       return;
     }
@@ -2929,12 +3440,41 @@
       saveMarks(c.marks);
       var mb = t.closest('[data-mp-marks]');
       mb.outerHTML = marksToggleHtml(c.marks);
-      fillPreview();
+      renderPreview();
       var nb = document.querySelector('[data-mp-marks]');
       if (nb) nb.focus();
-      toast(c.marks ? '確認の印を出しました' : '確認の印を消しました（子どもが見る形）');
+      toast(c.marks ? '印を出しました' : '印を消しました（子どもが見るのと同じ見た目）');
       return;
     }
+    // 見てほしい所: OK にする / このまま出す / 直してもらう（押し直すと戻る）・場所を見る（§V-9 c）
+    var ib = t.closest('[data-it-ok], [data-it-redo]');
+    if (ib) {
+      if (c.busy || c.d.version.status !== 'review') return;
+      var isOk = ib.hasAttribute('data-it-ok');
+      var i = Number(ib.getAttribute(isOk ? 'data-it-ok' : 'data-it-redo'));
+      toggleItem(c.st, c.d, triageOf(c.d).shown[i], isOk ? 'ok' : 'redo');
+      c.st.cursor = i;
+      syncReview();
+      return;
+    }
+    var gi = t.closest('[data-it-goto]');
+    if (gi) { gotoItem(Number(gi.getAttribute('data-it-goto'))); return; }
+    var pin = t.closest('button.mp-pin[data-pin-goto]');
+    if (pin) {
+      var pid = pin.getAttribute('data-pin-goto'), shown = triageOf(c.d).shown;
+      for (var k = 0; k < shown.length; k++) if (shown[k].id === pid) { focusItem(k); break; }
+      return;
+    }
+    var rr = t.closest('#rv-reread');
+    if (rr) {
+      action(rr, {
+        title: '読み手チェックをやり直します', body: '次の定期処理（10 分ごと）で読み手係がもう一度読みます。費用がかかります。',
+        okText: 'やり直す', busyText: '予約中…',
+        run: function () { return api('POST', '/api/review/' + encodeURIComponent(c.vid) + '/reread'); }, success: '読み手チェックのやり直しを予約しました'
+      });
+      return;
+    }
+    if (t.closest('[data-open-sources]')) { scrollToTarget('rv-sources-sec'); return; }
     var g = t.closest('[data-goto]');
     if (g) { gotoTarget(g.getAttribute('data-goto'), '出典カード'); return; }
     if (onStickyClick(c, t)) return;
@@ -2942,25 +3482,46 @@
     if (gc) {
       var n = gc.getAttribute('data-goto-claim');
       var para = null;
-      claimParaSelectors(n, !!c.st.pv.compare).some(function (q) { para = document.querySelector(q); return !!para; });
+      claimParaSelectors(n, !!c.st.pv.compare).some(function (qs) { para = document.querySelector(qs); return !!para; });
       if (para) gotoTarget(para.id, '');
       else toast('いま表示している「' + previewFrames(c.st).map(pvLabel).join('」「') + '」には、この主張の段落がありません。学年・長さを切り替えてください', true);
     }
   }
   // ---- 付箋の DOM 側 ----
   function renderStickies() {
-    var c = reviewCtx, el = $('#mp-stickies');
+    var c = reviewCtx, el = $('#mp-stickies'), n = $('#rv-stick-n');
     if (c && el) el.innerHTML = stickyListHtml(c.st.stickies || []);
+    if (c && n) n.textContent = String((c.st.stickies || []).length);
   }
   function closeStickyForm() {
     var f = document.querySelector('[data-stick-form]');
     if (f) f.parentNode.removeChild(f);
     if (reviewCtx) reviewCtx.stickDraft = null;
   }
-  /** まだ理由欄に入れていない付箋を、理由欄の後ろに足す（textarea にも反映し、何件入れたかを出す） */
-  function flowStickies(st) {
+  /** 「直してもらう」にした項目の行を、理由欄の後ろに足す（1 件 1 回だけ。§V-9 c） */
+  function flowRedo(st) {
+    var c = reviewCtx;
+    var pend = redoLines(c.d, st, c.locs);
+    if (!pend.length) return { added: 0, left: 0 };
+    var r = appendLines(st.note, pend.map(function (p) { return p.line; }));
+    if (r.added) {
+      st.note = r.note;
+      st.flowedLines = (st.flowedLines || []).concat(r.lines);
+      st.redoFlowed = (st.redoFlowed || []).concat(pend.slice(0, r.added).map(function (p) { return p.id; }));
+      var ta = $('#d-note');
+      if (ta) ta.value = st.note;
+    }
+    return { added: r.added, left: pend.length - r.added };
+  }
+  /** まだ理由欄に入れていない付箋を、理由欄の後ろに足す（textarea にも反映し、何件入れたかを出す）。pre = 先に足した「直してもらう」の項目の数 */
+  function flowStickies(st, pre) {
+    pre = pre || { added: 0, left: 0 };
     var pending = (st.stickies || []).filter(function (s) { return !s.flowed; });
-    if (!pending.length) return 0;
+    var lead = pre.added ? '直してもらう所 ' + pre.added + ' 件' : '';
+    if (!pending.length) {
+      if (pre.added || pre.left) toast(lead ? lead + 'を理由に足しました' + (pre.left ? '（' + NOTE_MAX + ' 字を超えるため ' + pre.left + ' 件は入れていません）' : '') : '理由が ' + NOTE_MAX + ' 字を超えるため、直してもらう所を足せませんでした', !pre.added || pre.left > 0);
+      return 0;
+    }
     var r = stickyNoteText(st.note, pending);
     if (r.added) {
       st.note = r.note;
@@ -2970,8 +3531,8 @@
       if (ta) ta.value = st.note;
       renderStickies();
     }
-    var left = pending.length - r.added;
-    toast(r.added ? '付箋 ' + r.added + ' 件を差し戻しの理由に足しました' + (left ? '（' + NOTE_MAX + ' 字を超えるため ' + left + ' 件は入れていません）' : '') : '理由が ' + NOTE_MAX + ' 字を超えるため、付箋を足せませんでした', !r.added || left > 0);
+    var left = pending.length - r.added + pre.left;
+    toast(r.added ? (lead ? lead + 'と' : '') + '付箋 ' + r.added + ' 件を理由に足しました' + (left ? '（' + NOTE_MAX + ' 字を超えるため ' + left + ' 件は入れていません）' : '') : '理由が ' + NOTE_MAX + ' 字を超えるため、付箋を足せませんでした', !r.added || left > 0);
     return r.added;
   }
   function addSticky(c) {
@@ -2989,7 +3550,7 @@
     fillPreview();
     renderStickies();
     if (st.mode === 'return') flowStickies(st);
-    else toast('付箋を付けました（全部で ' + st.stickies.length + ' 件）。差し戻す時に理由欄へ入ります');
+    else toast('付箋を付けました（全部で ' + st.stickies.length + ' 件）。直してもらう時に理由欄へ入ります');
   }
   /** 付箋の操作なら true */
   function onStickyClick(c, t) {
@@ -3043,12 +3604,11 @@
     else if (act === 'need_kind') toast('付箋の種類を選んでください', true);
     else closeStickyForm();
   }
-  /** 行き先へスクロールして点滅（閉じている details の中なら開く。既存の scrollToTarget を使う） */
+  /** 行き先へスクロールして点滅（閉じている details の中なら開く） */
   function gotoTarget(id, what) {
     var el = id ? document.getElementById(id) : null;
     if (!el) { if (what) toast(what + 'が見つかりません', true); return; }
-    for (var p = el.parentNode; p && p !== document; p = p.parentNode) if (p.tagName === 'DETAILS') p.open = true;
-    scrollToTarget(id);
+    flashEl(el);
   }
 
   function openKeys() {
@@ -3056,33 +3616,58 @@
     if (dlg && !dlg.open) dlg.showModal();
   }
 
+  /** 公開の確認ダイアログの文（§V-9 c: 見てほしい所 N 件を OK にしました・チャンネル『…』を確認済みにします・読み手チェックはまだです） */
+  function approveDialogBody(d, st, ap) {
+    var tri = triageOf(d), keys = trustChannelsOf(d, st), lines = ['公開すると配信 API に出ます。'];
+    if (tri.shown.length) lines.push('見てほしい所 ' + tri.shown.length + ' 件を OK にしました');
+    keys.forEach(function (k) {
+      var it = tri.shown.filter(function (x) { return x.channel_key === k; })[0];
+      lines.push('チャンネル『' + (it && typeof it.channel_name === 'string' && it.channel_name ? it.channel_name : k) + '』を確認済みにします');
+    });
+    if (ap && ap.readerWait) lines.push('読み手チェックはまだです');
+    return lines.join('\n');
+  }
+
   /** キーとボタンの共通の入口 */
   function runCommand(cmd) {
     var c = reviewCtx;
     if (!c || !cmd || c.busy) return;
     var st = c.st;
-    if (cmd.cmd === 'set' || cmd.cmd === 'draft_block') { applyCommand(st, cmd); syncReview(); return; }
+    if (cmd.cmd === 'draft_block') { applyCommand(st, cmd, c.d); syncReview(); return; }
     if (cmd.cmd === 'help') return openKeys();
     if (cmd.cmd === 'nav') return navReview(cmd.dir);
+    if (cmd.cmd === 'item_step') {
+      applyCommand(st, cmd, c.d);
+      if (st.cursor >= 0 && triageOf(c.d).shown.length) gotoItem(st.cursor);
+      else toast('見てほしい所はありません');
+      return;
+    }
+    if (cmd.cmd === 'item_ok') {
+      var it = triageOf(c.d).shown[st.cursor];
+      if (!it) { toast('N / P で見てほしい所を選んでから O を押してください', true); return; }
+      if (it.blocking) { toast('この項目はこのまま出せません（直してもらってください）', true); return; }
+      applyCommand(st, cmd, c.d);
+      syncReview();
+      return;
+    }
     if (cmd.cmd === 'approve') {
       var ap = approveState(c.d, st);
-      if (!ap.enabled) { syncReview(); if (ap.why[0]) scrollToTarget(ap.why[0].target); return; }
-      var okNames = autoOkKeys(triageOf(c.d)).map(function (k) { return CK_LABEL[k]; });
-      return sendDecision('approve', 'この版を承認して配信します', '承認すると配信 API に出ます。' + (okNames.length ? '\n自動で OK: ' + okNames.join('・') : ''));
+      if (!ap.enabled) { syncReview(); if (ap.why[0]) gotoWhy(ap.why[0].target); return; }
+      return sendDecision('approve', 'この版を公開します', approveDialogBody(c.d, st, ap));
     }
     if (cmd.cmd === 'return' || cmd.cmd === 'reject') {
       if (st.mode !== cmd.cmd) {
         st.mode = cmd.cmd;
-        if (cmd.cmd === 'return') flowStickies(st); // 付箋を理由欄の初期値へ（書いてある理由の後ろに足す）
+        if (cmd.cmd === 'return') flowStickies(st, flowRedo(st)); // 「直してもらう」の項目と付箋を理由欄の後ろに足す（書いてある理由は消さない）
         syncReview();
         var ta = $('#d-note');
         if (ta) { ta.focus(); ta.scrollIntoView({ block: 'nearest' }); }
         return;
       }
-      var sendNote = decisionNote(st, cmd.cmd); // 却下は流し込んだ付箋の行を外して送る
+      var sendNote = decisionNote(st, cmd.cmd); // 却下は流し込んだ行を外して送る
       if (!sendNote.trim()) { toast('理由を入力してください', true); $('#d-note').focus(); return; }
       return cmd.cmd === 'return'
-        ? sendDecision('return', 'この版を差し戻します', '理由を添えて改善 job を注文します（rework）。\n\n理由: ' + st.note)
+        ? sendDecision('return', 'この版を直してもらいます', '理由を添えて改善 job を注文します（作り直し）。\n\n理由: ' + st.note)
         : sendDecision('reject', 'この版を却下します', '配信の状態は変わりません。\n\n理由: ' + sendNote);
     }
   }
@@ -3094,21 +3679,26 @@
     location.hash = '#/review/' + next;
   }
 
-  /** 予告（確認ダイアログ）→ 実行（送信中はボタンとキーを無効化）→ トースト → 反映（一覧を取り直して次の確認待ちへ）。失敗時は入力を残す */
+  /** 送信が失敗した時の画面の動き（§V-9 c）: 'reload' = 読み直す / 'channel' = 最初の初めてのチャンネルの項目へ / 'stay' = そのまま */
+  function decisionErrorAction(code) {
+    if (code === 'channel_trust_required') return 'channel';
+    if (code === 'stale_reader' || code === 'stale_verification' || code === 'conflict' || code === 'checks_pending' || code === 'auto_triage_pending' || code === 'not_in_review') return 'reload';
+    return 'stay';
+  }
+
+  /** 予告（確認ダイアログ）→ 実行（送信中はボタンとキーを無効化）→ トースト → 反映（一覧を取り直して次の確認待ちへ）。失敗時は理由・項目の状態・付箋を残す */
   function sendDecision(decision, title, body) {
     var c = reviewCtx, st = c.st, vid = c.vid;
-    confirmDialog({ title: title, body: body, okText: decision === 'approve' ? '承認する' : decision === 'return' ? '差し戻す' : '却下する' }).then(function (dres) {
+    confirmDialog({ title: title, body: body, okText: decision === 'approve' ? '公開する' : decision === 'return' ? '直してもらう' : '却下する' }).then(function (dres) {
       if (!dres.ok || reviewCtx !== c) return;
       c.busy = true;
       var btn = $(decision === 'approve' ? '#approve-btn' : decision === 'return' ? '#return-btn' : '#reject-btn');
       var label = btn ? btn.innerHTML : '';
       syncReview();
       if (btn) btn.textContent = '送信中…';
-      var payload = { decision: decision, checklist: checklistPayload(c.d, st, decision === 'approve'), note: decision === 'approve' ? '' : decisionNote(st, decision), verification_id: c.d.verification_id };
-      if (decision === 'return') payload.brief_append = st.append;
-      api('POST', '/api/review/' + encodeURIComponent(vid) + '/decision', payload).then(function (res) {
+      api('POST', '/api/review/' + encodeURIComponent(vid) + '/decision', decisionPayload(c.d, st, decision)).then(function (res) {
         delete reviewStates[vid];
-        var msg = decision === 'approve' ? '承認しました' : decision === 'return' ? '差し戻しました' : '却下しました';
+        var msg = decision === 'approve' ? '公開しました' : decision === 'return' ? '直してもらう注文を出しました' : '却下しました';
         if (res && res.start_error) msg += '（改善 job の起動は後で行います: ' + (ERROR_TEXT[res.start_error] || res.start_error) + '）';
         var oldQ = c.queue || [];
         return fetchQueue().then(function (q) {
@@ -3123,9 +3713,13 @@
         c.busy = false;
         toast(e.message || '失敗しました', true);
         if (btn) btn.innerHTML = label;
-        var code = e.body && e.body.error;
-        if (code === 'stale_verification' || code === 'auto_triage_pending' || code === 'conflict' || code === 'not_in_review') route(); // 入力は reviewStates に残る
-        else syncReview();
+        var act = decisionErrorAction(e.body && e.body.error);
+        if (act === 'reload') { route(); return; } // 理由・項目の状態・付箋は reviewStates に残る（世代が変わった項目だけ open に戻る）
+        syncReview();
+        if (act === 'channel') {
+          var shown = triageOf(c.d).shown;
+          for (var k = 0; k < shown.length; k++) if (shown[k].cause === 'video_channel_new') { focusItem(k); break; }
+        }
       });
     });
   }
@@ -3146,22 +3740,87 @@
     runCommand(cmd);
   }
 
-  // ---- 画面: 確認待ち一覧（§L-6 一覧。並びはサーバーの順 = 要確認の多い順 → 古い順）----
+  // ---- 画面: 確認待ち一覧（§V-9 d。並びはサーバーの順 = 見てほしい所の多い順 → 古い順）----
+  var RL_SECTIONS = [['attention', '見てほしい所がある'], ['clean', '全部通った（子どもの画面を見て公開するだけ）'], ['pending', '機械の確認中']];
+  function rowGate(v) { return v && (v.gate === 'clean' || v.gate === 'attention' || v.gate === 'pending') ? v.gate : 'pending'; }
+  /** 一覧の表（純関数）。gate の無い行（古い Worker）は「機械の確認中」に入れる。空の区画は出さない */
+  function reviewListHtml(d) {
+    var rows = (d && Array.isArray(d.versions) ? d.versions : []).filter(isObj);
+    if (!rows.length) return '<p class="muted" data-rl-empty="1">確認待ちの版はありません。</p>';
+    return '<p class="muted">見てほしい所の多い順です。開いた画面では J / K で次・前へ移れます。</p>' + RL_SECTIONS.map(function (s) {
+      var rs = rows.filter(function (r) { return rowGate(r) === s[0]; });
+      if (!rs.length) return '';
+      return '<section class="rl-sec" data-rl-sec="' + s[0] + '"><h2>' + esc(s[1]) + ' <span class="muted rl-n">' + rs.length + ' 本</span></h2>' +
+        '<div class="table-wrap"><table><thead><tr><th>素材</th><th>版</th><th>見てほしい所</th><th>機械の確認</th><th>検証</th><th>作成</th></tr></thead><tbody>' +
+        rs.map(function (v) {
+          var nr = typeof v.needs_review === 'number' ? v.needs_review : typeof v.fix === 'number' && typeof v.ask === 'number' ? v.fix + v.ask : null;
+          var vs = verifyState(v, null);
+          var readerOnly = Array.isArray(v.pending_on) && v.pending_on.length === 1 && v.pending_on[0] === 'reader';
+          return '<tr data-rl-row="1"><td><a href="#/review/' + esc(v.version_id) + '">' + esc(v.title) + '</a></td><td>v' + esc(v.version) + '</td>' +
+            '<td>' + (nr === null ? '—' : nr > 0 ? pill(nr + ' 件', 'orange') : pill('0', 'green')) + '</td>' +
+            '<td>' + (typeof v.auto_ok === 'number' ? esc(v.auto_ok) + ' / 6' : '—') + (readerOnly ? ' ' + pill('読み手チェック待ち', 'gray') : '') + '</td>' +
+            '<td>' + pill(vs.text, vs.cls) + '</td><td>' + esc(fmtTime(v.created_at)) + '</td></tr>';
+        }).join('') + '</tbody></table></div></section>';
+    }).join('');
+  }
+  /** #rl-stats の中身（純関数）。s: GET /api/review/stats の応答 / null = 読み込み中 / 文字列 = 読めなかった理由 */
+  function rlStatsHtml(s, busy) {
+    if (s === null || s === undefined) return '<p class="loading">判断の数を読み込み中…</p>';
+    if (typeof s === 'string') return '<p class="err">判断の数を読めませんでした: ' + esc(s) + '</p><p><button type="button" class="btn small" id="rl-stats-retry">もう一度読み込む</button></p>';
+    var c = isObj(s.clean) ? s.clean : {}, num = function (x) { return typeof x === 'number' && isFinite(x) ? x : 0; };
+    var a = num(c.approve), r = num(c['return']), x = num(c.reject);
+    var line = '機械が『全部通った』とした教材で、ふじさんの判断は ' + (a + r + x ? '公開 ' + a + ' 本・直してもらう ' + r + ' 本・却下 ' + x + ' 本（直近 ' + num(s.streak) + ' 本つづけて公開）' : 'まだありません');
+    var on = s.auto_publish === true;
+    return '<p class="rl-stats-line">' + esc(line) + '</p><div class="rl-auto">' +
+      '<button type="button" class="rl-switch' + (on ? ' on' : '') + '" id="rl-autopub" aria-pressed="' + (on ? 'true' : 'false') + '"' + (busy ? ' disabled' : '') + '>' +
+        '<span class="rl-knob" aria-hidden="true"></span><span class="rl-switch-t">全部通った教材は自動で公開する</span><span class="rl-switch-s">' + (busy ? '切り替え中…' : on ? 'ON' : 'OFF') + '</span></button>' +
+      (on ? '<span class="muted" data-rl-autopub-n="1">自動で公開した教材 ' + num(s.auto_published) + ' 本</span>' : '') + '</div>';
+  }
+  function loadRlStats(here, refocus) {
+    var box = $('#rl-stats');
+    if (!box) return;
+    api('GET', '/api/review/stats').then(function (s) {
+      if (location.hash !== here || !$('#rl-stats')) return;
+      box.innerHTML = rlStatsHtml(s, false);
+      var sw = $('#rl-autopub');
+      if (refocus) sw.focus();
+      sw.addEventListener('click', function () {
+        var on = s.auto_publish !== true;
+        var go = function () {
+          box.innerHTML = rlStatsHtml(s, true);
+          api('POST', '/api/review/auto-publish', { on: on }).then(function (res) {
+            toast(res && res.auto_publish ? '全部通った教材を自動で公開するようにしました' : '自動で公開するのをやめました（全部通った教材も確認待ちに並びます）');
+            loadRlStats(here, true);
+          }, function (e) {
+            toast(e.message || '切り替えられませんでした', true);
+            loadRlStats(here, true);
+          });
+        };
+        if (!on) { go(); return; }
+        confirmDialog({ title: '全部通った教材を自動で公開します', body: '機械の確認が全部通った教材を、人を通さずに公開します。見てほしい所がある教材は、これまでどおり確認待ちに出ます。', okText: 'ON にする' }).then(function (r) { if (r.ok) go(); else sw.focus(); });
+      });
+    }, function (e) {
+      if (location.hash !== here || !$('#rl-stats')) return;
+      box.innerHTML = rlStatsHtml(e.message || '失敗しました');
+      var b = $('#rl-stats-retry');
+      if (b) b.addEventListener('click', function () { box.innerHTML = rlStatsHtml(null); loadRlStats(here); });
+    });
+  }
   function viewReviewList(view) {
-    view.innerHTML = '<h1>確認待ち</h1><div id="rl" class="card loading">読み込み中…</div><div id="rl-auto"></div>';
+    var here = location.hash;
+    view.innerHTML = '<h1>確認待ち</h1><div class="card rl-stats" id="rl-stats">' + rlStatsHtml(null) + '</div><div id="rl" class="card loading">読み込み中…</div><div id="rl-auto"></div>';
+    loadRlStats(here);
     api('GET', '/api/review').then(function (d) {
+      if (location.hash !== here) return;
       var el = $('#rl');
       el.classList.remove('loading');
-      if (!d.versions.length) { el.innerHTML = '<p class="muted">確認待ちの版はありません。</p>'; return; }
-      el.innerHTML = '<p class="muted">要確認の多い順です。開いた画面では J / K で次・前へ移れます。</p><div class="table-wrap"><table><thead><tr><th>素材</th><th>版</th><th>要確認</th><th>自動 OK</th><th>検証</th><th>作成</th></tr></thead><tbody>' + d.versions.map(function (v) {
-        var nr = typeof v.needs_review === 'number' ? v.needs_review : null;
-        var vs = verifyState(v, null);
-        return '<tr data-rl-row="1"><td><a href="#/review/' + esc(v.version_id) + '">' + esc(v.title) + '</a></td><td>v' + esc(v.version) + '</td>' +
-          '<td>' + (nr === null ? '—' : nr > 0 ? pill(String(nr), 'orange') : pill('0', 'green')) + '</td>' +
-          '<td>' + (typeof v.auto_ok === 'number' ? esc(v.auto_ok) + ' / 3' : '—') + '</td>' +
-          '<td>' + pill(vs.text, vs.cls) + '</td><td>' + esc(fmtTime(v.created_at)) + '</td></tr>';
-      }).join('') + '</tbody></table></div>';
-    }, function (e) { $('#rl').innerHTML = '<p class="err">読み込めませんでした: ' + esc(e.message) + '</p>'; });
+      el.innerHTML = reviewListHtml(d);
+    }, function (e) {
+      if (location.hash !== here) return;
+      $('#rl').innerHTML = '<p class="err">読み込めませんでした: ' + esc(e.message) + '</p><p><button type="button" class="btn" id="rl-retry">もう一度読み込む</button></p>';
+      var b = $('#rl-retry');
+      if (b) b.addEventListener('click', route);
+    });
     loadAutoRework();
   }
 
@@ -3192,24 +3851,30 @@
       if (!el) return;
       rows = (rows || []).filter(function (r) { return r.job; });
       if (!rows.length) { el.innerHTML = ''; return; }
-      el.innerHTML = '<div class="card"><h2>自動で作り直し中</h2><p class="muted">検証の結果が悪かったため、自動で 1 回差し戻しました。作り直しが終わるとここから確認待ちに移ります。</p><ul>' + rows.map(function (r) {
+      el.innerHTML = '<div class="card"><h2>自動で作り直し中</h2><p class="muted">機械の確認で直す所が見つかったため、自動で差し戻しました。作り直しが終わるとここから確認待ちに移ります。</p><ul>' + rows.map(function (r) {
         return '<li>' + pill('自動で作り直し中', 'yellow') + ' <a href="#/material/' + esc(r.m.id) + '">' + esc(r.m.title) + '</a> <a class="muted" href="#/job/' + esc(r.job.id) + '">' + esc(JOB_LABEL[r.job.status] || r.job.status) + '</a></li>';
       }).join('') + '</ul></div>';
     }, function () { /* 補助の表示。失敗しても一覧は使える */ });
   }
 
-  // smoke（§L-7 (l5)）から純関数を呼べるようにする。画面の動作には使わない
+  // smoke（§V-11 (u9)）とテストから純関数を呼べるようにする。画面の動作には使わない
   window.FactoryAdminReview = {
-    CAUSE_TEXT: CAUSE_TEXT, HUMAN_KEYS: HUMAN_KEYS, triageOf: triageOf, reviewItems: reviewItems, verifyState: verifyState,
-    approveState: approveState, checklistPayload: checklistPayload, keyCommand: keyCommand, applyCommand: applyCommand,
-    newReviewState: newReviewState, reviewHtml: reviewHtml, renderMd: renderMd,
-    // 出典カード（確認画面の「出典と主張」）
+    CAUSE_TEXT: CAUSE_TEXT, MK_KEYS: MK_KEYS, WHY_TEXT: WHY_TEXT, GATE_TEXT: GATE_TEXT,
+    triageOf: triageOf, readerOf: readerOf, verifyState: verifyState, gateText: gateText,
+    approveState: approveState, checklistPayload: checklistPayload, trustChannelsOf: trustChannelsOf, decisionPayload: decisionPayload, decisionErrorAction: decisionErrorAction,
+    keyCommand: keyCommand, applyCommand: applyCommand, toggleItem: toggleItem, syncItemGen: syncItemGen, statesFor: statesFor, itemGenOf: itemGenOf,
+    newReviewState: newReviewState, reviewHtml: reviewHtml, itemsHtml: itemsHtml, machineHtml: machineHtml, machineStates: machineStates, renderMd: renderMd,
+    // 項目の場所・子どもの画面の印
+    itemTarget: itemTarget, locateItem: locateItem, locateAll: locateAll, pinsOf: pinsOf, redoLines: redoLines, redoLine: redoLine, approveDialogBody: approveDialogBody,
+    // 一覧・確認済みのチャンネル
+    reviewListHtml: reviewListHtml, rlStatsHtml: rlStatsHtml, channelsHtml: channelsHtml,
+    // 出典カード（補足の「根拠と出典」）
     sourceCardsOf: sourceCardsOf, claimsBySource: claimsBySource, accessedText: accessedText, shortUrl: shortUrl,
-    // 教材プレビュー
-    inlineMd: inlineMd, pickVariant: pickVariant, previewBodyHtml: previewBodyHtml, previewFrameHtml: previewFrameHtml, kindName: kindName,
-    defaultPv: defaultPv, claimRefsOf: claimRefsOf,
+    // 子どもの画面
+    inlineMd: inlineMd, mdBlocks: mdBlocks, pickVariant: pickVariant, previewBodyHtml: previewBodyHtml, previewFrameHtml: previewFrameHtml, kindName: kindName,
+    defaultPv: defaultPv,
     // 付箋
-    stickyLine: stickyLine, stickyNoteText: stickyNoteText, stickyListHtml: stickyListHtml, STICK_KINDS: STICK_KINDS,
+    stickyLine: stickyLine, stickyNoteText: stickyNoteText, stickyListHtml: stickyListHtml, STICK_KINDS: STICK_KINDS, appendLines: appendLines,
     noteWithoutStickyLines: noteWithoutStickyLines, decisionNote: decisionNote, inInputOf: inInputOf, claimParaSelectors: claimParaSelectors, stickyKeyAction: stickyKeyAction, stripCites: stripCites
   };
 

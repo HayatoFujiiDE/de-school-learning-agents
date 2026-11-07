@@ -535,8 +535,9 @@ async function main() {
 }
 
 /**
- * (l5) 確認画面（§L-6）: 配信中の /admin/admin.js を node:vm で読み（起動はしない）、描画の純関数が返す HTML の要素数を数える。
- * 実 API の応答（triage 付き）を土台に、要確認 0 件 / N 件の triage を差し替えて描く。キー操作は keyCommand → applyCommand で状態を変えて描き直す。
+ * (l5) 確認画面 v3（§V-9・§V-11 (u9)）: 配信中の /admin/admin.js を node:vm で読み（起動はしない）、描画の純関数が返す HTML の要素数を数える。
+ * 実 API の応答を土台に、仕分け v2 の triage（全部通った / 見てほしい所 N 件 / 読み手チェック待ち）を差し替えて描く。
+ * 項目の OK・直してもらう・キー（N / P / O）は toggleItem / keyCommand → applyCommand で状態を変えて描き直す。
  */
 async function reviewScreenSmoke(detail) {
   const res = await fetch(`${BASE}/admin/admin.js`);
@@ -549,72 +550,96 @@ async function reviewScreenSmoke(detail) {
     return;
   }
   const R = win.FactoryAdminReview;
-  check('(l5) admin.js が確認画面の関数を持つ', res.status === 200 && !!R && typeof R.reviewHtml === 'function', `status=${res.status}`);
+  check('(l5) admin.js が確認画面の関数を持つ', res.status === 200 && !!R && typeof R.reviewHtml === 'function' && typeof R.toggleItem === 'function', `status=${res.status}`);
   if (!R || !detail?.version) return;
   const n = (html, re) => (html.match(re) || []).length;
-  const GROUP = /data-rv-group="/g;
-  const ITEM = /data-ck="/g;
+  const CARD = /data-item-id="/g;
+  // 押せる「公開する」ボタン = id の直後に disabled が無い
   const approveOn = (html) => /id="approve-btn">/.test(html);
-  const t = detail.triage;
-  check(
-    '(l5) GET /api/review/:id が triage を返す（§L-5）',
-    !!t && Array.isArray(t.groups) && typeof t.needs_review === 'number' && !!t.auto && ['content_and_evidence', 'terms_of_use', 'artifact_behavior'].every((k) => ['ok', 'review'].includes(t.auto[k])),
-    `triage=${t ? Object.keys(t).join(',') : 'none'}`,
-  );
+  const gateOf = (html) => (/id="rv-gate" data-gate="(\w+)"/.exec(html) || [])[1];
   {
     const html = R.reviewHtml(detail, R.newReviewState(), { queue: [detail.version.id] });
-    const expectGroups = Array.isArray(t?.groups) ? t.groups.length : 0;
-    check('(l5) 実 API の版を描画: 判定帯 1・group 数が triage と一致・フッター 1', n(html, /data-rv-band="1"/g) === 1 && n(html, GROUP) === expectGroups && n(html, /id="rv-foot"/g) === 1, `band=${n(html, /data-rv-band="1"/g)} groups=${n(html, GROUP)}/${expectGroups}`);
+    const t = detail.triage;
+    const want = t && Array.isArray(t.items) ? t.gate : 'pending';
+    check(
+      '(l5) 実 API の版を描画: 判定帯 1・ゲートの印が triage と一致（items の無い応答は pending）・子どもの画面 1・右の一覧・機械が確かめたこと 6 行・フッター 1',
+      n(html, /data-rv-band="1"/g) === 1 && gateOf(html) === want && n(html, /class="mat-preview"/g) === 1 && n(html, /id="rv-items"/g) === 1 && n(html, /data-mk="/g) === 6 && n(html, /id="rv-foot"/g) === 1,
+      `gate=${gateOf(html)}/${want} mk=${n(html, /data-mk="/g)}`,
+    );
   }
   const base = JSON.parse(JSON.stringify(detail));
   base.version.status = 'review';
   base.version.verification_status = 'done';
   base.verification_id = base.verification_id || 'ver_smoke';
   base.verification = { ...(base.verification || {}), contradicted: 0 };
-  const firstClaim = base.claims?.[0]?.id ?? 'c1';
-  const zero = { ...base, triage: { verification_id: base.verification_id, auto: { content_and_evidence: 'ok', terms_of_use: 'ok', artifact_behavior: 'ok' }, groups: [], ok_counts: { claims: base.claims?.length ?? 0, sources: base.sources?.length ?? 0 }, needs_review: 0, bad: false, reasons: [], action: 'none', return_note: null } };
-  const many = {
-    ...base,
-    triage: {
-      ...zero.triage,
-      auto: { content_and_evidence: 'review', terms_of_use: 'review', artifact_behavior: 'ok' },
-      groups: [
-        { cause: 'contradicted', source_id: 's1', url: 'https://example.com/a', verifier_opened_urls: ['https://example.com/b'], claim_ids: [firstClaim] },
-        { cause: 'source_not_listed', source_id: 's9', url: null, verifier_opened_urls: [], claim_ids: [firstClaim] },
-        { cause: 'license_unknown', source_id: 's1', url: 'https://example.com/a', verifier_opened_urls: [], claim_ids: [] },
-      ],
-      needs_review: 5,
-    },
-  };
+  base.reader = { status: 'done', gen: 'rd_smoke', findings: [], learning: { verdict: 'ok', reason: 'r' }, conditions: { verdict: 'ok', reason: 'r' }, summary: '', not_read: [], cost_cents: 0 };
+  const AUTO_OK = { content_and_evidence: 'ok', explanation_and_expression: 'ok', relation_to_learning: 'ok', conditions_of_use: 'ok', artifact_behavior: 'ok', terms_of_use: 'ok' };
+  const tri = (o) => ({ verification_id: base.verification_id, reader_gen: 'rd_smoke', gate: 'clean', pending_on: [], auto: AUTO_OK, items: [], counts: { fix: 0, ask: 0, note: 0, claims_ok: 0, sources_ok: 0 }, needs_review: 0, bad: false, reasons: [], action: 'none', reverify_kind: null, return_note: null, auto_rounds: 0, auto_return_max: 2, trusted_keys: [], groups: [], ok_counts: { claims: 0, sources: 0 }, ...o });
+  const CH = 'https://www.youtube.com/@smoke';
+  const items = [
+    { id: 'source:s1:license', kind: 'source', key: 'terms_of_use', severity: 'fix', cause: 'license_unknown', title: '利用条件が分からない', detail: '', source_ids: ['s1'] },
+    { id: 'video:v1:channel', kind: 'video', key: 'terms_of_use', severity: 'ask', cause: 'video_channel_new', title: '初めてのチャンネル（本人のアップかを見てください）', detail: '', video_id: 'v1', channel_key: CH, channel_name: 'smoke' },
+    { id: 'claim:c1', kind: 'claim', key: 'content_and_evidence', severity: 'note', cause: 'hypothesis_hedged', title: '仮説として書いてある', detail: '', claim_id: 'c1' },
+  ];
+  const zero = { ...base, triage: tri({}) };
+  const many = { ...base, triage: tri({ gate: 'attention', auto: { ...AUTO_OK, terms_of_use: 'review' }, items, counts: { fix: 1, ask: 1, note: 1, claims_ok: 0, sources_ok: 0 }, needs_review: 2, bad: true, reasons: ['needs_fix'] }) };
+  const readerWait = { ...base, reader: { ...base.reader, status: 'running', findings: null }, triage: tri({ gate: 'pending', pending_on: ['reader'], auto: { ...AUTO_OK, explanation_and_expression: 'review', relation_to_learning: 'review', conditions_of_use: 'review' } }) };
   {
     const html = R.reviewHtml(zero, R.newReviewState(), {});
-    check('(l5) 要確認 0 件: group 0・「要確認なし」・項目は人の 3 つ・承認は無効（未回答）', n(html, GROUP) === 0 && html.includes('要確認なし') && n(html, ITEM) === 3 && !approveOn(html), `groups=${n(html, GROUP)} items=${n(html, ITEM)} approve=${approveOn(html)}`);
+    check('(l5) 全部通った: ゲート clean・見てほしい所 0 件の文・「公開する」が押せる（「公開できます」）', gateOf(html) === 'clean' && html.includes('見てほしい所はありません。子どもの画面を見て、よければ公開してください。') && n(html, CARD) === 0 && approveOn(html) && html.includes('>公開できます</button>'), `gate=${gateOf(html)} approve=${approveOn(html)}`);
   }
-  {
-    const html = R.reviewHtml(many, R.newReviewState(), {});
-    const causes = ['出典と食い違う', '出典一覧にない出典', '利用条件が分からない'].every((x) => html.includes(`<h3>${x}</h3>`));
-    check('(l5) 要確認 N 件: group 3・原因の文・項目は 3 + review の 2・「要確認 5 件」', n(html, GROUP) === 3 && causes && n(html, ITEM) === 5 && html.includes('要確認 5 件'), `groups=${n(html, GROUP)} items=${n(html, ITEM)} causes=${causes}`);
-  }
-  const env = { inInput: false, dialogOpen: false, busy: false, draft: false };
-  const key = (k, extra = {}) => ({ key: k, code: /^[1-3]$/.test(k) ? `Digit${k}` : `Key${k.toUpperCase()}`, ...extra });
   {
     const st = R.newReviewState();
-    for (const k of ['1', '2', '3']) R.applyCommand(st, R.keyCommand(key(k), env));
-    let html = R.reviewHtml(zero, st, {});
-    const okOn = n(html, /data-val="ok" aria-pressed="true"/g);
-    const ready = approveOn(html);
-    R.applyCommand(st, R.keyCommand({ key: '!', code: 'Digit1', shiftKey: true }, env));
-    html = R.reviewHtml(zero, st, {});
-    const ngOn = n(html, /data-val="ng" aria-pressed="true"/g);
-    check('(l5) キー 1/2/3 で 3 項目が OK → 承認が有効、Shift+1 で NG → 承認が無効', okOn === 3 && ready && ngOn === 1 && !approveOn(html), `ok=${okOn} ready=${ready} ng=${ngOn} after=${approveOn(html)}`);
-    const payload = R.checklistPayload(zero, { ...st, ck: { ...st.ck, explanation_and_expression: { result: 'ok', note: '' } } }, true);
-    check('(l5) 承認の checklist は auto が ok の 3 項目を省く', Object.keys(payload).length === 3 && !('content_and_evidence' in payload), Object.keys(payload).join(','));
+    let html = R.reviewHtml(many, st, {});
+    const off = !approveOn(html) && html.includes('見てほしい所があと 2 件（OK にするか、直してもらうを選ぶ）');
+    const cards = n(html, CARD) === 2 && gateOf(html) === 'attention' && html.includes('見てほしい所 2 件');
+    for (const it of R.triageOf(many).shown) R.toggleItem(st, many, it, 'ok');
+    html = R.reviewHtml(many, st, {});
+    const on = approveOn(html) && n(html, /data-state="ok"/g) === 2;
+    const payload = R.decisionPayload(many, st, 'approve');
+    R.toggleItem(st, many, R.triageOf(many).shown[0], 'redo');
+    html = R.reviewHtml(many, st, {});
+    const redo = !approveOn(html) && html.includes('『直してもらう』にした所があります（直してもらうを押してください）');
+    check('(l5) 見てほしい所 N 件: カード 2・未決は押せない → 全部 OK で押せる → 直してもらうで押せない', cards && off && on && redo, `cards=${cards} off=${off} on=${on} redo=${redo}`);
+    check(
+      '(l5) 送信の payload: checklist は auto が ok でない項目だけ・trust_channels に OK にしたチャンネル・reader_gen',
+      JSON.stringify(Object.keys(payload.checklist)) === '["terms_of_use"]' && payload.checklist.terms_of_use.note === '見てほしい所を確認' && payload.trust_channels.length === 1 && payload.trust_channels[0] === CH && payload.reader_gen === 'rd_smoke',
+      JSON.stringify(payload).slice(0, 200),
+    );
+    const regen = { ...many, reader: { ...many.reader, gen: 'rd_smoke2' } };
+    check('(l5) 読み手係の世代が変わると項目の状態が open に戻る', !approveOn(R.reviewHtml(regen, st, {})) && n(R.reviewHtml(regen, st, {}), /data-state="open"/g) === 2, 'not reset');
+    const blk = JSON.parse(JSON.stringify(many));
+    Object.assign(blk.triage.items[0], { cause: 'contradicted', title: '出典と食い違う', blocking: true });
+    const bh = R.itemsHtml(blk, R.newReviewState(), {});
+    const card0 = bh.slice(bh.indexOf('id="rv-it-0"'), bh.indexOf('id="rv-it-1"'));
+    check('(l5) blocking の項目に「このまま出す」が無い', !card0.includes('data-it-ok=') && card0.includes('data-it-redo="0"'), card0.slice(0, 80));
+  }
+  {
+    const st = R.newReviewState();
+    const html = R.reviewHtml(readerWait, st, {});
+    const p = R.decisionPayload(readerWait, st, 'approve');
+    check(
+      '(l5) 読み手チェック待ち: ゲートの文・「公開する」が押せて「公開できます（読み手チェックはまだです）」・checklist の note「読み手チェックなしで見た」',
+      gateOf(html) === 'pending' && html.includes('読み手チェック待ち（待たずに公開もできます）') && approveOn(html) && html.includes('公開できます（読み手チェックはまだです）') && p.checklist.relation_to_learning?.note === '読み手チェックなしで見た',
+      `gate=${gateOf(html)} approve=${approveOn(html)}`,
+    );
+  }
+  const env = { inInput: false, dialogOpen: false, busy: false, draft: false };
+  const key = (k, extra = {}) => ({ key: k, code: /^[0-9]$/.test(k) ? `Digit${k}` : `Key${k.toUpperCase()}`, ...extra });
+  {
+    const st = R.newReviewState();
+    R.applyCommand(st, R.keyCommand(key('n'), env), many);
+    R.applyCommand(st, R.keyCommand(key('n'), env), many);
+    R.applyCommand(st, R.keyCommand(key('o'), env), many);
+    const ok2 = R.statesFor(st, many)['video:v1:channel'] === 'ok';
+    R.applyCommand(st, R.keyCommand(key('p'), env), many);
+    check('(l5) キー N / P で見てほしい所を選び、O で OK。1〜3 は効かない', ok2 && st.cursor === 0 && R.keyCommand(key('1'), env) === null, `ok=${ok2} cursor=${st.cursor}`);
   }
   {
     const blocked = [
-      ['ダイアログ表示中', R.keyCommand(key('1'), { ...env, dialogOpen: true })],
+      ['ダイアログ表示中', R.keyCommand(key('a'), { ...env, dialogOpen: true })],
       ['送信中', R.keyCommand(key('a'), { ...env, busy: true })],
-      ['キーリピート', R.keyCommand(key('1', { repeat: true }), env)],
+      ['キーリピート', R.keyCommand(key('o', { repeat: true }), env)],
       ['入力欄', R.keyCommand(key('r'), { ...env, inInput: true })],
       ['Ctrl', R.keyCommand(key('a', { ctrlKey: true }), env)],
       ['Meta', R.keyCommand(key('x', { metaKey: true }), env)],
@@ -629,7 +654,7 @@ async function reviewScreenSmoke(detail) {
     st.mode = 'return';
     st.note = '書きかけ';
     const cmd = R.keyCommand(key('j'), { ...env, draft: true });
-    R.applyCommand(st, cmd);
+    R.applyCommand(st, cmd, zero);
     const html = R.reviewHtml(zero, st, {});
     const visible = /<span id="rv-draft" class="err">理由を書きかけです<\/span>/.test(html);
     const free = R.keyCommand(key('k'), env);
@@ -637,17 +662,17 @@ async function reviewScreenSmoke(detail) {
   }
   {
     const st = R.newReviewState();
-    for (const k of ['explanation_and_expression', 'relation_to_learning', 'conditions_of_use']) st.ck[k] = { result: 'ok', note: '' };
     const cases = [
-      ['全部 OK・検証 done・処置なし', zero, true],
+      ['全部通った・検証 done・処置なし', zero, true],
       ['検証中', { ...zero, version: { ...zero.version, verification_status: 'running' } }, false],
-      ['食い違いあり', { ...zero, verification: { ...zero.verification, contradicted: 1 } }, false],
+      ['機械の確認中（pending_on = verification）', { ...zero, triage: { ...zero.triage, gate: 'pending', pending_on: ['verification'] } }, false],
       ['自動の差し戻し待ち', { ...zero, triage: { ...zero.triage, action: 'auto_return' } }, false],
-      ['review の項目が未回答', many, false],
+      ['見てほしい所が未決', many, false],
+      ['items の無い古い応答', { ...zero, triage: { ...zero.triage, items: undefined } }, false],
     ];
     const wrong = cases.filter(([, d, want]) => approveOn(R.reviewHtml(d, st, {})) !== want).map((c) => c[0]);
     const busy = approveOn(R.reviewHtml(zero, st, { busy: true }));
-    check('(l5) 固定フッターの承認ボタンは条件どおりに有効化（送信中は無効）', wrong.length === 0 && !busy, `違う=${wrong.join(',')} busy=${busy}`);
+    check('(l5) 固定フッターの「公開する」は条件どおりに有効化（送信中は無効）', wrong.length === 0 && !busy, `違う=${wrong.join(',')} busy=${busy}`);
   }
 }
 

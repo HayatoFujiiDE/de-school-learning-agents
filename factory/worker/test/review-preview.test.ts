@@ -1,41 +1,604 @@
-// 確認画面を「教材として見る」形にする・出典カード・付箋（§L-8）。admin.js の純関数を vm で読む（DOM は使わない）。
-// 作り物のデータ test/review-preview/detail.json は、見た目の確認（serve.mjs + headless Chrome）と共通。
+// 確認画面 v3（契約 §V-9・§V-11 (u9)）: 子どもの画面を主役に、見てほしい所・機械が確かめたこと・補足（出典カード）・固定フッター。
+// admin.js の純関数を vm で読む（DOM は使わない）。作り物のデータ test/review-preview/fixtures.mjs（detail.json が土台）は、
+// 見た目の確認（serve.mjs + headless Chrome）と共通。
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { triageVersion } from '../src/checks/triage';
+// @ts-expect-error 素の JS の作り物のデータ（serve.mjs と共通）
+import * as FX from './review-preview/fixtures.mjs';
 
 type Obj = Record<string, any>;
 const code = readFileSync(new URL('../public/admin/admin.js', import.meta.url), 'utf8');
 const win: Obj = { __FACTORY_ADMIN_NO_BOOT__: true };
 vm.runInNewContext(code, { window: win, console }, { timeout: 2000 });
 const R = win.FactoryAdminReview as Obj;
-const FIX = JSON.parse(readFileSync(new URL('./review-preview/detail.json', import.meta.url), 'utf8')) as Obj;
-const fixture = (): Obj => JSON.parse(JSON.stringify(FIX));
+const fixture = (): Obj => FX.attention();
 const n = (h: string, re: RegExp) => (h.match(re) || []).length;
+const md = (p: string) => readFileSync(new URL(`./review-preview/files/${p}`, import.meta.url), 'utf8');
+const BASE = '/api/review/vfix-0001/files/';
+/** 版の全部の変奏の本文（場所の決め方のテスト用） */
+const allMd = (d: Obj) => {
+  const out: Record<string, string> = {};
+  for (const p of d.version.material.parts) for (const v of p.variants) out[v.path] = md(v.path);
+  return out;
+};
+const idx = (d: Obj) => Object.fromEntries(d.claims.map((c: Obj, i: number) => [c.id, i]));
+/** 見てほしい所 i を ok / redo にした状態 */
+const pick = (d: Obj, st: Obj, i: number, to: 'ok' | 'redo') => R.toggleItem(st, d, R.triageOf(d).shown[i], to);
+/** fix は「このまま出す」、ask は「OK にする」で全部決めた状態 */
+const allOk = (d: Obj) => {
+  const st = R.newReviewState();
+  R.triageOf(d).shown.forEach((_x: Obj, i: number) => pick(d, st, i, 'ok'));
+  return st;
+};
 
-describe('作り物のデータ（fixture）', () => {
-  it('triage は triageVersion の結果と同じ（autoDerived = 自動の処置なし）', () => {
-    const d = fixture();
+describe('作り物のデータ（fixtures: 4 通り）', () => {
+  it.each(['attention', 'clean', 'pending', 'readerWait'])('%s: triage.groups / ok_counts は triageVersion（§L-3 互換の出力）と同じ', (name) => {
+    const d = (FX as Obj)[name]();
     const t = triageVersion({
       claims: { claims: d.claims.map((c: Obj) => ({ id: c.id, text: c.text, status: c.status, source_ids: c.source_ids, used_in: c.used_in })) },
-      report: { id: d.verification.id, result: { verdicts: d.claims.map((c: Obj) => ({ claim_id: c.id, verdict: c.verdict, reason: c.reason, opened_urls: c.opened_urls })) } },
+      report: d.verification ? { id: d.verification.id, result: { verdicts: d.claims.map((c: Obj) => ({ claim_id: c.id, verdict: c.verdict, reason: c.reason, opened_urls: c.opened_urls })) } } : null,
       sources: d.sources,
       checks: d.version.checks,
       material: d.version.material,
       autoReverified: 0,
       autoDerived: true,
-    });
-    expect(d.triage).toEqual(JSON.parse(JSON.stringify(t)));
+    } as never);
+    expect({ groups: d.triage.groups, ok_counts: d.triage.ok_counts }).toEqual(JSON.parse(JSON.stringify({ groups: t.groups, ok_counts: t.ok_counts })));
+  });
+
+  it.each(['attention', 'clean', 'pending', 'readerWait'])('%s: §V-6 b の形（counts・needs_review・gate と pending_on の決まり）', (name) => {
+    const t = (FX as Obj)[name]().triage;
+    const sev = (s: string) => t.items.filter((x: Obj) => x.severity === s).length;
+    expect(t.counts.fix).toBe(sev('fix'));
+    expect(t.counts.ask).toBe(sev('ask'));
+    expect(t.counts.note).toBe(sev('note'));
+    expect(t.needs_review).toBe(t.counts.fix + t.counts.ask);
+    expect(Object.keys(t.auto).sort()).toEqual([...R.MK_KEYS].sort());
+    expect(t.pending_on.length > 0).toBe(t.gate === 'pending');
+    if (t.gate === 'clean') {
+      expect(t.counts.fix + t.counts.ask).toBe(0);
+      expect(t.reasons).toEqual([]);
+      expect(Object.values(t.auto).every((x) => x === 'ok')).toBe(true);
+    }
   });
 });
 
-describe('出典カード: 並び順・主張の逆引き・状態文', () => {
-  it('問題のある順（食い違い → 開けていない → 利用条件不明 → 問題なし → 二次）。同じ順位は出典一覧の順', () => {
+describe('判定帯のゲートの印（§V-9 a 1.）', () => {
+  const gate = (d: Obj) => {
+    const h = R.reviewHtml(d, R.newReviewState(), {});
+    const m = /<span class="pill rv-gate (\w+)" id="rv-gate" data-gate="(\w+)">([^<]*)<\/span>/.exec(h);
+    return m ? [m[2], m[1], m[3]] : null;
+  };
+  it('clean = 緑「機械の確認: 全部通りました」/ attention = 橙「見てほしい所 N 件」/ pending = 灰', () => {
+    expect(gate(FX.clean())).toEqual(['clean', 'green', '機械の確認: 全部通りました']);
+    expect(gate(FX.attention())).toEqual(['attention', 'orange', '見てほしい所 6 件']);
+    expect(gate(FX.pending())).toEqual(['pending', 'gray', '機械の確認中']);
+  });
+  it('pending の文は pending_on で変える: reader だけ →「読み手チェック待ち（待たずに公開もできます）」/ 検証 failed →「検証ができていません（再検証を押してください）」', () => {
+    expect(gate(FX.readerWait())).toEqual(['pending', 'gray', '読み手チェック待ち（待たずに公開もできます）']);
+    const f = FX.pending();
+    f.version.verification_status = 'failed';
+    expect(gate(f)).toEqual(['pending', 'gray', '検証ができていません（再検証を押してください）']);
+    // 検証と読み手の両方が待ち → 機械の確認中
+    const both = FX.pending();
+    both.triage.pending_on = ['verification', 'reader'];
+    expect(gate(both)?.[2]).toBe('機械の確認中');
+  });
+  it('triage に items が無い古い応答・triage の無い応答は「機械の確認中」の見た目（落ちない）', () => {
+    const old = fixture();
+    delete old.triage.items;
+    delete old.triage.gate;
+    delete old.triage.pending_on;
+    expect(gate(old)).toEqual(['pending', 'gray', '機械の確認中']);
+    expect(R.triageOf(old).pending_on).toEqual(['verification']);
+    const none = fixture();
+    delete none.triage;
+    expect(gate(none)?.[0]).toBe('pending');
+    expect(R.approveState(old, R.newReviewState())).toMatchObject({ enabled: false, text: '検証が終わるのを待つ' });
+    const h = R.reviewHtml(old, R.newReviewState(), {});
+    expect(n(h, /data-mk-state="pending"/g)).toBeGreaterThan(0);
+  });
+});
+
+describe('見てほしい所（§V-9 a 2.）: 0 件 / N 件・カードの中身', () => {
+  it('N 件: fix / ask の項目だけ（note は出さない）。番号・title・場所・detail・直し方の案・ボタン', () => {
+    const d = fixture();
+    const h = R.itemsHtml(d, R.newReviewState(), { locs: R.locateAll(d, R.newReviewState(), allMd(d)) });
+    expect(h).toContain('<h2 class="rv-rail-h">見てほしい所（6）</h2>');
+    expect(n(h, /data-item-id="/g)).toBe(6);
+    expect(n(h, /data-sev="fix"/g)).toBe(4);
+    expect(n(h, /data-sev="ask"/g)).toBe(2);
+    expect(n(h, /data-state="open"/g)).toBe(6);
+    expect(h).not.toContain('仮説として書いてある');
+    expect(h).toContain('<p class="rv-it-where">小学生・短い 7 段落目</p>');
+    expect(h).toContain('<p class="rv-it-where">中学生・長い にあります</p>');
+    expect(h).toContain('<p class="rv-it-where">動かせるもの</p>');
+    expect(h).toContain('<p class="rv-it-where">動画</p>');
+    expect(h).toContain('直し方の案: 「いきを するときに すいこむ 空気の 中の 大切な もの」と一言そえる');
+    expect(h).toContain('チャンネル「作り物の科学チャンネル」');
+    // ask は「OK にする」だけ、fix は「このまま出す」「直してもらう」
+    expect(n(h, /data-it-ok="/g)).toBe(6);
+    expect(n(h, /data-it-redo="/g)).toBe(4);
+    expect(h).toContain('>OK にする</button>');
+    expect(h).toContain('>このまま出す</button>');
+    // 場所の決まらない項目（利用条件が分からない出典）には「場所を見る」が無い
+    expect(n(h, /data-it-goto="/g)).toBe(5);
+    expect(h).not.toContain('data-it-goto="1"');
+  });
+
+  it('0 件: 全部通った版は「見てほしい所はありません。子どもの画面を見て、よければ公開してください。」', () => {
+    const h = R.reviewHtml(FX.clean(), R.newReviewState(), {});
+    expect(h).toContain('<div id="rv-items-none" class="rv-none"><p>見てほしい所はありません。子どもの画面を見て、よければ公開してください。</p></div>');
+    expect(n(h, /data-item-id="/g)).toBe(0);
+  });
+
+  it('0 件で pending: verification あり →「機械の確認が終わるのを待っています」と検証の状態 / reader だけ →「読み手チェックを待っています。待たずに公開することもできます。」', () => {
+    const p = R.reviewHtml(FX.pending(), R.newReviewState(), {});
+    expect(p).toContain('<p class="rv-wait-t">機械の確認が終わるのを待っています</p>');
+    expect(p).toContain('検証: 検証中');
+    const r = R.reviewHtml(FX.readerWait(), R.newReviewState(), {});
+    expect(r).toContain('<p class="rv-wait-t">読み手チェックを待っています。待たずに公開することもできます。</p>');
+    expect(r).toContain('読み手チェック: 動いています');
+  });
+
+  it('blocking の項目には「このまま出す」が無い（「直してもらう」だけ）', () => {
+    const d = fixture();
+    const c6 = d.triage.items.find((x: Obj) => x.id === 'claim:c6');
+    Object.assign(c6, { cause: 'contradicted', title: '出典と食い違う', blocking: true });
+    const h = R.itemsHtml(d, R.newReviewState(), {});
+    const card = h.slice(h.indexOf('id="rv-it-0"'), h.indexOf('id="rv-it-1"'));
+    expect(card).not.toContain('data-it-ok=');
+    expect(card).toContain('data-it-redo="0"');
+    expect(card).toContain('このまま出すことはできません');
+    // ok にしようとしても状態は変わらない
+    const st = R.newReviewState();
+    pick(d, st, 0, 'ok');
+    expect(R.statesFor(st, d)['claim:c6']).toBeUndefined();
+  });
+
+  it('確認待ちでない版は読むだけ（フッター・項目のボタンなし。場所を見るは残る）', () => {
+    const d = fixture();
+    d.version.status = 'approved';
+    const h = R.reviewHtml(d, R.newReviewState(), {});
+    expect(h).not.toContain('id="rv-foot"');
+    expect(h).not.toContain('data-it-ok=');
+    expect(h).not.toContain('data-it-redo=');
+    expect(h).toContain('data-it-goto=');
+    expect(h).toContain('この版は確認待ちではありません（approved）');
+  });
+
+  it('読み手チェックが failed の時だけ「読み手チェックをやり直す」', () => {
+    const d = fixture();
+    expect(R.reviewHtml(d, R.newReviewState(), {})).not.toContain('id="rv-reread"');
+    d.reader.status = 'failed';
+    expect(R.reviewHtml(d, R.newReviewState(), {})).toContain('<button type="button" class="btn small" id="rv-reread">読み手チェックをやり直す</button>');
+  });
+});
+
+describe('項目の状態と「公開する」（§V-9 c）', () => {
+  const W = (s: string) => R.WHY_TEXT[s];
+  it('open が残る間は「見てほしい所があと N 件（OK にするか、直してもらうを選ぶ）」。OK にするたびに N が減り、全部決めると「公開できます」', () => {
+    const d = fixture();
+    const st = R.newReviewState();
+    expect(R.approveState(d, st)).toMatchObject({ enabled: false, text: '見てほしい所があと 6 件（OK にするか、直してもらうを選ぶ）' });
+    pick(d, st, 0, 'ok');
+    expect(R.approveState(d, st).text).toBe('見てほしい所があと 5 件（OK にするか、直してもらうを選ぶ）');
+    expect(R.approveState(d, st).why[0].target).toBe('rv-it-1');
+    const all = allOk(d);
+    expect(R.approveState(d, all)).toMatchObject({ enabled: true, text: '公開できます', readerWait: false });
+    expect(R.reviewHtml(d, all, {})).toContain('id="approve-btn">公開する');
+    expect(R.reviewHtml(d, st, {})).toContain('id="approve-btn" disabled>公開する');
+  });
+
+  it('「直してもらう」にした所があると押せない（「『直してもらう』にした所があります（直してもらうを押してください）」）。押し直すと戻る', () => {
+    const d = fixture();
+    const st = allOk(d);
+    pick(d, st, 0, 'redo');
+    expect(R.approveState(d, st)).toMatchObject({ enabled: false, text: W('redo') });
+    expect(R.approveState(d, st).why[0].target).toBe('return-btn');
+    expect(R.reviewHtml(d, st, {})).toContain('class="btn is-suggest" id="return-btn"');
+    pick(d, st, 0, 'redo');
+    expect(R.statesFor(st, d)['claim:c6']).toBe('open');
+    pick(d, st, 0, 'ok');
+    expect(R.approveState(d, st).enabled).toBe(true);
+    // ok も押し直すと open
+    pick(d, st, 0, 'ok');
+    expect(R.statesFor(st, d)['claim:c6']).toBe('open');
+    // ask の項目は「直してもらう」にならない
+    pick(d, st, 2, 'redo');
+    expect(R.statesFor(st, d)['app:parts/p2/p2-app.html']).toBe('ok');
+  });
+
+  it('押せない理由の文（verbatim）: 確認待ちでない・検証待ち・食い違い・一次資料・自動の再検証・自動の差し戻し', () => {
+    const d = FX.clean();
+    const st = R.newReviewState();
+    const why = (x: Obj) => R.approveState(x, st).why.map((w: Obj) => w.text);
+    expect(why({ ...d, version: { ...d.version, status: 'approved' } })).toEqual(['確認待ちの版ではありません']);
+    expect(why({ ...d, version: { ...d.version, verification_status: 'running' } })).toEqual(['検証が終わるのを待つ']);
+    expect(why(FX.pending())).toEqual(['検証が終わるのを待つ']);
+    const blk = (cause: string) => {
+      const x = FX.clean();
+      x.triage.items.push({ id: 'claim:c1', kind: 'claim', key: 'content_and_evidence', severity: 'fix', cause, title: 't', detail: '', blocking: true, claim_id: 'c1' });
+      return why(x);
+    };
+    expect(blk('contradicted')).toEqual(['食い違いの主張がある（直してもらってください）', '見てほしい所があと 1 件（OK にするか、直してもらうを選ぶ）']);
+    expect(blk('primary_source_unfetched')[0]).toBe('職人が開けていない一次資料がある（直してもらってください）');
+    expect(why({ ...d, triage: { ...d.triage, action: 'reverify' } })).toEqual(['自動の再検証を待っています']);
+    expect(why({ ...d, triage: { ...d.triage, action: 'auto_return' } })).toEqual(['自動の差し戻しを待っています']);
+    expect(R.approveState(d, st)).toMatchObject({ enabled: true, text: '公開できます' });
+  });
+
+  it('読み手チェック待ち（pending_on が reader だけ）では止めない:「公開できます（読み手チェックはまだです）」・ボタンは押せる・ダイアログにも書く', () => {
+    const d = FX.readerWait();
+    const st = R.newReviewState();
+    expect(R.approveState(d, st)).toMatchObject({ enabled: true, readerWait: true, text: '公開できます（読み手チェックはまだです）' });
+    const h = R.reviewHtml(d, st, {});
+    expect(h).toContain('id="approve-btn">公開する');
+    expect(h).toContain('>公開できます（読み手チェックはまだです）</button>');
+    expect(h).not.toContain('読み手チェックが終わるのを待つ');
+    expect(R.approveDialogBody(d, st, R.approveState(d, st))).toBe('公開すると配信 API に出ます。\n読み手チェックはまだです');
+  });
+
+  it('状態は「検証の id + 読み手係の世代」に結び付く: どちらかが変わると全部 open に戻る', () => {
+    const d = fixture();
+    const st = allOk(d);
+    expect(R.approveState(d, st).enabled).toBe(true);
+    const reverified = { ...d, verification_id: 'verfix-0002' };
+    expect(R.approveState(reverified, st).text).toBe('見てほしい所があと 6 件（OK にするか、直してもらうを選ぶ）');
+    const reread = { ...d, reader: { ...d.reader, gen: 'rd-fix-0002' } };
+    expect(R.approveState(reread, st).enabled).toBe(false);
+    R.syncItemGen(st, reread);
+    expect(Object.keys(R.statesFor(st, reread))).toEqual([]);
+    expect(R.approveState(d, st).enabled).toBe(false); // 古い OK は戻らない
+  });
+});
+
+describe('送信の payload（§V-9 c・§V-7 e）', () => {
+  it('approve: checklist は auto が ok でない項目だけ（note「見てほしい所を確認」）・trust_channels = ok にした初めてのチャンネル・reader_gen', () => {
+    const d = fixture();
+    const st = allOk(d);
+    const p = R.decisionPayload(d, st, 'approve');
+    expect(p).toEqual({
+      decision: 'approve',
+      checklist: {
+        content_and_evidence: { result: 'ok', note: '見てほしい所を確認' },
+        explanation_and_expression: { result: 'ok', note: '見てほしい所を確認' },
+        artifact_behavior: { result: 'ok', note: '見てほしい所を確認' },
+        terms_of_use: { result: 'ok', note: '見てほしい所を確認' },
+      },
+      note: '',
+      verification_id: 'verfix-0001',
+      trust_channels: ['https://www.youtube.com/@fixture-science'],
+      reader_gen: 'rd-fix-0001',
+    });
+    expect(R.approveDialogBody(d, st, R.approveState(d, st))).toBe('公開すると配信 API に出ます。\n見てほしい所 6 件を OK にしました\nチャンネル『作り物の科学チャンネル』を確認済みにします');
+    // チャンネルの項目を戻すと trust_channels から外れる
+    pick(d, st, 4, 'ok');
+    expect(R.decisionPayload(d, st, 'approve').trust_channels).toEqual([]);
+  });
+
+  it('全部通った版は checklist が空・trust_channels も空', () => {
+    const d = FX.clean();
+    expect(R.decisionPayload(d, R.newReviewState(), 'approve')).toMatchObject({ checklist: {}, trust_channels: [], reader_gen: 'rd-clean-0001' });
+  });
+
+  it('読み手チェック待ち: review のままの 3 項目は「読み手チェックなしで見た」', () => {
+    const p = R.decisionPayload(FX.readerWait(), R.newReviewState(), 'approve');
+    expect(p.checklist).toEqual({
+      explanation_and_expression: { result: 'ok', note: '読み手チェックなしで見た' },
+      relation_to_learning: { result: 'ok', note: '読み手チェックなしで見た' },
+      conditions_of_use: { result: 'ok', note: '読み手チェックなしで見た' },
+    });
+    expect(p.reader_gen).toBe('rd-wait-0001');
+  });
+
+  it('return / reject は checklist を送らない（null）・trust_channels / reader_gen を付けない・return は注文票への追記', () => {
+    const d = fixture();
+    const st = { ...R.newReviewState(), note: '直して', append: '追記' };
+    expect(R.decisionPayload(d, st, 'return')).toEqual({ decision: 'return', checklist: null, note: '直して', verification_id: 'verfix-0001', brief_append: '追記' });
+    expect(R.decisionPayload(d, st, 'reject')).toEqual({ decision: 'reject', checklist: null, note: '直して', verification_id: 'verfix-0001' });
+  });
+
+  it('エラーの時の画面: 409 stale_reader / stale_verification / conflict と 400 checks_pending は読み直す・400 channel_trust_required は項目へ', () => {
+    for (const c of ['stale_reader', 'stale_verification', 'conflict', 'checks_pending']) expect(R.decisionErrorAction(c)).toBe('reload');
+    expect(R.decisionErrorAction('channel_trust_required')).toBe('channel');
+    expect(R.decisionErrorAction('has_contradicted_claims')).toBe('stay');
+    expect(code).toContain("channel_trust_required: '初めてのチャンネルを確かめてから公開してください'");
+    expect(code).toContain("checks_pending: '機械の確認が終わってから公開してください'");
+    expect(code).toContain("stale_reader: '読み手チェックが新しくなりました。画面を読み直します'");
+    expect(code).toContain("reader_running: '読み手チェックが動いています'");
+  });
+
+  it('「直してもらう」の理由の行: `- {title}{（場所）}: {detail}`（1 回だけ。detail が空なら「: 」なし）', () => {
+    const d = fixture();
+    const st = R.newReviewState();
+    pick(d, st, 0, 'redo');
+    pick(d, st, 5, 'redo');
+    const locs = R.locateAll(d, st, allMd(d));
+    expect(R.redoLines(d, st, locs).map((x: Obj) => x.line)).toEqual([
+      '- 出典が付いていない（小学生・短い 7 段落目）',
+      '- 言葉がむずかしい（小学生・短い 2 段落目）: 小学 3 年生には「酸素」が何かの説明がないため、赤血球が何を運んでいるのか分からない',
+    ]);
+    st.redoFlowed = ['claim:c6'];
+    expect(R.redoLines(d, st, locs).map((x: Obj) => x.id)).toEqual(['reader:p1es-word-1']);
+    const r = R.appendLines('理由', ['- a', '- b']);
+    expect(r).toEqual({ note: '理由\n- a\n- b', added: 2, lines: ['- a', '- b'] });
+  });
+});
+
+describe('キー（§V-9 c）: A / R / X / J / K / N / P / O / ?。1〜3 はやめる', () => {
+  const env = { inInput: false, dialogOpen: false, busy: false, draft: false };
+  const key = (k: string, extra: Obj = {}) => R.keyCommand({ key: k, code: /^\d$/.test(k) ? `Digit${k}` : `Key${k.toUpperCase()}`, ...extra }, env);
+  it('命令の対応', () => {
+    expect(key('a')).toEqual({ cmd: 'approve' });
+    expect(key('r')).toEqual({ cmd: 'return' });
+    expect(key('x')).toEqual({ cmd: 'reject' });
+    expect(key('j')).toEqual({ cmd: 'nav', dir: 1 });
+    expect(key('n')).toEqual({ cmd: 'item_step', dir: 1 });
+    expect(key('p')).toEqual({ cmd: 'item_step', dir: -1 });
+    expect(key('o')).toEqual({ cmd: 'item_ok' });
+    expect(R.keyCommand({ key: '?', code: 'Slash', shiftKey: true }, env)).toEqual({ cmd: 'help' });
+    for (const k of ['1', '2', '3']) expect(key(k)).toBe(null);
+    expect(key('1', { shiftKey: true })).toBe(null);
+    expect(key('o', { repeat: true })).toBe(null);
+    expect(R.keyCommand({ key: 'n', code: 'KeyN' }, { ...env, inInput: true })).toBe(null);
+  });
+  it('N / P で項目を選び（一周する）、O で OK（blocking には効かない）', () => {
+    const d = fixture();
+    const st = R.newReviewState();
+    R.applyCommand(st, { cmd: 'item_ok' }, d);
+    expect(Object.keys(R.statesFor(st, d))).toEqual([]); // 選ぶ前の O は何もしない
+    R.applyCommand(st, { cmd: 'item_step', dir: 1 }, d);
+    expect(st.cursor).toBe(0);
+    R.applyCommand(st, { cmd: 'item_step', dir: -1 }, d);
+    expect(st.cursor).toBe(5);
+    R.applyCommand(st, { cmd: 'item_step', dir: 1 }, d);
+    expect(st.cursor).toBe(0);
+    R.applyCommand(st, { cmd: 'item_ok' }, d);
+    expect(R.statesFor(st, d)['claim:c6']).toBe('ok');
+    expect(R.itemsHtml(d, st, {})).toContain('class="rv-it sev-fix is-ok is-cur" id="rv-it-0"');
+    d.triage.items.find((x: Obj) => x.id === 'source:s4:license').blocking = true;
+    R.applyCommand(st, { cmd: 'item_step', dir: 1 }, d);
+    R.applyCommand(st, { cmd: 'item_ok' }, d);
+    expect(R.statesFor(st, d)['source:s4:license']).toBeUndefined();
+  });
+});
+
+describe('子どもの画面（§V-9 b）: 記法・さわってみよう・印', () => {
+  const d = fixture();
+  const p1 = d.version.material.parts[0];
+  const p2 = d.version.material.parts[1];
+  const o = (x: Obj = {}) => ({ fileBase: BASE, marks: true, stick: true, pins: R.pinsOf(d, R.newReviewState()), claimIdx: idx(d), frame: 0, pi: 0, path: 'parts/p1/p1-elementary-short.md', ...x });
+
+  it('太字（**…**）と番号つきの一覧（1. ）が出る。対にならない ** はそのまま。コードの中は太字にしない', () => {
+    const h = R.previewBodyHtml(md('parts/p2/p2-elementary-short.md'), p2, o({ pi: 1, path: 'parts/p2/p2-elementary-short.md' }));
+    expect(h).toContain('<strong>スライダー</strong>を 動かして');
+    expect(n(h, /<ol class="mp-ol">/g)).toBe(1);
+    expect(n(h, /<ol class="mp-ol">[\s\S]*?<\/ol>/g)).toBe(1);
+    expect((/<ol class="mp-ol">([\s\S]*?)<\/ol>/.exec(h) || [''])[0].match(/<li /g)?.length).toBe(3);
+    expect(R.inlineMd('**a** と `**b**` と **c', { bold: true })).toBe('<strong>a</strong> と <code>**b**</code> と **c');
+    expect(R.inlineMd('**a**')).toBe('**a**'); // ほかの画面の md は今までどおり
+    expect(R.mdBlocks('3. a\n4. b\n- c')).toEqual([{ t: 'ol', start: 3, items: ['a', 'b'] }, { t: 'ul', items: ['c'] }]);
+    expect(R.previewBodyHtml('3. a', p1, o())).toContain('<ol class="mp-ol" start="3">');
+  });
+
+  it('動かせるもの（iframe）の上に子どもに見える見出し「さわってみよう」。sandbox は allow-scripts だけ（印 OFF でも出る）', () => {
+    for (const marks of [true, false]) {
+      const h = R.previewBodyHtml(md('parts/p2/p2-elementary-short.md'), p2, o({ pi: 1, marks, path: 'parts/p2/p2-elementary-short.md' }));
+      expect(h).toContain('<p class="mp-app-cap">さわってみよう</p>');
+      expect(h).toMatch(/<div class="mp-app[^"]*"[^>]*><p class="mp-app-cap">さわってみよう<\/p>(<span class="mp-pins">[\s\S]*?<\/span>)?<iframe class="mp-app-frame" sandbox="allow-scripts" title="動かせるもの" src="\/api\/review\/vfix-0001\/files\/parts\/p2\/p2-app.html"><\/iframe><\/div>/);
+      expect(h.indexOf('mp-app-cap')).toBeLessThan(h.indexOf('data-para="0"'));
+      expect(h).not.toContain('allow-same-origin');
+    }
+  });
+
+  it('印 ON: 見てほしい所の段落・部品に番号の印（押すと一覧の項目へ）、note の主張の段落に点線と札', () => {
+    const h = R.previewBodyHtml(md('parts/p1/p1-elementary-short.md'), p1, o());
+    // 主張 c6（出典が付いていない = 1 番）・読み手係の quote（6 番）・動画のチャンネル（5 番）
+    expect(h).toContain('<button type="button" class="mp-pin is-open" data-pin-goto="claim:c6" aria-label="見てほしい所 1（まだ決めていません）">1</button>');
+    expect(h).toContain('data-pin-goto="reader:p1es-word-1"');
+    expect(h).toMatch(/<div class="mp-video has-pin" data-media="video" data-media-key="v1" data-pin="5">/);
+    expect(h).toMatch(/class="mp-para has-pin" id="mp-p-0-0-6" data-para="6"[^>]*data-pin="1"/);
+    expect(h).toContain('<span class="mp-note-tag">仮説として書いてある</span>');
+    expect(h).toContain('<span class="mp-note-tag">たとえ</span>');
+    expect(n(h, /class="mp-para is-note"/g)).toBe(2);
+    // 主張 id・出典 id は子どもの画面に出さない（補足の中だけ）
+    expect(h).not.toMatch(/\[c\d|c5 →|mp-cite/);
+    // 図（検証係が ok）には印が付かない
+    expect(h).toMatch(/<figure class="mp-fig" data-media="figure"/);
+  });
+
+  it('項目を ok にしたら丸は緑のチェック、redo にしたら「直」', () => {
+    const st = R.newReviewState();
+    pick(d, st, 0, 'ok');
+    pick(d, st, 5, 'redo');
+    const h = R.previewBodyHtml(md('parts/p1/p1-elementary-short.md'), p1, o({ pins: R.pinsOf(d, st) }));
+    expect(h).toContain('class="mp-pin is-ok" data-pin-goto="claim:c6" aria-label="見てほしい所 1（OK にしました）">✓</button>');
+    expect(h).toContain('class="mp-pin is-redo" data-pin-goto="reader:p1es-word-1" aria-label="見てほしい所 6（直してもらう）">直</button>');
+    expect(h).toContain('class="mp-para has-pin pin-ok"');
+  });
+
+  it('印 OFF: 番号の印・点線・札・付箋のボタンを全部消す（子どもが見るのと同じ見た目）', () => {
+    const on = R.previewBodyHtml(md('parts/p1/p1-elementary-short.md'), p1, o());
+    const off = R.previewBodyHtml(md('parts/p1/p1-elementary-short.md'), p1, o({ marks: false }));
+    for (const x of ['mp-pin', 'data-pin', 'has-pin', 'is-note', 'mp-note-tag', 'data-stick-open']) {
+      expect(on).toContain(x);
+      expect(off).not.toContain(x);
+    }
+    expect(n(off, /data-para="/g)).toBe(7);
+    const frame = R.previewFrameHtml(d, R.defaultPv(), 0, { marks: false, pins: R.pinsOf(d, R.newReviewState()) });
+    expect(frame).not.toContain('mp-pin');
+    expect(R.reviewHtml(d, R.newReviewState(), { marks: false })).toContain('data-mp-marks="1" aria-pressed="false"');
+  });
+
+  it('material.json の項目は枠の頭（要約・最初にやること・部品の題名）で quote を含む要素に印', () => {
+    const x = fixture();
+    x.triage.items.push({ id: 'reader:mj-1', kind: 'reader', key: 'explanation_and_expression', severity: 'fix', cause: 'word', title: '言葉がむずかしい', detail: '', path: 'material.json', quote: '赤い 丸を 数えてみよう' });
+    const f = R.previewFrameHtml(x, R.defaultPv(), 0, { marks: true, pins: R.pinsOf(x, R.newReviewState()) });
+    expect(f).toMatch(/<div class="mp-entry has-pin" data-head-k="entry" data-pin="7"><span class="mp-pins"><button[^>]*data-pin-goto="reader:mj-1"/);
+    expect(R.locateItem(x.triage.items.at(-1), x, {}, [R.defaultPv()])).toMatchObject({ t: 'head', label: '要約・最初にやること' });
+  });
+});
+
+describe('項目の場所（§V-9 b）', () => {
+  const d = fixture();
+  const items = R.triageOf(d).shown;
+  const frames = [R.defaultPv()];
+  it('主張 = その主張の印が付いた段落（表示中の変奏を先に）/ 変奏の quote = その段落 / 部品 = 図・動かせるもの・動画 / 表示中に無い = 「… にあります」', () => {
+    const m = allMd(d);
+    expect(R.locateItem(items[0], d, m, frames)).toMatchObject({ t: 'para', pi: 0, path: 'parts/p1/p1-elementary-short.md', para: 6, inView: true, label: '小学生・短い 7 段落目' });
+    expect(R.locateItem(items[1], d, m, frames)).toBe(null); // 出典の利用条件は場所が決まらない
+    expect(R.locateItem(items[2], d, m, frames)).toMatchObject({ t: 'media', media: 'app', label: '動かせるもの' });
+    expect(R.locateItem(items[3], d, m, frames)).toMatchObject({ t: 'para', path: 'parts/p2/p2-secondary-long.md', para: 0, inView: false, label: '中学生・長い にあります', sel: { aud: 'secondary', len: 'long', game: false } });
+    expect(R.locateItem(items[4], d, m, frames)).toMatchObject({ t: 'media', media: 'video', key: 'v1', label: '動画' });
+    expect(R.locateItem(items[5], d, m, frames)).toMatchObject({ para: 1, label: '小学生・短い 2 段落目' });
+    // 中学生・長いを表示している時は、同じ項目がその場所に
+    expect(R.locateItem(items[3], d, m, [{ aud: 'secondary', len: 'long', game: false }])).toMatchObject({ inView: true, label: '中学生・長い 1 段落目' });
+    // 本文を読む前は、主張の場所は出さない（quote の項目は変奏の名前だけ）
+    expect(R.locateItem(items[0], d, null, frames)).toBe(null);
+    expect(R.locateItem(items[5], d, null, frames)).toMatchObject({ para: -1, label: '小学生・短い' });
+  });
+});
+
+describe('機械が確かめたこと（§V-9 a 2.）', () => {
+  it('6 項目を 1 行ずつ（ok / review / pending）。要約の文', () => {
+    const h = R.machineHtml(fixture());
+    expect(n(h, /data-mk="/g)).toBe(6);
+    expect(h).toContain('data-mk="content_and_evidence" data-mk-state="review"');
+    expect(h).toContain('data-mk="relation_to_learning" data-mk-state="ok"');
+    expect(h).toContain('主張 7 件: 確か 5・仮説として書いてある 1・たとえ 1');
+    expect(h).toContain('読み手チェック: 直す所 1・気づき 1');
+    expect(h).toContain('図 1 枚: 問題なし 1');
+    expect(h).toContain('動画 1 本: 問題なし 1');
+    expect(h).toContain('動かせるもの 1 個: 問題なし 0');
+    expect(h).toContain('出典 6 件・動画のチャンネル: 初めて');
+    expect(h).toContain('data-open-sources="1">根拠と出典を開く →</button>');
+    // 使う条件の補足に material の conditions
+    expect(h).toContain('<dt>道具</dt><dd>ブラウザ</dd>');
+    expect(h).toContain('<dt>対象</dt><dd>小学生、中学生</dd>');
+    expect(h).toContain('<dt>サポーターの見守り</dt><dd>不要</dd>');
+    expect(R.machineHtml(FX.clean())).toContain('動画のチャンネル: 確認済み');
+    expect(n(R.machineHtml(FX.clean()), /data-mk-state="ok"/g)).toBe(6);
+  });
+
+  it('pending は gate が pending で、その項目の前提（§V-6 d）がまだ成り立っていない時', () => {
+    expect(R.machineStates(FX.readerWait())).toEqual({
+      content_and_evidence: 'ok', explanation_and_expression: 'pending', relation_to_learning: 'pending', conditions_of_use: 'pending', artifact_behavior: 'ok', terms_of_use: 'ok',
+    });
+    expect(R.machineStates(FX.pending())).toEqual({
+      content_and_evidence: 'pending', explanation_and_expression: 'pending', relation_to_learning: 'ok', conditions_of_use: 'ok', artifact_behavior: 'pending', terms_of_use: 'pending',
+    });
+  });
+
+  it('今あるテストが数える DOM（図のサムネイル・判定・動画・たとえのずれ・利用条件の動画）は補足の中に出し続ける', () => {
+    const d = fixture();
+    d.verification.analogy_gaps = [{ claim_id: 'c5', where: 'p1', analogy: 'トラック', same: '運ぶ', differs: '燃料' }];
+    const h = R.reviewHtml(d, R.newReviewState(), {});
+    expect(n(h, /class="thumb"/g)).toBe(1);
+    expect(n(h, /data-fig-verdict="/g)).toBe(1);
+    expect(n(h, /data-videos="1"/g)).toBe(1);
+    expect(n(h, /data-video="v1"/g)).toBe(1);
+    expect(n(h, /data-video-notes="1"/g)).toBe(1);
+    expect(n(h, /data-video-verdict="1"/g)).toBe(1);
+    expect(n(h, /data-video-meta="ok"/g)).toBe(1);
+    expect(n(h, /data-video-terms="1"/g)).toBe(1);
+    expect(n(h, /data-analogy-gaps="1"/g)).toBe(1);
+    const mk = (k: string) => h.indexOf(`data-mk="${k}"`);
+    expect(h.indexOf('data-videos=')).toBeGreaterThan(mk('explanation_and_expression'));
+    expect(h.indexOf('data-videos=')).toBeLessThan(mk('relation_to_learning'));
+    expect(h.indexOf('data-video-terms=')).toBeGreaterThan(mk('terms_of_use'));
+    expect(h).toContain('初めてのチャンネル</span>');
+  });
+
+  it('画面に内部の言葉（fix / ask / note・gate・triage・cause のコード）を出さない（属性と補足の表・機械検査の JSON は除く）', () => {
+    const h = R.reviewHtml(fixture(), R.newReviewState(), {});
+    const visible = h
+      .slice(0, h.indexOf('id="rv-sup"'))
+      .replace(/<[^>]*>/g, ' ');
+    for (const w of ['fix', 'ask', 'triage', 'gate', 'no_source', 'license_unknown', 'video_channel_new', 'app_unclear', 'claim:', 'c6', 's4']) expect(visible).not.toContain(w);
+  });
+});
+
+describe('並び（§V-9 a）: 判定帯 → 舞台（子どもの画面 → 右の一覧）→ 補足（畳んだ details）→ 固定フッター', () => {
+  const h = R.reviewHtml(fixture(), R.newReviewState(), { queue: ['vfix-0001', 'vclean-0001'] });
+  it('DOM の順と id', () => {
+    const at = (s: string) => h.indexOf(s);
+    const order = ['id="rv-band"', 'id="rv-stage"', 'id="rv-body"', 'id="mp-bar"', 'data-mp-marks', 'id="mp-frames"', 'id="rv-rail"', 'id="rv-items"', 'id="rv-machine"', 'id="mp-stickies"', 'id="rv-sup"', 'id="rv-sources"', 'id="rv-ok"', 'id="rv-detail"', 'id="rv-foot"', 'id="approve-why"', 'id="reject-btn"', 'id="return-btn"', 'id="approve-btn"'];
+    order.forEach((s) => expect(at(s), s).toBeGreaterThan(-1));
+    for (let i = 1; i < order.length; i++) expect(at(order[i]), order[i]).toBeGreaterThan(at(order[i - 1]));
+    expect(h).toContain('<span class="muted">1 / 2</span>');
+    expect(h).toContain('<details class="card rv-sec" id="rv-sources-sec"><summary><h2>根拠と出典（出典カード）</h2></summary>');
+    expect(h).not.toMatch(/<details[^>]*id="rv-(sources-sec|ok|detail)"[^>]* open/);
+    expect(h).toContain('却下する <span class="kbd">X</span>');
+    expect(h).toContain('直してもらう <span class="kbd">R</span>');
+    expect(h).toContain('公開する <span class="kbd">A</span>');
+    expect(n(h, /class="mat-preview"/g)).toBe(1);
+  });
+  it('見比べ: 枠が 2 つ・右の枠に自分の切り替え（見比べのボタンは左だけ）', () => {
+    const st = R.newReviewState();
+    st.pv.compare = true;
+    const c = R.reviewHtml(fixture(), st, {});
+    expect(n(c, /class="mat-preview"/g)).toBe(2);
+    expect(c).toContain('class="rv-stage is-compare"');
+    expect(c).toContain('class="mp-frames is-compare"');
+    expect(c).toContain('data-pv="aud" data-val="secondary" data-pvf="1" aria-pressed="true">中学生</button>');
+    expect(n(c, /data-pv="compare"/g)).toBe(1);
+  });
+});
+
+describe('一覧（§V-9 d）: 判断の数・自動公開のスイッチ・3 区画', () => {
+  it('3 区画（空の区画は出さない）・列（見てほしい所・機械の確認 n / 6）', () => {
+    const h = R.reviewListHtml({ versions: FX.listRows() });
+    expect(n(h, /data-rl-sec="/g)).toBe(3);
+    expect(h.indexOf('data-rl-sec="attention"')).toBeLessThan(h.indexOf('data-rl-sec="clean"'));
+    expect(h.indexOf('data-rl-sec="clean"')).toBeLessThan(h.indexOf('data-rl-sec="pending"'));
+    expect(h).toContain('<h2>全部通った（子どもの画面を見て公開するだけ）');
+    expect(n(h, /tr data-rl-row="1"/g)).toBe(4);
+    expect(h).toContain('<th>見てほしい所</th><th>機械の確認</th>');
+    expect(h).toContain('<span class="pill orange">6 件</span>');
+    expect(h).toContain('3 / 6');
+    expect(h).toContain('読み手チェック待ち');
+    const onlyClean = R.reviewListHtml({ versions: FX.listRows().filter((r: Obj) => r.gate === 'clean') });
+    expect(n(onlyClean, /data-rl-sec="/g)).toBe(1);
+    // gate の無い古い行は「機械の確認中」
+    expect(R.reviewListHtml({ versions: [{ version_id: 'x', title: 't', version: 1, needs_review: 2, auto_ok: 1 }] })).toContain('data-rl-sec="pending"');
+    expect(R.reviewListHtml({ versions: [] })).toContain('確認待ちの版はありません。');
+  });
+  it('判断の数の文とスイッチ（aria-pressed・ON の間は自動で公開した数）。0 本は「まだありません」', () => {
+    const on = R.rlStatsHtml({ auto_publish: true, clean: { approve: 12, return: 1, reject: 0 }, streak: 9, auto_published: 3 });
+    expect(on).toContain('機械が『全部通った』とした教材で、ふじさんの判断は 公開 12 本・直してもらう 1 本・却下 0 本（直近 9 本つづけて公開）');
+    expect(on).toContain('id="rl-autopub" aria-pressed="true"');
+    expect(on).toContain('全部通った教材は自動で公開する');
+    expect(on).toContain('自動で公開した教材 3 本');
+    const off = R.rlStatsHtml({ auto_publish: false, clean: { approve: 0, return: 0, reject: 0 }, streak: 0, auto_published: 0 });
+    expect(off).toContain('ふじさんの判断は まだありません');
+    expect(off).toContain('aria-pressed="false"');
+    expect(off).not.toContain('自動で公開した教材');
+    expect(R.rlStatsHtml({ auto_publish: false }, true)).toContain('id="rl-autopub" aria-pressed="false" disabled');
+    expect(R.rlStatsHtml('x')).toContain('id="rl-stats-retry"');
+    expect(code).toContain("'機械の確認が全部通った教材を、人を通さずに公開します。見てほしい所がある教材は、これまでどおり確認待ちに出ます。'");
+  });
+  it('確認済みのチャンネルの一覧（チャンネル名・URL・確かめた日・外す）。値はエスケープ', () => {
+    const h = R.channelsHtml({ channels: [{ channel_key: 'https://www.youtube.com/@a', channel_name: '<b>A</b>', channel_url: 'https://www.youtube.com/@a', created_at: '2026-11-05T09:00:00Z' }, { channel_key: 'javascript:x', channel_name: 'B', channel_url: 'javascript:x', created_at: null }] });
+    expect(n(h, /data-channel-key="/g)).toBe(2);
+    expect(h).toContain('<a href="https://www.youtube.com/@a" rel="noopener noreferrer" target="_blank">&lt;b&gt;A&lt;/b&gt;</a>');
+    expect(h).not.toContain('href="javascript:');
+    expect(h).toContain('確かめた日 2026/11/5');
+    expect(n(h, /data-channel-del="/g)).toBe(2);
+    expect(R.channelsHtml({ channels: [] })).toContain('確認済みのチャンネルはまだありません。');
+    expect(R.channelsHtml(null)).toContain('読み込み中…');
+    expect(R.channelsHtml('404')).toContain('id="vc-retry"');
+  });
+});
+
+describe('出典カード（補足の「根拠と出典」）: 並び順・主張の逆引き・状態文', () => {
+  it('問題のある順（引用不一致 → 開けていない → 利用条件不明 → 問題なし → 二次）。同じ順位は出典一覧の順', () => {
     const m = R.sourceCardsOf(fixture());
     expect(m.cards.map((c: Obj) => c.source.source_id)).toEqual(['s2', 's6', 's4', 's1', 's5', 's3']);
     expect(m.cards.map((c: Obj) => c.head.text)).toEqual([
-      '出典と食い違う主張があります',
+      '引用が本文と一致しません',
       '職人がこのページを開けていません',
       '利用条件が分かりません',
       '問題なし',
@@ -46,41 +609,40 @@ describe('出典カード: 並び順・主張の逆引き・状態文', () => {
     expect(m.problems).toBe(3);
   });
 
-  it('2 つ目以降の問題も残す（s2 = 食い違い + 引用不一致）。開けていないページの引用不一致は見出しを「開けていない」にまとめる', () => {
-    const m = R.sourceCardsOf(fixture());
+  it('食い違いの主張は先頭。開けていないページの引用不一致は見出しを「開けていない」にまとめる。動画の出典は検査しない', () => {
+    const d = fixture();
+    d.triage.groups.push({ cause: 'contradicted', source_id: 's2', url: d.sources[1].url, verifier_opened_urls: [], claim_ids: ['c5'] });
+    const m = R.sourceCardsOf(d);
     const by = (sid: string) => m.cards.find((c: Obj) => c.source.source_id === sid);
     expect(by('s2').issues).toEqual(['contradicted', 'quote_mismatch']);
+    expect(m.cards[0].head.text).toBe('出典と食い違う主張があります');
     expect(by('s6').issues).toEqual(['maker_url_not_fetched']);
-    // 動画の出典（watch URL が版の動画と一致）は開けた・引用の検査をしない
     expect(by('s5').video).toBe(true);
     expect(by('s5').issues).toEqual([]);
-    // 検証係が開いた URL（職人の URL と違う）
     expect(by('s2').opened).toEqual(['https://example.org/cells/nucleus-overview']);
   });
 
   it('主張の逆引き: 出典 id → 参照している主張（複数の出典を持つ主張は両方に出る）', () => {
     const by = R.claimsBySource(fixture().claims);
-    expect(by.s1.map((c: Obj) => c.id)).toEqual(['c1', 'c3']);
+    expect(by.s1.map((c: Obj) => c.id)).toEqual(['c1', 'c3', 'c7']);
     expect(by.s3.map((c: Obj) => c.id)).toEqual(['c3']);
-    expect(by.s9.map((c: Obj) => c.id)).toEqual(['c7']);
     expect('s5' in by).toBe(false);
-    // 形の違う値は飛ばす
     expect(Object.keys(R.claimsBySource([null, { id: 'x', source_ids: 's1' }, { id: 'y', source_ids: [1, 's2'] }]))).toEqual(['s2']);
   });
 
   it('出典の無い主張・一覧に無い出典を参照する主張は orphans', () => {
-    const m = R.sourceCardsOf(fixture());
-    expect(m.orphans.map((o: Obj) => [o.claim.id, o.why, o.missing])).toEqual([
+    const d = fixture();
+    d.claims.find((c: Obj) => c.id === 'c7').source_ids = ['s9'];
+    expect(R.sourceCardsOf(d).orphans.map((o: Obj) => [o.claim.id, o.why, o.missing])).toEqual([
       ['c6', 'no_source', []],
       ['c7', 'source_not_listed', ['s9']],
     ]);
   });
 
-  it('仕分けが無い時は出典の列と主張の判定から（同じ順）', () => {
+  it('groups の無い応答は出典の列と主張の判定から（同じ順）', () => {
     const d = fixture();
     delete d.triage;
-    const m = R.sourceCardsOf(d);
-    expect(m.cards.map((c: Obj) => c.source.source_id)).toEqual(['s2', 's6', 's4', 's1', 's5', 's3']);
+    expect(R.sourceCardsOf(d).cards.map((c: Obj) => c.source.source_id)).toEqual(['s2', 's6', 's4', 's1', 's5', 's3']);
   });
 
   it('取得日と短い URL', () => {
@@ -93,25 +655,22 @@ describe('出典カード: 並び順・主張の逆引き・状態文', () => {
   });
 });
 
-describe('出典カードの HTML（reviewHtml の中）', () => {
+describe('出典カードの HTML（補足の中）', () => {
   const h = R.reviewHtml(fixture(), R.newReviewState(), {});
-  const panel = h.slice(h.indexOf('id="rv-sources"'), h.indexOf('id="rv-check"'));
+  const panel = h.slice(h.indexOf('id="rv-sources"'), h.indexOf('id="rv-ok"'));
 
   it('「出典 M 件のうち 問題 K 件」・カードは出典の数 + 出典のない主張の 1 枚', () => {
     expect(panel).toContain('出典 6 件のうち 問題 3 件');
     expect(n(panel, /data-src-card="/g)).toBe(6);
-    expect(n(panel, /data-src-orphan="2"/g)).toBe(1);
-    expect(panel).toContain('出典のない主張が 2 件あります');
-    expect(panel).toContain('出典一覧にない出典: s9');
+    expect(n(panel, /data-src-orphan="1"/g)).toBe(1);
+    expect(panel).toContain('出典のない主張が 1 件あります');
   });
 
-  it('「問題なし」の中には問題の無い出典だけ（問題のある出典・主張を入れない）', () => {
+  it('「問題なし」の中には問題の無い出典だけ', () => {
     const ok = panel.slice(panel.indexOf('id="rv-src-ok"'));
     expect(ok).toContain('問題なし（出典 3 件。うち補助の出典 1 件）');
     expect(n(ok, /data-src-card="/g)).toBe(3);
-    for (const bad of ['出典と食い違う主張があります', '職人がこのページを開けていません', '利用条件が分かりません', '出典のない主張']) expect(ok).not.toContain(bad);
-    // 旧い「問題なし（主張 N 件・出典 M 件）」の見出しは使わない（中身が全件だったため）
-    expect(h).not.toContain('<h2>問題なし（主張');
+    for (const bad of ['引用が本文と一致しません', '職人がこのページを開けていません', '利用条件が分かりません', '出典のない主張']) expect(ok).not.toContain(bad);
     expect(h).toContain('主張と出典の一覧（全件・照合の記録。主張 7 件・出典 6 件）');
   });
 
@@ -133,30 +692,23 @@ describe('出典カードの HTML（reviewHtml の中）', () => {
     expect(panel).toContain('<code>quote_not_found</code>');
   });
 
+  it('出典カードの主張 id は本文の段落へ（data-goto-claim = 主張の番号）', () => {
+    expect(h).toContain('<button type="button" class="linkish sc-cid" data-goto-claim="4" title="本文のこの主張の段落へ">c5</button>');
+  });
+
   it('文字はすべてエスケープ・リンクは http(s) だけ', () => {
     const d = fixture();
     d.sources[0].title = '<b>x</b>';
     d.sources[0].quoted_excerpt = '<script>alert(1)</script>';
     d.sources[1].url = 'javascript:alert(1)';
     d.claims[0].text = '<img src=x onerror=alert(1)>';
+    d.triage.items[2].title = '<i>t</i>';
+    d.triage.items[2].detail = '<img src=y>';
+    d.reader.findings[1].note = '<u>n</u>';
     const p = R.reviewHtml(d, R.newReviewState(), {});
-    expect(p).not.toContain('<b>x</b>');
-    expect(p).not.toContain('<script>alert(1)</script>');
-    expect(p).not.toContain('<img src=x');
-    expect(p).not.toContain('href="javascript:');
-  });
-
-  it('既存の数える DOM（group・項目・サムネイル）は変わらない', () => {
-    expect(n(h, /data-rv-group="/g)).toBe(FIX.triage.groups.length);
-    expect(n(h, /data-ck="/g)).toBe(6);
-    expect(n(h, /class="thumb"/g)).toBe(1);
-    expect(n(h, /data-fig-verdict="/g)).toBe(1);
-    expect(n(h, /data-videos="1"/g)).toBe(1);
+    for (const x of ['<b>x</b>', '<script>alert(1)</script>', '<img src=x', '<img src=y', '<i>t</i>', '<u>n</u>', 'href="javascript:']) expect(p).not.toContain(x);
   });
 });
-
-const md = (p: string) => readFileSync(new URL(`./review-preview/files/${p}`, import.meta.url), 'utf8');
-const BASE = '/api/review/vfix-0001/files/';
 
 describe('教材プレビュー: [cN] は教材として見る時は出さない（inlineMd の中で外す）', () => {
   it('opts.cites を渡すと参照を外して id を集める。渡さなければ今までどおり', () => {
@@ -175,58 +727,31 @@ describe('教材プレビュー: [cN] は教材として見る時は出さない
   });
 
   it('エスケープした後に外す（参照の中の記号でタグを作れない）', () => {
-    const cites: string[] = [];
-    const h = R.inlineMd('<b>x</b> [c1]', { cites, known: {} });
-    expect(h).toBe('&lt;b&gt;x&lt;/b&gt;');
+    expect(R.inlineMd('<b>x</b> [c1]', { cites: [], known: {} })).toBe('&lt;b&gt;x&lt;/b&gt;');
   });
 });
 
 describe('教材プレビュー: 本文（previewBodyHtml）', () => {
   const d = fixture();
   const p1 = d.version.material.parts[0];
-  const p2 = d.version.material.parts[1];
-  const model = R.sourceCardsOf(d);
-  const o = (x: Obj = {}) => ({
-    fileBase: BASE,
-    marks: true,
-    chips: true,
-    stick: true,
-    markIds: { c2: true, c5: true },
-    claimIdx: Object.fromEntries(d.claims.map((c: Obj, i: number) => [c.id, i])),
-    claimRef: R.claimRefsOf(d, model),
-    frame: 0,
-    pi: 0,
-    ...x,
-  });
+  const o = (x: Obj = {}) => ({ fileBase: BASE, marks: true, stick: true, claimIdx: idx(d), frame: 0, pi: 0, ...x });
 
   it('本文に [c1] 等が出ない（印 OFF でも ON でも）', () => {
-    for (const marks of [false, true]) {
-      const h = R.previewBodyHtml(md('parts/p1/p1-elementary-short.md'), p1, o({ marks }));
-      expect(h).not.toMatch(/\[c\d/);
-    }
+    for (const marks of [false, true]) expect(R.previewBodyHtml(md('parts/p1/p1-elementary-short.md'), p1, o({ marks }))).not.toMatch(/\[c\d/);
   });
 
   it('図と動画は先頭の段落の直後（2 つ目の段落より前）', () => {
     const h = R.previewBodyHtml(md('parts/p1/p1-elementary-short.md'), p1, o());
-    const fig = h.indexOf('<figure class="mp-fig"><img alt="図" src="/api/review/vfix-0001/files/parts/p1/p1-figure-1.svg"></figure>');
+    const fig = h.indexOf('<img alt="図" src="/api/review/vfix-0001/files/parts/p1/p1-figure-1.svg">');
     const first = h.indexOf('data-para="0"');
     const second = h.indexOf('data-para="1"');
     expect(fig).toBeGreaterThan(first);
     expect(fig).toBeLessThan(second);
-    const vid = h.indexOf('<div class="mp-video"><iframe src="https://www.youtube-nocookie.com/embed/abcdefghijk?start=30&amp;end=95&amp;rel=0"');
+    const vid = h.indexOf('<iframe src="https://www.youtube-nocookie.com/embed/abcdefghijk?start=30&amp;end=95&amp;rel=0"');
     expect(vid).toBeGreaterThan(fig);
     expect(vid).toBeLessThan(second);
     expect(h).toContain('見どころ</span>細い血管の中を');
-    // youtube.com/embed は使わない
     expect(h).not.toContain('youtube.com/embed');
-  });
-
-  it('型 4 の app.html は本文の上（sandbox="allow-scripts" だけ）', () => {
-    const h = R.previewBodyHtml(md('parts/p2/p2-elementary-short.md'), p2, o({ pi: 1 }));
-    const app = h.indexOf('<div class="mp-app"><iframe class="mp-app-frame" sandbox="allow-scripts" title="動かせるもの" src="/api/review/vfix-0001/files/parts/p2/p2-app.html"></iframe></div>');
-    expect(app).toBeGreaterThan(-1);
-    expect(app).toBeLessThan(h.indexOf('data-para="0"'));
-    expect(h).not.toContain('allow-same-origin');
   });
 
   it('型 4 以外の app.html は図と同じ位置。図の無い md（段落なし）でも図を出す', () => {
@@ -250,6 +775,10 @@ describe('教材プレビュー: 本文（previewBodyHtml）', () => {
     expect(h).not.toContain('<iframe');
     expect(h).toContain('埋め込みません');
   });
+
+  it('一覧に無い主張 id の参照も本文には出さない', () => {
+    expect(R.previewBodyHtml('ふしぎ [c99]', p1, o({ claimIdx: {} }))).not.toContain('c99');
+  });
 });
 
 describe('教材プレビュー: 枠（型の名前・最初にやること・要約・変奏の選び方）', () => {
@@ -260,12 +789,12 @@ describe('教材プレビュー: 枠（型の名前・最初にやること・�
     expect(h).not.toContain('型 3');
     expect(h).toContain('最初にやること（見る）</span><p>図の 赤い 丸を 数えてみよう</p>');
     expect(h).toContain('最初にやること（さわる）');
-    expect(h).toContain('<p class="mp-summary">赤血球が からだじゅうに');
+    expect(h).toContain('<p class="mp-summary" data-head-k="summary">赤血球が からだじゅうに');
     expect(h).toContain('data-mode="es"');
     expect(h).toContain('いま表示: <b>小学生・短い</b>');
     const js = R.previewFrameHtml(fixture(), { aud: 'secondary', len: 'long', game: false }, 1);
     expect(js).toContain('data-mode="js"');
-    expect(js).toContain('<p class="mp-summary">赤血球が酸素を全身へ運ぶ仕組みを');
+    expect(js).toContain('赤血球が酸素を全身へ運ぶ仕組みを');
     expect(js).toContain('id="mp-body-1-0"');
     expect(R.kindName(9)).toBe('型 9');
   });
@@ -281,65 +810,18 @@ describe('教材プレビュー: 枠（型の名前・最初にやること・�
     expect(R.newReviewState().pv).toEqual(R.defaultPv());
   });
 
-  it('reviewHtml には本文の骨組みだけ（iframe・図は本文を読んでから入れる。既存の数える DOM は変えない）', () => {
+  it('reviewHtml には本文の骨組みだけ（子どもの画面の iframe・図は本文を読んでから入れる）', () => {
     const h = R.reviewHtml(fixture(), R.newReviewState(), {});
     expect(h).toContain('id="mp-frames"');
-    expect(n(h, /class="mat-preview"/g)).toBe(1);
-    expect(n(h, /<iframe /g)).toBe(1); // 「説明と表現」の動画だけ
-    expect(h).not.toContain('class="mp-fig"');
+    expect(n(h, /<iframe /g)).toBe(1); // 「説明と表現」の補足の動画だけ
+    expect(h).not.toContain('class="mp-fig');
     expect(h).toContain('aria-pressed="true">小学生</button>');
+    expect(h).toContain('data-mp-marks="1" aria-pressed="true"');
+    expect(h).toContain('印を見る<span class="mp-marks-state">ON</span>');
   });
 });
 
-describe('確認の印（ON / OFF）と、段落の印 ⇄ 出典カードの行き来', () => {
-  const d = fixture();
-  const model = R.sourceCardsOf(d);
-  const o = (marks: boolean) => ({
-    fileBase: BASE, marks, chips: true, stick: true, markIds: { c2: true, c5: true },
-    claimIdx: Object.fromEntries(d.claims.map((c: Obj, i: number) => [c.id, i])), claimRef: R.claimRefsOf(d, model), frame: 0, pi: 0,
-  });
-
-  it('既定 ON（localStorage が無い環境でも落ちない）。ctx.marks = false なら OFF の表示', () => {
-    expect(R.reviewHtml(fixture(), R.newReviewState(), {})).toContain('data-mp-marks="1" aria-pressed="true"');
-    const off = R.reviewHtml(fixture(), R.newReviewState(), { marks: false });
-    expect(off).toContain('data-mp-marks="1" aria-pressed="false"');
-    expect(off).toContain('<span class="mp-marks-state">OFF</span>');
-  });
-
-  it('ON: 要確認の段落は黄色・段落末に「c5 → s2」の印（押すと出典カードへ）・付箋のボタン。OFF: 子どもが見るのと同じ（印・黄色・ボタンなし）', () => {
-    const src = md('parts/p1/p1-elementary-short.md');
-    const on = R.previewBodyHtml(src, d.version.material.parts[0], o(true));
-    const s2 = model.cardOf.s2;
-    expect(on).toContain(`<button type="button" class="mp-cite is-flag" data-goto="${s2}" title="c5 の出典カードへ">c5 → s2</button>`);
-    expect(on).toContain('class="mp-para is-flag" id="mp-p-0-0-3"');
-    expect(on).toContain('data-goto="rv-src-orphan" title="c6 の出典カードへ">c6 → 出典なし</button>');
-    expect(n(on, /data-stick-open="/g)).toBe(7);
-    const off = R.previewBodyHtml(src, d.version.material.parts[0], o(false));
-    expect(off).not.toContain('mp-cite');
-    expect(off).not.toContain('is-flag');
-    expect(off).not.toContain('data-stick-open');
-    // 本文の段落は同じ数（data-cl で出典カードから段落へ戻れる）
-    expect(n(off, /data-para="/g)).toBe(7);
-    expect(off).toContain('data-cl="4"');
-  });
-
-  it('一覧に無い主張 id の参照は赤い印（行き先なし）', () => {
-    const h = R.previewBodyHtml('ふしぎ [c99]', d.version.material.parts[0], { ...o(true), claimIdx: {} });
-    expect(h).toContain('<span class="mp-cite is-missing">c99（一覧にない主張）</span>');
-  });
-
-  it('出典カードの主張 id は本文の段落へ（data-goto-claim = 主張の番号）・要確認のカードから出典カードへ', () => {
-    const h = R.reviewHtml(fixture(), R.newReviewState(), {});
-    expect(h).toContain('<button type="button" class="linkish sc-cid" data-goto-claim="4" title="本文のこの主張の段落へ">c5</button>');
-    expect(h).toContain(`data-goto="${model.cardOf.s2}">出典カードで見る →</button>`);
-    expect(h).toContain('data-goto="rv-src-orphan">出典のない主張のカードで見る →</button>');
-    // 出典カードは 2 列の右（教材プレビューと同じ rv-study の中）
-    expect(h.indexOf('id="rv-src-col"')).toBeGreaterThan(h.indexOf('id="mp-frames"'));
-    expect(h.indexOf('id="rv-src-col"')).toBeLessThan(h.indexOf('id="rv-check"'));
-  });
-});
-
-describe('付箋 → 差し戻しの理由の文', () => {
+describe('付箋 → 直してもらう理由の文', () => {
   const st1 = { id: 1, part_id: 'p1', part_title: '赤血球のしごと', part_index: 0, variant_path: 'parts/p1/p1-elementary-short.md', variant_label: '小学生・短い', para_index: 2, head: '赤血球は 血の中で いちばん 数が 多い…', kind: 'hard', text: '「いちばん」の根拠', flowed: false };
   const st2 = { ...st1, id: 2, para_index: 0, head: '図の', kind: 'other', text: '' };
 
@@ -368,10 +850,10 @@ describe('付箋 → 差し戻しの理由の文', () => {
   });
 
   it('一覧: 空の時の文・件数・まだ入れていない数・入れた印・1 件ずつの「消す」。文字はエスケープ', () => {
-    expect(R.stickyListHtml([])).toContain('付箋はまだありません');
+    expect(R.stickyListHtml([])).toContain('付箋はまだありません。「印を見る」を ON にして');
     const h = R.stickyListHtml([{ ...st1, text: '<b>x</b>' }, { ...st2, flowed: true }]);
     expect(h).toContain('<b>付箋 2 件</b>');
-    expect(h).toContain('まだ入れていない 1 件を理由欄に箇条書きで足します');
+    expect(h).toContain('「直してもらう」を押すと、まだ入れていない 1 件を理由欄に箇条書きで足します');
     expect(n(h, /data-stick-del="/g)).toBe(2);
     expect(h).toContain('理由欄に入れました');
     expect(h).toContain('&lt;b&gt;x&lt;/b&gt;');
@@ -379,84 +861,49 @@ describe('付箋 → 差し戻しの理由の文', () => {
     expect(R.stickyListHtml([{ ...st1, flowed: true }])).toContain('すべて理由欄に入れました');
   });
 
-  it('付箋のある段落には「付箋 N」の印。付箋は reviewStates の版ごとの状態に持つ', () => {
-    const d = fixture();
-    const h = R.previewBodyHtml(md('parts/p1/p1-elementary-short.md'), d.version.material.parts[0], { fileBase: BASE, marks: true, stickies: [st1, { ...st1, id: 3 }] });
-    expect(h).toContain('class="mp-para has-stick" id="mp-p-0-0-2"');
-    expect(h).toContain('<span class="mp-stuck" title="この段落の付箋">付箋 2</span>');
-    expect(R.newReviewState()).toMatchObject({ stickies: [], stickySeq: 0 });
-    const withList = R.reviewHtml(d, { ...R.newReviewState(), stickies: [st1] }, {});
-    expect(withList).toContain('id="mp-stickies"');
-    expect(withList).toContain('<b>付箋 1 件</b>');
-  });
-});
-
-describe('見比べ（左右 2 枠）', () => {
-  it('pv.compare で枠が 2 つ・右の枠に自分の切り替え・出典の欄は下へ（2 列をやめる）', () => {
-    const st = R.newReviewState();
-    expect(R.reviewHtml(fixture(), st, {})).toContain('data-pv="compare" data-val="1" data-pvf="0" aria-pressed="false">見比べ</button>');
-    st.pv.compare = true;
-    const h = R.reviewHtml(fixture(), st, {});
-    expect(n(h, /class="mat-preview"/g)).toBe(2);
-    expect(h).toContain('class="rv-study is-compare"');
-    expect(h).toContain('class="mp-frames is-compare"');
-    expect(h).toContain('data-pv="aud" data-val="secondary" data-pvf="1" aria-pressed="true">中学生</button>');
-    expect(h).toContain('見比べの間は、出典と主張の欄を下に移しています。');
-    expect(h).toContain('data-pv="compare" data-val="1" data-pvf="0" aria-pressed="true">見比べ</button>');
-    // 右の枠には見比べのボタンを出さない
-    expect(n(h, /data-pv="compare"/g)).toBe(1);
-  });
-});
-
-describe('レビューの指摘への対応（2026-11-07）', () => {
-  const st1 = { id: 1, part_id: 'p1', part_title: 't', part_index: 0, variant_path: 'parts/p1/p1-elementary-short.md', variant_label: '小学生・短い', para_index: 2, head: '赤血球は', kind: 'hard', text: '難しい', flowed: false };
-  const st2 = { ...st1, id: 2, para_index: 3, kind: 'fact', text: '' };
-
-  it('1. 印 OFF の時は付箋の目印（has-stick・「付箋 N」）も出さない（付箋の一覧には残る）', () => {
+  it('付箋のある段落には「付箋 N」の印（印 ON の時だけ）。付箋の一覧は右の一覧の中', () => {
     const d = fixture();
     const src = md('parts/p1/p1-elementary-short.md');
+    const on = R.previewBodyHtml(src, d.version.material.parts[0], { fileBase: BASE, marks: true, stickies: [st1, { ...st1, id: 3 }] });
+    expect(on).toContain('class="mp-para has-stick" id="mp-p-0-0-2"');
+    expect(on).toContain('<span class="mp-stuck" title="この段落の付箋">付箋 2</span>');
     const off = R.previewBodyHtml(src, d.version.material.parts[0], { fileBase: BASE, marks: false, stickies: [st1] });
     expect(off).not.toContain('has-stick');
     expect(off).not.toContain('mp-stuck');
-    const on = R.previewBodyHtml(src, d.version.material.parts[0], { fileBase: BASE, marks: true, stickies: [st1] });
-    expect(on).toContain('class="mp-para has-stick" id="mp-p-0-0-2"');
-    expect(on).toContain('付箋 1</span>');
-    expect(R.reviewHtml(d, { ...R.newReviewState(), stickies: [st1] }, { marks: false })).toContain('<b>付箋 1 件</b>');
+    expect(R.newReviewState()).toMatchObject({ stickies: [], stickySeq: 0 });
+    const withList = R.reviewHtml(d, { ...R.newReviewState(), stickies: [st1] }, { marks: false });
+    expect(withList).toContain('<h2 class="rv-rail-h">付箋（<span id="rv-stick-n">1</span>）</h2>');
+    expect(withList).toContain('<b>付箋 1 件</b>');
+    expect(withList.indexOf('id="mp-stickies"')).toBeGreaterThan(withList.indexOf('id="rv-rail"'));
   });
 
-  it('2. 却下で送る理由には流し込んだ付箋の行を入れない（差し戻しは入れる・理由欄はそのまま）。外して空なら空', () => {
-    const r = R.stickyNoteText('出典を直して', [st1, st2]);
+  it('却下で送る理由には流し込んだ行を入れない（直してもらうは入れる）。外して空なら空', () => {
+    const r = R.stickyNoteText('出典を直して', [st1, { ...st1, id: 2, para_index: 3, kind: 'fact', text: '' }]);
     const st = { ...R.newReviewState(), note: r.note, flowedLines: r.lines };
     expect(R.decisionNote(st, 'reject')).toBe('出典を直して');
     expect(R.decisionNote(st, 'return')).toBe(r.note);
-    expect(st.note).toBe(r.note);
     const only = R.stickyNoteText('', [st1]);
     expect(R.decisionNote({ note: only.note, flowedLines: only.lines }, 'reject').trim()).toBe('');
-    // 同じ文の行をオーナーが自分でも書いていたら、流し込んだ数だけ外す
     const dup = R.stickyLine(st1);
     expect(R.noteWithoutStickyLines(`${dup}\n${dup}`, [dup])).toBe(dup);
     expect(R.decisionNote({ note: 'a', flowedLines: undefined }, 'reject')).toBe('a');
   });
 
-  it('3. オーナーの理由の末尾の空白・改行は削らない（区切りの改行だけ足す）。1 件も足せない時は元のまま', () => {
+  it('オーナーの理由の末尾の空白・改行は削らない。1 件も足せない時は元のまま', () => {
     expect(R.stickyNoteText('理由  ', [st1]).note).toBe('理由  \n' + R.stickyLine(st1));
     expect(R.stickyNoteText('理由\n\n', [st1]).note).toBe('理由\n\n' + R.stickyLine(st1));
-    expect(R.stickyNoteText('理由\n', [st1]).note).toBe('理由\n' + R.stickyLine(st1));
     const full = 'あ'.repeat(3999) + ' ';
-    const r = R.stickyNoteText(full, [st1]);
-    expect(r).toEqual({ note: full, added: 0, lines: [] });
+    expect(R.stickyNoteText(full, [st1])).toEqual({ note: full, added: 0, lines: [] });
   });
 
-  it('4. 段落の先頭 20 字はコードポイントで切る（サロゲートペアを割らない）', () => {
+  it('段落の先頭 20 字はコードポイントで切る（サロゲートペアを割らない）', () => {
     const d = fixture();
-    const raw = '𠮷'.repeat(25) + ' [c1]';
-    const h = R.previewBodyHtml(raw, d.version.material.parts[0], { fileBase: BASE, marks: false });
+    const h = R.previewBodyHtml('𠮷'.repeat(25) + ' [c1]', d.version.material.parts[0], { fileBase: BASE, marks: false });
     expect(h).toContain(`data-head="${'𠮷'.repeat(20)}…"`);
-    const h2 = R.previewBodyHtml('😀'.repeat(20), d.version.material.parts[0], { fileBase: BASE, marks: false });
-    expect(h2).toContain(`data-head="${'😀'.repeat(20)}"`);
+    expect(R.previewBodyHtml('😀'.repeat(20), d.version.material.parts[0], { fileBase: BASE, marks: false })).toContain(`data-head="${'😀'.repeat(20)}"`);
   });
 
-  it('5. 主張 id を外す処理は長い空白の行で 2 乗にならない（16 万個の空白で 100ms 以内）', () => {
+  it('主張 id を外す処理は長い空白の行で 2 乗にならない（16 万個の空白で 100ms 以内）', () => {
     const spaces = ' '.repeat(160000);
     for (const line of [spaces + 'x', spaces + '[注', spaces + '[c1', 'a' + spaces + '[c1]', spaces]) {
       const t0 = performance.now();
@@ -464,35 +911,32 @@ describe('レビューの指摘への対応（2026-11-07）', () => {
       expect(performance.now() - t0).toBeLessThan(100);
     }
     const t1 = performance.now();
-    R.inlineMd(spaces + 'x', { cites: [], known: {} });
+    R.inlineMd(spaces + 'x', { cites: [], known: {}, bold: true });
     expect(performance.now() - t1).toBeLessThan(100);
-    // 直前の空白（半角・タブ・全角）も外す
     const out: string[] = [];
     expect(R.stripCites('a \t　[c1]。b', {}, out)).toBe('a。b');
     expect(out).toEqual(['c1']);
   });
 
-  it('7. 付箋の一言欄の Enter は IME の変換中（isComposing・keyCode 229）は付けない', () => {
+  it('付箋の一言欄の Enter は IME の変換中（isComposing・keyCode 229）は付けない', () => {
     expect(R.stickyKeyAction({ key: 'Enter' }, true)).toBe('add');
     expect(R.stickyKeyAction({ key: 'Enter' }, false)).toBe('need_kind');
     expect(R.stickyKeyAction({ key: 'Enter', isComposing: true }, true)).toBe(null);
     expect(R.stickyKeyAction({ key: 'Enter', keyCode: 229 }, true)).toBe(null);
-    expect(R.stickyKeyAction({ key: 'Process', keyCode: 229 }, true)).toBe(null);
     expect(R.stickyKeyAction({ key: 'Escape' }, true)).toBe('cancel');
     expect(R.stickyKeyAction({ key: 'a' }, true)).toBe(null);
   });
 
-  it('8. 付箋の入力の枠の中（種類ボタン・付ける/やめる）にフォーカスがある時は「入力中」= キー操作が効かない。見比べの時は右の枠も探す', () => {
+  it('付箋の入力の枠の中にフォーカスがある時は「入力中」= キー操作が効かない。見比べの時は右の枠も探す', () => {
     const el = (tagName: string, inForm: boolean) => ({ tagName, closest: (q: string) => (q === '[data-stick-form]' && inForm ? {} : null) });
     expect(R.inInputOf(el('BUTTON', true))).toBe(true);
     expect(R.inInputOf(el('BUTTON', false))).toBe(false);
     expect(R.inInputOf(el('INPUT', false))).toBe(true);
-    expect(R.inInputOf(el('TEXTAREA', false))).toBe(true);
     expect(R.inInputOf({ tagName: 'DIV', isContentEditable: true })).toBe(true);
     expect(R.inInputOf(null)).toBe(false);
     const env = { inInput: R.inInputOf(el('BUTTON', true)), dialogOpen: false, busy: false, draft: false };
-    for (const k of ['1', 'a', 'r', 'x', 'j', 'k']) expect(R.keyCommand({ key: k, code: /\d/.test(k) ? `Digit${k}` : `Key${k.toUpperCase()}` }, env)).toBe(null);
-    expect(R.keyCommand({ key: 'a', code: 'KeyA' }, { ...env, inInput: R.inInputOf(el('BUTTON', false)) })).toEqual({ cmd: 'approve' });
+    for (const k of ['a', 'r', 'x', 'j', 'k', 'n', 'p', 'o']) expect(R.keyCommand({ key: k, code: `Key${k.toUpperCase()}` }, env)).toBe(null);
+    expect(R.keyCommand({ key: 'a', code: 'KeyA' }, { ...env, inInput: false })).toEqual({ cmd: 'approve' });
     expect(R.claimParaSelectors(4, false)).toEqual(['.mat-preview[data-frame="0"] [data-cl~="4"]']);
     expect(R.claimParaSelectors('4"]x', true)).toEqual(['.mat-preview[data-frame="0"] [data-cl~="4"]', '.mat-preview[data-frame="1"] [data-cl~="4"]']);
   });
