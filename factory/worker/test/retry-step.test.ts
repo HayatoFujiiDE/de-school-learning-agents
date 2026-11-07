@@ -134,6 +134,30 @@ describe('retryFailedReworkStep（契約 V-13・u12）', () => {
     expect(rows(w.db, "SELECT id FROM factory_jobs WHERE material_id = 'm3' AND status = 'queued'")).toEqual([{ id: 'n3' }]);
   });
 
+  it('候補を読んだ後に同じ素材へ新しい job が入れば、印の CAS は 0 行で raced（印も queue もしない）', async () => {
+    const jid = seedFailed(1);
+    const real = w.env.DB;
+    // 候補を読んだ後・印の CAS の前に、人が新しい job を作って取り消し、素材が idle に戻った状態を作る
+    const DB = new Proxy(real, {
+      get(t, k) {
+        if (k === 'prepare')
+          return (sql: string) => {
+            if (sql.startsWith("UPDATE factory_jobs SET last_error = 'auto_retry:pending'"))
+              w.db
+                .prepare("INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, brief_md, created_at, updated_at) VALUES ('human', 'm1', 'rework', 'x', 'making', 'cancelled', 'b', ?, ?)")
+                .run(ago(1_000), ago(1_000));
+            return t.prepare(sql);
+          };
+        const v = (t as unknown as Record<string | symbol, unknown>)[k];
+        return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+      },
+    });
+    expect(await retryFailedReworkStep({ ...w.env, DB } as typeof w.env, { deadline: FAR() })).toEqual({ queued: [], skipped: [{ job_id: jid, reason: 'raced' }] });
+    expect(lastError(jid)).toBeNull();
+    expect(jobsOf('m1')).toEqual([]);
+    expect(workStatus('m1')).toBe('idle');
+  });
+
   it('queueJobForMaterial が 409 なら auto_retry:refused:material_busy で二度拾わない', async () => {
     const jid = seedFailed(1);
     // 素材は idle だが同じ素材に古い動いている job がある（作れない = 409 material_busy）

@@ -41,16 +41,36 @@ const stateOf = (col: string) => {
   const v = `COALESCE(NULLIF(${col},''),'{}')`;
   return `CASE WHEN json_valid(${v}) THEN CASE WHEN json_type(${v}) = 'object' THEN ${v} ELSE '{}' END ELSE '{}' END`;
 };
-const ATTEMPTS = (col: string) => `COALESCE(json_extract(${stateOf(col)},'$.auto_answer.attempts'),0)`;
+/** 試行の数（auto_answer が object でない・attempts が整数でない時は 0） */
+const ATTEMPTS = (col: string) => {
+  const s = stateOf(col);
+  return `CASE WHEN json_type(${s},'$.auto_answer.attempts') = 'integer' THEN json_extract(${s},'$.auto_answer.attempts') ELSE 0 END`;
+};
+/** skip の印（文字列でない時は ''） */
+const SKIP = (col: string) => {
+  const s = stateOf(col);
+  return `CASE WHEN json_type(${s},'$.auto_answer.skip') = 'text' THEN json_extract(${s},'$.auto_answer.skip') ELSE '' END`;
+};
+/** auto_answer の下に書く式（auto_answer が object でない — null・配列など — なら '{}' に置き直してから書く。でないと json_set が書けず数が増えない） */
+const SET_AUTO_ANSWER = (col: string, key: 'attempts' | 'skip', value: string) => {
+  const s = stateOf(col);
+  return `json_set(CASE WHEN json_type(${s},'$.auto_answer') = 'object' THEN ${s} ELSE json_set(${s},'$.auto_answer',json('{}')) END, '$.auto_answer.${key}', ${value})`;
+};
 
 const log = (jobId: string, result: string, extra: Record<string, string> = {}) => console.log(JSON.stringify({ at: 'auto_answer', job_id: jobId, result, ...extra }));
 
-/** 全部の質問に default（trim 後に空でなく、接頭辞を含めて 4,000 字以内）がある時だけ回答を返す。1 つでも欠ければ null */
+/**
+ * 全部の質問に default（trim 後に空でなく、接頭辞を含めて 4,000 字以内）がある時だけ回答を返す。1 つでも欠ければ null。
+ * 質問 id が空・重複する時も null（answerJob は question_id で回答を引くので、2 つ目の質問に 1 つ目の default が送られてしまう）
+ */
 function defaultAnswers(questions: unknown): Array<{ question_id: string; answer: string }> | null {
   if (!Array.isArray(questions) || questions.length === 0) return null;
   const out: Array<{ question_id: string; answer: string }> = [];
+  const ids = new Set<string>();
   for (const q of questions as Array<Partial<Question> | null>) {
     if (!q || typeof q.id !== 'string' || typeof q.default !== 'string') return null;
+    if (q.id === '' || ids.has(q.id)) return null;
+    ids.add(q.id);
     const d = q.default.trim();
     if (!d) return null;
     const answer = AUTO_ANSWER_PREFIX + d;
@@ -71,7 +91,7 @@ export async function autoAnswerStep(env: Env, port: FactoryPort, o: { deadline:
        WHERE j.status = 'needs_answer' AND j.answer_state IN ('none','saved') AND j.kind = 'rework' AND j.parent_version_id IS NOT NULL
          AND EXISTS (SELECT 1 FROM review_decisions d WHERE d.material_version_id = j.parent_version_id AND d.decision = 'return' AND d.reviewer_email = ?)
          AND ${ATTEMPTS('j.reconcile_state_json')} < ?
-         AND COALESCE(json_extract(${stateOf('j.reconcile_state_json')},'$.auto_answer.skip'),'') = ''
+         AND ${SKIP('j.reconcile_state_json')} = ''
        ORDER BY j.updated_at ASC, j.id ASC LIMIT ?`,
       AUTO_TRIAGE_EMAIL,
       AUTO_ANSWER_MAX,
@@ -82,10 +102,12 @@ export async function autoAnswerStep(env: Env, port: FactoryPort, o: { deadline:
     // answerJob 1 回分（ANSWER_BUDGET_MS）+ 5 秒が残っていなければ以降は見ない
     if (o.deadline - Date.now() < ANSWER_BUDGET_MS + 5_000) break;
     try {
-      // SQL の stateOf と同じく、読めない・object でない state は 0 回
-      const state = parseJsonField<{ auto_answer?: { attempts?: unknown } } | null>(c.reconcile_state_json, {});
-      const raw = state?.auto_answer?.attempts;
-      const attempts = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
+      // SQL の ATTEMPTS と同じく、読めない state・object でない auto_answer・整数でない attempts は 0 回
+      const state = parseJsonField<unknown>(c.reconcile_state_json, {});
+      const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+      const inner = isObject(state) ? state.auto_answer : undefined;
+      const raw = isObject(inner) ? inner.attempts : undefined;
+      const attempts = typeof raw === 'number' && Number.isInteger(raw) ? raw : 0;
       if (attempts >= AUTO_ANSWER_MAX) {
         // 候補の SQL で先に外れる（読んだ後に別の呼び出しが数を進めた時だけここに来る）
         out.skipped.push({ job_id: c.id, reason: 'cap' });
@@ -101,7 +123,7 @@ export async function autoAnswerStep(env: Env, port: FactoryPort, o: { deadline:
           await cas(
             db,
             stmt(
-              `UPDATE factory_jobs SET reconcile_state_json = json_set(${stateOf('reconcile_state_json')}, '$.auto_answer.skip', 'no_default'),
+              `UPDATE factory_jobs SET reconcile_state_json = ${SET_AUTO_ANSWER('reconcile_state_json', 'skip', "'no_default'")},
                  last_error = COALESCE(last_error, 'auto_answer:no_default')
                WHERE id = ? AND status = 'needs_answer' AND answer_state = 'none'`,
               c.id,
@@ -117,7 +139,7 @@ export async function autoAnswerStep(env: Env, port: FactoryPort, o: { deadline:
       const claimed = await cas(
         db,
         stmt(
-          `UPDATE factory_jobs SET reconcile_state_json = json_set(${stateOf('reconcile_state_json')}, '$.auto_answer.attempts', ${ATTEMPTS('reconcile_state_json')} + 1), updated_at = ?
+          `UPDATE factory_jobs SET reconcile_state_json = ${SET_AUTO_ANSWER('reconcile_state_json', 'attempts', `${ATTEMPTS('reconcile_state_json')} + 1`)}, updated_at = ?
            WHERE id = ? AND status = 'needs_answer' AND answer_state IN ('none','saved') AND ${ATTEMPTS('reconcile_state_json')} = ?`,
           nowIso(),
           c.id,
