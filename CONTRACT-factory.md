@@ -1324,3 +1324,7 @@ v3.5（2026-11-04 段階 0 の実測。最初の本物の session sesn_01Jfui3ap
 ## §U 機械用の注文の入口（v3.13。2026-11-07 凍結。Astra high REVISE → 直して medium GO）
 
 正本: `docs/plans/machine-orders/contract-U.md`。`POST /api/orders` を Cloudflare Access の service token（`common_name` が env `ORDER_CLIENT_IDS` のどれかと完全一致）だけに開く。できるのは新しい素材の draft の注文 1 種類（差し戻し・承認・公開・提案箱・設定は不可）。1 日 `ORDER_DAILY_MAX`（既定 5）件、settings `machine_orders_enabled='0'` で停止（どちらも INSERT と同じ batch の述語）。同じ `request_id` の再送は 200 replay。表 `machine_orders`（migration 0007）。手元の道具 `factory/worker/scripts/order.sh` は鍵を macOS の keychain から読み、引数・出力・ログ・環境に出さない（`-q` で `~/.curlrc` も読まない）。人の入口（§B-3 の `POST /api/materials`・提案箱の adopt）と `/api/intake` は変えない。確認の自動化（別レーン）は §V。
+
+## §AJ 立体モデル（3D）を素材に組み合わせる（v3.15。2026-11-07 凍結）
+
+本文（正本）は `docs/plans/models3d/contract-AJ.md`（AJ-0〜AJ-7）。人が提供元の記録でライセンスを確かめた一覧 `factory/models3d/catalog.json`（CC0 / CC BY / NASA の利用の決まり。PR-AJ1 で着地）に載っているものだけを、職人が注文票の一覧から選んで `parts[].models3d[]` に書く。v1 は提供元の公式の埋め込み（Sketchfab・Smithsonian Voyager）を確認画面で人が回して見る（仕分けが ask を出し、自動公開しない）。自前で見せる（GLB を取ってきて `<model-viewer>`）v2 と子ども向けアプリの描画は別契約。
