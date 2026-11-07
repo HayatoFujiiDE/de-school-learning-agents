@@ -257,7 +257,7 @@
   }
 
   // ---- 状況（上部帯）----
-  // 仕事ごとの枠 4 つを横に並べる（1100px 以上で 1 段・狭い時は 2×2）: 制作 / お金 / お題集め（提案箱へ）/ 画像・動画。
+  // 仕事ごとの枠 4 つを横に並べる（1100px 以上で 1 段・狭い時は 2×2）: 制作 / お金 / 入口（収集・会議）/ 画像・動画。
   // 各枠 = 見出し → 中身 → その仕事のボタン。その仕事の注意は枠の中の下に出し、注意がある枠は左の線を赤 / 黄にする。同じ注意を 2 つの枠に出さない。
   // 帯の中の金額は全部 $（fmtCents）。上限は整数ドルなら小数を落とす。¢ は #/images・#/videos の画面にだけ残す。
   /** 定期処理（cron）の最終からの経過の閾値（分）。ここ 1 か所だけで決める */
@@ -265,7 +265,7 @@
   /** 今日の費用のメーターの段階（上限に対する割合。判定は >=） */
   var COST_NEAR = 0.8;
   /** 枠の順と見出し（key は注意の行き先の名前） */
-  var STATUS_CARDS = [['run', '制作'], ['money', 'お金'], ['intake', 'お題集め（提案箱へ）'], ['media', '画像・動画']];
+  var STATUS_CARDS = [['run', '制作'], ['money', 'お金'], ['intake', '入口（収集・会議）'], ['media', '画像・動画']];
   var statusTimer = null; // 相対時間を 1 分ごとに直す単一のタイマー（loadStatus のたびに clear → set）
   var statusLast = null; // { s, alerts: { <枠>: html } }: タイマーが描き直しに使う最後の /api/status の応答と、枠ごとに描いた注意
   /** 上限の表示: 整数ドルなら小数を落とす（$200）。0 / 未定義は — */
@@ -317,7 +317,7 @@
     var dl = capLevel(s.today_cents, s.daily_cap_cents), money = '（' + fmtUsed(s.today_cents) + ' / ' + fmtCap(s.daily_cap_cents) + '）';
     if (dl === 'over') out.push(alertItem('money', 'red', '今日の費用が上限に達しました' + money + '。新しい制作は日付が変わるまで始まりません'));
     else if (dl === 'near') out.push(alertItem('money', 'yellow', '今日の費用が上限に近づいています' + money));
-    // お題集め: 収集・会議の失敗 / 失効（→ 提案箱）・月の上限 80% 以上
+    // 入口: 収集・会議の失敗 / 失効（→ 提案箱）・月の上限 80% 以上
     var sc = s.scout || {}, mt = s.meeting || {};
     if (sc.last_status === 'failed') out.push(alertItem('intake', 'red', '収集が' + esc(RUN_LABEL.failed) + 'しました（' + esc(fmtTime(sc.last_run_at)) + '）' + goLink('#/proposals', '提案箱を見る')));
     if (mt.last_status === 'failed' || mt.last_status === 'expired') out.push(alertItem('intake', 'red', '会議が' + esc(RUN_LABEL[mt.last_status]) + 'しました（' + esc(fmtTime(mt.last_at)) + '）' + goLink('#/proposals', '提案箱を見る')));
@@ -366,7 +366,7 @@
         '<span class="item">会議 ' + fmtUsed(mt.month_cents || 0) + '</span>' +
         (im ? '<span class="item">画像 ' + fmtUsed(im.month_cents) + '</span>' : '') + '</span></div>';
   }
-  /** お題集めの 1 行: 名前・最終の状態（未実行は muted 文字・失敗系は赤 pill）・今月 $x / $上限・[今すぐ] */
+  /** 入口の 1 行: 名前・最終の状態（未実行は muted 文字・失敗系は赤 pill）・今月 $x / $上限・[今すぐ] */
   function intakeRowHtml(name, o, at, bad, btn) {
     var label = o.last_status ? (RUN_LABEL[o.last_status] || o.last_status) : '';
     var title = at ? ' title="最終 ' + esc(fmtTime(at)) + '"' : '';
@@ -376,7 +376,7 @@
     return '<div class="sb-line sb-intake"><span class="sb-name">' + name + '</span>' + st +
       '<span class="sb-num">' + fmtUsed(o.month_cents || 0) + ' / ' + fmtCap(o.month_cap_cents) + '</span>' + btn + '</div>';
   }
-  /** お題集めの枠の中身: 収集の行・会議の行（ボタンの文言・busy 文・disabled 条件・id は今のまま） */
+  /** 入口の枠の中身: 収集の行・会議の行（ボタンの文言・busy 文・disabled 条件・id は今のまま） */
   function intakeBodyHtml(s) {
     var sc = s.scout || {}, mt = s.meeting || {};
     var scoutBusy = !!sc.running, meetBusy = !!mt.pending_batch;
@@ -400,7 +400,7 @@
     return '<div class="status-band">' +
       statusCardHtml('run', '制作', pause, runBodyHtml(s, now), by.run) +
       statusCardHtml('money', 'お金', '', moneyBodyHtml(s), by.money) +
-      statusCardHtml('intake', 'お題集め（提案箱へ）', '', intakeBodyHtml(s), by.intake) +
+      statusCardHtml('intake', '入口（収集・会議）', '', intakeBodyHtml(s), by.intake) +
       statusCardHtml('media', '画像・動画', '', mediaBodyHtml(s), by.media) +
       '</div>';
   }
@@ -454,7 +454,7 @@
     });
   }
 
-  // ---- 状況欄: 収集・会議（§K-7）。ボタンと今月の額はお題集めの枠 ----
+  // ---- 状況欄: 収集・会議（§K-7）。ボタンと今月の額は入口の枠 ----
   function bindIntakeButtons(s) {
     var sb = $('#scout-btn');
     if (sb) sb.addEventListener('click', function () {

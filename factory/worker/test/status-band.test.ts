@@ -1,4 +1,4 @@
-// 管理画面の上部「状況帯」（仕事ごとの枠 4 つ: 制作 / お金 / お題集め（提案箱へ）/ 画像・動画）の純関数。
+// 管理画面の上部「状況帯」（仕事ごとの枠 4 つ: 制作 / お金 / 入口（収集・会議）/ 画像・動画）の純関数。
 // public/admin/admin.js を node:vm で起動せず読み（image-admin.test.ts と同じ読み方）、返す HTML を数える。
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -93,15 +93,15 @@ describe('今日の費用のメーター', () => {
 });
 
 describe('枠の並びと中身', () => {
-  it('4 枠の見出しがこの順で出る: 制作 → お金 → お題集め（提案箱へ）→ 画像・動画', () => {
+  it('4 枠の見出しがこの順で出る: 制作 → お金 → 入口（収集・会議）→ 画像・動画', () => {
     expect(S.STATUS_CARDS.map((c) => c[0])).toEqual(CARDS);
     const h = S.statusBandHtml(ok(), NOW);
     const titles = [...h.matchAll(/<span class="sb-title">([^<]*)<\/span>/g)].map((m) => m[1]);
-    expect(titles).toEqual(['制作', 'お金', 'お題集め（提案箱へ）', '画像・動画']);
+    expect(titles).toEqual(['制作', 'お金', '入口（収集・会議）', '画像・動画']);
     expect([...h.matchAll(/data-card="(\w+)"/g)].map((m) => m[1])).toEqual(CARDS);
     expect(h.startsWith('<div class="status-band">')).toBe(true);
   });
-  it('ボタンはその仕事の枠の中: 止める → 制作（見出し行）・収集 / 会議を今すぐ → お題集め', () => {
+  it('ボタンはその仕事の枠の中: 止める → 制作（見出し行）・収集 / 会議を今すぐ → 入口', () => {
     const h = S.statusBandHtml(ok(), NOW);
     expect(card(h, 'run')).toContain('<div class="sb-head"><span class="sb-title">制作</span><button type="button" class="btn small" id="pause-btn">止める</button></div>');
     expect(card(h, 'intake')).toContain('id="scout-btn">収集を今すぐ</button>');
@@ -143,7 +143,7 @@ describe('枠の並びと中身', () => {
     expect(m).toContain('<span class="sb-label">今月</span><span class="sb-vals"><span class="item">収集 $0.05</span><span class="item">会議 $0.00</span><span class="item">画像 $1.70</span></span>');
     expect(m).not.toMatch(/合計|\$20\b|\$10\b|\$100\b|¢/);
   });
-  it('お題集め: 名前・最終の状態（未実行は muted・失敗系は赤 pill）・今月 $x / $上限（整数ドルは小数を落とす）', () => {
+  it('入口: 名前・最終の状態（未実行は muted・失敗系は赤 pill）・今月 $x / $上限（整数ドルは小数を落とす）', () => {
     const i = card(S.statusBandHtml(ok(), NOW), 'intake');
     expect(i).toMatch(/<span class="sb-name">収集<\/span><span class="sb-st muted" title="最終 [^"]+">完了<\/span><span class="sb-num">\$0\.00 \/ \$20<\/span>/);
     expect(i).toMatch(/<span class="sb-name">会議<\/span><span class="sb-st muted" title="最終 [^"]+">完了<\/span><span class="sb-num">\$0\.00 \/ \$10<\/span>/);
@@ -218,7 +218,7 @@ describe('注意はその仕事の枠の中', () => {
     expect(alertsOf(h, 'run')).toContain('<li class="sa-item sa-red">職人（agent）が設定されていません</li>');
     expect(cardCls(h, 'run')).toBe('sb-card sb-red');
   });
-  it('収集の失敗・会議の失効 → お題集め（赤・行き先は提案箱）。未実行は出さない', () => {
+  it('収集の失敗・会議の失効 → 入口（赤・行き先は提案箱）。未実行は出さない', () => {
     const h = S.statusBandHtml(ok({ scout: { ...ok().scout, last_status: 'failed' }, meeting: { ...ok().meeting, last_status: 'expired' } }), NOW);
     const a = alertsOf(h, 'intake');
     expect(n(a, /収集が失敗しました/g)).toBe(1);
@@ -227,7 +227,7 @@ describe('注意はその仕事の枠の中', () => {
     expect(cardCls(h, 'intake')).toBe('sb-card sb-red');
     expect(alertsOf(S.statusBandHtml(ok({ scout: { month_cents: 0, month_cap_cents: 2000 }, meeting: {} }), NOW), 'intake')).toBe('');
   });
-  it('月の上限 80% 以上: 収集・会議 → お題集め（黄）・画像 → 画像・動画（黄）', () => {
+  it('月の上限 80% 以上: 収集・会議 → 入口（黄）・画像 → 画像・動画（黄）', () => {
     const h = S.statusBandHtml(ok({ scout: { ...ok().scout, month_cents: 1600 }, meeting: { ...ok().meeting, month_cents: 1000 }, images: { ...ok().images, month_cents: 8000 } }), NOW);
     expect(alertsOf(h, 'intake')).toContain('今月の収集の費用が上限に近づいています（$16.00 / $20）');
     expect(alertsOf(h, 'intake')).toContain('今月の会議の費用が上限に達しました（$10.00 / $10）');
