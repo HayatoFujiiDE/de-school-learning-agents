@@ -1494,14 +1494,17 @@ export async function buildVerifyInput(
     shown.push({ path: p, media_type: p.endsWith('.png') ? 'image/png' : 'image/webp', data: bytesToBase64Chunked(buf) });
   }
   const notSeenSet = new Set(notSeen);
+  // 図の一覧は職人が書いた値（prompt・alt・絵の主張・参照）を含むので、<child_texts> / <apps> と同じく neutralizeInputText を通す（節の区切りを偽れない）
   const listing = figures.length
-    ? [
-        FIGURES_HEADING,
-        ...figures.map((p) => {
-          const desc = info.desc.has(p) ? info.desc.get(p)! + showsLine(info.shows.get(p)) : info.alt.has(p) ? `: alt=${info.alt.get(p)}` : '';
-          return `- ${p}${desc}${notSeenSet.has(p) ? NOT_SEEN_MARK : ''}`;
-        }),
-      ].join('\n')
+    ? neutralizeInputText(
+        [
+          FIGURES_HEADING,
+          ...figures.map((p) => {
+            const desc = info.desc.has(p) ? info.desc.get(p)! + showsLine(info.shows.get(p)) : info.alt.has(p) ? `: alt=${info.alt.get(p)}` : '';
+            return `- ${p}${desc}${notSeenSet.has(p) ? NOT_SEEN_MARK : ''}`;
+          }),
+        ].join('\n'),
+      )
     : '';
   total += listing.length + shown.reduce((n, s) => n + IMAGE_HEADING_PREFIX.length + s.path.length, 0);
   if (total > VERIFY_INPUT_CHAR_LIMIT) return null;
