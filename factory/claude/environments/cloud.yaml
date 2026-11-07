@@ -75,3 +75,6 @@ config:
       - en.wikipedia.org
       - kidshealth.org
       - "*.kidshealth.org"
+      - minecraft.net
+      - "*.minecraft.net"
+      - piston-meta.mojang.com

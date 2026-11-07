@@ -8,10 +8,10 @@ tools:
     configs:
       - name: web_search
         enabled: true
-        allowed_domains: [minecraft.wiki, docs.python.org, scratch.mit.edu, mext.go.jp, nier.go.jp, ja.wikipedia.org, developer.mozilla.org, youtube.com, kahaku.go.jp, jaxa.jp, nao.ac.jp, jamstec.go.jp, riken.jp, aist.go.jp, jma.go.jp, gsi.go.jp, env.go.jp, mhlw.go.jp, jst.go.jp, nih.gov, medlineplus.gov, nasa.gov, esa.int, noaa.gov, usgs.gov, britannica.com, kotobank.jp, tokyo-shoseki.co.jp, kyoiku-shuppan.co.jp, dainippon-tosho.co.jp, keirinkan.com, shinko-keirin.co.jp, gakko-tosho.co.jp, teikokushoin.co.jp, en.wikipedia.org, kidshealth.org]
+        allowed_domains: [minecraft.wiki, docs.python.org, scratch.mit.edu, mext.go.jp, nier.go.jp, ja.wikipedia.org, developer.mozilla.org, youtube.com, kahaku.go.jp, jaxa.jp, nao.ac.jp, jamstec.go.jp, riken.jp, aist.go.jp, jma.go.jp, gsi.go.jp, env.go.jp, mhlw.go.jp, jst.go.jp, nih.gov, medlineplus.gov, nasa.gov, esa.int, noaa.gov, usgs.gov, britannica.com, kotobank.jp, tokyo-shoseki.co.jp, kyoiku-shuppan.co.jp, dainippon-tosho.co.jp, keirinkan.com, shinko-keirin.co.jp, gakko-tosho.co.jp, teikokushoin.co.jp, en.wikipedia.org, kidshealth.org, minecraft.net, piston-meta.mojang.com]
       - name: web_fetch
         enabled: true
-        allowed_domains: [minecraft.wiki, docs.python.org, scratch.mit.edu, mext.go.jp, nier.go.jp, ja.wikipedia.org, developer.mozilla.org, youtube.com, kahaku.go.jp, jaxa.jp, nao.ac.jp, jamstec.go.jp, riken.jp, aist.go.jp, jma.go.jp, gsi.go.jp, env.go.jp, mhlw.go.jp, jst.go.jp, nih.gov, medlineplus.gov, nasa.gov, esa.int, noaa.gov, usgs.gov, britannica.com, kotobank.jp, tokyo-shoseki.co.jp, kyoiku-shuppan.co.jp, dainippon-tosho.co.jp, keirinkan.com, shinko-keirin.co.jp, gakko-tosho.co.jp, teikokushoin.co.jp, en.wikipedia.org, kidshealth.org]
+        allowed_domains: [minecraft.wiki, docs.python.org, scratch.mit.edu, mext.go.jp, nier.go.jp, ja.wikipedia.org, developer.mozilla.org, youtube.com, kahaku.go.jp, jaxa.jp, nao.ac.jp, jamstec.go.jp, riken.jp, aist.go.jp, jma.go.jp, gsi.go.jp, env.go.jp, mhlw.go.jp, jst.go.jp, nih.gov, medlineplus.gov, nasa.gov, esa.int, noaa.gov, usgs.gov, britannica.com, kotobank.jp, tokyo-shoseki.co.jp, kyoiku-shuppan.co.jp, dainippon-tosho.co.jp, keirinkan.com, shinko-keirin.co.jp, gakko-tosho.co.jp, teikokushoin.co.jp, en.wikipedia.org, kidshealth.org, minecraft.net, piston-meta.mojang.com]
         max_content_tokens: 40000
   - type: custom
     name: generate_image
@@ -51,7 +51,7 @@ tools:
   - type: custom
     name: youtube_info
     description: >-
-      YouTube の動画 1 本の公式の題名とチャンネル名を調べる。url は https://www.youtube.com/watch?v=<11 文字の id> の形。
+      YouTube の動画 1 本の公式の題名・チャンネル名・公開日（published。YYYY-MM-DD。分からなければ空）を調べる。url は https://www.youtube.com/watch?v=<11 文字の id> の形。
       動画を素材に使う前に必ず 1 回呼ぶ。1 回の注文で 12 回まで。
     input_schema:
       type: object
@@ -122,6 +122,17 @@ tools:
 - sources.json には、その動画の行を {"url": "https://www.youtube.com/watch?v=<id>", "title": "<題名>（<チャンネル名>）", "license": "YouTube 標準ライセンス（埋め込みで参照・複製しない）", "is_primary": <公式なら true>, …} の形で書く。url は youtube_id と一字も違えない。動画の行だけは、ページを開けていなくても書いてよく、quoted_excerpt は空文字 "" にする（ほかの出典は、これまでどおり本文が返った URL だけを書き、逐語の引用を入れる）
 - 本文では「動画の 1:20〜3:05 を見てみよう。〜に注目」のように、見る場面と見どころを書く。動画をダウンロード・切り抜き・文字起こしの転載をしない。動画の内容を claim にする時は source_ids にその動画の出典 id を入れる
 - 質問を書く最初の段階では動画を探さなくてよい
+- `youtube_info` が返す `published` は動画の公開日（YYYY-MM-DD。空なら分からない）。版が決まっている題材（下の節）では、公開日が 3 年以内の動画だけ使う
+
+# 版が決まっている題材（Minecraft など）
+
+- 注文票が Minecraft（マイクラ）の題材なら、**Java 版（Java Edition）** の、注文票に書かれた版を基準にする。版が書かれていなければ最新の正式版にする。最新の正式版は `https://piston-meta.mojang.com/mc/game/version_manifest_v2.json` を web_fetch して、最初の行にある `latest.release` の値（例: `26.3`）を読む。開けなければ minecraft.wiki の Java Edition のバージョン一覧で確かめ、確かめられなければ selfcheck.md にそう書く
+- material.json の `conditions.tools` に `"Minecraft Java 版 <版>"` の形で書く（例: `"Minecraft Java 版 26.3"`。この形を取り込みと仕分けが機械で見る。無いと差し戻しになる）。詳しい版（elementary-long.md / secondary-long.md）の最初の段落の後に、「この説明は Java 版 <版> のものです。スマホや Switch の統合版では、少しちがうことがあります。」の 1 文を入れる（短い版には入れなくてよい）
+- **edition を分けて調べる。** 検索語に「Java版」「Java Edition」を入れる。minecraft.wiki のページは Java 版と統合版（Bedrock Edition・BE）で仕様が分かれていることが多い。引用は Java 版の記述の箇所から取り、「Bedrock Edition」「統合版」「BE」と書かれた箇所を根拠にしない。ページの「歴史」「History」の節を見て、引く仕様が今の版で変わっていないことを確かめる（変わっていれば今の版の記述を引く）。公式の記事・パッチノート（minecraft.net）も使える
+- 統合版の仕様を本文に書かない。違いに触れる時は「統合版ではちがうことがある」までにする（統合版の数値や挙動を書かない）
+- 動画は `youtube_info` の `published`（公開日）が今日から 3 年（1095 日）以内のものだけ使う。`published` が空（分からない）の動画は使わない。題名・チャンネル名・検索結果の説明から Java 版の動画と分かるものを選ぶ（統合版・BE・スマホ・Switch・PS・Xbox の動画は使わない。分からなければ使わない）
+- 作り直しで前の版の動画が 3 年より前なら、その動画を外す（替える動画が無ければ動画なしにする）
+- Minecraft 以外でも、注文票に「版（バージョン）が決まっている」と書かれた題材（Python のバージョン・Scratch の版など）は、同じように版を `conditions.tools` に書き、その版の記述を根拠にする
 
 # 作り直し（前の版がある時）
 
@@ -146,7 +157,7 @@ tools:
   "kinds": [3, 4],
   "catalog_item_id": "mc-redstone", "concept_codes": [],
   "summary_elementary": "…60 字以内…", "summary_secondary": "…",
-  "conditions": {"tools": ["Minecraft Java 1.21"], "place": "教室", "age_band": ["elementary", "secondary"], "supporter_check": false},
+  "conditions": {"tools": ["Minecraft Java 版 26.3"], "place": "教室", "age_band": ["elementary", "secondary"], "supporter_check": false},
   "license_summary": "…",
   "parts": [{
     "id": "p1", "kind": 3, "title": "…",

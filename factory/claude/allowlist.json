@@ -36,7 +36,9 @@
     "gakko-tosho.co.jp",
     "teikokushoin.co.jp",
     "en.wikipedia.org",
-    "kidshealth.org"
+    "kidshealth.org",
+    "minecraft.net",
+    "piston-meta.mojang.com"
   ],
   "primary_hosts": [
     "mext.go.jp",
@@ -136,6 +138,9 @@
     "*.teikokushoin.co.jp",
     "en.wikipedia.org",
     "kidshealth.org",
-    "*.kidshealth.org"
+    "*.kidshealth.org",
+    "minecraft.net",
+    "*.minecraft.net",
+    "piston-meta.mojang.com"
   ]
 }
