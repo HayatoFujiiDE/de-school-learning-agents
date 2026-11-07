@@ -10,8 +10,8 @@ import { json, type RouteCtx } from '../http';
 import { isEmbeddableModel3d } from '../models3d';
 import { inspectGlb, MAX_MODEL3D_BYTES, models3dFileRows, R2_KEY, readCapped } from '../models3d-file';
 import { assetKey, licenseLabelOf, rightsModes, rightsReasonOf, subjectShasOf } from '../rights';
-import { providerOf } from '../rights-providers';
-import { lastRightsEvents, rightsRecordRows } from '../rights-store';
+import { evidenceKindOf, providerOf } from '../rights-providers';
+import { lastRightsEventsAll, rightsRecordRows } from '../rights-store';
 
 const FETCH_TIMEOUT_MS = 60_000;
 
@@ -28,11 +28,12 @@ export type ImportOutcome =
   | { ok: false; error: string; http: number };
 
 /**
- * §AJ2-2 の 2〜6（§AK-2 6 で関数に切り出し）。一覧の download_url から取り、形を検査して R2 に置き、D1 models3d_files に記録する。
- * fetched_by = by。2〜4 で落ちた時は D1 も R2 も書かない。put → upsert の順。古い sha の object は消さない。
- * 呼び出し側（runRightsCheck）は権利の確認が verified で host を許す時だけ、その確認の claim を持ったまま呼ぶ
+ * §AJ2-2 の 2〜6（§AK-2 6 で関数に切り出し）。一覧の download_url から取り、形を検査して R2 に置き、有効化する。
+ * fetched_by = by。2〜4 で落ちた時は D1 も R2 も書かない。put → 有効化の順。古い sha の object は消さない。
+ * 呼び出し側（runRightsCheck）は権利の確認が verified で host を許す時だけ、その確認の claim（claimToken）を持ったまま呼ぶ。
+ * 有効化は 1 つの batch で claim を持ち止めていない時だけ。0 行なら not_activated（呼び出し側が lost_claim か blocked に振り分ける）
  */
-export async function importModel3d(env: Pick<Env, 'DB' | 'R2'>, e: Model3dEntry, by: string, fetchImpl: typeof fetch = fetch): Promise<ImportOutcome> {
+export async function importModel3d(env: Pick<Env, 'DB' | 'R2'>, e: Model3dEntry, by: string, fetchImpl: typeof fetch, claimToken: string): Promise<ImportOutcome> {
   const fail = (http: number, error: string, bytes: number | null = null): ImportOutcome => {
     logFetch(e.id, error, bytes);
     return { ok: false, error, http };
@@ -67,28 +68,41 @@ export async function importModel3d(env: Pick<Env, 'DB' | 'R2'>, e: Model3dEntry
   const ins = inspectGlb(buf);
   if (!ins.ok) return fail(422, `bad_glb:${ins.reason}`, buf.byteLength);
 
-  // 5. sha256。既存行と同じ sha で object もあれば書かない（無ければ欠けた object の修復として 6 へ）
+  // 5. sha256。既存行と同じ sha で object もあれば put しない（無ければ欠けた object の修復として put する）
   const sha = hex(await crypto.subtle.digest('SHA-256', buf));
   const key = R2_KEY(e.id, sha);
   const bytes = buf.byteLength;
   const cur = await first<{ sha256: string }>(env.DB, stmt('SELECT sha256 FROM models3d_files WHERE catalog_id = ?', e.id));
-  if (cur?.sha256 === sha && (await env.R2.head(key))) {
-    logFetch(e.id, 'unchanged', bytes);
-    return { ok: true, status: 'unchanged', sha256: sha, bytes };
-  }
+  const unchanged = cur?.sha256 === sha && !!(await env.R2.head(key));
 
-  // 6. put → upsert（古い sha の object は消さない）
-  await env.R2.put(key, buf, { httpMetadata: { contentType: 'model/gltf-binary' }, sha256: sha });
-  await env.DB.prepare(
-    `INSERT INTO models3d_files (catalog_id, sha256, bytes, r2_key, draco, fetched_at, fetched_by) VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(catalog_id) DO UPDATE SET sha256 = excluded.sha256, bytes = excluded.bytes, r2_key = excluded.r2_key, draco = excluded.draco,
-       fetched_at = excluded.fetched_at, fetched_by = excluded.fetched_by`,
-  )
-    .bind(e.id, sha, bytes, key, ins.draco ? 1 : 0, nowIso(), by)
-    .run();
-  logFetch(e.id, 'fetched', bytes);
-  return { ok: true, status: 'fetched', sha256: sha, bytes, draco: ins.draco };
+  // 6. put（内容アドレスの key なので無条件。claim を失った後に置かれた object も、検査済みで参照されないだけ = 害はない）→ 有効化
+  if (!unchanged) await env.R2.put(key, buf, { httpMetadata: { contentType: 'model/gltf-binary' }, sha256: sha });
+  const status = unchanged ? 'unchanged' : 'fetched';
+  // §AK-2 6 v3.1: 有効化（models3d_files の upsert・rights_hosted・取り込みの履歴）は 1 つの batch。各文は「claim をこのトークンが持ち、止めていない」時だけ
+  const ak = assetKey('models3d', e.id);
+  const at = nowIso();
+  const res = await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO models3d_files (catalog_id, sha256, bytes, r2_key, draco, fetched_at, fetched_by) SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${HELD_OPEN}
+       ON CONFLICT(catalog_id) DO UPDATE SET sha256 = excluded.sha256, bytes = excluded.bytes, r2_key = excluded.r2_key, draco = excluded.draco,
+         fetched_at = excluded.fetched_at, fetched_by = excluded.fetched_by`,
+    ).bind(e.id, sha, bytes, key, ins.draco ? 1 : 0, at, by, ak, claimToken),
+    env.DB.prepare(
+      `INSERT INTO rights_hosted (asset_key, sha256, verified_at, check_token) SELECT ?, ?, ?, ? WHERE ${HELD_OPEN}
+       ON CONFLICT(asset_key, sha256) DO UPDATE SET verified_at = excluded.verified_at, check_token = excluded.check_token`,
+    ).bind(ak, sha, at, claimToken, ak, claimToken),
+    env.DB.prepare(
+      `INSERT INTO rights_checks (asset_key, at, by, evidence_kind, result, license_code, evidence_json, check_token) SELECT ?, ?, ?, ?, ?, NULL, ?, ? WHERE ${HELD_OPEN}`,
+    ).bind(ak, at, by, evidenceKindOf(providerOf(e)), `import:${status}`, JSON.stringify([{ url: e.download_url, sha256: sha, ok: true }]), claimToken, ak, claimToken),
+  ]);
+  const changes = res.map((r) => Number(r.meta?.changes ?? 0));
+  if (changes[0] === 0 || changes[1] === 0) return fail(409, 'not_activated', bytes);
+  logFetch(e.id, status, bytes);
+  return unchanged ? { ok: true, status, sha256: sha, bytes } : { ok: true, status, sha256: sha, bytes, draco: ins.draco };
 }
+
+/** 有効化の条件: その項目の claim をこのトークンが持っていて、止めていない（§AK-2 6 v3.1・B2・B3） */
+const HELD_OPEN = 'EXISTS (SELECT 1 FROM rights_records WHERE asset_key = ? AND claim_token = ? AND blocked = 0)';
 
 type Model3dState = 'embed' | 'hosted' | 'hosted_missing' | 'not_hosted' | 'unavailable';
 
@@ -100,13 +114,15 @@ type Model3dState = 'embed' | 'hosted' | 'hosted_missing' | 'not_hosted' | 'unav
 export async function listModels3d(c: RouteCtx): Promise<Response> {
   const rows = new Map((await models3dFileRows(c.env.DB)).map((r) => [r.catalog_id, r]));
   const records = await rightsRecordRows(c.env.DB);
+  // 最後の失敗と取り込みの失敗は全件まとめて 3 クエリ（§AK-5。1 件ずつ引かない）
+  const events = await lastRightsEventsAll(c.env.DB);
   const subjects = await subjectShasOf(MODELS3D);
   const models: Array<Record<string, unknown>> = [];
   for (const e of MODELS3D) {
     const key = assetKey('models3d', e.id);
     const record = records.get(key);
     const subject = subjects.get(key);
-    const ev = await lastRightsEvents(c.env.DB, key);
+    const ev = events.get(key) ?? { last_fail: null, last_import_fail: null };
     const ok = record !== undefined && record !== 'invalid' ? record : null;
     const rights = {
       code: ok ? ok.license_code : 'unknown',

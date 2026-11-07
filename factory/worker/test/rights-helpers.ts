@@ -102,3 +102,79 @@ export async function fullGate(o: { hosted?: Array<[string, HostedModel3d]>; hos
 }
 
 export const hostedRow = (sha: string, bytes = 10): HostedModel3d => ({ sha256: sha, bytes, draco: true, fetched_at: AT });
+
+// ---------------------------------------------------------------------------------------------
+// 提供元の作り物（fetch の stub・最小の GLB・NASA / DBCLS のページ）。§AK v3.1 の回帰テストが使う
+
+export type Route = (init?: RequestInit) => Response | Promise<Response>;
+export type Stub = typeof fetch & { calls: string[] };
+/** url ごとの応答（無い url は 404）。呼ばれた url を順に記録する */
+export function stubBy(routes: Record<string, Route>): Stub {
+  const calls: string[] = [];
+  const f = (async (u: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(u);
+    calls.push(url);
+    const r = routes[url];
+    return r ? r(init) : new Response('not found', { status: 404 });
+  }) as Stub;
+  f.calls = calls;
+  return f;
+}
+export const htmlRes = (s: string): Route => () => new Response(s, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
+export const statusRes = (status: number, headers: Record<string, string> = {}): Route => () => new Response(status === 302 ? null : 'x', { status, headers });
+
+/** JSON chunk だけの最小の GLB（inspectGlb が通る。tag で中身 = sha を変える） */
+export function tinyGlb(tag = 'a'): ArrayBuffer {
+  const json = new TextEncoder().encode(JSON.stringify({ asset: { version: '2.0', generator: tag }, meshes: [] }));
+  const jl = json.length + ((4 - (json.length % 4)) % 4);
+  const total = 20 + jl;
+  const out = new Uint8Array(total).fill(0x20, 20);
+  const dv = new DataView(out.buffer);
+  out.set(new TextEncoder().encode('glTF'), 0);
+  dv.setUint32(4, 2, true);
+  dv.setUint32(8, total, true);
+  dv.setUint32(12, jl, true);
+  dv.setUint32(16, 0x4e4f534a, true);
+  out.set(json, 20);
+  return out.buffer;
+}
+export const glbRes = (b: ArrayBuffer): Route => () => new Response(b, { status: 200, headers: { 'content-type': 'model/gltf-binary' } });
+
+export const NASA_HUB = 'https://science.nasa.gov/3d-resources/';
+export const NASA_TERMS = 'https://www.nasa.gov/nasa-brand-center/images-and-media/';
+export const HUB_HTML = '<html><body><h1>3D Resources</h1><p>All of these assets are free to download and use.</p></body></html>';
+export const TERMS_HTML =
+  '<html><body><h1>Images and Media</h1><p>NASA content - images, audio, video, and computer files used in the rendition of 3-dimensional models - generally are not subject to copyright in the United States. You may use this material for educational or informational purposes.</p></body></html>';
+
+/** NASA のモデルのページ（実測の形）。head・h1 の区画・Details の後ろ・Downloads の中身・末尾を差し替えられる */
+export interface NasaPageParts {
+  head?: string;
+  h1Block?: string;
+  details?: string;
+  downloads?: string;
+  after?: string;
+}
+export const nasaPageOf = (e: Model3dEntry, o: NasaPageParts = {}) => `<!doctype html><html><head><title>NASA Science</title>${o.head ?? ''}</head><body>
+<header><a href="/">NASA Science</a></header>
+${o.h1Block ?? `<h1 class="page-title">${e.title_src}</h1>`}
+<section><h2>Details</h2><dl><dt>Source</dt><dd>${e.attribution}</dd><dt>Mission</dt><dd>Mars 2020</dd></dl>${o.details ?? ''}</section>
+<section><h2>Downloads</h2>${o.downloads ?? `<a href="${e.download_url}" download>GLB</a>`}</section>${o.after ?? ''}
+</body></html>`;
+/** NASA の 3 ページ（モデル・トップ・利用の決まり）と、extra の url の応答 */
+export const nasaRoutesOf = (e: Model3dEntry, o: NasaPageParts = {}, extra: Record<string, Route> = {}): Record<string, Route> => ({
+  [e.page_url]: htmlRes(nasaPageOf(e, o)),
+  [NASA_HUB]: htmlRes(HUB_HTML),
+  [NASA_TERMS]: htmlRes(TERMS_HTML),
+  ...extra,
+});
+/** DBCLS の根拠のページ（body の中身をそのまま） */
+export const dbclsPageOf = (body: string, title = 'BodyParts3D') => `<html><head><title>lic</title></head><body><h1>${title} のライセンス</h1><p>${title} はクリエイティブ・コモンズのライセンスで提供します。</p>${body}</body></html>`;
+
+/** 1 回だけ待たせる門（stub の中で enter → 外から release） */
+export function deferred() {
+  let release!: () => void;
+  let enter!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const entered = new Promise<void>((r) => (enter = r));
+  return { gate, entered, release: () => release(), enter: () => enter() };
+}

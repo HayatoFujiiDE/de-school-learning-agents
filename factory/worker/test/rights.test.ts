@@ -30,7 +30,7 @@ import {
   type RightsRecord,
   type RightsStatus,
 } from '../src/rights';
-import { checkCcUrl, checkNasa, checkSketchfab, runRightsCheck, stripComments, textOfHtml, type RightsCheckOutcome } from '../src/rights-check';
+import { checkCcUrl, checkNasa, checkSketchfab, decodeEntities, parseHtml, runRightsCheck, textOfHtml, type RightsCheckOutcome } from '../src/rights-check';
 import { rightsCandidates, rightsStep, type RightsCronRow } from '../src/rights-cron';
 import { providerOf, RIGHTS_PROVIDERS } from '../src/rights-providers';
 import { lastRightsEvents, loadRightsGate, rightsRecordRows, setRightsBlocked } from '../src/rights-store';
@@ -584,9 +584,9 @@ describe('AK-7 6 nasa-3d（statement）', () => {
     expect(await check(o)).toEqual({ ok: false, fail_code: code });
   });
 
-  it('コメントの中の印・Downloads の後の印は見ない（通る）', async () => {
-    expect((await check({ details: '<!-- Courtesy of Someone, all rights reserved -->' })).ok).toBe(true);
+  it('Downloads の後の印は見ない（通る）。v3.1: Details の区画のコメントの中の印は生 HTML の検索で落とす', async () => {
     expect((await check({ after: '<footer>Courtesy of the footer</footer>' })).ok).toBe(true);
+    expect(await check({ details: '<!-- Courtesy of Someone, all rights reserved -->' })).toEqual({ ok: false, fail_code: 'third_party_marker' });
   });
 
   it('一覧の attribution が NASA で始まらない → source_not_nasa', async () => {
@@ -615,15 +615,42 @@ describe('AK-7 6 nasa-3d（statement）', () => {
   });
 });
 
-describe('AK-7 6 untrusted な HTML の読み方（stripComments / textOfHtml）', () => {
-  it('コメントは indexOf のループで落とす（閉じていなければ残りを全部）', () => {
-    expect(stripComments('a<!-- x -->b<!--y-->c')).toBe('abc');
-    expect(stripComments('a<!-- open')).toBe('a');
-    expect(stripComments('a-->b')).toBe('a-->b');
+describe('AK-7 6 v3.1 untrusted な HTML の読み方（parseHtml / textOfHtml / decodeEntities）', () => {
+  it('コメントは可視テキストに入らない。閉じていないコメントは unparseable（null）', () => {
+    expect(textOfHtml('a<!-- x -->b<!--y-->c')).toBe('abc');
+    expect(textOfHtml('a<!-->b<!--->c')).toBe('abc');
+    expect(textOfHtml('a<!-- x --!>b')).toBe('ab');
+    expect(textOfHtml('a<!-- open')).toBeNull();
+    expect(textOfHtml('a-->b')).toBe('a-->b');
+  });
+  it('属性値の引用の中の <!-- > <script> は区切りにならない（"…" と \'…\' と引用なし）。属性値は実体を復号する', () => {
+    expect(textOfHtml('<span data-x="<!--">A</span>B<span data-x=\'-->\'>C</span>')).toBe('A B C');
+    expect(textOfHtml('<a title="x>y" href=/p?a=1&amp;b=2>t</a>')).toBe('t');
+    const t = parseHtml('<A HREF="/x&#46;glb" href="/second" data-href="/d">z</A>')!;
+    expect(t[0]).toMatchObject({ type: 'start', name: 'a' });
+    expect(t[0].type === 'start' && [...t[0].attrs.entries()]).toEqual([['href', '/x.glb'], ['data-href', '/d']]);
+    expect(parseHtml('<p class="x>')).toBeNull();
+    expect(parseHtml('<div class="a"')).toBeNull();
+  });
+  it('script のエスケープの状態（<!-- の中の </script> で終わる・<!--<script> の中の </script> では終わらない）。閉じていない script は null', () => {
+    expect(textOfHtml('<script>var s = "<!--";</script>V')).toBe('V');
+    expect(textOfHtml('<script><!--<script></script>hidden--></script>V')).toBe('V');
+    expect(textOfHtml('<script>document.write("<h1>x</h1>")</script><h1>T</h1>')).toBe('T');
+    expect(textOfHtml('<script>var a = 1;')).toBeNull();
+    expect(textOfHtml('<style>p{}')).toBeNull();
+    expect(textOfHtml('<plaintext><h1>x')).toBeNull();
+  });
+  it('decodeEntities: 数値（; なし・先頭の 0 も）と名前付き。属性値では ; の無い名前付きの直後が英数字か = なら復号しない', () => {
+    expect(decodeEntities('&#0000000169 &#169 &#xA9; &copy; &copyright')).toBe('© © © © ©right');
+    expect(decodeEntities('a&copy=1', true)).toBe('a&copy=1');
+    expect(decodeEntities('a&copy;=1', true)).toBe('a©=1');
+    expect(decodeEntities('&apos; &apos')).toBe("' &apos");
+    expect(decodeEntities('&#99999999999;')).toBe('\ufffd');
   });
   it('script / style を落とし、タグを空白に、文字実体を 1 回だけ復号し、空白を 1 つに', () => {
     expect(textOfHtml('<p>A&amp;B&nbsp;C</p><script>var s = "<p>x</p>";</script><STYLE>p{}</STYLE><p>&quot;q&quot; &#169; &#xA9; &copy; &amp;#169;</p>')).toBe('A&B C "q" © © © &#169;');
-    expect(textOfHtml('a < b and c<d')).toBe('a < b and c');
+    expect(textOfHtml('a < b and c')).toBe('a < b and c');
+    expect(textOfHtml('a < b and c<d')).toBeNull();
     expect(textOfHtml('x&#0;y&#x110000;z')).toBe('x�y�z');
     // 大きな入力でも線形（閉じない < や <!-- が並んでも 2 乗にならない）
     const t0 = Date.now();
@@ -790,7 +817,7 @@ describe('AK-7 10 取り込み（verified の直後だけ）', () => {
   it('止めている記録・NC などで host が許されない時も取り込まない', async () => {
     await seedGood(db, ROVER.id, { blocked: true });
     const f = stubBy(nasaRoutes(ROVER, {}, { [ROVER.download_url!]: glbRes(tinyGlb()) }));
-    expect(await runRightsCheck(env, ROVER, 'cron', f)).toMatchObject({ kind: 'verified', import: null });
+    expect(await runRightsCheck(env, ROVER, 'cron', f)).toMatchObject({ kind: 'verified', blocked: true, import: { ok: false, error: 'blocked' } });
     expect(f.calls).not.toContain(ROVER.download_url);
     expect(recordRow(ROVER).blocked).toBe(1);
   });
@@ -855,7 +882,7 @@ describe('AK-7 14 cron の段（rightsCandidates / rightsStep）', () => {
       return [r.asset_key, { record: r, claim_at: claim, last_attempt_at: r.last_attempt_at }];
     };
     const rowsMap = new Map<string, RightsCronRow>([
-      await row(B, { subject_sha256: '0'.repeat(64), last_attempt_at: ago(60_000) }),
+      await row(B, { subject_sha256: '0'.repeat(64), last_attempt_at: ago(2 * 3600_000) }),
       await row(C, { checked_at: ago(31 * DAY), last_attempt_at: ago(2 * DAY + 3600_000) }),
       await row(D, { checked_at: ago(31 * DAY), last_attempt_at: ago(12 * 3600_000) }),
       await row(E, { checked_at: ago(10 * DAY), last_attempt_at: ago(2 * DAY) }),
@@ -870,7 +897,8 @@ describe('AK-7 14 cron の段（rightsCandidates / rightsStep）', () => {
     expect(got).toEqual([A.id, B.id, J.id, G.id, TRI.id, C.id, F.id]);
     // claim が 10 分より古ければ対象に戻る
     rowsMap.set(assetKey('models3d', I.id), { ...rowsMap.get(assetKey('models3d', I.id))!, claim_at: ago(11 * 60_000) });
-    expect(rightsCandidates(entries, rowsMap, subjects, NOW).map((e) => e.id).slice(0, 3)).toEqual([A.id, B.id, I.id]);
+    // v3.1: 指紋違い (b) は試行の古い順（I は最後の試行が 2026-11-07 で B より古い）
+    expect(rightsCandidates(entries, rowsMap, subjects, NOW).map((e) => e.id).slice(0, 3)).toEqual([A.id, I.id, B.id]);
   });
 
   it('rightsStep: 5 件で止まり、先頭 5 件が毎回失敗しても次の cron で別の 5 件に進む。paused は paused。deadline を過ぎたら残す', async () => {
@@ -950,7 +978,7 @@ describe('AK-7 15 運営の API（check / block / unblock）', () => {
     await seedGood(db, ALLO.id, { blocked: true, checked_at: '2026-01-01T00:00:00.000Z' });
     const res = await checkRights(routeCtx(), ALLO.id, stubBy({ [ALLO_API]: jsonRes(sketchfabApi()) }));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: 'verified', code: 'cc-by', label: 'CC BY 4.0', modes: NO });
+    expect(await res.json()).toEqual({ status: 'verified', code: 'cc-by', label: 'CC BY 4.0', modes: NO, blocked: true });
     expect(recordRow(ALLO)).toMatchObject({ status: 'verified', blocked: 1 });
     expect(String(recordRow(ALLO).checked_at) > '2026-01-01T00:00:00.000Z').toBe(true);
   });
@@ -968,6 +996,7 @@ describe('AK-7 15 運営の API（check / block / unblock）', () => {
       code: 'nasa-media',
       label: 'NASA の利用の決まり',
       modes: { host: true, embed: false },
+      blocked: false,
       import: { status: 'fetched', bytes: glb.byteLength },
     });
     expect(await j(await checkRights(routeCtx(), ISS.id, stubBy(nasaRoutes(ISS, {}, { [ISS.download_url!]: statusRes(500) }))))).toMatchObject({ status: 'verified', import: { status: 'failed', error: 'fetch_failed:500' } });

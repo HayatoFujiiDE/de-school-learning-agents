@@ -38,6 +38,7 @@
 
 - 一覧は `GET <工場のオリジン>/api/library/models3d`（認証なし・`access-control-allow-origin: *`・10 分 cache）。**権利の門番を通った項目だけ**が入る（記録の無い項目・止めた項目は入らない）。material.json の `parts[].models3d[].catalog_id` をここの `id` で引く（無ければ描かない）。埋め込みの件（`kind` が `sketchfab` / `voyager`）は `embed_url` を iframe に渡す（形の再確認は §AJ-4 と同じ 2 つの正規表現）
 - 取り込み済みの `download` の件には `file_url`（**絶対 url**）・`bytes`・`sha256` が付く。`file_url` はそのまま `<model-viewer src="…">` に渡す（工場とアプリは別オリジンなので、相対の url に組み直さない）。配信は `GET /api/library/models3d/files/<id>/<sha256>.glb`（`content-type: model/gltf-binary`・`access-control-allow-origin: *`・1 日 cache。権利の記録が通っていて、その sha を確認のもとで取り込んだ時だけ 200）
+- 確認の claim を失った古い実行（または途中で止めた実行）が R2 に置いた GLB は、有効化（D1 `models3d_files`・`rights_hosted`）されないまま残る。key は中身の sha（内容アドレス）で形の検査も済んでいるので害はなく、配信は `rights_hosted` に無い sha を 404 にする（回収は範囲外。契約 §AK-2 6 v3.1）
 - アプリ側の CSP に要るもの（確認画面 `/admin` で実ブラウザ・Chrome で確かめた組）:
   - `connect-src` に工場のオリジン（GLB の取得）と `blob:`（three の GLTFLoader が埋め込みの画像を `blob:` の URL で読む。無いと質感が全部落ちる）
   - `script-src` に `'wasm-unsafe-eval'`（Draco の復号器の wasm のコンパイル）

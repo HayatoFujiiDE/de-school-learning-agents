@@ -12,9 +12,13 @@ import { rightsRecordOf } from './rights-store';
 const DAY_MS = 86_400_000;
 const CLAIM_TTL_MS = 10 * 60_000;
 const RECHECK_AFTER_MS = 30 * DAY_MS;
+/** 指紋違い (b) の取り直しの間隔（v3.1・B4） */
+const SUBJECT_RETRY_MS = 60 * 60_000;
 export const RIGHTS_PER_CRON = 5;
-/** 1 件を始める前に、締め切りまでこれだけ残っていなければ残りは次回 */
-export const RIGHTS_ITEM_MARGIN_MS = 150_000;
+/**
+ * 1 件を始める前に、締め切りまでこれだけ残っていなければ残りは次回（v3.1: 1 件の最悪 150 s + 後続の会議・振り返りの 180 s）
+ */
+export const RIGHTS_ITEM_MARGIN_MS = 330_000;
 
 export interface RightsCronRow {
   record: RightsRecord | 'invalid';
@@ -30,14 +34,17 @@ const olderThan = (iso: string | null, now: Date, ms: number): boolean => {
 };
 
 /**
- * 対象（AK-6）: providerOf(e) が unsupported でないもので、(a) 行が無い / (b) 行の subject_sha256 が今の指紋と違う /
+ * 対象（AK-6 v3.1）: providerOf(e) が unsupported でないもので、(a) 行が無い /
+ * (b) 行の subject_sha256 が今の指紋と違い、かつ last_attempt_at が 1 時間より前（失敗し続ける指紋違いが 1 時間に 1 回しか枠を使わない。B4）/
  * (c) status が verified / human で checked_at が 30 日より前 かつ last_attempt_at が 1 日より前 /
  * (d) status が stale / unverified / mismatch で last_attempt_at が 1 日より前。claim_at が 10 分以内なら対象外。blocked は飛ばさない。
  * 不正な行（'invalid'）は (d) と同じく last_attempt_at が 1 日より前の時だけ（判断: 毎回の取り直しで枠を占めない）。
- * 並び: (a)(b) が先（一覧の順）、次に last_attempt_at の古い順（同じなら一覧の順）。件数は切らない（呼び出し側が 5 件まで）
+ * 並び: (a)（一覧の順）→ (b)（last_attempt_at の古い順）→ (c)(d)（同じく古い順。同じなら一覧の順）。件数は切らない（呼び出し側が 5 件まで）。
+ * 指紋は失敗の時に更新しない（古い権利の記録を新しい対象に戻さないため）
  */
 export function rightsCandidates(entries: readonly Model3dEntry[], rows: ReadonlyMap<string, RightsCronRow>, subjects: ReadonlyMap<string, string>, now: Date): Model3dEntry[] {
   const first: Model3dEntry[] = [];
+  const changed: Array<{ e: Model3dEntry; at: number; i: number }> = [];
   const rest: Array<{ e: Model3dEntry; at: number; i: number }> = [];
   entries.forEach((e, i) => {
     if (providerOf(e).kind === 'unsupported') return;
@@ -56,7 +63,7 @@ export function rightsCandidates(entries: readonly Model3dEntry[], rows: Readonl
       return;
     }
     if (r.subject_sha256 !== subjects.get(key)) {
-      first.push(e);
+      if (olderThan(r.last_attempt_at, now, SUBJECT_RETRY_MS)) changed.push({ e, at: atKey, i });
       return;
     }
     if (r.status === 'verified' || r.status === 'human') {
@@ -65,8 +72,10 @@ export function rightsCandidates(entries: readonly Model3dEntry[], rows: Readonl
     }
     if (olderThan(r.last_attempt_at, now, DAY_MS)) rest.push({ e, at: atKey, i });
   });
-  rest.sort((a, b) => a.at - b.at || a.i - b.i);
-  return [...first, ...rest.map((x) => x.e)];
+  const byAttempt = (a: { at: number; i: number }, b: { at: number; i: number }) => a.at - b.at || a.i - b.i;
+  changed.sort(byAttempt);
+  rest.sort(byAttempt);
+  return [...first, ...changed.map((x) => x.e), ...rest.map((x) => x.e)];
 }
 
 /** rights_records の全行を cron 用に読む（記録・claim_at・last_attempt_at） */
@@ -96,7 +105,7 @@ export interface RightsStepResult {
 
 /**
  * cron の段（3-d）。paused なら 'paused'。対象を 5 件まで、1 件ずつ runRightsCheck(env, e, 'cron')。
- * 1 件を始める前に deadline − 150 s を過ぎていたら残りは次回。1 件の例外は failed に数えて次へ（ログは runRightsCheck が 1 行出す）
+ * 1 件を始める前に deadline − 330 s を過ぎていたら残りは次回（後続の段の時間を残す）。1 件の例外は failed に数えて次へ（ログは runRightsCheck が 1 行出す）
  */
 export async function rightsStep(env: Pick<Env, 'DB' | 'R2'>, o: { deadline: number; fetchImpl?: typeof fetch; now?: Date; catalog?: readonly Model3dEntry[] }): Promise<RightsStepResult | 'paused'> {
   if ((await getSetting(env.DB, 'paused')) === '1') return 'paused';

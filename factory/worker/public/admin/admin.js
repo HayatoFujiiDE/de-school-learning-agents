@@ -878,6 +878,7 @@
     if (c === 'download_url_not_linked') return 'ページにファイルのリンクがありません';
     if (c.indexOf('statement_missing:') === 0) return '提供元の決まりの文が見つかりません';
     if (c.indexOf('evidence_') === 0 || c === 'subject_mismatch') return '根拠のページが対象と合いません';
+    if (c === 'unparseable') return '提供元のページの形が読み取れません';
     return c || '—';
   }
   /** 取り込みの失敗（import: の後ろ・応答の import.error）の日本語 */
@@ -926,11 +927,15 @@
     if (typeof r.last_attempt_at === 'string' && r.last_attempt_at) return '最後の試行 ' + channelDate(r.last_attempt_at);
     return '—';
   }
-  /** §AK-5: 「権利を確かめる」の toast（res = POST …/check の応答、blocked = その行が止めてあるか） */
+  /**
+   * §AK-5: 「権利を確かめる」の toast（res = POST …/check の応答、blocked = その行が止めてあるか。応答に blocked（確認の後に読み直した値）があればそれを使う）
+   */
   function rightsCheckToast(res, blocked) {
     var s = res && res.status, label = res && typeof res.label === 'string' ? res.label : '不明', msg;
     var modes = res && isObj(res.modes) ? res.modes : {};
     var imp = res && isObj(res.import) ? res.import : null;
+    if (res && typeof res.blocked === 'boolean') blocked = res.blocked;
+    if (s === 'verified' && imp && imp.status === 'blocked') return '確かめました（' + label + '）。止めているので取り込みません';
     if (s === 'verified') {
       if (imp && (imp.status === 'fetched' || imp.status === 'unchanged')) msg = '取り込みました（' + model3dMiB(imp.bytes) + ' MiB）';
       else if (imp) msg = '確かめましたが取り込めませんでした（' + model3dImportErrorText(imp.error) + '）';

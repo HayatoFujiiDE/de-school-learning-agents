@@ -239,9 +239,10 @@ export function rightsCheckFixture(id, blocked = false) {
   if (!e) return null;
   const r = rightsOfFixture(e, blocked);
   if (r.evidence_kind === 'human') return { status: 'human_unchanged', code: r.code, label: r.label, modes: r.modes };
-  const out = { status: 'verified', code: r.code, label: r.label, modes: r.modes };
-  if (!blocked && e.id === ROVER_ID) out.import = { status: 'unchanged', bytes: ROVER_BYTES };
-  if (!blocked && e.id === 'nasa-iss') out.import = { status: 'failed', error: 'too_large' };
+  // §AK-5 v3.1: blocked は確認の後に読み直した値。止めている download は取り込まない（import.status = blocked）
+  const out = { status: 'verified', code: r.code, label: r.label, modes: r.modes, blocked };
+  if (e.id === ROVER_ID) out.import = blocked ? { status: 'blocked' } : { status: 'unchanged', bytes: ROVER_BYTES };
+  if (e.id === 'nasa-iss') out.import = blocked ? { status: 'blocked' } : { status: 'failed', error: 'too_large' };
   return out;
 }
 

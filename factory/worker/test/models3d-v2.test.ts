@@ -17,7 +17,7 @@ import { checkRights } from '../src/routes/rights';
 import { reviewDetail } from '../src/routes/review';
 import { d1, migratedDb, one, rows } from './d1-shim';
 import { ctx as reviewCtx, good, material, seed, world } from './review-auto-helpers';
-import { seedAllGood, seedGood, seedHostedSha } from './rights-helpers';
+import { goodRecord, insertRecord, seedAllGood, seedGood, seedHostedSha } from './rights-helpers';
 
 type Obj = Record<string, any>;
 const ROVER = 'nasa-perseverance-rover';
@@ -255,8 +255,15 @@ const stubFetch = (make: () => Response | Promise<Response>): Stub => {
 };
 const glbRes = (b: ArrayBuffer, headers: Record<string, string> = {}) => new Response(b, { status: 200, headers: { 'content-type': 'model/gltf-binary', ...headers } });
 const BY = 'ops@example.invalid';
-/** §AK-2 6: 取り込みの中身（importModel3d。権利の確認が verified の直後に claim を持ったまま呼ぶ）。e が無い id は作り物の download で */
-const call = async (id: string, f: typeof fetch) => importModel3d(env, MODELS3D_BY_ID.get(id)!, BY, f);
+const TOKEN = 'tok-import';
+/** §AK-2 6 v3.1: 取り込みの中身（importModel3d）。権利の確認の claim を持ち、止めていない行がある時だけ有効化する（行は 1 回だけ作る） */
+const call = async (id: string, f: typeof fetch) => {
+  const e = MODELS3D_BY_ID.get(id)!;
+  if (!rows(db, 'SELECT 1 FROM rights_records WHERE asset_key = ?', `models3d:${id}`).length) await seedClaimed(e);
+  return importModel3d(env, e, BY, f, TOKEN);
+};
+const seedClaimed = async (e: (typeof MODELS3D)[number], o: { blocked?: boolean; token?: string } = {}) =>
+  insertRecord(db, await goodRecord(e, { blocked: o.blocked === true }), { at: new Date().toISOString(), token: o.token ?? TOKEN });
 const fileRows = () => rows(db, 'SELECT * FROM models3d_files');
 
 describe('§AJ2-5 3・§AK-2 6 importModel3d（取り込みの中身。旧 POST /api/models3d/<id>/fetch の 2〜6）', () => {
@@ -371,6 +378,35 @@ describe('§AJ2-5 3・§AK-2 6 importModel3d（取り込みの中身。旧 POST 
     expect(r2.store.has(R2_KEY(ROVER, shaHex(b)))).toBe(true);
     expect(one(db, 'SELECT sha256 FROM models3d_files WHERE catalog_id = ?', ROVER).sha256).toBe(shaHex(b));
     expect(fileRows()).toHaveLength(1);
+  });
+
+  it('§AK-2 6 v3.1: 有効化は 1 つの batch（models3d_files・rights_hosted の sha と check_token・import:fetched の履歴）。同じ sha の 2 回目は verified_at を更新', async () => {
+    const body = glb();
+    await call(ROVER, stubFetch(() => glbRes(body)));
+    const h1 = one(db, 'SELECT sha256, check_token, verified_at FROM rights_hosted WHERE asset_key = ?', `models3d:${ROVER}`);
+    expect(h1).toMatchObject({ sha256: shaHex(body), check_token: TOKEN });
+    expect(rows(db, 'SELECT result, by, check_token FROM rights_checks')).toEqual([{ result: 'import:fetched', by: BY, check_token: TOKEN }]);
+    await new Promise((r) => setTimeout(r, 5));
+    await call(ROVER, stubFetch(() => glbRes(body)));
+    expect(rows(db, 'SELECT result FROM rights_checks ORDER BY id').map((r) => r.result)).toEqual(['import:fetched', 'import:unchanged']);
+    expect(String(one(db, 'SELECT verified_at FROM rights_hosted WHERE asset_key = ?', `models3d:${ROVER}`).verified_at) > String(h1.verified_at)).toBe(true);
+    expect(rows(db, 'SELECT sha256 FROM rights_hosted')).toHaveLength(1);
+  });
+
+  it('§AK-2 6 v3.1: claim を別のトークンが持つ・止めている行では有効化しない（not_activated）。D1 は書かず、R2 の object は残る（参照されないだけ）', async () => {
+    for (const o of [{ token: 'other-token' }, { blocked: true }]) {
+      db = migratedDb();
+      env = { DB: d1(db), R2: r2.R2 } as unknown as Env;
+      r2.store.clear();
+      const body = glb();
+      await seedClaimed(ROVER_E, o);
+      const r = await importModel3d(env, ROVER_E, BY, stubFetch(() => glbRes(body)), TOKEN);
+      expect(r, JSON.stringify(o)).toEqual({ ok: false, error: 'not_activated', http: 409 });
+      expect(fileRows()).toEqual([]);
+      expect(rows(db, 'SELECT sha256 FROM rights_hosted')).toEqual([]);
+      expect(rows(db, 'SELECT id FROM rights_checks')).toEqual([]);
+      expect(r2.store.has(R2_KEY(ROVER, shaHex(body)))).toBe(true);
+    }
   });
 
   it('§AK-5: check の handler 単体で c.service は 403 human_only（取得しない・D1 に書かない）', async () => {
@@ -815,6 +851,10 @@ describe('§AJ2-5 9・§AK-5 admin.js: #/models3d の表（権利の列と操作
     expect(T({ status: 'lost_claim', modes: {} }, false)).toBe('確認が長引いたので結果を捨てました。もう一度');
     expect(T({ status: 'verified', label: 'CC BY 4.0', modes: { host: false, embed: false } }, true)).toBe('確かめました（CC BY 4.0）（止めているので出ません）');
     expect(T({ status: 'failed', fail_code: 'fetch_failed:500', modes: {} }, true)).toBe('確かめられませんでした（提供元から取れませんでした）（止めているので出ません）');
+    // v3.1: 確認の途中に止めた（応答の blocked = 読み直した値・import.status = blocked）
+    expect(T({ status: 'verified', label: 'NASA の利用の決まり', modes: { host: false, embed: false }, blocked: true, import: { status: 'blocked' } }, false)).toBe('確かめました（NASA の利用の決まり）。止めているので取り込みません');
+    expect(T({ status: 'verified', label: 'CC BY 4.0', modes: { host: false, embed: false }, blocked: true }, false)).toBe('確かめました（CC BY 4.0）（止めているので出ません）');
+    expect(T({ status: 'verified', label: 'CC BY 4.0', modes: { host: true, embed: true }, blocked: false }, true)).toBe('確かめました（CC BY 4.0）');
   });
 
   it('fail_code の日本語（rightsFailText）と根拠の日本語（rightsKindText）', () => {
@@ -845,6 +885,7 @@ describe('§AJ2-5 9・§AK-5 admin.js: #/models3d の表（権利の列と操作
       ['subject_mismatch', '根拠のページが対象と合いません'],
       ['license_url_mismatch', 'license_url_mismatch'],
       ['no_license_url', 'no_license_url'],
+      ['unparseable', '提供元のページの形が読み取れません'],
     ];
     for (const [code, text] of table) expect(F(code), code).toBe(text);
     expect(M.rightsKindText('api')).toBe('機械: 提供元の API');

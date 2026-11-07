@@ -28,12 +28,15 @@ export async function checkRights(c: RouteCtx, id: string, fetchImpl: typeof fet
     case 'human':
       return json(200, { status: o.result, code: o.record.license_code, label: licenseLabelOf(o.record.license_code, o.record.license_url), modes });
     case 'verified': {
-      const imp = o.import === null ? undefined : o.import.ok ? { status: o.import.status, bytes: o.import.bytes } : { status: 'failed', error: o.import.error };
+      // §AK-5 v3.1: blocked は確認の後に読み直した値。止めていたので取り込まなかった時は import.status = 'blocked'
+      const imp =
+        o.import === null ? undefined : o.import.ok ? { status: o.import.status, bytes: o.import.bytes } : o.import.error === 'blocked' ? { status: 'blocked' } : { status: 'failed', error: o.import.error };
       return json(200, {
         status: 'verified',
         code: o.record.license_code,
         label: licenseLabelOf(o.record.license_code, o.record.license_url),
         modes,
+        blocked: o.blocked,
         ...(imp ? { import: imp } : {}),
       });
     }
