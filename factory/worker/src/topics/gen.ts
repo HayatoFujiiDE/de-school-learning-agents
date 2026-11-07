@@ -481,7 +481,7 @@ async function closeFailed(
 const emptyDiag = (): RunDiagInput => ({ turns: 0, nudged: false, calls: [], stop: null, saveCalled: false, offered: 0, droppedReasons: {} });
 
 const RUN_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const PARENT_ID_RE = /^tp_[A-Za-z0-9_-]{1,100}$/;
+export const PARENT_ID_RE = /^tp_[A-Za-z0-9_-]{1,100}$/;
 
 /**
  * queue の message（{ t: 'topic_run', run_id, token, req }）を確かめて読む（v2.6。中身は信用しない）。

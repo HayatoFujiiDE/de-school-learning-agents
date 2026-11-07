@@ -6,7 +6,8 @@ import { cfg } from '../env';
 import { json, readBody, type RouteCtx } from '../http';
 import { monthCostCents } from '../ledger';
 import { approvePred, retireParentOnApproveStmts, retireStmt, topicGate } from '../topics/gate';
-import { reserveTopicRun, type ReserveOutcome, type RunRequest } from '../topics/gen';
+import { type ReserveOutcome, type RunRequest } from '../topics/gen';
+import { queueTopicRun } from '../topics/queue-run';
 import {
   TOPIC_DECISION_LABELS,
   TOPIC_FETCH_RESULT_LABELS,
@@ -25,7 +26,6 @@ import {
   insertTopicStmts,
   isTopicKind,
   readRun,
-  runCancelStmts,
   toRunRow,
   toTopicRow,
   TOPIC_ROW_EXTRA_COLS,
@@ -38,8 +38,6 @@ import {
 
 const STATUSES = ['draft', 'checking', 'held', 'ready', 'rejected', 'retired'] as const;
 const DECISIONS = ['approve', 'reject', 'retire', 'star', 'unstar', 'recheck'] as const;
-/** 手動の run の締め切り（queue の受け手が走らせる時と同じ。取る時の「残り時間」の判定にも使う。v2.6） */
-const MANUAL_RUN_MS = 5 * 60_000;
 
 const bad = (error: string, extra: Record<string, unknown> = {}) => json(400, { error, ...extra });
 
@@ -276,29 +274,14 @@ function notTakenResponse(o: Extract<ReserveOutcome, { status: 'not_taken' }>): 
 /**
  * 手動の run（v2.6）: 同じ要求の中で取り（取れない時は今までどおり 409）、queue へ送って 202 { status: 'queued', run }。
  * 生成と保存は queue の受け手（src/index.ts）が走らせる（ブラウザの接続の寿命に縛られない）。
- * 送れない時（IMAGE_GEN が無い・send が投げる）は run の行と取り置きを取り消して 503 queue_unavailable
+ * 送れない時（IMAGE_GEN が無い・send が投げる）は run の行と取り置きを取り消して 503 queue_unavailable。
+ * 取る・送る・取り消すは src/topics/queue-run.ts の queueTopicRun（運用の依頼箱 §W と共有）
  */
 async function queueManualRun(c: RouteCtx, req: RunRequest): Promise<Response> {
-  const db = c.env.DB;
-  const r = await reserveTopicRun(c.env, req, { deadline: Date.now() + MANUAL_RUN_MS });
+  const r = await queueTopicRun(c.env, req);
   if (r.status === 'not_taken') return notTakenResponse(r);
-  const { runId, token } = r.taken;
-  let sent = false;
-  if (c.env.IMAGE_GEN) {
-    try {
-      await c.env.IMAGE_GEN.send({ t: 'topic_run', run_id: runId, token, req });
-      sent = true;
-    } catch {
-      sent = false;
-    }
-  }
-  if (!sent) {
-    const x = await conditionalBatch(db, runCancelStmts(runId, token));
-    console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: x.ok ? 'cancelled' : 'lost', reason: 'queue_unavailable' }));
-    return json(503, { error: 'queue_unavailable' });
-  }
-  console.log(JSON.stringify({ at: 'topic_run', run_id: runId, status: 'queued' }));
-  const run = await readRun(db, runId);
+  if (r.status === 'queue_unavailable') return json(503, { error: 'queue_unavailable' });
+  const run = await readRun(c.env.DB, r.runId);
   return json(202, { status: 'queued', run: run ? toRunRow(run) : null });
 }
 

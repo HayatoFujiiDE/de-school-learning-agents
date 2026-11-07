@@ -13,6 +13,7 @@ import { runVerificationStep } from './verify';
 import { autoPublishStep, triageStep } from './triage-step';
 import { readerStep } from './reader';
 import { topicsTick } from './topics/tick';
+import { opsTick } from './ops';
 
 // cron 経由の reconcile は開始から 10 分を締め切りにする（scheduled handler は最長 15 分。検証の時間を残す）
 const CRON_RECONCILE_BUDGET_MS = 10 * 60_000;
@@ -141,6 +142,13 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
     }
   } catch (e) {
     out.scout_error = e instanceof Error ? e.name : 'error';
+  }
+
+  // 運用の依頼箱（契約 §W）。お題の段の直前に 1 回・1 件だけ（手動と同じ経路で取って queue へ送るだけ。外部は呼ばない）
+  try {
+    out.ops = await opsTick(env);
+  } catch (e) {
+    out.ops_error = e instanceof Error ? e.name : 'error';
   }
 
   // お題のストック（contract-T T-13）。入口の段の後に 1 回。各段の残り時間は topicsTick が見る（(1) 予定の確定と (2) 片付けは常に行う）

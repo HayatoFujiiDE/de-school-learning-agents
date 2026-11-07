@@ -1300,6 +1300,10 @@ v3.5（2026-11-04 段階 0 の実測。最初の本物の session sesn_01Jfui3ap
 - 動画は、人が一度「本人のアップ」と確かめたチャンネルなら次から機械だけで通る
 - 確認画面は子どもが見る教材を主役にし、見てほしい所だけを印と短い一覧で出す
 
+## §W 運用の依頼箱（2026-11-07 凍結）
+
+正本: `docs/plans/ops-requests/contract-W.md`。Claude が `wrangler d1 execute` で表 `ops_requests`（migration 0010）に依頼を 1 行置き、cron の `opsTick`（お題の段の直前・1 tick に 1 件・60 分で失効）が管理画面の「今すぐ作る」と同じ `queueTopicRun` で始める（お題の run だけ・trigger manual・台帳と上限は手動と同じ）。道具は `factory/worker/scripts/ops-request.sh`。
+
 ## §T お題のストック（v3.12。2026-11-06 凍結。§J の「『今日のお題』（`topics`）は本スライスに含めない」と §R-35 の「`topics` は別裁定へ」を置き換える）
 
 正本: `docs/plans/topics-variety/contract-T.md`（v2.2。Astra high 3 回の指摘への裁定は同 T-16）。素材の §B-6（`publishSwitch` が唯一の切替・人の承認）は変えない。お題は別の表と別の関数（`src/topics/gate.ts`）で扱う。
