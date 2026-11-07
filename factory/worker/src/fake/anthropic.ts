@@ -15,6 +15,8 @@ import type { Message, MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk
 import type { MessageBatchIndividualResponse } from '@anthropic-ai/sdk/resources/messages/batches';
 import { BATCH_LIST_LIMIT, BATCH_RESULTS_MAX_BYTES, PortError, type BatchView, type CallOpts, type FactoryPort, type FileMeta, type SessionView } from '../anthropic';
 import { getSetting, nowIso, setSetting } from '../db';
+import { READER_QUALITY_KEYS } from '../checks/triage';
+import { READER_SYSTEM_V2 } from '../reader';
 import type { Env } from '../env';
 import { SCOUT_FEEDS } from '../generated/scout-sources';
 import { SCOUT_MODEL } from '../scout';
@@ -643,6 +645,14 @@ async function fakeReaderReply(db: D1Database, params: MessageCreateParamsNonStr
     learning: over.learning ?? { verdict: 'ok', reason: 'fake: 活動が学習につながっている' },
     conditions: over.conditions ?? { verdict: 'ok', reason: 'fake: 使う条件が本文と合っている' },
     summary: typeof over.summary === 'string' ? over.summary : 'fake: 読みやすい',
+    // §AL-4: schema 2 の版の呼び出し（system が READER_SYSTEM_V2）には素材の形の 4 判定を足す（既定は全部 ok。fake_reading の quality で上書き）
+    ...(params.system === READER_SYSTEM_V2
+      ? {
+          quality:
+            over.quality ??
+            Object.fromEntries(READER_QUALITY_KEYS.map((k) => [k, { verdict: 'ok', reason: `fake: ${k} は問題なし` }])),
+        }
+      : {}),
   };
   return {
     id: `msg_fake_${crypto.randomUUID().slice(0, 8)}`,

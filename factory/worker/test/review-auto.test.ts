@@ -6,6 +6,7 @@ import { decide, listReview, reread, reviewDetail, reviewStats, setAutoPublish }
 import { computeTriage } from '../src/triage-step';
 import { one, rows } from './d1-shim';
 import { CH, WATCH, addVerification, ctx, fixable, good, material, okReading, seed, setSetting, world, type World } from './review-auto-helpers';
+import { goodMaterialV2 } from './helpers';
 
 type Obj = Record<string, any>;
 let w: World;
@@ -249,5 +250,44 @@ describe('一覧と詳細の形（契約 V-8）', () => {
     expect(b2.verification.apps).toBeNull();
     expect(b2.reader).toMatchObject({ status: 'running', findings: null, learning: null, summary: null, not_read: null });
     expect(b2.triage.pending_on).toEqual(['reader']);
+  });
+});
+
+describe('§AL-4（T3）: 詳細の reader に quality（schema 2 の版）', () => {
+  const quality = {
+    first_action: { verdict: 'problem', reason: '説明から始まる' },
+    questions_first: { verdict: 'ok', reason: '問いが先' },
+    one_idea_per_paragraph: { verdict: 'unclear', reason: '決められない' },
+    no_goal_words: { verdict: 'ok', reason: '無い' },
+  };
+  it('schema 2 の版で v: 2 と quality がある → reader.quality に 4 判定（既存のキーはそのまま）', async () => {
+    seed(w, { mid: 'm1', vid: 'v1', claims: [['confirmed', ['s1']]], material: goodMaterialV2(), readerJson: okReading({ v: 2, summary: '読める', quality }) });
+    const b = (await body(await reviewDetail(ctx(w, 'GET'), 'v1'))).json;
+    expect(b.reader).toEqual({
+      status: 'done',
+      gen: 'rt-v1',
+      findings: [],
+      learning: { verdict: 'ok', reason: '' },
+      conditions: { verdict: 'ok', reason: '' },
+      summary: '読める',
+      not_read: [],
+      cost_cents: 0,
+      quality,
+    });
+    expect(b.triage.items.filter((i: Obj) => i.id.startsWith('quality:')).map((i: Obj) => [i.id, i.severity])).toEqual([
+      ['quality:first_action', 'fix'],
+      ['quality:one_idea_per_paragraph', 'ask'],
+    ]);
+  });
+  it('schema 2 の版で v: 1（quality なし）の reader_json → 読めない（findings 等 null・quality キーなし）。schema 1 の版は quality 付きでもキーなし', async () => {
+    seed(w, { mid: 'm1', vid: 'v1', claims: [['confirmed', ['s1']]], material: goodMaterialV2(), apps: [{ path: 'parts/p1/app.html', verdict: 'ok', reason: '' }], readerJson: okReading({ summary: '読める' }) });
+    const b = (await body(await reviewDetail(ctx(w, 'GET'), 'v1'))).json;
+    expect(b.reader).toMatchObject({ status: 'done', findings: null, learning: null, summary: null, not_read: null });
+    expect('quality' in b.reader).toBe(false);
+    expect(b.triage.items.map((i: Obj) => i.cause)).toEqual(['reader_failed', 'reader_failed', 'reader_failed']);
+    seed(w, { mid: 'm2', vid: 'v2', claims: [['confirmed', ['s1']]], readerJson: okReading({ v: 2, quality }) });
+    const b2 = (await body(await reviewDetail(ctx(w, 'GET'), 'v2'))).json;
+    expect(b2.reader).toMatchObject({ status: 'done', findings: [], summary: '' });
+    expect('quality' in b2.reader).toBe(false);
   });
 });

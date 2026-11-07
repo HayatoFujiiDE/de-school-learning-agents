@@ -6,6 +6,7 @@ import { getJob, startJob } from '../jobs';
 import { claimReverify } from '../reverify';
 import { buildReject, buildReturn, buildReworkBrief, CHECKLIST_KEYS, publishSwitch } from '../publish';
 import { CHECK_KEYS, readReaderResult, type CheckKey } from '../checks/triage';
+import { schemaVersionOf } from '../checks/shape';
 import { videoSourceIds } from '../checks/citations';
 import { figureShowsMetaOf } from '../checks/schema';
 import { AUTO_PUBLISH_EMAIL, computeTriage, latestVerificationOf } from '../triage-step';
@@ -173,7 +174,8 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
   // §Q-5・§Q-10 9: 版の動画の記録（v1 の video-notes.json か、呼び出しの記録から組み立てたもの。何も無い・読めなければ null）
   const videoNotes = await readVideoNotes(c.env.R2, v.r2_prefix, v.material_json);
   // 契約 V-8: 読み手係（done でない時・結果が読めない時は findings 等が null）
-  const reading = v.reader_status === 'done' ? readReaderResult(parseJsonField<unknown>(v.reader_json ?? '', null)) : null;
+  // §AL-4: schema 2 の版は v: 2 と quality が無ければ読めない（null）
+  const reading = v.reader_status === 'done' ? readReaderResult(parseJsonField<unknown>(v.reader_json ?? '', null), schemaVersionOf(material)) : null;
   return json(200, {
     version: {
       id: v.id,
@@ -249,6 +251,8 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
       summary: reading ? reading.summary : null,
       not_read: reading?.not_read ?? null,
       cost_cents: Number(v.reader_cost_cents ?? 0),
+      // §AL-4: 素材の形の 4 判定（schema 2 の版で読めた時だけ。schema 1・旧 row はキーごと無い）
+      ...(reading?.quality ? { quality: reading.quality } : {}),
     },
     auto_publish: (await getSetting(db, 'auto_publish')) === '1',
     generated_images: generatedImages,

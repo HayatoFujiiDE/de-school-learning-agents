@@ -10,6 +10,7 @@ import {
   RETURN_NOTE_TEXT_V2,
   buildReturnNote,
   clampAutoReturnMax,
+  readReaderResult,
   returnNoteTextOf,
   triageVersion,
   type TriageInput,
@@ -78,6 +79,15 @@ function mat(o: { app?: boolean; video?: boolean } = {}): Obj {
 }
 
 const okReading = (o: Obj = {}) => ({ findings: [], learning: { verdict: 'ok', reason: '' }, conditions: { verdict: 'ok', reason: '' }, summary: '', not_read: [], ...o });
+/** §AL-4: schema 2 の版の読み手係の結果（v: 2・quality の 4 キーが全部 ok）。q で quality の一部を上書き */
+const okQuality = (q: Obj = {}) => ({
+  first_action: { verdict: 'ok', reason: '' },
+  questions_first: { verdict: 'ok', reason: '' },
+  one_idea_per_paragraph: { verdict: 'ok', reason: '' },
+  no_goal_words: { verdict: 'ok', reason: '' },
+  ...q,
+});
+const okReadingV2 = (o: Obj = {}, q: Obj = {}) => ({ v: 2, ...okReading(), quality: okQuality(q), ...o });
 
 interface Spec {
   /** claim ごとの [verdict, source_ids, presented_as] */
@@ -642,8 +652,11 @@ describe('§AL-5 仕分け v2（child_text の新しい kind）', () => {
   const V2_BODY = 'parts/p1/body.md';
   const appOk = [{ path: 'parts/p1/app.html', verdict: 'ok', reason: '' }];
   /** schema 2・版が決まっている題材（conditions.tools に Minecraft Java 版 26.3）の material に child_text を与える */
+  // §AL-4（T3）: schema 2 の版の読み手係の結果は v: 2 と quality の 4 キーが要る（無ければ reader_failed）ので、既定は quality 全部 ok の v2 の結果
   const v2Triage = (childText: unknown[], o: Partial<Spec> = {}) =>
-    triageVersion(build({ claims: [['confirmed', ['s1']]], material: goodMaterialV2(), apps: appOk, checks: { ...GREEN_CHECKS, child_text: childText }, ...o }));
+    triageVersion(
+      build({ claims: [['confirmed', ['s1']]], material: goodMaterialV2(), apps: appOk, checks: { ...GREEN_CHECKS, child_text: childText }, reader: { status: 'done', token: 'rt1', result: okReadingV2() }, ...o }),
+    );
 
   it('前提: 版が決まっている schema 2 の material で child_text が空なら clean', () => {
     expect(isVersionBoundMaterial(goodMaterialV2())).toBe(true);
@@ -716,5 +729,83 @@ describe('§AL-5 仕分け v2（child_text の新しい kind）', () => {
     expect(returnNoteTextOf(goodMaterialV2())).toBe(RETURN_NOTE_TEXT_V2);
     expect(returnNoteTextOf(goodMaterial())).toBe(RETURN_NOTE_TEXT);
     expect(returnNoteTextOf(null)).toBe(RETURN_NOTE_TEXT);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// §AL-4・§AL-5（T3）: 読み手係の quality → 項目、schema 2 の row の reader_json の読み方
+
+describe('§AL-5 仕分け v2（読み手係の quality）', () => {
+  const appOk = [{ path: 'parts/p1/app.html', verdict: 'ok', reason: '' }];
+  const v2 = (result: unknown, o: Partial<Spec> = {}) =>
+    triageVersion(build({ claims: [['confirmed', ['s1']]], material: goodMaterialV2(), apps: appOk, reader: { status: 'done', token: 'rt1', result }, ...o }));
+  // 現行（schema 1）で正常に読める完全な結果（learning・conditions・summary・not_read まで揃っている）
+  const fullV1 = { v: 1, findings: [], learning: { verdict: 'ok', reason: 'つながる' }, conditions: { verdict: 'ok', reason: '合う' }, summary: '読める', not_read: [] };
+
+  it('前提: 完全な schema 1 の結果は schema 1 の読み方では読める（弁別の対照）', () => {
+    expect(readReaderResult(fullV1, 1)).not.toBeNull();
+    const t = triageVersion(build({ claims: [['confirmed', ['s1']]], reader: { status: 'done', token: 'rt1', result: fullV1 } }));
+    expect([t.gate, t.items]).toEqual(['clean', []]);
+  });
+
+  it('schema 2 の row に完全な schema 1 の結果（v: 1・quality なし）→ readReaderResult(json, 2) が null → reader_failed の ask 3 件・gate attention（clean にならない）', () => {
+    expect(readReaderResult(fullV1, 2)).toBeNull();
+    // v: 2 でも quality が無い・v が 1 のまま quality だけある → null
+    expect(readReaderResult({ ...fullV1, v: 2 }, 2)).toBeNull();
+    expect(readReaderResult({ ...fullV1, quality: okQuality() }, 2)).toBeNull();
+    // quality の 1 キー欠落・verdict の値の外・reason が文字列でない → null
+    const { no_goal_words: _drop, ...three } = okQuality();
+    expect(readReaderResult({ ...fullV1, v: 2, quality: three }, 2)).toBeNull();
+    expect(readReaderResult({ ...fullV1, v: 2, quality: okQuality({ first_action: { verdict: 'good', reason: '' } }) }, 2)).toBeNull();
+    expect(readReaderResult({ ...fullV1, v: 2, quality: okQuality({ first_action: { verdict: 'ok', reason: 3 } }) }, 2)).toBeNull();
+    const t = v2(fullV1);
+    expect(t.items.map((i) => [i.id, i.severity, i.cause])).toEqual([
+      ['reader:reader_failed:explanation_and_expression', 'ask', 'reader_failed'],
+      ['reader:reader_failed:relation_to_learning', 'ask', 'reader_failed'],
+      ['reader:reader_failed:conditions_of_use', 'ask', 'reader_failed'],
+    ]);
+    expect(t.gate).toBe('attention');
+    expect(t.action).toBe('none');
+  });
+
+  it('schema 2 の row に v: 2 と quality 全部 ok → 項目なし・clean。readReaderResult は v と quality を返す', () => {
+    const r = readReaderResult(okReadingV2(), 2)!;
+    expect([r.v, r.quality]).toEqual([2, okQuality()]);
+    const t = v2(okReadingV2());
+    expect([t.gate, t.items]).toEqual(['clean', []]);
+  });
+
+  it('quality problem → fix・unclear → ask・ok → 項目なし（id quality:<key>・kind reader・key 説明と表現・cause quality_<key>・title は ITEM_TITLE）', () => {
+    const t = v2(
+      okReadingV2(
+        { findings: [{ path: 'parts/p1/body.md', quote: 'q', kind: 'word', severity: 'note', note: 'n', suggestion: 's' }], learning: { verdict: 'unclear', reason: 'わからない' } },
+        { first_action: { verdict: 'problem', reason: '説明から始まる' }, questions_first: { verdict: 'unclear', reason: '決められない' }, no_goal_words: { verdict: 'problem', reason: '学ぼう がある' } },
+      ),
+      { autoRounds: 2 },
+    );
+    const items = t.items.map((i) => [i.id, i.kind, i.key, i.severity, i.cause, i.title, i.detail]);
+    // reader の項目（findings）の直後に quality、その後に learning
+    expect(items.map((i) => i[0])).toEqual([expect.stringMatching(/^reader:[0-9a-f]{8}$/), 'quality:first_action', 'quality:questions_first', 'quality:no_goal_words', 'learning']);
+    expect(items.slice(1, 4)).toEqual([
+      ['quality:first_action', 'reader', 'explanation_and_expression', 'fix', 'quality_first_action', CONTRACT_TITLE_V2.quality_first_action, '説明から始まる'],
+      ['quality:questions_first', 'reader', 'explanation_and_expression', 'ask', 'quality_questions_first', CONTRACT_TITLE_V2.quality_questions_first, '決められない'],
+      ['quality:no_goal_words', 'reader', 'explanation_and_expression', 'fix', 'quality_no_goal_words', CONTRACT_TITLE_V2.quality_no_goal_words, '学ぼう がある'],
+    ]);
+    expect(t.gate).toBe('attention');
+    // unclear だけなら ask（自動の差し戻しにはならない）
+    const onlyAsk = v2(okReadingV2({}, { one_idea_per_paragraph: { verdict: 'unclear', reason: 'r' } }));
+    expect(onlyAsk.items.map((i) => [i.id, i.severity, i.title])).toEqual([['quality:one_idea_per_paragraph', 'ask', CONTRACT_TITLE_V2.quality_one_idea_per_paragraph]]);
+    expect([onlyAsk.gate, onlyAsk.action]).toEqual(['attention', 'none']);
+    // problem があれば fix（回数が残っていれば auto_return）
+    const fix = v2(okReadingV2({}, { first_action: { verdict: 'problem', reason: 'r' } }));
+    expect(fix.items.map((i) => [i.id, i.severity])).toEqual([['quality:first_action', 'fix']]);
+    expect(fix.action).toBe('auto_return');
+  });
+
+  it('schema 1 の row に quality 付きの結果 → quality は見ない（項目なし・clean）', () => {
+    const withQ = { ...fullV1, v: 2, quality: okQuality({ first_action: { verdict: 'problem', reason: 'r' }, no_goal_words: { verdict: 'unclear', reason: 'r' } }) };
+    expect(readReaderResult(withQ, 1)?.quality).toBeUndefined();
+    const t = triageVersion(build({ claims: [['confirmed', ['s1']]], reader: { status: 'done', token: 'rt1', result: withQ } }));
+    expect([t.gate, t.items]).toEqual(['clean', []]);
   });
 });

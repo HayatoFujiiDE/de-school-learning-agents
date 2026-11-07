@@ -18,7 +18,7 @@ import { model3dSourceIds, videoSourceIds } from './citations';
 import { declaredEdition, isVersionBoundMaterial, isVideoTooOld, parsePublishedDay } from './edition';
 import { PRIMARY_HOSTS } from './hosts';
 import { figureShowsMetaOf } from './schema';
-import { schemaVersionOf } from './shape';
+import { schemaVersionOf, type SchemaVersion } from './shape';
 import { versionVideosOfMaterial } from '../videos';
 import { MODELS3D_BY_ID, versionModels3dOfMaterial } from '../models3d';
 
@@ -329,7 +329,8 @@ export function returnNoteTextOf(material: unknown): typeof RETURN_NOTE_TEXT | t
 }
 
 // ---------------------------------------------------------------------------------------------
-// 読み手係の結果の形（契約 V-4 e・f。reader.ts の parseReading が作り、reader_json に {v:1, model, …, not_read} で保存する）
+// 読み手係の結果の形（契約 V-4 e・f。reader.ts の parseReading が作り、reader_json に {v:1, model, …, not_read} で保存する。
+// schema 2 の版は {v:2, model, …, quality, not_read}（契約 AL-4）
 
 export const READER_FINDING_KINDS = ['word', 'sentence', 'structure', 'mismatch', 'tone', 'other'] as const;
 export type ReaderFindingKind = (typeof READER_FINDING_KINDS)[number];
@@ -348,20 +349,45 @@ export interface ReaderJudgement {
   verdict: ReaderVerdict;
   reason: string;
 }
+/** 読み手係の素材の形の判定（schema 2 の版だけ。契約 AL-4）の 4 キー */
+export const READER_QUALITY_KEYS = ['first_action', 'questions_first', 'one_idea_per_paragraph', 'no_goal_words'] as const;
+export type ReaderQualityKey = (typeof READER_QUALITY_KEYS)[number];
+export type ReaderQuality = Record<ReaderQualityKey, ReaderJudgement>;
 export interface ReaderResult {
   findings: ReaderFinding[];
   learning: ReaderJudgement;
   conditions: ReaderJudgement;
   summary: string;
   not_read: string[];
+  /** schema 2 の版だけ（v === 2 で quality の 4 キーが揃っている時） */
+  quality?: ReaderQuality;
+  v?: number;
 }
 
 const inList = <T extends string>(list: readonly T[], v: unknown): v is T => typeof v === 'string' && (list as readonly string[]).includes(v);
 
-/** reader_json を parse した値 → 読み手係の結果。形が違えば null（壊れた reader_json は「読み手チェックができなかった」として扱う） */
-export function readReaderResult(raw: unknown): ReaderResult | null {
+/** quality の 4 キー（各 verdict が READER_VERDICTS・reason が文字列）→ 値。1 つでも欠けた・形が違えば null */
+function readQuality(raw: unknown): ReaderQuality | null {
+  if (!isObj(raw)) return null;
+  const out: Partial<ReaderQuality> = {};
+  for (const k of READER_QUALITY_KEYS) {
+    const j = raw[k];
+    if (!isObj(j) || !inList(READER_VERDICTS, j.verdict) || typeof j.reason !== 'string') return null;
+    out[k] = { verdict: j.verdict, reason: j.reason };
+  }
+  return out as ReaderQuality;
+}
+
+/**
+ * reader_json を parse した値 → 読み手係の結果。形が違えば null（壊れた reader_json は「読み手チェックができなかった」として扱う）。
+ * schema は版の schemaVersionOf(material)。schema 2 の版は v === 2 かつ quality の 4 キーが揃っていなければ null
+ * （v2 を知らない Worker が書いた結果を clean と読まない。契約 AL-4）。schema 1 の版は従来どおり（quality があっても見ない）
+ */
+export function readReaderResult(raw: unknown, schema: SchemaVersion): ReaderResult | null {
   if (!isObj(raw) || !Array.isArray(raw.findings) || !isObj(raw.learning) || !isObj(raw.conditions)) return null;
   if (!inList(READER_VERDICTS, raw.learning.verdict) || !inList(READER_VERDICTS, raw.conditions.verdict)) return null;
+  const quality = schema === 2 && raw.v === 2 ? readQuality(raw.quality) : null;
+  if (schema === 2 && !quality) return null;
   const findings: ReaderFinding[] = [];
   for (const f of raw.findings) {
     if (!isObj(f) || !inList(READER_FINDING_KINDS, f.kind) || !inList(READER_SEVERITIES, f.severity)) return null;
@@ -373,6 +399,7 @@ export function readReaderResult(raw: unknown): ReaderResult | null {
     conditions: { verdict: raw.conditions.verdict, reason: str(raw.conditions.reason) },
     summary: str(raw.summary),
     not_read: strList(raw.not_read),
+    ...(quality ? { v: 2, quality } : {}),
   };
 }
 
@@ -1088,7 +1115,7 @@ export function triageVersion(input: TriageInput): TriageOutput {
 
   // 読み手係
   const rStatus = String(input.reader?.status ?? 'pending');
-  const rResult = rStatus === 'done' ? readReaderResult(input.reader?.result) : null;
+  const rResult = rStatus === 'done' ? readReaderResult(input.reader?.result, schemaVersionOf(input.material)) : null;
   // done なのに結果が読めない版は「読み手チェックができなかった」として扱う（自動 OK にしない）
   const readerDone = rStatus === 'done' && rResult !== null;
   const readerFailed = rStatus === 'failed' || (rStatus === 'done' && rResult === null);
@@ -1109,6 +1136,14 @@ export function triageVersion(input: TriageInput): TriageOutput {
         suggestion: cut(f.suggestion, 400),
         detail: f.note,
       });
+    }
+    // 素材の形（schema 2 の版だけ。契約 AL-5）: problem → fix・unclear → ask・ok → 出さない
+    if (rResult.quality) {
+      for (const k of READER_QUALITY_KEYS) {
+        const q = rResult.quality[k];
+        if (q.verdict === 'ok') continue;
+        push({ id: `quality:${k}`, kind: 'reader', key: 'explanation_and_expression', severity: q.verdict === 'problem' ? 'fix' : 'ask', cause: `quality_${k}`, detail: q.reason });
+      }
     }
     const judge = (j: ReaderJudgement, which: 'learning' | 'conditions') => {
       const key = which === 'learning' ? 'relation_to_learning' : 'conditions_of_use';
