@@ -135,6 +135,21 @@ describe('autoAnswerStep（契約 V-12・u11）', () => {
     expect((await autoAnswerStep(w.env, fakePort().port, { deadline: FAR() })).answered).toEqual([d]);
   });
 
+  it('質問 id が重複・空なら no_default で答えない（2 つ目の質問に 1 つ目の default を送らない）', async () => {
+    const dup = seedJob(1, { questions: [QS[0], { ...QS[1], id: 'q1' }] });
+    const empty = seedJob(2, { questions: [QS[0], { ...QS[1], id: '' }] });
+    const { port, sent } = fakePort();
+    expect(await autoAnswerStep(w.env, port, { deadline: FAR() })).toEqual({ answered: [], skipped: [{ job_id: dup, reason: 'no_default' }, { job_id: empty, reason: 'no_default' }] });
+    for (const j of [dup, empty]) {
+      expect(job(j)).toMatchObject({ status: 'needs_answer', answer_state: 'none' });
+      expect(attempts(j)).toBeUndefined();
+      expect(skipMark(j)).toBe('no_default');
+      expect(one(w.db, 'SELECT last_error FROM factory_jobs WHERE id = ?', j).last_error).toBe('auto_answer:no_default');
+    }
+    expect(sent).toEqual([]);
+    expect(autoLogs()).toEqual([dup, empty].map((j) => ({ at: 'auto_answer', job_id: j, result: 'no_default' })));
+  });
+
   it('no_default の job が先頭に居ても後ろの自動の差し戻しの job は詰まらない（次の tick で自動回答される）', async () => {
     const noDef = [{ id: 'q1', question: 'x', why: '', default: '' }];
     const a = seedJob(1, { questions: noDef });
@@ -242,6 +257,36 @@ describe('autoAnswerStep（契約 V-12・u11）', () => {
     expect(await autoAnswerStep(w.env, okp.port, { deadline: FAR() })).toEqual({ answered: [], skipped: [] });
     expect(job(k)).toMatchObject({ status: 'needs_answer', answer_state: 'saved' });
     expect(attempts(k)).toBe(3);
+  });
+
+  it('auto_answer が null や配列の行でも attempts が数えられ、送信の失敗が続けば 3 回で止まる', async () => {
+    for (const [n, inner] of [
+      [1, null],
+      [2, []],
+    ] as const) {
+      w = world();
+      const jid = seedJob(n, { state: { auto_answer: inner } });
+      let calls = 0;
+      const bad = fakePort({ fail: true });
+      const counting = {
+        ...bad.port,
+        async sendEvents(id: string, evs: unknown[]) {
+          calls++;
+          return bad.port.sendEvents(id, evs as never);
+        },
+      } as unknown as FactoryPort;
+      for (let i = 0; i < 5; i++) await autoAnswerStep(w.env, counting, { deadline: FAR() });
+      expect(calls).toBe(3);
+      expect(attempts(jid)).toBe(3);
+      expect(job(jid)).toMatchObject({ status: 'needs_answer', answer_state: 'saved' });
+    }
+  });
+
+  it('auto_answer が null の行で default が欠ければ skip の印を書いて以後の候補から外れる', async () => {
+    const jid = seedJob(1, { questions: [{ id: 'q1', question: 'x', why: '', default: '' }], state: { auto_answer: null } });
+    expect((await autoAnswerStep(w.env, fakePort().port, { deadline: FAR() })).skipped).toEqual([{ job_id: jid, reason: 'no_default' }]);
+    expect(skipMark(jid)).toBe('no_default');
+    expect(await autoAnswerStep(w.env, fakePort().port, { deadline: FAR() })).toEqual({ answered: [], skipped: [] });
   });
 
   it('人が保存した回答が saved で止まっている自動の差し戻しの job は、その回答をそのまま送る', async () => {

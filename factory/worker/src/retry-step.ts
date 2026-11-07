@@ -13,6 +13,10 @@ const RETRY_WINDOW_MS = 24 * 60 * 60_000;
 const PENDING_STALE_MS = 10 * 60_000;
 /** 印の条件: まだ再投入していない、または pending のまま止まった（新しい job が既にあれば候補の「新しい job なし」で外れる） */
 const UNMARKED = (p: string) => `(COALESCE(${p}last_error,'') NOT LIKE 'auto_retry:%' OR (${p}last_error = 'auto_retry:pending' AND ${p}updated_at < ?))`;
+/** 同じ素材に新しい job が無く、素材が idle（候補の SQL と印の CAS の両方で見る。t はその job の表の名前） */
+const FREE_MATERIAL = (t: string) =>
+  `NOT EXISTS (SELECT 1 FROM factory_jobs nj WHERE nj.material_id = ${t}.material_id AND nj.created_at > ${t}.created_at)
+         AND EXISTS (SELECT 1 FROM materials m WHERE m.id = ${t}.material_id AND m.work_status = 'idle')`;
 /** 1 回分（D1 の数文）に要る残り時間 */
 const MIN_REMAINING_MS = 5_000;
 
@@ -44,8 +48,7 @@ export async function retryFailedReworkStep(env: Env, o: { deadline: number }): 
        WHERE j.status = 'failed' AND j.error = 'retries_exhausted' AND j.kind = 'rework' AND j.parent_version_id IS NOT NULL
          AND j.updated_at >= ?
          AND ${UNMARKED('j.')}
-         AND NOT EXISTS (SELECT 1 FROM factory_jobs nj WHERE nj.material_id = j.material_id AND nj.created_at > j.created_at)
-         AND EXISTS (SELECT 1 FROM materials m WHERE m.id = j.material_id AND m.work_status = 'idle')
+         AND ${FREE_MATERIAL('j')}
          AND (SELECT count(*) FROM factory_jobs fj WHERE fj.parent_version_id = j.parent_version_id AND fj.kind = 'rework' AND fj.status = 'failed' AND fj.error = 'retries_exhausted') < 2
        ORDER BY j.updated_at ASC, j.id ASC LIMIT 1`,
       isoPlus(-RETRY_WINDOW_MS),
@@ -53,11 +56,13 @@ export async function retryFailedReworkStep(env: Env, o: { deadline: number }): 
     ),
   );
   if (!c) return out;
-  // (1) 印を先に付ける（同時に動いた別の tick と二重に作らない）
+  // (1) 印を先に付ける（同時に動いた別の tick と二重に作らない）。読んだ後に人が新しい job を作った・素材が動いた時も 0 行で raced
+  //     （印と queue の間の短い窓は残る。素材の二重は queueJobForMaterial の idle の検査で防ぐ）
   const claimed = await cas(
     db,
     stmt(
-      `UPDATE factory_jobs SET last_error = 'auto_retry:pending', updated_at = ? WHERE id = ? AND status = 'failed' AND ${UNMARKED('')}`,
+      `UPDATE factory_jobs SET last_error = 'auto_retry:pending', updated_at = ? WHERE id = ? AND status = 'failed' AND ${UNMARKED('')}
+         AND ${FREE_MATERIAL('factory_jobs')}`,
       nowIso(),
       c.id,
       isoPlus(-PENDING_STALE_MS),
