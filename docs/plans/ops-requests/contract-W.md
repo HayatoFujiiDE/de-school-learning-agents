@@ -44,3 +44,14 @@
 - 道具: `scripts/ops-request.sh reverify <version_id>`。
 - 理由: §S-8-3 の画像の使い回しで検証が part_missing になった版 2 件を、直した後に人の操作なしで検証し直すため。
 - 費用と有限化: 依頼 1 件で検証係が 1 回ぶん走り直す（route の再検証と同じ。§W-2 と違い外部費用が掛かる）。上限は version ごとの検証の試行回数（verifyMaxAttempts）・1 回の検証の費用の上限（verify_cost_cap）・1 tick 1 件・60 分で失効、で押さえる。依頼の日次の上限は設けない（運用者だけが書ける）。
+
+## §W-4 工夫をやめる（2026-11-07 追加）
+
+- kind `tip_retire`、payload `{ tip_id, reason }`。tip_id は uuid の形だけ、reason は理由コード `factory_fault`（工場の不具合で起きた失敗から出た工夫）だけ。自由文・余計な項目・形違いは bad_payload。migration 0013 で CHECK を広げた（表を作り直して行を写す）。
+- opsTick は `retro_tips` の **decided_by = 'auto' かつ status = 'active'** の行だけを CAS で `retired` にし、`retire_reason = 'ops:<reason>'`・retired_at を書く。人が入れた工夫（decided_by = 'human'）は止めない（管理画面の「やめる」だけ）。成功は done で、result に `{ tip_id, status: 'retired' }`。
+- 断られた時は failed で、result に `{ refused: <コード> }`（`not_found` / `not_active` / `not_auto`）。
+- 管理画面の「改善係の記録」の「やめた」の理由は「工場の不具合で起きた失敗から出た工夫だったので、司令塔がやめました」と出る。
+- 道具: `scripts/ops-request.sh tip-retire <tip_id>`（理由は factory_fault 固定）。
+- 理由: §S-8 の取り込みの不具合（7bfa689 で修正）で failed になった 2 件を改善係が職人の失敗と読み、工夫が 2 つ自動で入った。本番の記録を直接書き換える操作は許可の判定で止まるため、オーナーの承認（2026-11-07「A」）で依頼箱に足した。§S v2 D 2（自動でやめない）は改善係の LLM の判断の話で、本節は司令塔が原因を確かめた上で止める経路。
+- 費用: 外部費用なし（D1 の 1 行の更新だけ）。1 tick 1 件・60 分で失効。
+

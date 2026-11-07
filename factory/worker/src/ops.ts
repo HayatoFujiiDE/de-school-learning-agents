@@ -2,6 +2,7 @@
 // Claude（司令塔）が `wrangler d1 execute` で ops_requests に 1 行書き、cron が 1 tick に 1 件だけ拾う。
 // できるのはお題の run と、invalid_outputs で failed になった job の取り込み直し（§W-2。route の POST /api/jobs/:id/reingest と同じ claimReingest。session は作らない・費用なし）と、
 // review の版の検証し直し（§W-3。route の POST /api/review/:version_id/reverify と同じ claimReverify。検証を pending に戻すだけ）。
+// 自動で入った工夫をやめる（§W-4。理由コードだけを受け、人が入れた工夫は止めない）。
 // お題は手動の route と同じ queueTopicRun を通す（台帳・上限・run_in_progress・trigger 'manual' が同じ）。
 // payload は信用しない（形を確かめ、合わなければ failed: bad_payload）。ログに payload の中身（note）は出さない。
 
@@ -42,6 +43,42 @@ export function parseReverifyPayload(raw: string): string | null {
   const p = v as Record<string, unknown>;
   if (Object.keys(p).some((k) => k !== 'version_id')) return null;
   return typeof p.version_id === 'string' && JOB_ID_RE.test(p.version_id) ? p.version_id : null;
+}
+
+/** tip_retire の理由コード（§W-4）。自由文は受けない。retire_reason には 'ops:<code>' で書く */
+export const TIP_RETIRE_REASONS = ['factory_fault'] as const;
+export type TipRetireReason = (typeof TIP_RETIRE_REASONS)[number];
+
+/** tip_retire の payload: { tip_id, reason }（uuid の形と理由コードだけ）。合わなければ null */
+export function parseTipRetirePayload(raw: string): { tipId: string; reason: TipRetireReason } | null {
+  let v: unknown;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const p = v as Record<string, unknown>;
+  if (Object.keys(p).some((k) => k !== 'tip_id' && k !== 'reason')) return null;
+  if (typeof p.tip_id !== 'string' || !JOB_ID_RE.test(p.tip_id)) return null;
+  if (typeof p.reason !== 'string' || !(TIP_RETIRE_REASONS as readonly string[]).includes(p.reason)) return null;
+  return { tipId: p.tip_id, reason: p.reason as TipRetireReason };
+}
+
+/**
+ * 自動で入った（decided_by = 'auto'）active の工夫だけを retired にする（CAS）。人が入れた工夫は AI からは止めない（管理画面の「やめる」だけ）
+ */
+async function retireAutoTip(db: D1Database, tipId: string, reason: TipRetireReason): Promise<{ ok: true } | { ok: false; error: string }> {
+  const t = nowIso();
+  const ok = await cas(
+    db,
+    stmt("UPDATE retro_tips SET status = 'retired', retired_at = ?, retire_reason = ?, updated_at = ? WHERE id = ? AND status = 'active' AND decided_by = 'auto'", t, `ops:${reason}`, t, tipId),
+  );
+  if (ok) return { ok: true };
+  const row = await first<{ status: string; decided_by: string | null }>(db, stmt('SELECT status, decided_by FROM retro_tips WHERE id = ?', tipId));
+  if (!row) return { ok: false, error: 'not_found' };
+  if (row.status !== 'active') return { ok: false, error: 'not_active' };
+  return { ok: false, error: 'not_auto' };
 }
 
 /** 依頼の寿命。作られてこれを超えた pending は expired */
@@ -149,6 +186,25 @@ export async function opsTick(env: Env, opts: { now?: Date } = {}): Promise<OpsT
         } else {
           status = 'done';
           result = { version_id: versionId, verification_status: 'pending' };
+        }
+      }
+      await finish(db, row.id, status, result);
+      console.log(JSON.stringify({ at: 'ops_request', id: row.id, kind: row.kind, status }));
+      return { expired, request: { id: row.id, kind: row.kind, status } };
+    }
+    if (row.kind === 'tip_retire') {
+      const p = parseTipRetirePayload(row.payload_json);
+      if (!p) {
+        status = 'failed';
+        result = { error: 'bad_payload' };
+      } else {
+        const r = await retireAutoTip(db, p.tipId, p.reason);
+        if (!r.ok) {
+          status = 'failed';
+          result = { refused: r.error };
+        } else {
+          status = 'done';
+          result = { tip_id: p.tipId, status: 'retired' };
         }
       }
       await finish(db, row.id, status, result);
