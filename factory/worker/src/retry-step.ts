@@ -9,6 +9,10 @@ import { queueJobForMaterial } from './jobs';
 export const AUTO_RETRY_MARK = 'auto_retry:';
 /** これより古い失敗は拾わない */
 const RETRY_WINDOW_MS = 24 * 60 * 60_000;
+/** 印 auto_retry:pending のままこれ以上止まった job は拾い直す（印を付けた後に落ちた時） */
+const PENDING_STALE_MS = 10 * 60_000;
+/** 印の条件: まだ再投入していない、または pending のまま止まった（新しい job が既にあれば候補の「新しい job なし」で外れる） */
+const UNMARKED = (p: string) => `(COALESCE(${p}last_error,'') NOT LIKE 'auto_retry:%' OR (${p}last_error = 'auto_retry:pending' AND ${p}updated_at < ?))`;
 /** 1 回分（D1 の数文）に要る残り時間 */
 const MIN_REMAINING_MS = 5_000;
 
@@ -39,12 +43,13 @@ export async function retryFailedReworkStep(env: Env, o: { deadline: number }): 
       `SELECT j.id, j.material_id, j.parent_version_id, j.brief_md FROM factory_jobs j
        WHERE j.status = 'failed' AND j.error = 'retries_exhausted' AND j.kind = 'rework' AND j.parent_version_id IS NOT NULL
          AND j.updated_at >= ?
-         AND COALESCE(j.last_error, '') NOT LIKE 'auto_retry:%'
+         AND ${UNMARKED('j.')}
          AND NOT EXISTS (SELECT 1 FROM factory_jobs nj WHERE nj.material_id = j.material_id AND nj.created_at > j.created_at)
          AND EXISTS (SELECT 1 FROM materials m WHERE m.id = j.material_id AND m.work_status = 'idle')
          AND (SELECT count(*) FROM factory_jobs fj WHERE fj.parent_version_id = j.parent_version_id AND fj.kind = 'rework' AND fj.status = 'failed' AND fj.error = 'retries_exhausted') < 2
        ORDER BY j.updated_at ASC, j.id ASC LIMIT 1`,
       isoPlus(-RETRY_WINDOW_MS),
+      isoPlus(-PENDING_STALE_MS),
     ),
   );
   if (!c) return out;
@@ -52,9 +57,10 @@ export async function retryFailedReworkStep(env: Env, o: { deadline: number }): 
   const claimed = await cas(
     db,
     stmt(
-      `UPDATE factory_jobs SET last_error = 'auto_retry:pending', updated_at = ? WHERE id = ? AND status = 'failed' AND COALESCE(last_error, '') NOT LIKE 'auto_retry:%'`,
+      `UPDATE factory_jobs SET last_error = 'auto_retry:pending', updated_at = ? WHERE id = ? AND status = 'failed' AND ${UNMARKED('')}`,
       nowIso(),
       c.id,
+      isoPlus(-PENDING_STALE_MS),
     ),
   );
   if (!claimed) {

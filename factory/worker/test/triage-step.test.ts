@@ -8,9 +8,10 @@ import { one, rows } from './d1-shim';
 import { CH, WATCH, addVerification, ctx, fixable, good, material, seed, setSetting, world, type V, type World } from './review-auto-helpers';
 
 const FAR = () => Date.now() + 10 * 60_000;
-/** 契約 V-12 a の文（verbatim） */
+/** 契約 V-12 a の文（verbatim。レビュー後の版: 約束を「機械の差し戻しの作り直しでは」に限定） */
 const AUTO_RETURN_APPEND_TEXT =
-  '（機械の仕分けからのお願い）この差し戻しは人ではなく機械の仕分けによるものです。質問（questions）は出さず、迷う点は注文票とこの差し戻し理由から最も妥当な方を自分で選んで作り、選んだことと理由を selfcheck.md に 1 行で書いてください。それでも質問を出した時は、あなたの既定案（default）がそのまま回答として返ります。';
+  '（機械の仕分けからのお願い）この差し戻し理由は人ではなく機械の仕分けによるものです。質問（questions）は出さず、迷う点は注文票と差し戻し理由から最も妥当な方を自分で選んで作り、選んだことと理由を selfcheck.md に 1 行で書いてください。機械の差し戻しの作り直しで質問を出した時は、あなたの既定案（default）がそのまま回答として返ります。';
+const timesIn = (s: string, sub: string) => s.split(sub).length - 1;
 let w: World;
 let env: Env;
 
@@ -54,6 +55,10 @@ describe('triageStep（契約 V-7 b）', () => {
     expect(await triageStep(env, { deadline: FAR() })).toEqual(['auto_return']);
     reworkVersion('v1', fixable('m1', 'v2', { version: 2, created_at: '2026-11-07T01:00:00.000Z' }));
     expect(await triageStep(env, { deadline: FAR() })).toEqual(['auto_return']);
+    // 契約 V-12 a: お願い文は前の brief の ## 追記 として引き継がれ、2 回目の自動の差し戻しでも 1 回しか入らない
+    const brief2 = String(one(w.db, "SELECT brief_md FROM factory_jobs WHERE kind = 'rework' AND parent_version_id = 'v2'").brief_md);
+    expect(brief2).toContain('## 差し戻し理由（v2）');
+    expect(timesIn(brief2, AUTO_RETURN_APPEND_TEXT)).toBe(1);
     const { wid } = reworkVersion('v2', fixable('m1', 'v3', { version: 3, created_at: '2026-11-07T02:00:00.000Z' }));
     expect(await triageStep(env, { deadline: FAR() })).toEqual(['none']);
     expect(vcol('v3', 'status, triaged_verification_id, triage_v, triage_gate')).toEqual({ status: 'review', triaged_verification_id: wid, triage_v: 2, triage_gate: 'attention' });

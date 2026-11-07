@@ -126,6 +126,8 @@ describe('autoAnswerStep（契約 V-12・u11）', () => {
     }
     expect(sent).toEqual([]);
     expect(autoLogs()).toEqual([a, b, c].map((j) => ({ at: 'auto_answer', job_id: j, result: 'no_default' })));
+    // 見える化: 管理画面の last_error にも印（既にあれば上書きしない）
+    for (const j of [a, b, c]) expect(one(w.db, 'SELECT last_error FROM factory_jobs WHERE id = ?', j).last_error).toBe('auto_answer:no_default');
     // ちょうど 4,000 字なら答える
     const w2 = world();
     w = w2;
@@ -144,6 +146,52 @@ describe('autoAnswerStep（契約 V-12・u11）', () => {
     expect(job(c)).toMatchObject({ status: 'running', phase: 'making', answer_state: 'sent' });
     // 人が管理画面で答える経路は変わらない（印は無視される）
     expect(job(a)).toMatchObject({ status: 'needs_answer', answer_state: 'none' });
+  });
+
+  it('no_default の印は last_error が既にあれば上書きしない', async () => {
+    const a = seedJob(1, { questions: [{ id: 'q1', question: 'x', why: '', default: '' }] });
+    w.db.prepare("UPDATE factory_jobs SET last_error = 'scan_no_progress' WHERE id = ?").run(a);
+    expect((await autoAnswerStep(w.env, fakePort().port, { deadline: FAR() })).skipped).toEqual([{ job_id: a, reason: 'no_default' }]);
+    expect(one(w.db, 'SELECT last_error FROM factory_jobs WHERE id = ?', a).last_error).toBe('scan_no_progress');
+    expect(skipMark(a)).toBe('no_default');
+  });
+
+  it('attempts の CAS に負けた時は raced（ログも出す）で answerJob を呼ばない', async () => {
+    const jid = seedJob(1);
+    const real = w.env.DB;
+    // 候補を読んだ後・CAS の前に、別の呼び出しが試行の数を進めた状態を作る
+    const DB = new Proxy(real, {
+      get(t, k) {
+        if (k === 'prepare')
+          return (sql: string) => {
+            if (sql.startsWith('UPDATE factory_jobs SET reconcile_state_json') && sql.includes('$.auto_answer.attempts'))
+              w.db.prepare(`UPDATE factory_jobs SET reconcile_state_json = '{"auto_answer":{"attempts":1}}' WHERE id = ?`).run(jid);
+            return t.prepare(sql);
+          };
+        const v = (t as unknown as Record<string | symbol, unknown>)[k];
+        return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+      },
+    });
+    const { port, sent } = fakePort();
+    expect(await autoAnswerStep({ ...w.env, DB } as typeof w.env, port, { deadline: FAR() })).toEqual({ answered: [], skipped: [{ job_id: jid, reason: 'raced' }] });
+    expect(autoLogs()).toEqual([{ at: 'auto_answer', job_id: jid, result: 'raced' }]);
+    expect(job(jid)).toMatchObject({ status: 'needs_answer', answer_state: 'none' });
+    expect(sent).toEqual([]);
+  });
+
+  it("reconcile_state_json が '' や壊れた JSON の行があっても段は止まらない（0 回として扱い、'{}' から書き直して答える）", async () => {
+    const a = seedJob(1);
+    const b = seedJob(2);
+    w.db.prepare("UPDATE factory_jobs SET reconcile_state_json = '{broken' WHERE id = ?").run(a);
+    w.db.prepare("UPDATE factory_jobs SET reconcile_state_json = '' WHERE id = ?").run(b);
+    expect(await autoAnswerStep(w.env, fakePort().port, { deadline: FAR() })).toEqual({ answered: [a, b], skipped: [] });
+    expect([attempts(a), attempts(b)]).toEqual([1, 1]);
+    // default の欠ける壊れた行も印を書いて外れる
+    const c = seedJob(3, { questions: [{ id: 'q1', question: 'x', why: '', default: '' }] });
+    w.db.prepare("UPDATE factory_jobs SET reconcile_state_json = '[1' WHERE id = ?").run(c);
+    expect((await autoAnswerStep(w.env, fakePort().port, { deadline: FAR() })).skipped).toEqual([{ job_id: c, reason: 'no_default' }]);
+    expect(skipMark(c)).toBe('no_default');
+    expect(await autoAnswerStep(w.env, fakePort().port, { deadline: FAR() })).toEqual({ answered: [], skipped: [] });
   });
 
   it('paused なら何もしない（attempts 不変）', async () => {

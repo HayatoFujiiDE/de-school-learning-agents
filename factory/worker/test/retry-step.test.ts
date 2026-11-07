@@ -114,6 +114,26 @@ describe('retryFailedReworkStep（契約 V-13・u12）', () => {
     expect((await retryFailedReworkStep(w.env, { deadline: FAR() })).queued.map((x) => x.failed_job_id)).toEqual([b]);
   });
 
+  it('auto_retry:pending のまま 10 分以上止まった job は拾い直す。10 分未満は拾わない。新しい job があれば拾わない', async () => {
+    const old = seedFailed(1, { lastError: 'auto_retry:pending', updatedAt: ago(11 * 60_000) });
+    const fresh = seedFailed(2, { lastError: 'auto_retry:pending', updatedAt: ago(9 * 60_000) });
+    const queuedAlready = seedFailed(3, { lastError: 'auto_retry:pending', updatedAt: ago(30 * 60_000) });
+    // queue 済みで印だけ書けなかった job（同じ素材に新しい job がある）
+    w.db
+      .prepare("INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, parent_version_id, brief_md, created_at, updated_at) VALUES ('n3', 'm3', 'rework', 'x', 'questions', 'queued', 'v3', 'b', ?, ?)")
+      .run(ago(29 * 60_000), ago(29 * 60_000));
+    w.db.prepare("UPDATE materials SET work_status = 'idle' WHERE id = 'm3'").run();
+    const r = await retryFailedReworkStep(w.env, { deadline: FAR() });
+    const q = jobsOf('m1');
+    expect(q).toHaveLength(1);
+    expect(r).toEqual({ queued: [{ failed_job_id: old, job_id: q[0].id }], skipped: [] });
+    expect(lastError(old)).toBe(`auto_retry:${q[0].id}`);
+    expect(await retryFailedReworkStep(w.env, { deadline: FAR() })).toEqual({ queued: [], skipped: [] });
+    expect([lastError(fresh), lastError(queuedAlready)]).toEqual(['auto_retry:pending', 'auto_retry:pending']);
+    expect(jobsOf('m2')).toEqual([]);
+    expect(rows(w.db, "SELECT id FROM factory_jobs WHERE material_id = 'm3' AND status = 'queued'")).toEqual([{ id: 'n3' }]);
+  });
+
   it('queueJobForMaterial が 409 なら auto_retry:refused:material_busy で二度拾わない', async () => {
     const jid = seedFailed(1);
     // 素材は idle だが同じ素材に古い動いている job がある（作れない = 409 material_busy）

@@ -17,10 +17,11 @@ export const AUTO_TRIAGE_EMAIL = 'system:auto-triage';
 export const AUTO_PUBLISH_EMAIL = 'system:auto-publish';
 /**
  * 契約 V-12 a: 自動の差し戻しの brief に「## 追記」として付けるお願い（職人が質問で止まって人待ちにならないように）。
- * それでも質問が来た時は auto-answer.ts の autoAnswerStep が職人自身の default で答える。人の差し戻しの brief には付けない
+ * それでも質問が来た時は auto-answer.ts の autoAnswerStep が職人自身の default で答える。人の差し戻しの brief には付けない。
+ * 前の brief の ## 追記 として後の作り直し（人の差し戻しを含む）にも残るので、約束の文は「機械の差し戻しの作り直しでは」に限定する
  */
 export const AUTO_RETURN_APPEND =
-  '（機械の仕分けからのお願い）この差し戻しは人ではなく機械の仕分けによるものです。質問（questions）は出さず、迷う点は注文票とこの差し戻し理由から最も妥当な方を自分で選んで作り、選んだことと理由を selfcheck.md に 1 行で書いてください。それでも質問を出した時は、あなたの既定案（default）がそのまま回答として返ります。';
+  '（機械の仕分けからのお願い）この差し戻し理由は人ではなく機械の仕分けによるものです。質問（questions）は出さず、迷う点は注文票と差し戻し理由から最も妥当な方を自分で選んで作り、選んだことと理由を selfcheck.md に 1 行で書いてください。機械の差し戻しの作り直しで質問を出した時は、あなたの既定案（default）がそのまま回答として返ります。';
 /** 1 回の cron で書き込みが成立する版の数（§L-4・契約 V-7 b） */
 export const TRIAGE_BATCH = 3;
 /** 1 回の cron で読む（computeTriage を当てる）版の数（契約 V-7 b。busy・stale・pending の版が先頭に居座っても後ろが進む） */
@@ -231,7 +232,8 @@ export async function applyTriage(env: Env, v: TriageApplyRow, t: TriageOutput):
           checklist_json: null,
           note,
           new_job_id: newJobId,
-          rework_brief_md: buildReworkBrief(orig?.brief_md, v.version, note, AUTO_RETURN_APPEND),
+          // お願い文は前の brief の ## 追記 として引き継がれるので、まだ無い時だけ足す（自動の差し戻しが続いても 1 回だけ）
+          rework_brief_md: buildReworkBrief(orig?.brief_md, v.version, note, orig?.brief_md?.includes(AUTO_RETURN_APPEND) ? '' : AUTO_RETURN_APPEND),
           rework_model: JOB_MODEL.rework,
           rework_budget_cents: cfg(env).budgetReworkCents,
           machine_gate: t.gate,
