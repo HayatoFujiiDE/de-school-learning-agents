@@ -3290,11 +3290,31 @@
       return 'その他';
     }).join('・');
   }
-  var RETRO_VERSION_STATUS = { review: ['確認待ち', 'yellow'], approved: ['承認済み', 'green'], rejected: ['差し戻し・却下', 'gray'] };
+  /** 観点キー → 画面の言葉（return_themes の other は「その他」） */
+  function retroNgLabel(k) {
+    for (var i = 0; i < CHECKLIST.length; i++) if (CHECKLIST[i][0] === k) return CHECKLIST[i][1];
+    return 'その他';
+  }
+  /**
+   * 最新の差し戻しの観点の欄（§S v2 追加 A）。チェックリストに ng があればそれを出し、
+   * 無い時（unclassified）は改善係が理由の文を観点に分けたもの（ai_return_themes）を「AI が読んだ観点」として出す。evidence は LLM の文なので esc()
+   */
+  function retroLedgerNgHtml(r) {
+    var keys = Array.isArray(r.latest_return_ng) ? r.latest_return_ng : [];
+    var themes = Array.isArray(r.ai_return_themes) ? r.ai_return_themes : [];
+    if (keys.length === 1 && keys[0] === 'unclassified' && themes.length) {
+      return '<span data-retro-ai-themes="' + esc(themes.length) + '"><span class="muted">AI が読んだ観点:</span> ' +
+        themes.map(function (t) {
+          return esc(retroNgLabel(t.key)) + ' ' + esc(Number(t.count || 0)) + ' 件' + (t.evidence ? ' <span class="muted">（' + esc(t.evidence) + '）</span>' : '');
+        }).join('・') + '</span>';
+    }
+    return esc(retroNgText(keys));
+  }
+  var RETRO_VERSION_STATUS ={ review: ['確認待ち', 'yellow'], approved: ['承認済み', 'green'], rejected: ['差し戻し・却下', 'gray'] };
   /** 作り直しの台帳（§S v2 A）。教材ごとに作った回数・作り直し・費用・差し戻し・承認。費用の多い行に印を付ける */
   function retroLedgerHtml(rows) {
     rows = Array.isArray(rows) ? rows : [];
-    var head = '<h2>作り直しの台帳</h2><p class="muted">教材ごとに、承認されるまでに作った回数と費用です（新しい順）。費用の多い行に印を付けています。教材の名前を押すと、その教材の画面を開きます。</p>';
+    var head = '<h2>作り直しの台帳</h2><p class="muted">教材ごとに、承認されるまでに作った回数と費用です（新しい順）。費用の多い行に印を付けています。教材の名前を押すと、その教材の画面を開きます。差し戻しのチェックリストに観点の記録が無い時は、改善係が理由の文から読んだ観点（AI が読んだ観点）を出します。</p>';
     if (!rows.length) return '<div class="card" data-retro-ledger="0">' + head + '<p class="muted" data-retro-ledger-empty="1">まだ注文はありません。注文が終わると、ここに教材ごとの回数と費用が出ます</p></div>';
     var costs = rows.map(function (r) { return Number(r.list_cost_cents || 0); });
     var avg = costs.reduce(function (s, c) { return s + c; }, 0) / costs.length;
@@ -3313,7 +3333,7 @@
         '<td>' + (hot ? '<b>' + esc(retroCents(c)) + '</b>' : esc(retroCents(c))) + '</td>' +
         '<td>' + esc(ret) + ' 回' + (auto ? ' <span class="muted">（うち自動 ' + esc(auto) + '）</span>' : '') + '</td>' +
         '<td>' + esc(Number(r.approves || 0)) + ' 回</td>' +
-        '<td>' + esc(retroNgText(r.latest_return_ng)) + '</td></tr>';
+        '<td>' + retroLedgerNgHtml(r) + '</td></tr>';
     }).join('');
     return '<div class="card" data-retro-ledger="' + rows.length + '">' + head + '<div class="table-wrap"><table class="retro-ledger"><thead><tr>' +
       '<th scope="col">教材</th><th scope="col">作った回数</th><th scope="col">作り直し</th><th scope="col">費用</th><th scope="col">差し戻し</th><th scope="col">承認</th><th scope="col">最新の差し戻しの観点</th>' +
