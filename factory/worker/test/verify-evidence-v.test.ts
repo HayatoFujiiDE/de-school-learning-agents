@@ -717,4 +717,86 @@ describe('契約 V-3 d (u3) strict の文法が大きすぎた時の逃げ道', 
     expect(setting('verify_strict')).toBeNull();
     expect(ver()).toMatchObject({ verification_status: 'pending', verification_attempts: 1 });
   });
+
+  // ---- Astra レビュー（契約 V-3 d の裁定）: 配備前の plan.json（strict が無い）と、設定の書き込みの失敗 ----
+  const planKey = () => verifyPlanKey('v1', token());
+  const readPlanJson = () => JSON.parse(String(r2.get(planKey()))) as Record<string, unknown>;
+  /** plan.json を配備前の形にする（strict を消す）か、strict の値を書き換える */
+  const setPlanStrict = (v: boolean | undefined) => {
+    const p = readPlanJson();
+    if (v === undefined) delete p.strict;
+    else p.strict = v;
+    r2.set(planKey(), JSON.stringify(p));
+  };
+  const pauseMsg = { type: 'succeeded', message: { type: 'message', role: 'assistant', content: [{ type: 'text', text: '出典を開いています' }], stop_reason: 'pause_turn', usage: { input_tokens: 10, output_tokens: 1 } } };
+  /** settings への書き込み（INSERT INTO settings）だけが throw する DB */
+  const settingsDownEnv = (vars: Record<string, string> = {}): Env => {
+    const env = makeEnv(vars);
+    const base = env.DB;
+    return {
+      ...env,
+      DB: {
+        ...base,
+        prepare: (sql: string) => {
+          if (/INSERT INTO settings/.test(sql)) throw new Error('settings_down');
+          return base.prepare(sql);
+        },
+        batch: base.batch.bind(base),
+      } as unknown as D1Database,
+    };
+  };
+
+  it('Batch: strict の無い旧 plan.json の 2 ターン目を提出すると、plan.json にその提出の strict が書かれる', async () => {
+    seed();
+    const { port, created, s } = batchPort([pauseMsg, succeeded(reportMsg({}))]);
+    const env = makeEnv();
+    // t0 の提出 → 配備前の plan.json に見せる（strict を消す）→ t0 の回収（pause_turn → 続き）
+    expect(await batchRun(env, port, s, () => setPlanStrict(undefined))).toContain('collect=continue:t1');
+    expect(Object.hasOwn(readPlanJson(), 'strict')).toBe(false);
+    s.status = 'in_progress';
+    expect(await runVerificationStep(env, port, { deadline: Date.now() + 120_000 })).toContain('submit=submitted');
+    expect(created).toHaveLength(2);
+    expect(reportStrict(created[1].params).strict).toBe(true);
+    expect(readPlanJson().strict).toBe(true);
+  });
+
+  it('Batch: strict の無い旧 plan.json の試行が errored（compiled grammar）→ attempts が返る（配備前の提出はすべて strict つき）', async () => {
+    seed();
+    const { port, s } = batchPort([erroredGrammar]);
+    expect(await batchRun(makeEnv(), port, s, () => setPlanStrict(undefined))).toContain('collect=retry:schema_too_large');
+    expect(setting('verify_strict')).toBe('0');
+    expect(ver()).toMatchObject({ verification_status: 'pending', verification_attempts: 0 });
+  });
+
+  it('Batch: strict:false の plan.json の試行が同じエラー → 今の失敗の扱い（設定が 1 のままでも plan.json の値で決める）', async () => {
+    seed();
+    const { port, s } = batchPort([erroredGrammar]);
+    expect(await batchRun(makeEnv(), port, s, () => setPlanStrict(false))).toContain('collect=retry:result_errored');
+    expect(ver()).toMatchObject({ verification_status: 'pending', verification_attempts: 1 });
+  });
+
+  it('Batch: plan.json が読めない試行の同じエラー → 今の失敗の扱い（返さない）', async () => {
+    seed();
+    const { port, s } = batchPort([erroredGrammar]);
+    expect(await batchRun(makeEnv(), port, s, () => r2.set(planKey(), '{'))).toContain('collect=retry:result_errored');
+    expect(setting('verify_strict')).toBe('0');
+    expect(ver()).toMatchObject({ verification_status: 'pending', verification_attempts: 1 });
+  });
+
+  it('同期: settings の書き込みが失敗した時は、strict つきの試行でも attempts を消費する（上限なら failed）', async () => {
+    seed();
+    db.prepare("UPDATE material_versions SET verification_attempts = 2 WHERE id = 'v1'").run();
+    const { port } = syncPort([grammar400()]);
+    expect(await runVerificationStep(settingsDownEnv({ VERIFY_MODE: 'sync' }), port)).toBe('retry:api:PortError:400');
+    expect(setting('verify_strict')).toBeNull();
+    expect(ver()).toMatchObject({ verification_status: 'failed', verification_attempts: 3 });
+  });
+
+  it('Batch: settings の書き込みが失敗した時は、strict つきの試行でも attempts を消費する', async () => {
+    seed();
+    const { port, s } = batchPort([erroredGrammar]);
+    expect(await batchRun(settingsDownEnv(), port, s)).toContain('collect=retry:result_errored');
+    expect(setting('verify_strict')).toBeNull();
+    expect(ver()).toMatchObject({ verification_status: 'pending', verification_attempts: 1 });
+  });
 });

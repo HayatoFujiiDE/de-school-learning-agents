@@ -1692,14 +1692,20 @@ export function isSchemaTooLargeError(e: unknown): boolean {
   return err?.type === 'invalid_request_error' && typeof err.message === 'string' && err.message.includes('compiled grammar');
 }
 
-/** 契約 V-3 d: settings に verify_strict = '0' を書き（upsert）、ログに残す。書けなくても throw しない（次の試行がまた当たって書く） */
-async function disableVerifyStrict(db: D1Database, mode: VerifyMeta['mode'], versionId: string): Promise<void> {
+/**
+ * 契約 V-3 d: settings に verify_strict = '0' を書き（upsert）、ログに残す。書けたら true。書けなくても throw しない。
+ * 書けなかった時は attempts を返さない（呼ぶ側。設定の書き込みだけが失敗し続けても strict つきの失敗を無限に繰り返さない＝有界）
+ */
+async function disableVerifyStrict(db: D1Database, mode: VerifyMeta['mode'], versionId: string): Promise<boolean> {
+  let written = false;
   try {
     await setSetting(db, VERIFY_STRICT_KEY, '0');
+    written = true;
   } catch {
-    // 書けなくても試行の扱いは同じ
+    written = false;
   }
-  console.log(JSON.stringify({ at: 'verify', mode, version_id: versionId, error: 'schema_too_large' }));
+  console.log(JSON.stringify({ at: 'verify', mode, version_id: versionId, error: 'schema_too_large', ...(written ? {} : { setting: 'not_written' }) }));
+  return written;
 }
 
 /**
@@ -1879,9 +1885,10 @@ async function runAttempt(
       resp = await port.createMessage(params, deadline !== undefined ? { deadline, maxTimeoutMs: SYNC_CALL_MAX_MS } : undefined);
     } catch (e) {
       if (isSchemaTooLargeError(e)) {
-        // 契約 V-3 d: 以後の試行は strict なし。strict つきで出した試行は attempts を消費しない（strict なしで同じエラーなら今の失敗の扱い）
-        await disableVerifyStrict(env.DB, 'sync', v.id);
-        if (strict) return { ok: false, reason: 'schema_too_large', microDollars: micro, refund: true };
+        // 契約 V-3 d: 以後の試行は strict なし。strict つきで出し、設定を書けた試行だけ attempts を消費しない
+        // （strict なしで同じエラー・設定を書けなかった時は今の失敗の扱い）
+        const written = await disableVerifyStrict(env.DB, 'sync', v.id);
+        if (strict && written) return { ok: false, reason: 'schema_too_large', microDollars: micro, refund: true };
       }
       return { ok: false, reason: `api:${errorKind(e)}`, microDollars: micro };
     }
@@ -2382,10 +2389,10 @@ export async function submitOne(
       const m = await readConversation(env, key);
       if (!m) return failAttempt(env, l, r.material_id, { reason: 'conversation_missing' });
       messages = m;
-      // 契約 V-3 d: 2 ターン目以降で strict の有無が変わった時は、plan.json の strict をこの提出の値にする（plan.json が無い・古い形なら書かない）
+      // 契約 V-3 d: 2 ターン目以降は plan.json の strict をこの提出の値にする（strict の無い配備前の plan.json も書く。plan.json が読めなければ書かない）
       const pk = verifyPlanKey(r.id, r.verification_token);
       const plan = await readPlan(env, pk);
-      if (plan && plan.strict !== undefined && plan.strict !== strict) await env.R2.put(pk, JSON.stringify({ ...plan, strict }));
+      if (plan && plan.strict !== strict) await env.R2.put(pk, JSON.stringify({ ...plan, strict }));
     }
   } catch (e) {
     // createBatch の前なので batch は無い（見積りを付けない）
@@ -2553,9 +2560,11 @@ export async function collectOne(env: Env, port: FactoryPort, r: BatchRow, deadl
   if (d.kind === 'fail') {
     let refund = false;
     if (d.schemaTooLarge) {
-      // 契約 V-3 d: 以後の提出は strict なし。plan.json の strict が true の試行だけ attempts を消費しない（無い・false は今の失敗の扱い）
-      await disableVerifyStrict(env.DB, 'batch', r.id);
-      refund = (await readPlan(env, verifyPlanKey(r.id, r.verification_token)).catch(() => null))?.strict === true;
+      // 契約 V-3 d: 以後の提出は strict なし。設定を書けて、plan.json が読めて strict が false でない試行だけ attempts を消費しない
+      // （strict が無い = 配備前の提出はすべて strict つき。false・plan.json が読めない・設定を書けない時は今の失敗の扱い）
+      const written = await disableVerifyStrict(env.DB, 'batch', r.id);
+      const plan = written ? await readPlan(env, verifyPlanKey(r.id, r.verification_token)).catch(() => null) : null;
+      refund = written && plan !== null && plan.strict !== false;
     }
     const out = await failAttempt(env, lc, r.material_id, { reason: refund ? 'schema_too_large' : d.schemaTooLarge ? 'result_errored' : d.reason, ledgerCents: cents, refund });
     console.log(JSON.stringify({ at: 'verify', mode: 'batch', version_id: r.id, turn: r.verify_turn, result: out }));
