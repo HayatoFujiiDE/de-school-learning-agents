@@ -142,7 +142,36 @@ export function figureClaims() {
   return d;
 }
 
-export const ALL = { attention, clean, pending, readerWait, figureClaims };
+/**
+ * 立体モデル（§AJ）のある版: p1 に一覧の 2 件（Sketchfab の 1 件・Smithsonian Voyager の 1 件）。仕分けは 1 件ごとに「人が回して見る」（ask）。
+ * 4 通りの版とは別に serve.mjs だけが出す（#/review/vm3d-0001）。見方と出典の並びは作り物だが、埋め込みの url は一覧（factory/models3d/catalog.json）の実物
+ */
+export function models3d() {
+  const d = attention();
+  d.version.id = 'vm3d-0001';
+  d.version.version = 8;
+  d.version.created_at = '2026-11-07T11:00:00.000Z';
+  d.material.title = '赤血球のしごと（立体モデルのある版）';
+  const catalog = JSON.parse(readFileSync(new URL('../../../models3d/catalog.json', import.meta.url), 'utf8')).models;
+  const entryOf = (id) => catalog.find((m) => m.id === id);
+  const picks = [
+    { id: 'd1', catalog_id: 'omnh-allosaurus', source_id: 's9', why: '骨盤と 後ろあしを 回して 見る（作り物の見方）' },
+    { id: 'd2', catalog_id: 'si-triceratops', source_id: 's10', why: '頭の 後ろの えりかざりを 横から 見る（作り物の見方）' },
+  ];
+  d.version.material.parts[0].models3d = picks.map(({ id, catalog_id, why, source_id }) => ({ id, catalog_id, why, source_id }));
+  d.models3d_meta = {};
+  for (const p of picks) {
+    const e = entryOf(p.catalog_id);
+    d.sources.push({ source_id: p.source_id, url: e.page_url, title: e.title_ja, accessed_at: '2026-11-07', quoted_excerpt: '', license: e.license.label, is_primary: 0, url_was_fetched: 0, quote_found: 0, check_detail: 'model3d' });
+    d.models3d_meta[p.id] = { catalog_id: e.id, title: e.title_ja, org: e.org, kind: e.kind, embed_url: e.embed_url, page_url: e.page_url, license: e.license.label, attribution: e.attribution };
+  }
+  const items = picks.map((p) => ({ id: 'model3d:' + p.id, kind: 'model3d', key: 'explanation_and_expression', severity: 'ask', cause: 'model3d_human', model3d_id: p.id, catalog_id: p.catalog_id, title: entryOf(p.catalog_id).title_ja, detail: '立体モデル（人が回して見てください）' }));
+  d.triage.items = [...items, ...d.triage.items];
+  d.triage.counts = { ...d.triage.counts, ask: d.triage.counts.ask + items.length };
+  return d;
+}
+
+export const ALL = { attention, clean, pending, readerWait, figureClaims, models3d };
 
 /** 一覧（GET /api/review）の行。並びはサーバーと同じ（needs_review の多い順 → 古い順） */
 export function listRows() {

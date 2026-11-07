@@ -1328,3 +1328,7 @@ v3.5（2026-11-04 段階 0 の実測。最初の本物の session sesn_01Jfui3ap
 ## §AJ 立体モデル（3D）を素材に組み合わせる（v3.15。2026-11-07 凍結）
 
 本文（正本）は `docs/plans/models3d/contract-AJ.md`（AJ-0〜AJ-7）。人が提供元の記録でライセンスを確かめた一覧 `factory/models3d/catalog.json`（CC0 / CC BY / NASA の利用の決まり。PR-AJ1 で着地）に載っているものだけを、職人が注文票の一覧から選んで `parts[].models3d[]` に書く。v1 は提供元の公式の埋め込み（Sketchfab・Smithsonian Voyager）を確認画面で人が回して見る（仕分けが ask を出し、自動公開しない）。自前で見せる（GLB を取ってきて `<model-viewer>`）v2 と子ども向けアプリの描画は別契約。
+
+## §AJ2 立体モデル v2: `download` を工場が自分で持って見せる（v3.16。2026-11-07 凍結）
+
+本文（正本）は `docs/plans/models3d/contract-AJ2.md`（AJ2-0〜AJ2-6）。一覧の `kind: download` のうち運営が確認画面の「立体モデル」ページで取り込んだもの（GLB を一覧の `download_url` から取り、形を検査して R2 に置き、D1 `models3d_files` に記録。1 件 24 MiB まで）だけを、確認画面（`<model-viewer>` と Draco 復号器を自前に置く。`/admin` の CSP に `'wasm-unsafe-eval'` と `worker-src blob:`）と学習者側の入口（`GET /api/library/models3d` の `file_url`・`GET /api/library/models3d/files/<id>/<sha>.glb`。認証なし・CORS `*`）で見せる。職人の定義は変えない（`ant apply` 不要）。子ども向けアプリの描画・OBJ の変換・24 MiB 超の軽量化は範囲外。

@@ -109,7 +109,7 @@
 
 - PR-AJ1（着地済み）: 一覧・同期・テスト（main `b58fcd8`）。
 - PR-AJ2: AJ-1〜AJ-6 を 1 PR（契約面 schema・CSP・仕分けの 3 面をまたぐので実装は Opus high、レビューは Astra medium。security 境界に当たる所は CSP と iframe の src の形の再確認だけ）。着地後に deploy（AI が `deploy-ref.sh`）→ `ant apply --yes claude/agents/material-maker.md`（ふじさん。environment は変えないので cloud.yaml は渡さない）→ 費用ゼロの確認用 session 1 本（AI）→ `claude-lock.json` の commit。
-- v2（別契約・別レーン）: `download` を自前で見せる（GLB の取得と R2・`<model-viewer>`・容量の上限・子ども向けアプリの描画）/ 検証係が立体モデルの題名と見方の食い違いを判定 / 職人が一覧に無いモデルを探す時の Sketchfab Data API によるライセンス確認。
+- v2（別契約・別レーン。契約は `contract-AJ2.md`。2026-11-07 凍結）: `download` を自前で見せる（GLB の取得と R2・`<model-viewer>`・容量の上限・子ども向けアプリの描画）/ 検証係が立体モデルの題名と見方の食い違いを判定 / 職人が一覧に無いモデルを探す時の Sketchfab Data API によるライセンス確認。
 
 ## 未確認の点（推測を事実として書かない）
 
