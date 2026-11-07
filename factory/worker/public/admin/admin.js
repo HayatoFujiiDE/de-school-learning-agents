@@ -1390,7 +1390,7 @@
     if (!floor.filter) { b.classList.add('hidden'); b.textContent = ''; return; }
     b.classList.remove('hidden');
     var sel = noItemsStation(floor.filter);
-    var chip = sel ? stationName(floor.filter) + 'を選んでいます' : stationName(floor.filter) + 'にいる素材だけ表示中';
+    var chip = stationName(floor.filter) + 'の係を開いています';
     b.innerHTML = esc(chip) + ' <span class="scene-filter-x" aria-hidden="true">✕</span>';
     b.setAttribute('aria-label', chip + (sel ? '。押すと選択を解除します' : '。押すと絞り込みを解除します'));
   }
