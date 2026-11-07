@@ -11,10 +11,8 @@
     setTimeout(function () { when(pred, then, left - 1); }, 100);
   }
   var loaded = function (n) { return function () { return document.querySelectorAll('.mp-md').length >= n; }; };
-  // headless の --screenshot はスクロールした位置を撮れないため、上の「要確認」を畳んで教材プレビューを画面に入れる
-  function toStudy() { var g = $('#rv-groups'); if (g) g.open = false; }
   // フォーカスで動いたスクロールも戻す（撮れるのは先頭の画面だけ）
-  function done() { setTimeout(function () { window.scrollTo(0, 0); document.title = 'ready'; }, 300); }
+  function done() { setTimeout(function () { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); window.scrollTo(0, 0); document.title = 'ready'; }, 400); }
   function addSticky(para, kind, text, then) {
     if (!click('#mp-body-0-0 [data-stick-open="' + para + '"]')) return then();
     when(function () { return !!$('[data-stick-form]'); }, function () {
@@ -25,67 +23,56 @@
       setTimeout(then, 150);
     });
   }
+  // 項目の場所（「小学生・短い 2 段落目」など）は全部の変奏を読んでから出る
+  var located = function () { return !!$('.rv-it-where') || !$('.rv-it'); };
   var steps = {
-    top: function () { done(); },
-    'default': function () { toStudy(); done(); },
-    'marks-off': function () { toStudy(); click('[data-mp-marks]'); when(loaded(2), function () { toStudy(); done(); }); },
-    compare: function () { toStudy(); click('[data-pv="compare"]'); when(loaded(4), function () { toStudy(); done(); }); },
+    top: function () { when(located, done); },
+    // 見てほしい所の 1 件目を OK にした状態・1 件目を「直してもらう」にした状態
+    ok1: function () { when(located, function () { click('[data-it-ok]'); done(); }); },
+    redo1: function () { when(located, function () { click('[data-it-redo="0"]'); done(); }); },
+    // 全部の項目を決めた（ask は OK・fix は 1 件だけ「このまま出す」、残りは「直してもらう」）→ 直してもらうを押して理由欄を開く
+    'return-open': function () {
+      when(located, function () {
+        Array.prototype.forEach.call(document.querySelectorAll('.rv-it[data-sev="ask"] [data-it-ok]'), function (b) { b.click(); });
+        Array.prototype.forEach.call(document.querySelectorAll('.rv-it[data-sev="fix"] [data-it-redo]'), function (b) { b.click(); });
+        addSticky(2, 'hard', '「いちばん 数が 多い」の根拠が子どもに伝わらない', function () {
+          click('#return-btn');
+          setTimeout(done, 200);
+        });
+      });
+    },
+    'marks-off': function () { when(located, function () { click('[data-mp-marks]'); when(loaded(2), done); }); },
+    compare: function () { when(located, function () { click('[data-pv="compare"]'); when(loaded(4), done); }); },
+    // 表示中の変奏に無い項目（中学生・長い にあります）の「場所を見る」→ その変奏に切り替わる
+    'goto-other': function () {
+      when(located, function () {
+        var b = Array.prototype.filter.call(document.querySelectorAll('.rv-it'), function (li) { return /にあります/.test(li.textContent); })[0];
+        if (b) click(b.querySelector('[data-it-goto]'));
+        setTimeout(function () { when(loaded(2), done); }, 300);
+      });
+    },
+    // 横にはみ出す要素を数える（--dump-dom で読む。幅の確かめ用）
+    measure: function () {
+      when(located, function () {
+        var vw = document.documentElement.clientWidth, out = [];
+        Array.prototype.forEach.call(document.querySelectorAll('body *'), function (el) {
+          var r = el.getBoundingClientRect();
+          if (r.width && r.right > vw + 1 && !(el.parentElement && el.parentElement.getBoundingClientRect().right > vw + 1)) out.push((el.id ? '#' + el.id : el.tagName.toLowerCase() + '.' + String(el.className).split(' ')[0]) + ':' + Math.round(r.right));
+        });
+        document.body.setAttribute('data-over', out.slice(0, 20).join(' ') || 'none');
+        document.body.setAttribute('data-sw', String(document.documentElement.scrollWidth) + '/' + vw);
+        done();
+      });
+    },
+    list: function () { when(function () { return !!$('#rl-autopub') && !!$('[data-rl-sec]'); }, done); },
+    videos: function () { when(function () { return !!$('[data-channel-key]') || !!$('[data-channels-empty]'); }, done); },
     sticky: function () {
       addSticky(2, 'hard', '「いちばん 数が 多い」の根拠が子どもに伝わらない', function () {
-        addSticky(3, 'fact', '核と運搬量の関係は食い違いの指摘あり', function () {
-          click('#mp-body-0-0 [data-stick-open="1"]');
-          when(function () { return !!$('[data-stick-form]'); }, function () {
-            click('[data-stick-kind="long"]');
-            toStudy();
-            done();
-          });
-        });
+        addSticky(3, 'fact', '核と運搬量の関係は食い違いの指摘あり', function () { done(); });
       });
-    },
-    'sticky-list': function () {
-      addSticky(2, 'hard', '「いちばん 数が 多い」の根拠が子どもに伝わらない', function () {
-        addSticky(3, 'fact', '核と運搬量の関係は食い違いの指摘あり', function () {
-          toStudy();
-          var ps = document.querySelectorAll('.mp-part');
-          if (ps[1]) ps[1].style.display = 'none'; // 付箋の一覧を画面に入れるため、撮る時だけ 2 つ目の部品を隠す
-          done();
-        });
-      });
-    },
-    flowed: function () {
-      addSticky(2, 'hard', '「いちばん 数が 多い」の根拠が子どもに伝わらない', function () {
-        addSticky(3, 'fact', '核と運搬量の関係は食い違いの指摘あり', function () {
-          click('#return-btn');
-          setTimeout(function () { if (document.activeElement) document.activeElement.blur(); toStudy(); done(); }, 200);
-        });
-      });
-    },
-    'sticky-del': function () {
-      addSticky(2, 'hard', 'a', function () {
-        addSticky(3, 'fact', 'b', function () {
-          click('[data-stick-del="1"]');
-          // Enter で付ける・Esc でやめる
-          click('#mp-body-0-0 [data-stick-open="4"]');
-          when(function () { return !!$('[data-stick-form]'); }, function () {
-            click('[data-stick-kind="long"]');
-            var inp = $('[data-stick-form] input');
-            inp.value = 'enter';
-            inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-            setTimeout(function () {
-              click('#mp-body-0-0 [data-stick-open="5"]');
-              when(function () { return !!$('[data-stick-form]'); }, function () {
-                $('[data-stick-form] input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-                done();
-              });
-            }, 150);
-          });
-        });
-      });
-    },
-    goto: function () {
-      toStudy();
-      setTimeout(function () { click('#mp-body-0-0 [data-para="3"] .mp-cite'); window.scrollTo(0, 0); setTimeout(done, 200); }, 200);
     }
   };
-  when(loaded(2), function () { (steps[shot] || done)(); });
+  var isReview = /^#\/review\/./.test(location.hash);
+  if (isReview) when(loaded(2), function () { (steps[shot] || done)(); });
+  else (steps[shot] || done)();
 })();

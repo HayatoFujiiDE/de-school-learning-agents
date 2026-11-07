@@ -1,5 +1,5 @@
 {
-  "_comment": "確認画面の見た目の確認と単体テスト用の作り物のデータ（GET /api/review/:id の応答の形 = src/routes/review.ts）。実在の組織・人・ページではない。triage は test/review-preview.test.ts が triageVersion の結果と一致することを確かめる",
+  "_comment": "確認画面の見た目の確認と単体テスト用の作り物のデータ（GET /api/review/:id の応答の形 = 契約 §V-8・§V-6 b）。実在の組織・人・ページではない。この版は「見てほしい所がある版」（gate attention）。全部通った版・機械の確認中の版・読み手チェック待ちの版は fixtures.mjs がこの版から作る。triage.groups / ok_counts は test/review-preview.test.ts が triageVersion（§L-3 互換の出力）と一致することを確かめる",
   "version": {
     "id": "vfix-0001",
     "material_id": "mfix-0001",
@@ -28,6 +28,17 @@
       "concept_codes": [],
       "summary_elementary": "赤血球が からだじゅうに 酸素を はこぶ しくみを、図と うごく もので 見てみよう",
       "summary_secondary": "赤血球が酸素を全身へ運ぶ仕組みを、図とシミュレーションで確かめる",
+      "conditions": {
+        "tools": [
+          "ブラウザ"
+        ],
+        "place": "教室",
+        "age_band": [
+          "elementary",
+          "secondary"
+        ],
+        "supporter_check": false
+      },
       "license_summary": "出典ごとの利用条件に従う（作り物）",
       "parts": [
         {
@@ -167,7 +178,14 @@
       "kakunin_zumi": [],
       "missing_source_refs": [],
       "missing_claim_refs": [],
-      "unreferenced_files": []
+      "unreferenced_files": [],
+      "child_text": [
+        {
+          "path": "parts/p2/p2-secondary-long.md",
+          "kind": "file_name",
+          "sample": "p2-app.html のスライダーで血流の速さを変え、"
+        }
+      ]
     },
     "public_paths": [],
     "tech_dependencies": [
@@ -286,12 +304,13 @@
       "reason": "s1 の本文に同じ内容がある",
       "opened_urls": [
         "https://example.org/body/blood/red-cells"
-      ]
+      ],
+      "presented_as": "fact"
     },
     {
       "id": "c2",
       "text": "血液中の細胞で最も数が多いのは赤血球である",
-      "status": "confirmed",
+      "status": "hypothesis",
       "source_ids": [
         "s6"
       ],
@@ -300,8 +319,9 @@
         "p2"
       ],
       "verdict": "hypothesis",
-      "reason": "出典のページを開けず、ほかの資料でも数の比較を確かめきれない",
-      "opened_urls": []
+      "reason": "出典のページを開けず、ほかの資料でも数の比較を確かめきれない。本文は「言われています」と推測として書いている",
+      "opened_urls": [],
+      "presented_as": "hedged"
     },
     {
       "id": "c3",
@@ -318,7 +338,8 @@
       "reason": "s1 と s3 に記述がある",
       "opened_urls": [
         "https://example.org/body/blood/red-cells"
-      ]
+      ],
+      "presented_as": "fact"
     },
     {
       "id": "c4",
@@ -334,11 +355,12 @@
       "reason": "s4 の本文に同じ数字がある",
       "opened_urls": [
         "https://example.net/encyclopedia/erythrocyte-lifespan"
-      ]
+      ],
+      "presented_as": "fact"
     },
     {
       "id": "c5",
-      "text": "核が無いぶん赤血球は多くの酸素を運べる",
+      "text": "赤血球は荷台が空のトラックのように多くの酸素を積める",
       "status": "hypothesis",
       "source_ids": [
         "s2"
@@ -346,11 +368,12 @@
       "used_in": [
         "p1"
       ],
-      "verdict": "contradicted",
-      "reason": "検証係が開いたページには「核が無いことと運搬量の関係ははっきりしない」とある",
+      "verdict": "hypothesis",
+      "reason": "核が無いことと運搬量の関係ははっきりしない。本文はたとえとして書いている",
       "opened_urls": [
         "https://example.org/cells/nucleus-overview"
-      ]
+      ],
+      "presented_as": "analogy"
     },
     {
       "id": "c6",
@@ -362,21 +385,25 @@
       ],
       "verdict": "confirmed",
       "reason": "一般的な事実",
-      "opened_urls": []
+      "opened_urls": [],
+      "presented_as": "fact"
     },
     {
       "id": "c7",
       "text": "新しい赤血球は骨髄で作られる",
       "status": "confirmed",
       "source_ids": [
-        "s9"
+        "s1"
       ],
       "used_in": [
         "p1"
       ],
       "verdict": "confirmed",
-      "reason": "一般的な事実",
-      "opened_urls": []
+      "reason": "s1 に骨髄で作られるとある",
+      "opened_urls": [
+        "https://example.org/body/blood/red-cells"
+      ],
+      "presented_as": "fact"
     }
   ],
   "verification": {
@@ -385,9 +412,9 @@
     "model": "fixture",
     "claims_total": 7,
     "confirmed": 5,
-    "hypothesis": 1,
+    "hypothesis": 2,
     "unverified": 0,
-    "contradicted": 1,
+    "contradicted": 0,
     "overall_note": "作り物の検証メモ",
     "figures": [
       {
@@ -403,6 +430,13 @@
         "verdict": "ok",
         "reason": "区間で赤血球が 1 列に進む"
       }
+    ],
+    "apps": [
+      {
+        "path": "parts/p2/p2-app.html",
+        "verdict": "unclear",
+        "reason": "スライダーの値を速さに変える式がソースの中に 2 か所あり、どちらが使われるか読み切れなかった"
+      }
     ]
   },
   "verification_id": "verfix-0001",
@@ -410,21 +444,150 @@
     {
       "id": "verfix-0001",
       "attempt": 1,
-      "contradicted": 1,
+      "contradicted": 0,
       "created_at": "2026-11-06T09:30:00.000Z"
     }
   ],
   "verify_cost_cents": 38,
   "generated_images": [],
   "video_notes": null,
-  "video_meta": [],
+  "video_meta": [
+    {
+      "video_id": "v1",
+      "outcome": "ok",
+      "title": "赤血球が流れる様子（作り物）",
+      "author_name": "作り物の科学チャンネル",
+      "author_url": "https://www.youtube.com/@fixture-science",
+      "channel_match": "match"
+    }
+  ],
   "triage": {
     "verification_id": "verfix-0001",
+    "reader_gen": "rd-fix-0001",
+    "gate": "attention",
+    "pending_on": [],
     "auto": {
       "content_and_evidence": "review",
-      "terms_of_use": "review",
-      "artifact_behavior": "review"
+      "explanation_and_expression": "review",
+      "relation_to_learning": "ok",
+      "conditions_of_use": "ok",
+      "artifact_behavior": "review",
+      "terms_of_use": "review"
     },
+    "items": [
+      {
+        "detail": "出典のページを開けず、ほかの資料でも数の比較を確かめきれない。本文は「言われています」と推測として書いている",
+        "id": "claim:c2",
+        "kind": "claim",
+        "key": "content_and_evidence",
+        "severity": "note",
+        "cause": "hypothesis_hedged",
+        "title": "仮説として書いてある",
+        "claim_id": "c2",
+        "source_ids": [
+          "s6"
+        ]
+      },
+      {
+        "detail": "核が無いことと運搬量の関係ははっきりしない。本文はたとえとして書いている",
+        "id": "claim:c5",
+        "kind": "claim",
+        "key": "content_and_evidence",
+        "severity": "note",
+        "cause": "analogy",
+        "title": "たとえとして書いてある",
+        "claim_id": "c5",
+        "source_ids": [
+          "s2"
+        ]
+      },
+      {
+        "detail": "",
+        "id": "claim:c6",
+        "kind": "claim",
+        "key": "content_and_evidence",
+        "severity": "fix",
+        "cause": "no_source",
+        "title": "出典が付いていない",
+        "claim_id": "c6",
+        "source_ids": []
+      },
+      {
+        "detail": "",
+        "id": "source:s4:license",
+        "kind": "source",
+        "key": "terms_of_use",
+        "severity": "fix",
+        "cause": "license_unknown",
+        "title": "利用条件が分からない",
+        "source_ids": [
+          "s4"
+        ]
+      },
+      {
+        "detail": "スライダーの値を速さに変える式がソースの中に 2 か所あり、どちらが使われるか読み切れなかった",
+        "id": "app:parts/p2/p2-app.html",
+        "kind": "app",
+        "key": "artifact_behavior",
+        "severity": "ask",
+        "cause": "app_unclear",
+        "title": "動かせるものを機械では決められなかった",
+        "path": "parts/p2/p2-app.html"
+      },
+      {
+        "detail": "",
+        "id": "check:file_name:0",
+        "kind": "text",
+        "key": "explanation_and_expression",
+        "severity": "fix",
+        "cause": "file_name",
+        "title": "本文にファイル名が出ている",
+        "path": "parts/p2/p2-secondary-long.md",
+        "quote": "p2-app.html のスライダーで血流の速さを変え、"
+      },
+      {
+        "detail": "",
+        "id": "video:v1:channel",
+        "kind": "video",
+        "key": "terms_of_use",
+        "severity": "ask",
+        "cause": "video_channel_new",
+        "title": "初めてのチャンネル（本人のアップかを見てください）",
+        "video_id": "v1",
+        "channel_key": "https://www.youtube.com/@fixture-science",
+        "channel_name": "作り物の科学チャンネル"
+      },
+      {
+        "detail": "小学 3 年生には「酸素」が何かの説明がないため、赤血球が何を運んでいるのか分からない",
+        "id": "reader:p1es-word-1",
+        "kind": "reader",
+        "key": "explanation_and_expression",
+        "severity": "fix",
+        "cause": "word",
+        "title": "言葉がむずかしい",
+        "path": "parts/p1/p1-elementary-short.md",
+        "quote": "酸素（さんそ）を はこぶ 小さな つぶです",
+        "suggestion": "「いきを するときに すいこむ 空気の 中の 大切な もの」と一言そえる"
+      }
+    ],
+    "counts": {
+      "fix": 4,
+      "ask": 2,
+      "note": 2,
+      "claims_ok": 6,
+      "sources_ok": 5
+    },
+    "needs_review": 6,
+    "bad": true,
+    "reasons": [
+      "needs_fix"
+    ],
+    "action": "none",
+    "reverify_kind": null,
+    "return_note": null,
+    "auto_rounds": 2,
+    "auto_return_max": 2,
+    "trusted_keys": [],
     "groups": [
       {
         "cause": "maker_url_not_fetched",
@@ -436,7 +599,7 @@
         ]
       },
       {
-        "cause": "contradicted",
+        "cause": "quote_mismatch",
         "source_id": "s2",
         "url": "https://example.org/cells/nucleus-and-oxygen-capacity-of-mammalian-erythrocytes",
         "verifier_opened_urls": [
@@ -456,22 +619,6 @@
         ]
       },
       {
-        "cause": "source_not_listed",
-        "source_id": "s9",
-        "url": null,
-        "verifier_opened_urls": [],
-        "claim_ids": [
-          "c7"
-        ]
-      },
-      {
-        "cause": "quote_mismatch",
-        "source_id": "s2",
-        "url": "https://example.org/cells/nucleus-and-oxygen-capacity-of-mammalian-erythrocytes",
-        "verifier_opened_urls": [],
-        "claim_ids": []
-      },
-      {
         "cause": "license_unknown",
         "source_id": "s4",
         "url": "https://example.net/encyclopedia/erythrocyte-lifespan",
@@ -487,15 +634,42 @@
       }
     ],
     "ok_counts": {
-      "claims": 3,
+      "claims": 4,
       "sources": 3
-    },
-    "needs_review": 10,
-    "bad": true,
-    "reasons": [
-      "contradicted"
+    }
+  },
+  "reader": {
+    "status": "done",
+    "gen": "rd-fix-0001",
+    "findings": [
+      {
+        "path": "parts/p1/p1-elementary-short.md",
+        "quote": "酸素（さんそ）を はこぶ 小さな つぶです",
+        "kind": "word",
+        "severity": "fix",
+        "note": "小学 3 年生には「酸素」が何かの説明がないため、赤血球が何を運んでいるのか分からない",
+        "suggestion": "「いきを するときに すいこむ 空気の 中の 大切な もの」と一言そえる"
+      },
+      {
+        "path": "parts/p2/p2-elementary-short.md",
+        "quote": "赤い つぶの 数を 10 びょう 数える",
+        "kind": "structure",
+        "severity": "note",
+        "note": "数えた数をどこに書くかが書かれていないので、2 回目と比べにくい",
+        "suggestion": "「数を メモして おこう」と一言足す"
+      }
     ],
-    "action": "none",
-    "return_note": null
-  }
+    "learning": {
+      "verdict": "ok",
+      "reason": "図で数える → 動かして速さを変える、の順に、血が酸素を運ぶ量の違いに気づく活動になっている"
+    },
+    "conditions": {
+      "verdict": "ok",
+      "reason": "ブラウザと教室だけで使え、危ない活動は無い"
+    },
+    "summary": "短い文で書かれていて、小学生でも読み進められる。「酸素」だけ説明が足りない。",
+    "not_read": [],
+    "cost_cents": 14
+  },
+  "auto_publish": false
 }

@@ -517,12 +517,12 @@ describe('§P c 6 確認画面: 「説明と表現」の下のたとえのずれ
     expect(h).toContain('&lt;b&gt;電線&lt;/b&gt;: 同じ = 信号を運ぶ / 違う = 弱まる <small class="muted">c1 ・ parts/p1/a.md</small>');
     expect(h).toContain('<li data-analogy-gap="1">水路: 同じ = 流れる / 違う = 圧力は無い</li>');
     expect(h).not.toContain('<b>電線</b>');
-    // 「説明と表現」の項目の中（次の項目より前）
-    const item = h.indexOf('id="ck-explanation_and_expression"');
+    // 「機械が確かめたこと」の「説明と表現」の補足の中（次の項目より前。§V-9 a）
+    const item = h.indexOf('data-mk="explanation_and_expression"');
     expect(item).toBeGreaterThanOrEqual(0);
     const at = h.indexOf('data-analogy-gaps=');
     expect(at).toBeGreaterThan(item);
-    expect(h.indexOf('id="ck-', item + 1)).toBeGreaterThan(at);
+    expect(h.indexOf('data-mk="', item + 1)).toBeGreaterThan(at);
   });
 
   it.each([

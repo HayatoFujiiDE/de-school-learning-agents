@@ -224,8 +224,10 @@ describe('§Q-5 確認画面: 「説明と表現」の動画', () => {
     const h = R.reviewHtml(d([video(), video({ id: 'v2', youtube_id: YT2, start_sec: 5, end_sec: 600 })]), R.newReviewState(), {});
     expect(n(h, /data-videos="2"/g)).toBe(1);
     expect(h).toContain('動画 2 本');
-    expect(h).toContain('区間 1:20〜3:05 ・ チャンネル 公式チャンネル');
-    expect(h).toContain('区間 0:05〜10:00');
+    // §V-9 a: 区間・見どころは「説明と表現」の補足の動画のブロック、チャンネル・本人のアップと言える理由は「利用条件」の補足
+    expect(h).toContain('<p>区間 1:20〜3:05</p>');
+    expect(h).toContain('<p>区間 0:05〜10:00</p>');
+    expect(h).toContain('<p><b>動画 v1</b> チャンネル 公式チャンネル');
     expect(h).toContain('見どころ: 粉の上を信号が進む様子が見える');
     expect(h).toContain('本人のアップと言える理由: チャンネルの概要欄に本人の制作とある');
     expect(h).toContain(NOTE);
@@ -235,11 +237,12 @@ describe('§Q-5 確認画面: 「説明と表現」の動画', () => {
     expect(n(h, /動画の記録はまだありません/g)).toBe(4);
     // 図の行に動画の本数
     expect(h).toContain('図・画像 1 枚・動画 2 本（');
-    // 「説明と表現」の項目の中（次の項目より前）
-    const item = h.indexOf('id="ck-explanation_and_expression"');
+    // 「機械が確かめたこと」の「説明と表現」の補足の中（次の項目より前）
+    const item = h.indexOf('data-mk="explanation_and_expression"');
     const at = h.indexOf('data-videos=');
+    expect(item).toBeGreaterThanOrEqual(0);
     expect(at).toBeGreaterThan(item);
-    expect(h.indexOf('id="ck-', item + 1)).toBeGreaterThan(at);
+    expect(h.indexOf('data-mk="', item + 1)).toBeGreaterThan(at);
   });
 
   it('値はすべてエスケープする', () => {
@@ -269,12 +272,14 @@ describe('§Q-5 確認画面: 「説明と表現」の動画', () => {
     expect(h).not.toContain('動画 ');
     expect(h).not.toContain(NOTE);
     expect(h).toContain('図・画像 1 枚（');
-    expect(h).toContain('利用条件が分からない出典があります');
+    // §V-9: 利用条件の補足の文は、利用条件が分からない出典がある時だけ（この版の出典は CC BY-NC-SA 3.0）
+    expect(h).not.toContain('利用条件が分からない出典があります');
+    expect(R.reviewHtml(d(undefined, { sources: [{ source_id: 's1', license: 'unknown' }] }), R.newReviewState(), {})).toContain('利用条件が分からない出典があります（1 件）');
   });
 
   it('「利用条件」の項目の文は動画の文（§Q-9.6）。出典の利用条件が分かる時は従来の文を出さない', () => {
     const h = R.reviewHtml(d([video()]), R.newReviewState(), {});
-    const item = h.indexOf('id="ck-terms_of_use"');
+    const item = h.indexOf('data-mk="terms_of_use"');
     expect(item).toBeGreaterThanOrEqual(0);
     expect(h.indexOf('data-video-terms="1"')).toBeGreaterThan(item);
     expect(h).not.toContain('利用条件が分からない出典があります');
