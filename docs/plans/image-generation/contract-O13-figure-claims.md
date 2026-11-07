@@ -13,7 +13,7 @@
 2. `primary_hosts`（新設。**`domains` の部分集合**であることを test で固定する）: 上のうち `en.wikipedia.org`・`kidshealth.org`・`ja.wikipedia.org`・`minecraft.wiki`・`docs.python.org`・`scratch.mit.edu`・`developer.mozilla.org`・`youtube.com` を**除く**全部 + `mext.go.jp`・`nier.go.jp`。
 3. `hosts`（限定環境の allowed_hosts）にも同じ host を足す（`domains ⊆ hosts` を test で固定。2026-11-06 の sessions.create 全件 400 の再発防止）。
 4. `material-maker.md` の `allowed_domains:`（web_search / web_fetch の 2 か所）と `claude/environments/` の allowed_hosts を同じ一覧に直す（`sync-claude-assets.sh` が生成するなら生成、手書きなら手で揃えて test で突き合わせる）。反映は ant apply（職人と環境の両方）→ 確認用の session を 1 本（[[feedback-smoke-session-after-ant-apply]]）。
-5. host の照合（取り込みと検証係で同じ純関数 `hostMatches(hostname, list)`）: `new URL(url).hostname` を小文字にし、末尾の `.` を取り、ポートは見ない。一致は完全一致か、`'.' + entry` で終わること（`notkahaku.go.jp` は `kahaku.go.jp` に一致しないが `go.jp` が一覧にあれば一致する。一覧に裸の `go.jp` は入れない）。
+5. host の照合（取り込み・仕分け・確認画面が同じ純関数 `hostMatches(hostname, list)` を使う。検証係の取得先は API の web_fetch の allowed_domains が守るので Worker 側に照合は無い）: `new URL(url).hostname` を小文字にし、末尾の `.` を取り、ポートは見ない。一致は完全一致か、`'.' + entry` で終わること（`notkahaku.go.jp` は `kahaku.go.jp` に一致しないが `go.jp` が一覧にあれば一致する。一覧に裸の `go.jp` は入れない）。
 
 ## O13-1 職人（material-maker.md。ant apply が要る）
 
@@ -25,7 +25,7 @@
 
 ## O13-2 取り込み（`src/checks/schema.ts`。すべて I/O なしの純関数で検査し、checks_json に残す）
 
-1. files[] の行の `shows`: **`image_id` のある行だけ**に書ける（SVG や他のファイルの行にあれば `bad_image_shows:<path>`）。形: 配列で **2〜6 件**。各要素は `text` が空白だけでない 1〜200 字（code point）の文字列、`source_ids` が 1〜5 件・各 1〜40 字の文字列・重複なし。`reference_url`: 文字列で `new URL()` が解析でき、protocol が `https:`、host が空でなく、2000 字以内。どれかが違えば `bad_image_shows:<path>`（`bad_image_ref` と同じ＝取り込みで弾く）。素材全体で shows の合計は 48 件まで（超えたら最初に超えた path で `bad_image_shows`）。
+1. files[] の行の `shows`: **`image_id` のある行だけ**に書ける（SVG や他のファイルの行にあれば `bad_image_shows:<path>`）。形: 配列で **2〜6 件**。各要素は `text` が空白だけでない 1〜200 字（code point）の文字列、`source_ids` が 1〜5 件・各 1〜40 字の文字列・重複なし。`reference_url`: 文字列で、文字どおり `https://` で始まり（前後の空白なし。確認画面のリンクの条件と同じ）、`new URL()` が解析でき、host が空でなく、2000 字以内。どれかが違えば `bad_image_shows:<path>`（`bad_image_ref` と同じ＝取り込みで弾く）。素材全体で shows の合計は 48 件まで（同じ path は 1 回だけ数える。超えたら最初に超えた path で `bad_image_shows`）。**同じ path の行が 2 つ以上**ある時は、2 行目以降の shows と reference_url が 1 行目と同じでなければ `bad_image_shows:<path>`（後の行の主張が検査から漏れないように。以降の検査・一覧は path の最初の行だけを見る）。
 2. 対象画像に `shows` が無い → checks_json の `figure_shows_missing: [<path>]`（弾かない。旧い版のため）。
 3. `source_ids` が sources に無い id → checks_json の `figure_shows_refs: [{path, n, source_ids: [<無い id を全部>]}]`（文ごとに 1 件。既存 `missing_source_refs` には混ぜない。claim_id を作らない）。
 4. **一次の出典**: 各 shows の `source_ids` のうち、sources.json の `url` の hostname が `primary_hosts`（O13-0）に `hostMatches` で一致する出典が 1 つも無い → checks_json の `figure_shows_no_primary: [{path, n}]`。`is_primary` の自己申告は使わない。url が解析できない出典は一致しない扱い。
@@ -54,7 +54,7 @@
 2. 図の項目の detail（`ITEM_DETAIL_MAX` 600 はそのまま。番号が全部残る形）:
    - 1 行目（必ず入る。80 字以内）: `絵の主張 [1][3] に問題、[2] は確かめきれない`（wrong の番号を全部、次に unclear の番号を全部。無い側は省く）
    - 続けて wrong ごとに `・[n] <text を 60 字で切る>: 問題（<note を 40 字で切る>）`、unclear ごとに `・[n] <text 60 字>: 確かめきれない（<note 40 字>）`（1 行 120 字以内。48 件の上限でも 1 行目 + 4 行は入る）
-   - 最後に reason。合計 600 字に入らない分は**後ろから**切る（1 行目と番号の行が先に残る）
+   - 最後に reason。合計 600 字に入らない分は**後ろから**切る（1 行目と番号の行が先に残る）。番号の行は途中で切らず、入らない行ごと落とす。最後の reason だけ入る分まで切る（2026-11-07 Astra high の指摘 M2）
    - 「問題」の説明は「絵のとおりでない」に限らない（出典との食い違いも wrong。どちらかは note に書かれる）
 3. return_note（V-6 g の書式）の図の行は §L-9 の付箋の行と同じ形: `- 図 <part_id> <path>: 検証係の指摘 — <detail>`（detail は上の順。4000 字の上限は既存どおり）。
 4. 新しい項目（kind `check`、key `explanation_and_expression`、機械検査の位置）:
@@ -76,10 +76,10 @@
 
 ## O13-7 受け入れ（vitest。fake の port・`node:sqlite`）
 
-1. schema: 正しい shows は通る。1 件・7 件・空白の text・201 字・source_ids 0 件 / 6 件 / 重複・`http://`・host 無し・2001 字 → `bad_image_shows:<path>`。49 件目で素材が弾かれる。対象画像で shows 無し → `figure_shows_missing`。sources に無い id → `figure_shows_refs` に `{path, n, source_id}`。一次の host が無い → `figure_shows_no_primary` に `{path, n}`。サブドメイン（`www.kahaku.go.jp`）は一致、`notkahaku.go.jp` は `kahaku.go.jp` に一致しない（`go.jp` には一致）。作り直しで親の text を 1 つ落とす → `figure_shows_removed`。親無しでは検査しない。
+1. schema: 正しい shows は通る。1 件・7 件・空白の text・201 字・source_ids 0 件 / 6 件 / 重複・`http://`・host 無し・2001 字 → `bad_image_shows:<path>`。49 件目で素材が弾かれる。対象画像で shows 無し → `figure_shows_missing`。sources に無い id → `figure_shows_refs` に `{path, n, source_ids}`（無い id を全部）。同じ path の行が 2 つで絵の主張が違う → `bad_image_shows`、同じなら通り合計は 1 回だけ数える。`https://` で始まらない参照（先頭の空白・`https:host`）→ `bad_image_shows`。一次の host が無い → `figure_shows_no_primary` に `{path, n}`。サブドメイン（`www.kahaku.go.jp`）は一致、`notkahaku.go.jp` は `kahaku.go.jp` に一致しない（`go.jp` には一致）。作り直しで親の text を 1 つ落とす → `figure_shows_removed`。親無しでは検査しない。
 2. verify（同期）: 図の行に絵の主張と参照が入る。計画の `figure_checks` が 1..N と一致する応答 → 成功し result_json に `checks` と `verdict_raw`。欠け・重複・enum 外・`checks` 無し → `claim_set_mismatch`。旧い計画（`figure_checks` 無し）では `checks` 無しの応答も成功し保存は `[]`。wrong があるのに verdict ok → 保存は problem で reason の先頭に文。unclear だけで ok → unclear。not_seen の図は `figure_checks` に入らず `checks: []`。
 3. verify（Batch）: plan.json に `figure_checks` が残り、継続提出を 1 回挟んでも落ちない（読み直し → 書き戻しで保つ）。回収時に同じ検査。
-4. triage: problem の図の detail が `・[n]` の行で始まり、600 字で後ろから切れる。return_note の図の行が `- 図 <part_id> <path>: 検証係の指摘 — ・[n]` で始まる。`figure_shows_no_primary` / `figure_shows_ref` / `figure_shows_removed` は fix で、`autoRounds < autoReturnMax` の時に auto_return。`figure_shows_missing` は note。
+4. triage: problem の図の detail の 1 行目が「絵の主張 [n] に問題、[m] は確かめきれない」、続く行が `・[n]`、600 字で後ろから切れる（6 文・wrong と unclear が混ざる時も番号の行が途中で切れない）。return_note の図の行が `- 図 <part_id> <path>: 検証係の指摘 — 絵の主張 [n] に問題` で始まる。`figure_shows_no_primary` / `figure_shows_ref` / `figure_shows_removed` は fix で、`autoRounds < autoReturnMax` の時に auto_return。`figure_shows_missing` は note。
 5. admin: `figures_meta` から ✓ ✗ ？ － の一覧が出る。shows 無しの図は出ない。`esc()` を通る。
 6. allowlist: `primary_hosts ⊆ domains ⊆ hosts`。`hostMatches`（小文字化・末尾 `.`・ポート無視・サブドメイン・`notkahaku.go.jp` 不一致）。material-maker.md の `allowed_domains` 2 か所と環境の allowed_hosts が allowlist.json と一致する（test で突き合わせ）。検証係の `VERIFIER_FETCH_DOMAINS` に新しい host が入る。
 7. 計画の不正: `figure_checks` が null / path 欠け / 余分 / N が -1 → `claim_set_mismatch`（旧い計画扱いにしない）。旧 Batch（計画にキー無し）の継続提出 → 回収は `checks: []` で成功。

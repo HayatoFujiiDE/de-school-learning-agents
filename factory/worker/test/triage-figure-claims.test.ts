@@ -89,6 +89,29 @@ describe('§O-13-4 1・2 図の項目（severity は最終の verdict・detail �
     expect(lines[4]).toMatch(/^x+$/);
   });
 
+  it('6 文・wrong と unclear が混ざる時も、番号の行は途中で切れない（入らない行ごと落とす）。1 行目には全部の番号が残り、reason は入る分だけ', () => {
+    const checks = [1, 2, 3, 4, 5].map((n) => ({ n, result: 'wrong', note: 'の'.repeat(40) })).concat([{ n: 6, result: 'unclear', note: 'の'.repeat(40) }]);
+    const inp = input({ figures: rbcFig('problem', checks, 'r') });
+    const files = (inp.material as Obj).parts[0].files as Obj[];
+    files[files.length - 1].shows = Array.from({ length: 6 }, (_, k) => ({ text: String.fromCharCode(0x3042 + k).repeat(60), source_ids: ['s1'] }));
+    const d = item(triageVersion(inp), `figure:${RBC}`)!.detail;
+    expect(d.length).toBeLessThanOrEqual(ITEM_DETAIL_MAX);
+    const lines = d.split('\n');
+    expect(lines[0]).toBe('絵の主張 [1][2][3][4][5] に問題、[6] は確かめきれない');
+    // 6 行目（[6]）は入らないので行ごと落ち、その後ろの reason も落ちる（後ろから切る）。残った行はどれも壊れていない
+    for (const l of lines.slice(1)) expect(l).toMatch(/^・\[[1-5]\] .{60}: 問題（の{40}）$/);
+    expect(lines).toHaveLength(6);
+    expect(d).not.toContain('\n・[6]');
+    // 番号の行が全部入る時は、reason を入る分だけ切って最後に置く
+    const five = rbcFig('problem', checks.slice(0, 5), 'x'.repeat(50));
+    const d2 = item(triageVersion({ ...inp, report: { ...inp.report!, result: { ...(inp.report!.result as Obj), figures: five } } as TriageInput['report'] }), `figure:${RBC}`)!.detail;
+    expect(d2.length).toBe(ITEM_DETAIL_MAX);
+    const l2 = d2.split('\n');
+    expect(l2).toHaveLength(7);
+    expect(l2.at(-1)).toMatch(/^x+$/);
+    expect(l2.at(-1)!.length).toBeLessThan(50);
+  });
+
   it('unclear だけの図は ask・1 行目は「確かめきれない」だけ。checks の無い旧い結果の図は reason だけ', () => {
     const t = triageVersion(input({ figures: rbcFig('unclear', [{ n: 1, result: 'unclear', note: '' }, { n: 2, result: 'ok', note: '' }, { n: 3, result: 'ok', note: '' }], 'r') }));
     expect(item(t, `figure:${RBC}`)).toMatchObject({ severity: 'ask', cause: 'figure_unclear', detail: `絵の主張 [1] は確かめきれない\n・[1] ${TEXTS[0]}: 確かめきれない\nr` });

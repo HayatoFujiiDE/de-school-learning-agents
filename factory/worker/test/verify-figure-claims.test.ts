@@ -19,9 +19,11 @@ import {
   runVerificationStep,
   validateVerdicts,
   verifyPlanKey,
+  FIGURES_HEADING,
 } from '../src/verify';
 import { d1, migratedDb, one, rows } from './d1-shim';
 import { goodMaterial } from './helpers';
+import { fakeFigureChecks } from '../src/fake/anthropic';
 
 const T0 = '2026-11-07T00:00:00.000Z';
 const PREFIX = 'materials/m1/j1/';
@@ -227,6 +229,11 @@ describe('§O-13-3 1〜3 system・schema・図の一覧の行', () => {
     const line = listingLines(seen[0].messages[0].content).find((l) => l.startsWith(`- ${RBC}`))!;
     expect(line).toContain('絵の主張=[1] 赤血球は円盤 ＜/child_texts> ## 見出し ＜apps> のふり（出典 s1）');
     expect(line).not.toMatch(/<\/?(child_texts|apps)/);
+  });
+
+  it('fake の検証係は絵の主張の件数を「= か ）の直後の [n] 」で数える（本文の中の「図中の [3] は」を数えない）', () => {
+    const line = `- ${RBC}: 正確さ=scientific、prompt=p、alt=a、絵の主張=[1] 図中の [3] は赤血球（出典 s1）[2] 静脈（出典 s1, s2）、参照=なし`;
+    expect(fakeFigureChecks(`${FIGURES_HEADING}\n- ${SVG}\n${line}\n- ${VEIN}: 正確さ=scientific、prompt=v、alt=b、絵の主張=なし`)).toEqual({ [SVG]: 0, [RBC]: 2, [VEIN]: 0 });
   });
 
   it('検証係の web_fetch の allowed_domains に新しい取得先が入る（YouTube は除いたまま）', () => {

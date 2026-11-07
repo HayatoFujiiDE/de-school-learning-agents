@@ -1110,6 +1110,11 @@ describe('§O-13-5 図のサムネイルの下の「絵の主張」（✓ ✗ �
     const d = FX.figureClaims();
     const h = R.reviewHtml(d, R.newReviewState(), {});
     expect(n(h, /data-fig-claims=/g)).toBe(1);
-    for (const m of h.match(/<figure class="mp-fig[\s\S]*?<\/figure>/g) ?? []) expect(m).not.toContain('fig-claims');
+    // 子どもの画面の本文（図を実際に描画した上で）に絵の主張が混ざらない
+    const body = R.previewBodyHtml('## 本文', d.version.material.parts[0], { fileBase: BASE, marks: true, stick: true, frame: 0, pi: 0 });
+    const figs = body.match(/<figure class="mp-fig[\s\S]*?<\/figure>/g) ?? [];
+    expect(figs.some((m) => m.includes('data-media-key="parts/p1/p1-rbc.png"'))).toBe(true);
+    for (const m of figs) expect(m).not.toMatch(/fig-claims|絵の主張/);
+    expect(body).not.toMatch(/fig-claims|data-fig-ref/);
   });
 });

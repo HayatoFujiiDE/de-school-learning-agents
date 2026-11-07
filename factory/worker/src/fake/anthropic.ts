@@ -283,7 +283,7 @@ function fakeShownFigures(text: string): string[] {
  * §O-13-3 1: 図の一覧の行の `、絵の主張=[1] …[k] …、参照=` から、渡された図ごとの絵の主張の件数（`[1] `・`[2] ` と続く番号の数。なしは 0）。
  * fake の検証係だけが読む（checks を 1..N の ok で返す）
  */
-function fakeFigureChecks(text: string): Record<string, number> {
+export function fakeFigureChecks(text: string): Record<string, number> {
   const i = text.indexOf('# 図・画像（');
   const out: Record<string, number> = {};
   if (i < 0) return out;
@@ -298,7 +298,8 @@ function fakeFigureChecks(text: string): Record<string, number> {
     if (at >= 0) {
       const end = rest.lastIndexOf('、参照=');
       const seg = rest.slice(at, end > at ? end : undefined);
-      while (seg.includes(`[${n + 1}] `)) n++;
+      // 番号は `=[1] `・`）[2] ` と、直前が = か ）の所だけ数える（本文の中の「図中の [3] は」を数えない）
+      for (const m of seg.matchAll(/[=）]\[(\d+)\] /g)) if (Number(m[1]) === n + 1) n++;
     }
     out[path] = n;
   }

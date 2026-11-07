@@ -63,8 +63,22 @@ describe('§O-13-2 1 shows・reference_url の形（取り込みで弾く bad_im
     ['解析できない参照', { reference_url: 'not a url' }],
     ['2001 字の参照', { reference_url: 'https://www.kahaku.go.jp/' + 'a'.repeat(2001 - 'https://www.kahaku.go.jp/'.length) }],
     ['参照が文字列でない', { reference_url: 1 }],
+    ['先頭に空白のある参照', { reference_url: ' ' + KAHAKU }],
+    ['末尾に改行のある参照', { reference_url: KAHAKU + '\n' }],
+    ['https: の後に // が無い参照', { reference_url: 'https:www.kahaku.go.jp/x' }],
   ])('%s → bad_image_shows:<path>', (_n, o) => {
     expect(detailOf(filesWith([imgRow(o)]))).toBe(`bad_image_shows:${RBC}`);
+  });
+
+  it('同じ path の行が 2 つ: 絵の主張と参照が 1 行目と同じなら通り（合計は 1 回だけ数える）、違えば bad_image_shows（2 行目の主張が検査から漏れない）', () => {
+    const six = Array.from({ length: 6 }, (_, i) => show(`文 ${i}`));
+    expect(detailOf(filesWith([imgRow({ reference_url: KAHAKU }), imgRow({ reference_url: KAHAKU })]))).toBe('ok');
+    // 6 件 × 9 行 = 54 だが同じ path は 1 回だけ数えるので 6 件 → 通る
+    expect(detailOf(filesWith(Array.from({ length: 9 }, () => imgRow({ shows: six }))))).toBe('ok');
+    expect(detailOf(filesWith([imgRow(), imgRow({ shows: [show('別の文', ['zz']), show('もう 1 つ')] })]))).toBe(`bad_image_shows:${RBC}`);
+    expect(detailOf(filesWith([imgRow({ shows: [show('別の文', ['zz']), show('もう 1 つ')] }), imgRow()]))).toBe(`bad_image_shows:${RBC}`);
+    expect(detailOf(filesWith([imgRow({ reference_url: KAHAKU }), imgRow()]))).toBe(`bad_image_shows:${RBC}`);
+    expect(detailOf(filesWith([imgRow(), { path: RBC, role: 'figure', image_id: IMG, alt: '赤血球' }]))).toBe(`bad_image_shows:${RBC}`);
   });
 
   it('image_id の無い行（SVG）に shows / reference_url があれば bad_image_shows', () => {

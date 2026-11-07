@@ -121,7 +121,8 @@ export function checkImageShows(
   let ref: string | null = null;
   if (hasRef) {
     const u = f.reference_url;
-    if (typeof u !== 'string' || cpLen(u) > REFERENCE_URL_MAX) return { ok: false };
+    // 文字どおり `https://` で始まる（前後の空白・`https:host` の形は弾く。確認画面のリンクの条件と同じ）
+    if (typeof u !== 'string' || u !== u.trim() || !u.startsWith('https://') || cpLen(u) > REFERENCE_URL_MAX) return { ok: false };
     let parsed: URL;
     try {
       parsed = new URL(u);
@@ -197,7 +198,7 @@ function parentShowsOf(materialJsonText: string): Map<string, { image_id: string
  * - accuracyByImageId: image_requests の accuracy（scientific の画像が「対象画像」）
  * - primaryHosts: 一次とみなす発行主体（allowlist.json の primary_hosts）。sources.json の url の hostname を hostMatches で照らす（is_primary は使わない）
  * - parentMaterialJson: 作り直しの親の版の material_json（undefined / null = 比べない）。JSON として読めなければ比べず parentUnreadable
- * path は最初の行だけを見る（同じ path の重複した参照は同じ image_id であることを取り込みが確かめている）
+ * path は最初の行だけを見る（同じ path の重複した参照は、同じ image_id で絵の主張・参照も同じであることを validateOutputs が確かめている）
  */
 export function checkFigureShows(
   material: Pick<Material, 'parts'>,
@@ -485,8 +486,10 @@ export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
   const techDeps = new Set<string>();
   /** §Q-1: videos は sources.json を読んだ後に検査する（出典の行との一致を見るため） */
   const rawVideos: Array<{ id: string; videos: unknown[] | null }> = [];
-  /** §O-13-2 1: 素材全体の絵の主張の合計 */
+  /** §O-13-2 1: 素材全体の絵の主張の合計（同じ path は 1 回だけ数える） */
   let showsTotal = 0;
+  /** §O-13-2 1: path → 1 行目の絵の主張・参照（JSON）。同じ path の 2 行目以降は 1 行目と同じでなければ弾く（後の行の主張が検査から漏れないように） */
+  const showsByPath = new Map<string, string>();
   for (const [i, raw] of (m.parts as unknown[]).entries()) {
     const p = raw as Record<string, unknown>;
     if (!p || typeof p !== 'object') return fail(`bad_type:parts[${i}]`);
@@ -537,8 +540,13 @@ export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
         // §O-13-2 1: 絵の主張・参照の形（bad_image_ref と同じく取り込みで弾く）。素材全体の合計は SHOWS_TOTAL_MAX まで
         const sh = checkImageShows(f, ref.ref !== null);
         if (!sh.ok) return fail(`bad_image_shows:${f.path}`);
-        showsTotal += sh.shows?.length ?? 0;
-        if (showsTotal > SHOWS_TOTAL_MAX) return fail(`bad_image_shows:${f.path}`);
+        const shKey = JSON.stringify([sh.shows, sh.reference_url]);
+        const prevSh = showsByPath.get(f.path);
+        if (prevSh === undefined) {
+          showsByPath.set(f.path, shKey);
+          showsTotal += sh.shows?.length ?? 0;
+          if (showsTotal > SHOWS_TOTAL_MAX) return fail(`bad_image_shows:${f.path}`);
+        } else if (prevSh !== shKey) return fail(`bad_image_shows:${f.path}`);
         if (!files.has(f.path)) return fail(`missing_ref:${f.path}`);
         if (!imageBytesMatch(f.path, files.get(f.path)!)) return fail(`bad_image:${f.path}`);
         pfiles.push({

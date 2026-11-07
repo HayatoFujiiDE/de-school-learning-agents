@@ -554,7 +554,8 @@ function readFigureChecks(raw: unknown): Array<{ n: number; result: (typeof FIGU
 
 /**
  * §O-13-4 2: 図の項目の detail。1 行目「絵の主張 [1][3] に問題、[2] は確かめきれない」（80 字まで）、続けて wrong・unclear ごとの行
- * （`・[n] <text 60 字>: 問題（<note 40 字>）`）、最後に reason。wrong も unclear も無ければ reason だけ。600 字は呼び出し側が後ろから切る
+ * （`・[n] <text 60 字>: 問題（<note 40 字>）`）、最後に reason。wrong も unclear も無ければ reason だけ。
+ * 合計は ITEM_DETAIL_MAX（600 字）まで。入らない分は後ろから切るが、番号の行は途中で切らず（入らない行ごと落とす）、最後の reason だけ入る分まで切る
  */
 export function figureItemDetail(checks: ReadonlyArray<{ n: number; result: string; note: string }>, texts: ReadonlyMap<number, string>, reason: string): string {
   const wrong = checks.filter((c) => c.result === 'wrong');
@@ -566,7 +567,17 @@ export function figureItemDetail(checks: ReadonlyArray<{ n: number; result: stri
     const note = cutCp(oneLine(c.note), 40);
     return `・[${c.n}] ${cutCp(oneLine(texts.get(c.n) ?? ''), 60)}: ${label}${note ? `（${note}）` : ''}`;
   };
-  return [head, ...wrong.map((c) => row(c, '問題')), ...unclear.map((c) => row(c, '確かめきれない')), ...(reason ? [reason] : [])].join('\n');
+  const rows = [...wrong.map((c) => row(c, '問題')), ...unclear.map((c) => row(c, '確かめきれない'))];
+  let out = head;
+  for (const l of rows) {
+    if (out.length + 1 + l.length > ITEM_DETAIL_MAX) return out;
+    out += '\n' + l;
+  }
+  if (reason) {
+    const room = ITEM_DETAIL_MAX - out.length - 1;
+    if (room > 0) out += '\n' + reason.slice(0, room);
+  }
+  return out;
 }
 
 /** material の parts のうち files[] に path がある part の id（無ければ path の parts/<id>/ から。どちらも無ければ ''） */
