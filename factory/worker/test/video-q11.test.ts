@@ -219,6 +219,8 @@ function reportMsg(videos: unknown[], c2: { verdict: string; reason: string } = 
           figures: [],
           analogy_gaps: [],
           videos,
+          // 契約 V-3 b: 計画（入力・plan.json）に apps がある時は応答に必須（この版は app なし）
+          apps: [],
         },
       },
     ],

@@ -345,10 +345,10 @@ export const VIDEO_NOTE_OMITTED_MARK = '（容量のため省略。判定に含�
 
 /**
  * 節の区切りに見えるものを無害にする（§Q-9.3）: `<source_captures>` `<video_notes>` `<videos>` の開始・終了タグの `<` を全角に、
- * `##` で始まる行の頭に全角空白を足す（見出しを偽れない）
+ * `##` で始まる行の頭に全角空白を足す（見出しを偽れない）。契約 V-3 c: `<apps>` `<child_texts>` `<parts>` も同じ置き換え
  */
 export function neutralizeInputText(t: string): string {
-  return t.replace(/<(\/?\s*(?:source_captures|video_notes|videos))/gi, '＜$1').replace(/^(\s*)##/gm, '$1　##');
+  return t.replace(/<(\/?\s*(?:source_captures|video_notes|videos|apps|child_texts|parts))/gi, '＜$1').replace(/^(\s*)##/gm, '$1　##');
 }
 
 const oneLine = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
