@@ -119,13 +119,17 @@
   // 作品の本物の写真（L2 が作品の images[] に保存する { data, w, h }）。最初の 1 枚。形が違えば null
   var PHOTO_RE = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
   function photoOk(p) { return isObj(p) && isStr(p.data) && p.data.length <= 400 * 1024 && PHOTO_RE.test(p.data) && typeof p.w === 'number' && typeof p.h === 'number' && p.w > 0 && p.h > 0; }
+  // 写真の形の検査: ブラウザでは DES.photo.valid（photo.js）、無ければ同じ規則の photoOk
+  function validPhoto(p) { var P = DES.photo; return P && typeof P.valid === 'function' ? P.valid(p) && photoOk(p) : photoOk(p); }
+  // 作品の images[0] → 無ければ「作品に残す」で残した作品の art.photo（本物の写真 { data, w, h }。theme は無い）
   function firstImage(w) {
     var l = w && Array.isArray(w.images) ? w.images : [];
     for (var i = 0; i < l.length; i++) {
       var p = isObj(l[i]) && isObj(l[i].photo) ? l[i].photo : l[i];
-      if (photoOk(p)) return { data: p.data, w: p.w, h: p.h };
+      if (validPhoto(p)) return { data: p.data, w: p.w, h: p.h };
     }
-    return null;
+    var ap = w && isObj(w.art) && isObj(w.art.photo) ? w.art.photo : null;
+    return ap && validPhoto(ap) ? { data: ap.data, w: ap.w, h: ap.h } : null;
   }
   function itemId(workId) { return MY + workId; }
   function ownItem(state, w, acts) {
@@ -228,6 +232,8 @@
     if ('note' in art) return isObj(art.note) && okPair(art.note.title) && Array.isArray(art.note.lines) && art.note.lines.every(okPair) ? art : null;
     if ('photo' in art) {
       var p = art.photo;
+      // 本物の写真（theme が無く data がある）は img として扱う（形を検査してから）
+      if (isObj(p) && !isStr(p.theme) && 'data' in p) return photoOk(p) ? art : null;
       return isObj(p) && isStr(p.theme) && (p.n == null || (okNum(p.n) && p.n >= 0)) && (p.cat == null || isStr(p.cat)) && (p.odai == null || isStr(p.odai)) ? art : null;
     }
     if ('stage' in art) return okStage(art.stage) ? art : null;
@@ -318,6 +324,7 @@
       return [H('div', { class: 'work-note gl-note-art' }, [H('p', { class: 'wn-title' }, pick(art.note.title)),
         H('ul', null, art.note.lines.map(function (l) { return H('li', null, pick(l)); }))])];
     }
+    if (art && art.photo && photoOk(art.photo)) return [H('img', { src: art.photo.data, alt: '', decoding: 'async' })];
     try { svg = art && art.photo && MD ? MD.photoArt(art.photo) : (art && art.stage && MD ? MD.art(art.stage) : ''); } catch (e) { svg = ''; }
     return [DES.raw(svg || GD.lineArt(cat))];
   }

@@ -89,6 +89,16 @@ eq(wcItem.img, { data: PNG, w: 640, h: 480 }, 'items 作品の本物の写真（
 eq(G.firstImage({ images: [{ data: 'javascript:alert(1)', w: 1, h: 1 }] }), null, 'firstImage data:image の base64 以外は使わない');
 eq(G.firstImage({ images: [{ data: 'data:image/jpeg;base64,AA"><script>', w: 1, h: 1 }] }), null, 'firstImage 属性を壊す文字は通さない');
 ok(!('roles' in wcItem) && !('read' in wcItem), 'items 作ってきた流れ・見立ては出さない');
+var artPhoto = { data: PNG, w: 320, h: 200 };
+eq(G.firstImage({ art: { photo: artPhoto } }), artPhoto, 'firstImage images が無ければ art.photo の本物の写真（作品に残す）');
+eq(G.firstImage({ images: [{ data: PNG, w: 640, h: 480 }], art: { photo: artPhoto } }), { data: PNG, w: 640, h: 480 }, 'firstImage images[0] が先');
+eq(G.firstImage({ art: { photo: { data: 'data:text/html;base64,AA', w: 1, h: 1 } } }), null, 'firstImage art.photo も形を検査する');
+eq(G.firstImage({ art: { photo: { theme: 'mc', n: 0 } } }), null, 'firstImage 線画の写真（theme）は img にしない');
+ok(G.safeArt({ photo: artPhoto }) !== null, 'safeArt theme が無く data のある写真は通す');
+eq(G.safeArt({ photo: { data: 'javascript:x', w: 1, h: 1 } }), null, 'safeArt 形の違う data は通さない');
+ok(G.safeArt({ photo: { theme: 'mc', n: 1 } }) !== null, 'safeArt 線画の写真（theme）は今までどおり');
+var wArt = G.items(G.put(sn, 'wd', 't', '2026-11-08T02:00:00.000Z'), [{ id: 'wd', title: '残した作品', status: 'done', theme: 'py', from: 'make', roles: { own: 1, ai: 0 }, art: { photo: artPhoto } }])[0];
+eq(wArt.img, artPhoto, 'items 作品に残した作品は art.photo の写真を絵に使う');
 eq(G.catOf({ theme: 'zz' }), 'craft', 'catOf 知らない題材はものづくり');
 
 // ---------- 絞り込み ----------
