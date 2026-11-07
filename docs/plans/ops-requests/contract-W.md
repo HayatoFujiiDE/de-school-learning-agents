@@ -8,7 +8,7 @@
 
 ## 範囲
 
-- できるのは **お題の run だけ**（`kind = 'topic_run'`）。payload は `{ purpose: 'gen', kind }`（kind は news / talk / philo / make）か `{ purpose: 'derive', kind: 'refresh'|'extend', parent_id, note? }`（note は 200 字まで・親は topics に在る）。それ以外の形・余計な項目は `failed`・result `{ error: 'bad_payload' }`。
+- できるのは **お題の run**（`kind = 'topic_run'`）と、§W-2 の取り込み直し・§W-3 の検証し直し（どちらも route と同じ述語で状態を戻すだけ。新しい権限は増えない）。お題の run のpayload は `{ purpose: 'gen', kind }`（kind は news / talk / philo / make）か `{ purpose: 'derive', kind: 'refresh'|'extend', parent_id, note? }`（note は 200 字まで・親は topics に在る）。それ以外の形・余計な項目は `failed`・result `{ error: 'bad_payload' }`。
 - 素材の注文・承認・公開・設定は扱わない。画面は変えない。管理画面の route（`POST /api/topics/runs`・`/derive`）の応答（202 / 409 / 503）は変えない。
 
 ## 権限の考え方
@@ -43,3 +43,4 @@
 - 断られた時は failed で、result に `{ refused: <コード> }`（`not_found` / `not_in_review` / `verification_running` / `conflict`）。
 - 道具: `scripts/ops-request.sh reverify <version_id>`。
 - 理由: §S-8-3 の画像の使い回しで検証が part_missing になった版 2 件を、直した後に人の操作なしで検証し直すため。
+- 費用と有限化: 依頼 1 件で検証係が 1 回ぶん走り直す（route の再検証と同じ。§W-2 と違い外部費用が掛かる）。上限は version ごとの検証の試行回数（verifyMaxAttempts）・1 回の検証の費用の上限（verify_cost_cap）・1 tick 1 件・60 分で失効、で押さえる。依頼の日次の上限は設けない（運用者だけが書ける）。

@@ -13,6 +13,17 @@ WAIT_INTERVAL=30
 WAIT_MAX_SEC=1200
 
 say() { printf '%s\n' "$1"; }
+# uuid の形（小文字 16 進 36 文字・ハイフンの位置）だけを通す。grep は行単位で判定するため改行を含む引数が通ってしまう（レビュー指摘 2026-11-07）ので使わない
+is_uuid() {
+  case "$1" in
+    ''|*[!0123456789abcdef-]*) return 1 ;;  # 範囲（a-f）は locale で大文字を通すことがあるので文字を並べる
+  esac
+  [ "${#1}" -eq 36 ] || return 1
+  case "$1" in
+    ????????-????-????-????-????????????) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 usage() {
   say '使い方: scripts/ops-request.sh topic <news|talk|philo|make> [--wait]' >&2
   say '        scripts/ops-request.sh reingest <job_id>' >&2
@@ -25,7 +36,7 @@ if [ "$1" = 'reingest' ]; then
   [ $# -eq 2 ] || usage
   JOB=$2
   # uuid の形だけを通してから SQL に入れる
-  printf '%s' "$JOB" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' || { say 'job_id は uuid の形にしてください' >&2; exit 1; }
+  is_uuid "$JOB" || { say 'job_id は uuid の形にしてください' >&2; exit 1; }
   command -v uuidgen >/dev/null 2>&1 || { say 'uuidgen が見つかりません' >&2; exit 1; }
   cd "$(dirname "$0")/.." || exit 1
   ID=$(uuidgen | tr 'A-Z' 'a-z')
@@ -45,7 +56,7 @@ if [ "$1" = 'reverify' ]; then
   [ $# -eq 2 ] || usage
   VER=$2
   # uuid の形だけを通してから SQL に入れる
-  printf '%s' "$VER" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' || { say 'version_id は uuid の形にしてください' >&2; exit 1; }
+  is_uuid "$VER" || { say 'version_id は uuid の形にしてください' >&2; exit 1; }
   command -v uuidgen >/dev/null 2>&1 || { say 'uuidgen が見つかりません' >&2; exit 1; }
   cd "$(dirname "$0")/.." || exit 1
   ID=$(uuidgen | tr 'A-Z' 'a-z')

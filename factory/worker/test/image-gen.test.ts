@@ -1029,6 +1029,10 @@ describe('§O-8 t12 入力検査・U の表・取り込みの image_id・鍵の�
     expect(await buildUserContent({ R2: bucket, DB: env.DB }, v)).toEqual({ error: 'part_missing' });
     db.prepare("UPDATE factory_jobs SET kind = 'rework' WHERE id = 'j1'").run();
     expect(textOf(await buildUserContent({ R2: bucket, DB: env.DB }, v))).toContain('正確さ=scientific');
+    // (e) rework でも parent_version_id が無ければ前の job の画像は読まない
+    db.prepare("UPDATE factory_jobs SET parent_version_id = NULL WHERE id = 'j1'").run();
+    expect(await buildUserContent({ R2: bucket, DB: env.DB }, v)).toEqual({ error: 'part_missing' });
+    db.prepare("UPDATE factory_jobs SET parent_version_id = 'v0' WHERE id = 'j1'").run();
     // (b) 別の素材の job（j1 より前）の done の画像
     const OTHER_M = `img_${'d'.repeat(32)}`;
     job('jx', 'm_other', 'draft', T);
