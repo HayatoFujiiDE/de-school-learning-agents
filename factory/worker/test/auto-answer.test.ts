@@ -77,6 +77,7 @@ function fakePort(o: { fail?: boolean } = {}): { port: FactoryPort; sent: unknow
 
 const job = (jid: string) => one(w.db, 'SELECT status, phase, answer_state, reconcile_state_json FROM factory_jobs WHERE id = ?', jid);
 const attempts = (jid: string) => (JSON.parse(String(job(jid).reconcile_state_json)) as { auto_answer?: { attempts?: number } }).auto_answer?.attempts;
+const skipMark = (jid: string) => (JSON.parse(String(job(jid).reconcile_state_json)) as { auto_answer?: { skip?: string } }).auto_answer?.skip;
 const autoLogs = () => logs.filter((l) => l.at === 'auto_answer');
 const sentText = (sent: unknown[]) => JSON.stringify(sent);
 
@@ -115,21 +116,34 @@ describe('autoAnswerStep（契約 V-12・u11）', () => {
     const { port, sent } = fakePort();
     const r = await autoAnswerStep(w.env, port, { deadline: FAR() });
     expect(r).toEqual({ answered: [], skipped: [{ job_id: a, reason: 'no_default' }, { job_id: b, reason: 'no_default' }] });
-    expect(await autoAnswerStep(w.env, port, { deadline: FAR() })).toEqual({
-      answered: [],
-      skipped: [{ job_id: a, reason: 'no_default' }, { job_id: b, reason: 'no_default' }],
-    });
+    // 一度 no_default になった job は印（auto_answer.skip）で以後の候補から外れる
+    expect(await autoAnswerStep(w.env, port, { deadline: FAR() })).toEqual({ answered: [], skipped: [{ job_id: c, reason: 'no_default' }] });
+    expect(await autoAnswerStep(w.env, port, { deadline: FAR() })).toEqual({ answered: [], skipped: [] });
     for (const j of [a, b, c]) {
       expect(job(j)).toMatchObject({ status: 'needs_answer', answer_state: 'none' });
       expect(attempts(j)).toBeUndefined();
+      expect(skipMark(j)).toBe('no_default');
     }
     expect(sent).toEqual([]);
-    expect(autoLogs()[0]).toEqual({ at: 'auto_answer', job_id: a, result: 'no_default' });
+    expect(autoLogs()).toEqual([a, b, c].map((j) => ({ at: 'auto_answer', job_id: j, result: 'no_default' })));
     // ちょうど 4,000 字なら答える
     const w2 = world();
     w = w2;
     const d = seedJob(1, { questions: [{ id: 'q1', question: 'x', why: '', default: 'あ'.repeat(4000 - AUTO_ANSWER_PREFIX.length) }] });
     expect((await autoAnswerStep(w.env, fakePort().port, { deadline: FAR() })).answered).toEqual([d]);
+  });
+
+  it('no_default の job が先頭に居ても後ろの自動の差し戻しの job は詰まらない（次の tick で自動回答される）', async () => {
+    const noDef = [{ id: 'q1', question: 'x', why: '', default: '' }];
+    const a = seedJob(1, { questions: noDef });
+    const b = seedJob(2, { questions: noDef });
+    const c = seedJob(3);
+    const { port } = fakePort();
+    expect(await autoAnswerStep(w.env, port, { deadline: FAR() })).toEqual({ answered: [], skipped: [{ job_id: a, reason: 'no_default' }, { job_id: b, reason: 'no_default' }] });
+    expect(await autoAnswerStep(w.env, port, { deadline: FAR() })).toEqual({ answered: [c], skipped: [] });
+    expect(job(c)).toMatchObject({ status: 'running', phase: 'making', answer_state: 'sent' });
+    // 人が管理画面で答える経路は変わらない（印は無視される）
+    expect(job(a)).toMatchObject({ status: 'needs_answer', answer_state: 'none' });
   });
 
   it('paused なら何もしない（attempts 不変）', async () => {
@@ -142,14 +156,18 @@ describe('autoAnswerStep（契約 V-12・u11）', () => {
     expect(sent).toEqual([]);
   });
 
-  it('attempts 3 で cap（answerJob を呼ばない）', async () => {
+  it('attempts 3 の job は候補に出ない（answerJob を呼ばず、cap のログも出ない）。先頭に 2 件あっても後ろの job は同じ tick で答える', async () => {
     const jid = seedJob(1, { state: { auto_answer: { attempts: 3 } } });
+    const j2 = seedJob(2, { state: { auto_answer: { attempts: 3 } } });
+    const c = seedJob(3);
     const { port, sent } = fakePort();
-    expect(await autoAnswerStep(w.env, port, { deadline: FAR() })).toEqual({ answered: [], skipped: [{ job_id: jid, reason: 'cap' }] });
-    expect(job(jid)).toMatchObject({ status: 'needs_answer', answer_state: 'none' });
-    expect(attempts(jid)).toBe(3);
-    expect(sent).toEqual([]);
-    expect(autoLogs()).toEqual([{ at: 'auto_answer', job_id: jid, result: 'cap' }]);
+    expect(await autoAnswerStep(w.env, port, { deadline: FAR() })).toEqual({ answered: [c], skipped: [] });
+    for (const j of [jid, j2]) {
+      expect(job(j)).toMatchObject({ status: 'needs_answer', answer_state: 'none' });
+      expect(attempts(j)).toBe(3);
+    }
+    expect(sent).toHaveLength(2); // c の 1 回分（回答 + define_outcome）だけ
+    expect(autoLogs()).toEqual([{ at: 'auto_answer', job_id: c, result: 'sent' }]);
   });
 
   it('送信の失敗で saved に戻り、次の tick で送り直す。失敗が続けば 3 回で止まる', async () => {
@@ -167,13 +185,13 @@ describe('autoAnswerStep（契約 V-12・u11）', () => {
     expect(sentText(okp.sent)).toContain(`${AUTO_ANSWER_PREFIX}小学 4 年`);
     expect(Number(one(w.db, 'SELECT COUNT(*) AS n FROM standards_log WHERE job_id = ?', jid).n)).toBe(2);
 
-    // 失敗が続く job: 3 回試して cap
+    // 失敗が続く job: 3 回試して止まる（以後は候補に出ない）
     const k = seedJob(2);
     for (let i = 1; i <= 3; i++) {
       expect((await autoAnswerStep(w.env, bad.port, { deadline: FAR() })).skipped).toEqual([{ job_id: k, reason: 'refused' }]);
       expect(attempts(k)).toBe(i);
     }
-    expect((await autoAnswerStep(w.env, okp.port, { deadline: FAR() })).skipped).toEqual([{ job_id: k, reason: 'cap' }]);
+    expect(await autoAnswerStep(w.env, okp.port, { deadline: FAR() })).toEqual({ answered: [], skipped: [] });
     expect(job(k)).toMatchObject({ status: 'needs_answer', answer_state: 'saved' });
     expect(attempts(k)).toBe(3);
   });

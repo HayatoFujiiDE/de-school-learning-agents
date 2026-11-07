@@ -1,6 +1,7 @@
 // 自動回答の段（契約 V-12）。機械の仕分けが差し戻した作り直しの job で職人が質問した時（needs_answer）、
 // 職人自身の既定案（default）で答える。回答の経路は人の回答と同じ answerJob（standards_log に残り、session に「運営からの回答」として届く）。
 // 人の差し戻しの job には触らない。job ごとの試行は AUTO_ANSWER_MAX 回まで（reconcile_state_json.auto_answer.attempts）。
+// 上限に達した job と default の欠ける job（auto_answer.skip = 'no_default'）は候補の SQL で外し、後ろの job を詰まらせない。
 import type { FactoryPort } from './anthropic';
 import { all, cas, errorKind, getSetting, nowIso, stmt } from './db';
 import type { Env } from './env';
@@ -59,8 +60,11 @@ export async function autoAnswerStep(env: Env, port: FactoryPort, o: { deadline:
       `SELECT j.id, j.questions_json, j.answer_state, j.reconcile_state_json FROM factory_jobs j
        WHERE j.status = 'needs_answer' AND j.answer_state IN ('none','saved') AND j.kind = 'rework' AND j.parent_version_id IS NOT NULL
          AND EXISTS (SELECT 1 FROM review_decisions d WHERE d.material_version_id = j.parent_version_id AND d.decision = 'return' AND d.reviewer_email = ?)
+         AND COALESCE(json_extract(j.reconcile_state_json,'$.auto_answer.attempts'),0) < ?
+         AND COALESCE(json_extract(j.reconcile_state_json,'$.auto_answer.skip'),'') = ''
        ORDER BY j.updated_at ASC, j.id ASC LIMIT ?`,
       AUTO_TRIAGE_EMAIL,
+      AUTO_ANSWER_MAX,
       AUTO_ANSWER_BATCH,
     ),
   );
@@ -72,6 +76,7 @@ export async function autoAnswerStep(env: Env, port: FactoryPort, o: { deadline:
       const raw = state?.auto_answer?.attempts;
       const attempts = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
       if (attempts >= AUTO_ANSWER_MAX) {
+        // 候補の SQL で先に外れる（読んだ後に別の呼び出しが数を進めた時だけここに来る）
         out.skipped.push({ job_id: c.id, reason: 'cap' });
         log(c.id, 'cap');
         continue;
@@ -81,6 +86,15 @@ export async function autoAnswerStep(env: Env, port: FactoryPort, o: { deadline:
       if (c.answer_state === 'none') {
         const a = defaultAnswers(parseJsonField<unknown>(c.questions_json, null));
         if (!a) {
+          // 印を 1 回だけ書いて以後の候補から外す（人が管理画面で答える。answerJob はこの key を見ない）
+          await cas(
+            db,
+            stmt(
+              `UPDATE factory_jobs SET reconcile_state_json = json_set(COALESCE(NULLIF(reconcile_state_json,''),'{}'), '$.auto_answer.skip', 'no_default')
+               WHERE id = ? AND status = 'needs_answer' AND answer_state = 'none'`,
+              c.id,
+            ),
+          );
           out.skipped.push({ job_id: c.id, reason: 'no_default' });
           log(c.id, 'no_default');
           continue;
