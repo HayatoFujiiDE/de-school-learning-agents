@@ -1,0 +1,231 @@
+/* 右パネル・予定表・グリッド・目標・下タブ・シート（CONTRACT-v3 §B / §D / §E / §R / §S） */
+
+/* ---------- チップ（高さ 22px・11px・radius 999。出所は 色 + ラベル + アイコン） ---------- */
+.chip{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 9px;border-radius:999px;font-size:11px;font-weight:600;line-height:1;white-space:nowrap;max-width:100%;background:#f0f1ed;color:#5b6059;border:1px solid transparent;transition:background-color .15s ease-out,color .15s ease-out}
+.chip .ico{width:12px;height:12px}
+.chip span{overflow:hidden;text-overflow:ellipsis}
+.chip.k-fixed,.chip.k-event{background:#ffffffa6;color:var(--sand-ink)}
+.chip.k-optional{background:#f0f1ed;color:#5b6059}
+.chip.k-mine{background:var(--record-soft);color:var(--record)}
+.chip.k-proposed{background:#fff;color:var(--ai-ink);border:1px dashed var(--ai)}
+.chip.k-held,.chip.k-tomorrow,.chip.k-overlap{background:var(--sand);color:var(--sand-ink)}
+.chip.k-overlap{border-color:#d9d0bf}
+.chip.k-trial{background:#fff;color:var(--ink);border-color:#d9d0bf}
+.chip.src-own{background:#e8eef5;color:var(--own)}
+.chip.src-record{background:var(--record-soft);color:var(--record)}
+.chip.src-ai{background:var(--ai-soft);color:var(--ai-ink);border:1px dashed var(--ai)}
+.chip-btn{display:inline-flex;align-items:center;min-height:44px;margin:-11px 0;padding:0}
+
+/* 操作後にフォーカスを置く入れ物（tabindex=-1）。輪郭は codex の focus-visible と同じ色 */
+.row-group:focus,.proposal-card:focus,.goal.editing:focus{outline:none}
+.row-group:focus-visible,.proposal-card:focus-visible,.goal.editing:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
+
+/* ---------- 右パネル（§E-1） ---------- */
+.plan-panel{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:16px 14px 18px;box-shadow:var(--shadow);position:sticky;top:96px;max-height:calc(100vh - 116px);overflow:auto;overscroll-behavior:contain;min-width:0;font-size:13px}
+.panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:12px}
+.ph-title{min-width:0}
+.panel-head h2{font-size:17px;line-height:1.5}
+.panel-head h2:focus{outline:none}
+.panel-date{font-size:11px;color:var(--muted);line-height:1.6}
+.ph-actions{display:flex;align-items:center;gap:2px;flex-shrink:0}
+.ph-actions .link-btn{font-size:11px;min-height:44px;padding:0 6px}
+.ph-actions .icon-btn{width:44px;height:44px}
+.panel-tabs{margin-bottom:14px}
+.panel-tabs .segmented{display:flex;width:100%}
+.panel-tabs .segmented button{flex:1;min-height:44px;font-size:12px;padding:7px 4px;min-width:0}
+.panel-body{display:grid;gap:14px;min-width:0}
+
+/* ---------- 目標 3 枠（§E-2 / R-8） ---------- */
+.goals{min-width:0}
+.goals-head{margin-bottom:8px}
+.goal-list{display:grid;gap:8px}
+.goals.is-wide .goal-list{grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.goal{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;justify-items:start;align-content:start;text-align:left;width:100%;min-height:44px;padding:10px 12px;border-radius:10px;background:#fff;border:1px solid var(--line);font-size:12px;line-height:1.7;min-width:0}
+.goal.has-text{border-left:3px solid var(--own)}
+.goal.empty{border:1px dashed #cfcabd;background:transparent}
+.goal-label{font-size:11px;letter-spacing:.06em;color:var(--muted);font-weight:600;line-height:1.6}
+.goal-text{font-size:13px;color:var(--ink);overflow-wrap:anywhere}
+.goal-empty{font-size:12px;color:var(--gap)}
+.goal.editing{border-left:3px solid var(--own);background:#fff}
+.goal.editing textarea{width:100%;min-height:44px;border:1px solid #d8ddd1;border-radius:8px;padding:9px 10px;resize:none;font-size:13px;line-height:1.6;background:#fff}
+.goal.editing .actions{gap:6px}
+/* パネル / drawer / sheet の目標はコンパクトな 1 行（T-4）: 3 枠の合計 130px 以下
+   （実測: 2 行に折れる枠 53 + 1 行 34×2 + 間 4×2 = 129px。破線枠は 1px の分だけ padding を減らして同じ高さ） */
+.goals:not(.is-wide) .goal-list{gap:4px}
+.goal.compact{display:block;min-height:0;padding:7px 12px;border:0;border-radius:8px;box-shadow:none;background:transparent;line-height:19px}
+.goal.compact.has-text{border-left:3px solid var(--own);border-radius:0 8px 8px 0}
+.goal.compact.empty{border:1px dashed #cfcabd;padding:6px 11px}
+.goal.compact .g-label{font-size:11px;color:var(--muted);font-weight:600;margin-right:6px}
+.goal.compact .g-text{font-size:13px;color:var(--ink);overflow-wrap:anywhere}
+.goal.compact.empty .g-text{color:var(--muted)}
+.goals.is-wide{margin-bottom:16px}
+
+/* ---------- 予定表（§D・カレンダー型・等高リスト） ---------- */
+.plan-table{display:grid;gap:14px;min-width:0}
+.block{min-width:0}
+.block-head{display:flex;align-items:baseline;gap:8px;font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.06em;margin:0 0 6px;line-height:1.6;border-bottom:1px solid var(--line);padding-bottom:4px}
+.bh-name{color:var(--ink)}
+.block-rows{display:grid;gap:6px;min-width:0}
+.row-group{display:grid;gap:4px;border-radius:10px;min-width:0}
+.row{display:grid;grid-template-columns:64px minmax(0,1fr) auto;grid-template-areas:"time title ops" "time chips ops";column-gap:10px;row-gap:3px;align-items:center;min-height:44px;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:#fff;font-size:12px;line-height:1.6;min-width:0}
+.row-time{grid-area:time;display:flex;flex-direction:column;align-self:start;font-variant-numeric:tabular-nums;font-size:12px;line-height:1.5;min-width:0}
+.row-time .t-start{font-weight:600}
+.row-time .t-end{color:var(--muted)}
+.row-time .t-sep{display:none}
+.edited-mark{font-size:10px;color:var(--record);font-weight:600;line-height:1.6;margin-top:2px}
+.row-title{grid-area:title;font-weight:600;font-size:13px;min-width:0;overflow-wrap:anywhere;display:flex;align-items:center;gap:6px}
+.row-chips{grid-area:chips;display:flex;flex-wrap:wrap;gap:4px;min-width:0}
+.row-ops{grid-area:ops;display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;min-width:0}
+.row.wide-ops{grid-template-columns:64px minmax(0,1fr);grid-template-areas:"time title" "time chips" "time ops"}
+.row.wide-ops .row-ops{justify-content:flex-start;margin-top:4px}
+@media(min-width:1121px){
+.plan-table.is-wide .row.wide-ops{grid-template-columns:64px minmax(120px,1fr) auto;grid-template-areas:"time title ops" "time chips ops"}
+.plan-table.is-wide .row.wide-ops .row-ops{justify-content:flex-end;margin-top:0}
+}
+.drag-mark{display:inline-flex;color:var(--muted);cursor:grab;flex-shrink:0}
+.drag-mark .ico{width:14px;height:14px}
+.icon-btn.row-more{width:44px;height:44px}
+.row.k-fixed,.row.k-event{background:var(--sand);border-color:var(--sand);color:var(--sand-ink)}
+.row.k-fixed .row-time .t-end,.row.k-event .row-time .t-end{color:var(--sand-ink)}
+.row.k-optional{background:#fff;border:1px dashed var(--line)}
+.row.k-mine{border-left:3px solid var(--record)}
+.row.k-mine[draggable="true"]{cursor:grab}
+.row.k-proposed{background:var(--ai-soft);border:1px dashed var(--ai)}
+.row.k-held{background:#faf9f5;border:1px dashed var(--line);border-left:3px solid #d3d0c6}
+.row.free{display:flex;align-items:center;justify-content:space-between;gap:6px 8px;flex-wrap:wrap;background:transparent;border:1px dashed var(--line);padding:6px 10px}
+.row.free .row-time{display:none}
+.row.free .row-title{font-weight:500;font-size:12px;color:var(--muted)}
+.row.free .row-ops{justify-content:flex-start}
+.row.stub{display:flex;align-items:center;gap:6px 10px;flex-wrap:wrap;background:transparent;border:1px dashed var(--line);color:var(--muted);padding:4px 10px}
+.row.stub .row-time{color:var(--muted)}
+.row.stub .row-title{font-weight:500;font-size:12px;color:var(--muted);flex:1}
+.row.stub .stub-overlap{font-size:10px;font-weight:600;color:var(--sand-ink);white-space:nowrap}
+.row.has-overlap{border-color:#d9c9a6}
+
+/* 現在時刻線（橙 1.5px + 左に時刻） */
+.now-line{position:relative;height:0;margin:-3px 0;z-index:1}
+.now-line:before{content:'';position:absolute;left:40px;right:0;top:0;border-top:1.5px solid var(--orange)}
+.now-time{position:absolute;left:0;top:-8px;font-size:10px;font-weight:700;color:#a9590b;background:var(--paper);padding:0 4px;line-height:16px;border-radius:4px;font-variant-numeric:tabular-nums}
+.plan-panel .now-time,.plan-main .now-time{background:#fff}
+
+/* 行メニュー・時刻を直す・重なり帯 */
+.row-menu{display:grid;gap:2px;padding:6px;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px #20251b14;margin-left:74px}
+.row-menu .btn.small,.row-sheet-list .btn.small{justify-content:flex-start;border-color:transparent;width:100%}
+.time-edit{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;padding:10px 12px;background:#fff;border:1px solid var(--line);border-radius:10px}
+.te-field{display:grid;gap:4px;font-size:11px;color:var(--muted)}
+.te-field select{min-height:44px;border:1px solid #d8ddd1;border-radius:8px;background:#fff;padding:0 10px;font-size:13px;color:var(--ink)}
+.time-edit .actions{gap:6px}
+.overlap-band{background:var(--sand);color:var(--sand-ink);border-radius:10px;padding:8px 12px;display:grid;gap:6px;font-size:12px}
+.overlap-band p{line-height:1.7}
+.overlap-band .actions{gap:6px}
+.overlap-band .link-btn{min-height:44px;padding:0}
+
+/* 行内・グリッド内・メニュー内の操作は 44px（R-9） */
+.row-ops .btn.small,.row-menu .btn.small,.act-ops .btn.small,.overlap-band .btn.small,.time-edit .btn.small,.goal .btn.small,.row-sheet-list .btn.small,.row-sheet .btn.small{min-height:44px}
+
+/* 追加・削除の差し替え（200ms ease-out） */
+@keyframes rowIn{from{max-height:0;opacity:0}to{max-height:160px;opacity:1}}
+.row.enter{animation:rowIn .2s ease-out;overflow:hidden}
+.row.leave{transition:max-height .2s ease-out,opacity .2s ease-out,padding .2s ease-out,min-height .2s ease-out;max-height:0!important;min-height:0;opacity:0;overflow:hidden;padding-top:0;padding-bottom:0}
+
+/* ドロップ先（薄橙） */
+.row.drop-ok{background:var(--orange-soft);border-color:var(--orange)}
+.row.drop-over{box-shadow:0 0 0 2px var(--orange)}
+
+/* ---------- 今まで取り組んできたこと（§E-3 / R-8） ---------- */
+.grid-wrap{display:grid;gap:10px;min-width:0}
+.grid{display:grid;gap:12px;min-width:0}
+.grid.cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.grid.cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.cat-card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 12px 4px;min-width:0}
+.cat-name{font-size:13px;line-height:1.6;margin-bottom:4px}
+.act-list{list-style:none;margin:0;padding:0;display:grid}
+/* 取り組みは 1 行 = タイトル（左）+ 文字だけの操作 2 つ（右）。狭いカードでは操作が次の行の右へ回る（T-4） */
+.act{display:flex;flex-wrap:wrap;align-items:center;gap:0 8px;padding:2px 0;border-top:1px solid var(--line);font-size:12px;min-width:0}
+.act:first-child{border-top:0}
+.act[draggable="true"]{cursor:grab}
+.act-main{flex:1 1 7em;min-width:0;display:grid;gap:4px;padding:8px 0}
+.act-title{font-weight:500;font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+.act-chips{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.act-ops{display:flex;gap:0;margin-left:auto;flex-shrink:0}
+.act-ops .btn.ghost.small{padding:6px 8px}
+.act-ops .btn.ghost.small:hover{color:var(--ink);filter:none}
+.grid.is-pick .act{grid-template-columns:minmax(0,1fr) auto;align-items:center}
+.grid-note{font-size:10px;color:var(--muted);line-height:1.7}
+.grid-more{font-size:11px;color:var(--muted)}
+
+/* ---------- #plan（予定を広く見る） ---------- */
+.plan-page{max-width:1180px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:28px;align-items:start}
+.plan-main,.plan-history{min-width:0}
+.plan-page .section-head{align-items:flex-end}
+.plan-page .section-head h2{font-size:20px}
+/* 先頭見出し「今日の予定」は h1（§AA-2）。見た目は h2 の時のまま */
+.plan-page .section-head h1{font-size:20px;line-height:1.6;letter-spacing:normal}
+.plan-page .section-head h1:focus,.plan-page .section-head h2:focus{outline:none}
+.plan-main .plan-table{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:16px}
+
+/* ---------- ダイアログ（drawer / sheet / pick / 行メニュー / 表示） ---------- */
+dialog.plan-dialog{padding:0;border:0;margin:0;background:#fcfbf8;max-width:100%;border-radius:0;box-shadow:-15px 0 50px #0002;overflow:auto}
+dialog.plan-dialog::backdrop{background:#0003;backdrop-filter:none}
+dialog.plan-dialog .plan-panel{position:static;max-height:none;overflow:visible;border:0;border-radius:0;box-shadow:none;background:transparent;padding:16px 16px 24px}
+dialog.plan-dialog .now-time{background:#fcfbf8}
+.mode-options{display:flex;gap:10px;flex-wrap:wrap}
+.mode-options .radio-card{min-width:180px;min-height:48px;cursor:pointer}
+dialog.pick-sheet .grid-wrap{margin-top:6px}
+.row-sheet-list{display:grid;gap:4px}
+
+/* ---------- トースト（戻す・明日にとっておく を押せる。R-9） ---------- */
+.toast{display:flex;align-items:center;gap:12px}
+.toast.actionable{pointer-events:auto}
+.toast[hidden]{display:none}
+.toast-btn{color:#fff;border:1px solid #ffffff73;border-radius:7px;min-height:44px;padding:0 14px;font-size:12px;font-weight:600;flex-shrink:0}
+
+/* ---------- 下タブ帯（≤ 700） ---------- */
+.tabbar{display:none}
+
+/* ---------- 幅ごとの形 ---------- */
+@media(max-width:1120px){.plan-panel{padding:14px 12px 16px}}
+@media(max-width:950px){
+.plan-page{grid-template-columns:minmax(0,1fr)}
+}
+@media(min-width:701px){
+dialog.plan-dialog{inset:0 0 0 auto;width:340px;height:100vh;max-height:100vh;border-left:1px solid var(--line)}
+}
+@media(max-width:700px){
+body{padding-bottom:56px}
+.tabbar{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));position:fixed;left:0;right:0;bottom:0;height:56px;background:var(--tabbar);color:#fff;z-index:25}
+.tabbar button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:10px;color:#fff;min-height:56px;position:relative;min-width:0}
+.tabbar .ico{width:18px;height:18px}
+.tabbar button.active{font-weight:700}
+.tabbar button.active:before{content:'';position:absolute;top:0;left:28%;right:28%;height:3px;background:var(--orange);border-radius:0 0 2px 2px}
+.toast{bottom:81px}
+dialog.plan-dialog{inset:0 0 auto 0;width:100%;max-height:88vh;border-radius:0 0 18px 18px;box-shadow:0 15px 50px #0002;animation:sheetDown .22s ease-out}
+dialog.row-sheet{margin:auto auto 0;width:100%;max-width:100%;border-radius:18px 18px 0 0;padding:18px 16px 24px}
+.goals.is-wide .goal-list{grid-template-columns:minmax(0,1fr)}
+.grid.cols-2,.grid.cols-3{grid-template-columns:minmax(0,1fr)}
+.row{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"time chips" "title ops"}
+.row.wide-ops,.plan-table.is-wide .row.wide-ops{grid-template-columns:auto minmax(0,1fr);grid-template-areas:"time chips" "title title" "ops ops"}
+.plan-table.is-wide .row.wide-ops .row-ops{justify-content:flex-start;margin-top:4px}
+.row-time{flex-direction:row;align-items:baseline;gap:2px;align-self:center;flex-wrap:wrap}
+.row-time .t-sep{display:inline;color:var(--muted)}
+.edited-mark{margin:0 0 0 6px}
+.row-chips{justify-content:flex-end}
+.row.wide-ops .row-chips{justify-content:flex-start}
+.drag-mark{display:none}
+.plan-main .plan-table{padding:12px}
+.mode-options .radio-card{min-width:0}
+}
+@keyframes sheetDown{from{transform:translateY(-100%)}to{transform:translateY(0)}}
+
+/* ---------- 小学生向け（es）の部位別サイズ（R-9） ---------- */
+html[data-mode="es"] .plan-panel{font-size:14px}
+html[data-mode="es"] .row{font-size:13px;min-height:48px}
+html[data-mode="es"] .row-title,html[data-mode="es"] .goal-text,html[data-mode="es"] .act-title{font-size:14px}
+html[data-mode="es"] .chip{font-size:12px}
+html[data-mode="es"] .goal-label,html[data-mode="es"] .block-head,html[data-mode="es"] .goal.compact .g-label{font-size:12px}
+html[data-mode="es"] .goal.compact .g-text{font-size:14px}
+html[data-mode="es"] .goal.compact{line-height:20px}
+html[data-mode="es"] .grid-note,html[data-mode="es"] .edited-mark,html[data-mode="es"] .row.stub .stub-overlap{font-size:11px}
+html[data-mode="es"] .row-ops .btn.small,html[data-mode="es"] .row-menu .btn.small,html[data-mode="es"] .act-ops .btn.small,html[data-mode="es"] .overlap-band .btn.small,html[data-mode="es"] .time-edit .btn.small,html[data-mode="es"] .goal .btn.small,html[data-mode="es"] .row-sheet-list .btn.small,html[data-mode="es"] .icon-btn.row-more,html[data-mode="es"] .te-field select,html[data-mode="es"] .toast-btn{min-height:48px}
+html[data-mode="es"] .icon-btn.row-more,html[data-mode="es"] .ph-actions .icon-btn{width:48px;height:48px}
+html[data-mode="es"] .panel-tabs .segmented button,html[data-mode="es"] .ph-actions .link-btn,html[data-mode="es"] .row-sheet .btn,html[data-mode="es"] .pick-sheet .btn.small{min-height:48px}

@@ -1,0 +1,393 @@
+/* 作る（#make / #make/<id>）と作品（#works）の共通部品。CONTRACT-v3 §U、design-v3 §5 / §6。作品の一覧・詳細・見せる（§W）は works.css。
+   前半は codex-mock/style.css の .page-head / .project-row / .idea-options / .studio-* / .stage-* / .range-row / .step-line / .work-card / .field / .new-dot を移植
+   （値は変えない。例外: .range-row input の accent は橙をやめてオリーブ — 橙の用途の制限 §I）。後半の「v3 追加」は新規。 */
+
+/* ---------- codex から移植 ---------- */
+.page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:27px}
+.page-head p{font-size:13px;margin-top:9px;color:var(--muted)}
+.project-row{display:flex;align-items:center;gap:18px;padding:18px;background:#fff;border:1px solid var(--line);border-radius:14px}
+.project-thumb{width:88px;flex-shrink:0;border-radius:10px;background:#f2ede1;overflow:hidden}
+.project-thumb svg{width:100%}
+.project-row h3{font-size:14px}
+.project-row .btn{margin-left:auto;flex-shrink:0}
+.idea-options{display:grid;grid-template-columns:1fr 1fr 1fr;gap:13px;margin-top:20px}
+.idea-option{text-align:left;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fafaf7;padding:0}
+.idea-option svg{width:100%;height:125px}
+.studio-header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:20px}
+.studio-header h1{font-size:23px}
+.studio-layout{display:grid;grid-template-columns:minmax(260px,.8fr) minmax(360px,1.2fr);gap:23px;align-items:start}
+.studio-chat{padding:22px;min-width:0;background:#fcfbf8}
+.studio-chat .message-list{gap:14px;margin:18px 0}
+.studio-chat .message .bubble{font-size:12px;padding:12px;max-width:100%}
+.studio-chat .composer{box-shadow:none;padding:11px;border-radius:10px}
+.studio-chat .composer textarea{font-size:12px;min-height:65px}
+.studio-stage{padding:0;overflow:hidden}
+.stage-top{padding:15px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.stage-top strong{font-size:11px}
+.stage-canvas{min-height:290px;background:var(--art-bg);background-image:radial-gradient(#d7d5ca .7px,transparent .7px);background-size:16px 16px;display:grid;place-items:center;position:relative}
+.stage-canvas svg{width:100%;max-height:320px}
+.stage-tools{padding:21px}
+.range-row{display:flex;gap:15px;align-items:center;justify-content:space-between;margin-bottom:14px}
+.range-row label{font-size:12px}
+.range-row input{accent-color:var(--olive);width:48%}
+.range-row output{font-size:11px;color:var(--muted);width:35px}
+.studio-layout.chat-hidden{grid-template-columns:1fr}
+.studio-layout.chat-hidden .studio-chat{display:none}
+.studio-layout.chat-hidden .studio-stage{max-width:900px;width:100%;margin:auto}
+.step-line{display:flex;gap:9px;align-items:center;font-size:11px;color:var(--muted);margin-bottom:14px}
+.step-line strong{color:var(--ink);font-weight:500}
+.work-card{border-radius:14px;border:1px solid var(--line);background:white;overflow:hidden}
+.work-preview{width:100%;padding:0;display:block;background:var(--art-bg);aspect-ratio:1.52;overflow:hidden}
+.work-preview svg{width:100%;height:100%;object-fit:contain}
+.work-info{padding:17px 18px}
+.work-info h3{font-size:14px;margin:7px 0}
+.work-info .muted{font-size:10px}
+.field{display:grid;gap:8px;font-size:12px;font-weight:500}
+.field input,.field textarea,.field select{width:100%;padding:12px;border:1px solid #d8ddd1;border-radius:9px;background:#fff;min-height:44px;font-weight:400}
+.new-dot{width:5px;height:5px;border-radius:50%;background:var(--orange);margin-left:auto}
+@media(max-width:1120px){.studio-layout{gap:15px;grid-template-columns:minmax(245px,.8fr) minmax(310px,1.2fr)}
+.studio-chat{padding:15px}
+}
+@media(max-width:950px){.studio-layout{grid-template-columns:1fr}
+.studio-chat{order:2}
+.stage-canvas{min-height:250px}
+.studio-chat .message-list{max-height:240px;overflow:auto}
+}
+@media(max-width:700px){.idea-options{gap:8px}
+.idea-option svg{height:95px}
+.project-row{gap:10px;padding:14px;flex-wrap:wrap}
+.project-thumb{width:68px}
+.project-row h3{font-size:12px}
+.project-row .btn{margin-left:78px}
+.studio-header{align-items:flex-start;flex-wrap:wrap}
+.studio-header h1{font-size:20px}
+.studio-layout{grid-template-columns:minmax(0,1fr)}
+.stage-tools{padding:17px}
+.page-head{margin-bottom:21px;gap:12px}
+.page-head p{font-size:12px}
+.work-preview{aspect-ratio:1.8}
+}
+
+/* ---------- v3 追加: 共通 ---------- */
+.mk-art{display:block;width:100%;height:auto}
+/* 一覧の外枠は全ページ同じ幅（§AA-1）。作るの一覧の中身は 900px の箱のまま左寄せ。作品の詳細の幅は変えない */
+.make-entry,.works-page{max-width:var(--page-max);margin:0 auto;min-width:0}
+.make-entry>*{max-width:900px}
+.works-page.work-detail{max-width:1080px}
+.make-sec .section-head h2{font-size:15px;line-height:1.6}
+.make-sec{margin-bottom:34px;min-width:0}
+.make-sec .section-head{margin-bottom:12px}
+.make-sec .idea-options{margin-top:0}
+/* 行内・カード内・メニュー内の操作は 44px（es 48px。R-9 / T-3） */
+.studio .btn.small,.make-entry .btn.small,.works-page .btn.small,.make-dialog .btn.small,.paused .btn.small{min-height:44px}
+html[data-mode="es"] .studio .btn.small,html[data-mode="es"] .make-entry .btn.small,html[data-mode="es"] .works-page .btn.small,html[data-mode="es"] .make-dialog .btn.small,html[data-mode="es"] .studio .icon-btn,html[data-mode="es"] .studio-tabs .segmented button,html[data-mode="es"] .opt-chip,html[data-mode="es"] .cap-thumb,html[data-mode="es"] .studio .link-btn{min-height:48px}
+.origin-chip{flex-shrink:0}
+.pick-hint{font-size:11px;color:var(--muted);line-height:1.7;margin:0 0 8px}
+
+/* 操作領域（§U-12 指摘 22）: 作る・作品・ダイアログの操作は js 44px / es 48px（topbar・話すの composer の .btn は対象外） */
+.make-entry .btn,.works-page .btn,.make-entry .link-btn,.works-page .link-btn,.studio .link-btn,.make-entry input,.make-dialog .btn,.make-dialog .field input,.make-dialog .field select,.make-dialog input[type=text],.make-paused .btn{min-height:44px}
+html[data-mode="es"] .make-entry .btn,html[data-mode="es"] .works-page .btn,html[data-mode="es"] .make-entry .link-btn,html[data-mode="es"] .works-page .link-btn,
+html[data-mode="es"] .make-entry input,html[data-mode="es"] .make-dialog .btn,html[data-mode="es"] .make-dialog .field input,html[data-mode="es"] .make-dialog .field select,
+html[data-mode="es"] .make-dialog input[type=text],html[data-mode="es"] .studio .btn,html[data-mode="es"] .studio .msg-foot .btn.ghost.small,
+html[data-mode="es"] .studio input[type=text],html[data-mode="es"] .make-paused .btn{min-height:48px}
+html[data-mode="es"] .studio-header .icon-btn{width:48px;height:48px}
+.step-line .next-set{min-height:44px;padding:0 4px;font-size:12px}
+html[data-mode="es"] .step-line .next-set{min-height:48px}
+
+/* ---------- 入口（#make） ---------- */
+.project-list{display:grid;gap:10px}
+.project-text{min-width:0;display:grid;gap:2px}
+.project-text h3{line-height:1.6;overflow-wrap:anywhere}
+.project-text .muted{font-size:11px;line-height:1.7}
+.project-next{font-size:11px;color:#876023;line-height:1.7}
+.sample-card{display:flex;flex-direction:column;min-width:0}
+.sample-art{background:var(--art-bg);background-image:radial-gradient(#d7d5ca .7px,transparent .7px);background-size:16px 16px;padding:6px 10px;border-bottom:1px solid var(--line)}
+.sample-art svg{height:125px}
+.sample-body{display:grid;gap:6px;padding:12px 12px 14px;background:#fff;flex:1;align-content:start}
+.sample-body h3{font-size:14px;line-height:1.6}
+.sample-body .muted{font-size:11px;line-height:1.7}
+.sample-body .btn{justify-self:start;margin-top:4px}
+.more-row{margin-top:8px}
+.more-row .link-btn,.make-today .link-btn{min-height:44px}
+.idea-form{display:flex;gap:10px;align-items:stretch}
+.idea-form input{flex:1;min-width:0;min-height:44px;border:1px solid #d8ddd1;border-radius:9px;background:#fff;padding:10px 12px;font-size:13px}
+.idea-form .btn{flex-shrink:0}
+.idea-media{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.make-today{margin-top:-14px}
+
+/* ---------- 作業台（#make/<id>）: 3 列（相談｜作業対象｜バディが作ったもの） ---------- */
+.studio{min-width:0}
+/* 作業台の戻るリンク（作品・お題・単元と同じ部品。§AA-3）と、開いた時にフォーカスを置く h1 */
+.mk-back{margin:0 0 4px}
+.mk-back .link-btn{font-weight:600;gap:6px}
+html[data-mode="es"] .mk-back .link-btn{min-height:48px}
+.studio-title:focus{outline:none}
+.studio-header{flex-wrap:wrap;margin-bottom:16px;position:relative}
+.sh-main{display:flex;align-items:center;gap:10px;min-width:0;flex:1 1 280px}
+.studio-title{font-size:23px;line-height:1.4;min-width:0}
+.title-btn{text-align:left;font-weight:700;padding:2px 4px;margin-left:-4px;border-radius:6px;overflow-wrap:anywhere;min-height:44px}
+.title-btn:hover{background:#efeee8;filter:none}
+.sh-actions{display:flex;align-items:center;gap:4px;flex-shrink:0;margin-left:auto}
+.studio-header .icon-btn{width:44px;height:44px}
+.head-menu{position:absolute;right:0;top:100%;z-index:6;margin:4px 0 0;min-width:220px;display:grid;gap:2px;padding:6px;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px #20251b14}
+.head-menu .btn.small{justify-content:flex-start;border-color:transparent;width:100%}
+.studio-header .inline-edit{flex:1;min-width:0}
+.studio-tabs{margin-bottom:12px}
+.studio-tabs .segmented{display:flex;width:100%}
+.studio-tabs .segmented button{flex:1;min-height:44px;font-size:12px;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.studio-tabs .new-dot{margin-left:0}
+.studio-layout>*{min-width:0}
+/* ≤ 700 の「作業台｜相談」切替。display を持つ列でも hidden を効かせる */
+.studio-layout>[hidden]{display:none!important}
+@media(min-width:1121px){
+.studio-layout.has-shelf{grid-template-columns:minmax(200px,.7fr) minmax(330px,1.3fr) 240px;gap:20px}
+.studio-layout.has-shelf.chat-hidden{grid-template-columns:minmax(0,1fr) 240px}
+.studio-layout.has-shelf.chat-hidden .studio-stage{max-width:900px}
+}
+@media(min-width:951px){
+.studio-chat{position:sticky;top:96px;max-height:calc(100vh - 116px);display:flex;flex-direction:column}
+.studio-chat .message-list{flex:1 1 auto;overflow:auto;min-height:120px;padding-right:2px}
+.shelf.card{position:sticky;top:96px;max-height:calc(100vh - 116px);overflow:auto;overscroll-behavior:contain}
+}
+
+/* 相談列 */
+.chat-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.chat-head h2{font-size:15px;line-height:1.6}
+.chat-head h2:focus{outline:none}
+.resume-note{display:flex;gap:8px;align-items:flex-start;margin-top:12px;padding:10px 12px;border-left:3px solid var(--ai);background:var(--ai-soft);border-radius:0 10px 10px 0;font-size:12px;line-height:1.8}
+.resume-note .des-buddy{margin-top:3px}
+.quote-frame{margin-top:12px;padding:10px 12px;background:#fff;border:1px solid var(--line);border-left:3px solid var(--own);border-radius:0 10px 10px 0;display:grid;gap:6px;min-width:0}
+.quote-frame.is-ai{border:1px dashed var(--ai);border-radius:10px}
+.quote-frame:focus{outline:none}
+.quote-frame:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
+.qf-text{font-size:13px;line-height:1.8;overflow-wrap:anywhere;white-space:pre-wrap}
+.quote-frame .actions{gap:2px}
+.studio-chat .message-list .message.record{margin-left:0}
+.msg-opts{display:flex;flex-wrap:wrap;gap:6px}
+.msg-opts .btn.small{background:#fff}
+.msg-foot{display:flex;align-items:center;gap:6px}
+.msg-foot .btn.ghost.small{padding:4px 8px;min-height:32px}
+.studio .msg-foot .btn.ghost.small{min-height:44px}
+.message.buddy .msg-body>.chip{margin-bottom:-2px}
+.mk-composer textarea{min-height:56px}
+.mk-composer .composer-bottom{gap:8px}
+.mk-composer .hint{font-size:10px}
+
+/* 作業対象 */
+/* focus の輪（offset 4px）が切れないよう、作業対象の列は overflow を見せる（codex の overflow:hidden からの例外。§U-11 指摘 22） */
+.studio .studio-stage{display:flex;flex-direction:column;overflow:visible}
+.studio-stage>.step-line{padding:12px 20px;margin:0;border-bottom:1px solid var(--line);flex-wrap:wrap;row-gap:2px;font-size:12px}
+.step-line:focus{outline:none}
+.step-line:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
+.step-line strong{overflow-wrap:anywhere}
+.step-line .btn{margin-left:auto}
+.step-line.flash{background:var(--sand)}
+.step-line.editing .inline-edit{flex:1 1 220px}
+.stage-block,.ext-block,.stage-empty{border-bottom:1px solid var(--line);min-width:0}
+.stage-block:focus,.ext-block:focus,.stage-empty:focus{outline:none}
+.stage-block:focus-visible,.ext-block:focus-visible,.stage-empty:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
+.stage-top{gap:10px;flex-wrap:wrap}
+.st-name{display:flex;align-items:center;gap:8px;min-width:0}
+.st-name strong{font-size:13px;font-weight:600;overflow-wrap:anywhere}
+.untested{font-size:11px;color:var(--muted);border:1px dashed #cfcabd;border-radius:999px;padding:2px 9px;line-height:1.6;white-space:nowrap}
+.untested[hidden]{display:none}
+.studio .stage-canvas{min-height:170px;padding:12px 18px}
+.studio .stage-canvas svg{max-height:200px}
+.stage-code{margin:0;padding:10px 20px;background:#f7f5f0;border-top:1px solid var(--line);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)}
+.studio .stage-tools{padding:16px 20px 4px}
+.range-row input{min-height:44px}
+.range-row output{width:auto;min-width:48px;text-align:right}
+.test-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:4px 20px 16px}
+.result-line{font-size:12px;line-height:1.7;color:var(--muted);min-width:0;flex:1 1 200px}
+.result-line.has-result{color:var(--ink)}
+.result-line .rl-label{color:var(--muted)}
+.stage-note{list-style:none;margin:0;padding:14px 20px;display:grid;gap:6px;font-size:13px;line-height:1.8}
+.stage-empty{padding:22px 20px;display:grid;gap:12px;background:#fbfaf6}
+.stage-empty-text{font-size:13px;line-height:1.9}
+.mini-samples{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.mini-samples .sample-art svg{height:80px}
+.mini-samples .sample-body h3{font-size:12px}
+.ext-block .stage-top strong{font-size:12px}
+.photo-main{margin:0;padding:14px 20px 6px;display:grid;gap:4px}
+.photo-main svg{border-radius:10px;background:#fcfbf8;max-height:220px}
+.photo-main figcaption,.photo-thumb figcaption{font-size:10px;color:var(--muted);line-height:1.6}
+.photo-thumbs{display:flex;gap:8px;padding:0 20px 4px;flex-wrap:wrap}
+.photo-thumb{margin:0;width:84px}
+.photo-thumb svg{border-radius:6px;border:1px solid var(--line)}
+.ext-actions{padding:8px 20px 14px;gap:6px}
+.photo-form{margin:0 20px 16px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff;display:grid;gap:8px}
+.pf-head{font-size:12px;font-weight:600;line-height:1.6}
+.photo-form input{min-height:44px;border:1px solid #d8ddd1;border-radius:8px;padding:8px 10px;font-size:13px;width:100%}
+.opt-chips{display:flex;flex-wrap:wrap;gap:6px}
+.opt-chip{min-height:44px;padding:0 14px;border:1px solid var(--line);border-radius:999px;background:#fff;font-size:12px;font-weight:500}
+.opt-chip[aria-pressed="true"]{background:#e8eef5;border-color:var(--own);color:var(--own);font-weight:600}
+.work-ops{display:flex;gap:8px;flex-wrap:wrap;padding:14px 20px}
+.checkpoint-ops{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;padding:14px 20px;border-top:1px solid var(--line);margin-top:auto}
+.inline-edit{display:grid;gap:6px;min-width:0}
+.inline-edit input,.inline-edit textarea{width:100%;min-height:44px;border:1px solid #d8ddd1;border-radius:8px;padding:8px 10px;font-size:13px;background:#fff;resize:none}
+.inline-edit .actions{gap:6px}
+
+/* 比べる */
+.compare-view{padding:14px 20px;border-bottom:1px solid var(--line);background:#fbfaf6}
+.compare-view:focus{outline:none}
+.compare-view:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
+.cv-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;font-size:12px}
+.compare-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.compare-item{margin:0;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px;display:grid;gap:4px;min-width:0}
+.compare-item figcaption{font-size:11px;line-height:1.6;color:var(--ink);overflow-wrap:anywhere}
+.compare-item .stage-note{padding:4px;font-size:11px}
+.pick-toggle.on{background:#e8eef5;color:var(--own)}
+
+/* ここまでの変化 */
+.changes{padding:6px 20px 12px}
+.changes-head{margin:8px 0 6px}
+.changes-head h3{font-size:13px;line-height:1.6}
+.change-list{list-style:none;margin:0;padding:0;display:grid}
+.change-row{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:4px 10px;align-items:start;padding:10px 0;border-top:1px solid var(--line)}
+.change-row:first-child{border-top:0}
+.change-row:focus{outline:none}
+.change-row:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
+.cr-time{font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;line-height:22px}
+.cr-main{display:grid;gap:3px;min-width:0}
+.cr-who{display:flex;gap:4px;flex-wrap:wrap}
+.cr-what{font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+.cr-result{font-size:11px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere}
+.cr-ops{display:flex;gap:2px;flex-wrap:wrap;justify-content:flex-end}
+.see-all{min-height:44px}
+
+/* 棚「バディが作ったもの」 */
+.shelf{min-width:0}
+.shelf.card{padding:14px 12px}
+.shelf.inline{padding:6px 20px 14px;border-bottom:1px solid var(--line);background:#fffcf6}
+.shelf-head{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:8px;flex-wrap:wrap}
+.shelf-head h2{font-size:14px;line-height:1.6}
+.shelf-head h2:focus{outline:none}
+.shelf-acts{display:flex;gap:2px;flex-wrap:wrap}
+.shelf-cards{display:grid;gap:10px}
+.shelf.inline .shelf-cards{grid-template-columns:repeat(auto-fill,minmax(180px,1fr))}
+.shelf-card{background:#fff;border:1px dashed var(--ai);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;min-width:0}
+.shelf-card:focus{outline:none}
+.shelf-card:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
+.shelf-card.is-adopted{border-style:solid;border-color:#e6d2ac}
+.shelf-card.is-passed{background:#faf9f5;border-color:var(--line)}
+.shelf-card.is-passed .card-art{opacity:.6}
+.shelf-card.is-making{border:1px dashed var(--ai);background:var(--ai-soft);padding:14px 12px;display:grid;gap:8px;justify-items:start}
+.making-text{font-size:12px;font-weight:600;color:var(--ai-ink);line-height:1.6}
+@keyframes cardIn{from{opacity:0}to{opacity:1}}
+.shelf-card.enter{animation:cardIn .15s ease-out}
+.card-art{background:#f6f3ea;padding:6px 8px;border-bottom:1px solid var(--line)}
+.card-art svg{max-height:96px}
+.card-note{list-style:none;margin:0;padding:10px 12px;background:#f6f3ea;border-bottom:1px solid var(--line);font-size:11px;line-height:1.7;display:grid;gap:2px}
+.card-body{padding:8px 12px 4px;display:grid;gap:4px;min-width:0}
+.card-title{font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+.card-desc{font-size:11px;color:var(--muted);line-height:1.6;overflow-wrap:anywhere}
+.card-desc:empty{display:none}
+.card-chips{display:flex;gap:4px;flex-wrap:wrap}
+.chip.k-adopted{background:var(--sand);color:var(--sand-ink)}
+.card-src{font-size:11px;line-height:1.6;color:var(--ai-ink);overflow-wrap:anywhere}
+.card-ops{display:flex;gap:4px;flex-wrap:wrap;padding:4px 8px 8px}
+.card-ops .btn.small{padding:6px 9px}
+.card-ops .btn.ghost.small{padding:6px 6px}
+.remake-opts{display:grid;gap:4px;padding:0 10px 10px}
+.remake-opts .btn.small{justify-content:flex-start}
+.passed-toggle{min-height:44px;margin-top:6px}
+.shelf-cards.passed{margin-top:4px}
+
+/* ---------- ダイアログ（作品に残す / 今日はここまで / 写真・スクショを入れる） ---------- */
+.make-dialog .dialog-body{gap:16px}
+/* ダイアログの閉じる・フッターも操作領域 44px（es 48px）（§U-11 指摘 22） */
+.make-dialog .dialog-head .icon-btn{width:44px;height:44px}
+.make-dialog .dialog-footer .btn{min-height:44px}
+html[data-mode="es"] .make-dialog .dialog-head .icon-btn{width:48px;height:48px}
+html[data-mode="es"] .make-dialog .dialog-footer .btn,html[data-mode="es"] .studio .title-btn,html[data-mode="es"] .range-row input{min-height:48px}
+.make-dialog .field input,.make-dialog .field select{font-size:13px}
+.push-line{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;background:#fff;border:1px solid var(--line);border-radius:12px}
+.push-line p{font-size:13px;line-height:1.9}
+.push-actions{margin-top:-6px}
+.roles-box{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:grid;gap:6px}
+.roles-box .eyebrow{margin:0}
+.roles-sum{font-size:13px;line-height:1.8;display:flex;align-items:center;flex-wrap:wrap;gap:4px}
+.roles-lines{margin:0;padding-left:18px;font-size:12px;line-height:1.8;color:var(--ink)}
+.dlg-error{font-size:12px;line-height:1.8;color:#8a3b12;background:#fbecd7;border-radius:8px;padding:8px 12px}
+.cap-images,.cap-made{border:0;margin:0;padding:0;display:grid;gap:8px;min-width:0}
+.cap-images legend,.cap-made legend{font-size:12px;font-weight:500;margin-bottom:8px;padding:0}
+.cap-thumbs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.cap-thumb{position:relative;border:1px solid var(--line);border-radius:10px;background:#fff;padding:4px;min-height:44px}
+.cap-thumb.on{border:2px solid var(--own);padding:3px}
+.cap-thumb[aria-disabled="true"]{cursor:default}
+.cap-check{position:absolute;right:6px;top:6px;width:22px;height:22px;border-radius:50%;background:var(--own);color:#fff;display:grid;place-items:center}
+.cap-check .ico{width:14px;height:14px}
+.cap-images>.btn{justify-self:start}
+.cap-made input{min-height:44px;border:1px solid #d8ddd1;border-radius:9px;padding:10px 12px;font-size:13px;width:100%;background:#fff}
+.ai-read-box{background:var(--ai-soft);border:1px dashed var(--ai);border-radius:12px;padding:10px 12px;display:grid;gap:6px}
+.ai-read-box:focus{outline:none}
+.ar-text{font-size:13px;line-height:1.8}
+.ai-read-box input{min-height:44px;border:1px solid #d8ddd1;border-radius:8px;padding:8px 10px;font-size:13px;width:100%;background:#fff}
+.ai-read-box .actions{gap:2px}
+.face-note{font-size:11px;color:var(--muted);line-height:1.7}
+
+/* ---------- #paused（作る から） ---------- */
+.make-paused .paused-push{display:grid;gap:10px}
+.make-paused .push-line{border:0;padding:0;text-align:left}
+.paused-actions{justify-content:center}
+
+/* ---------- 幅ごと ---------- */
+@media(max-width:1120px){
+.studio-title{font-size:21px}
+}
+@media(max-width:950px){
+.studio-chat{max-height:none}
+}
+@media(max-width:700px){
+.idea-options.sample-options{grid-template-columns:minmax(0,1fr)}
+.sample-card{flex-direction:row}
+.sample-art{width:42%;flex-shrink:0;border-bottom:0;border-right:1px solid var(--line);display:grid;place-items:center}
+.sample-art svg{height:auto}
+.idea-form{flex-wrap:wrap}
+.idea-form .btn{width:100%}
+.project-row .btn{margin-left:auto}
+.studio-header h1,.studio-title{font-size:20px}
+.studio-stage>.step-line,.stage-top,.test-row,.work-ops,.checkpoint-ops,.changes,.ext-actions,.photo-thumbs,.photo-main{padding-left:14px;padding-right:14px}
+.shelf.inline{padding-left:14px;padding-right:14px}
+.stage-code{padding-left:14px;padding-right:14px}
+.studio .stage-tools{padding:12px 14px 2px}
+.photo-form{margin-left:14px;margin-right:14px}
+.range-row{gap:10px}
+.range-row input{width:auto;flex:1;min-width:0}
+.studio-chat .composer{position:sticky;bottom:56px;z-index:5}
+.studio-chat{padding:14px}
+.checkpoint-ops{justify-content:flex-start}
+.change-row{grid-template-columns:40px minmax(0,1fr)}
+.cr-ops{grid-column:2;justify-content:flex-start}
+.compare-pair{grid-template-columns:minmax(0,1fr)}
+.cap-thumbs{gap:6px}
+.page-head{flex-wrap:wrap}
+}
+
+/* ---------- 小学生向け（es） ---------- */
+html[data-mode="es"] .studio-chat .message .bubble,html[data-mode="es"] .mk-composer textarea,html[data-mode="es"] .qf-text,html[data-mode="es"] .stage-empty-text,html[data-mode="es"] .push-line p,html[data-mode="es"] .ar-text{font-size:15px}
+html[data-mode="es"] .cr-what,html[data-mode="es"] .result-line,html[data-mode="es"] .step-line,html[data-mode="es"] .card-title,html[data-mode="es"] .roles-sum{font-size:14px}
+html[data-mode="es"] .card-desc,html[data-mode="es"] .cr-result,html[data-mode="es"] .card-src,html[data-mode="es"] .face-note,html[data-mode="es"] .untested,html[data-mode="es"] .card-note{font-size:12px}
+
+/* ---------- §AE 作るを広げる（入口の組の入れ替え・こんなのも作れる） ---------- */
+.sample-options.is-fading,.pj-grid.is-fading{opacity:0;transition:opacity .15s ease}
+.sample-options.is-fadein,.pj-grid.is-fadein{animation:mk-fadein .15s ease-out}
+@keyframes mk-fadein{from{opacity:0}to{opacity:1}}
+.make-sec .sec-sub{font-size:12px;color:var(--muted);line-height:1.7;margin-top:2px}
+.pj-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.pj-card{display:flex;flex-direction:column;min-width:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}
+.pj-art{position:relative;aspect-ratio:1.6;overflow:hidden;background:var(--art-bg);border-bottom:1px solid var(--line)}
+.pj-art .mk-art{width:100%;height:100%}
+.pj-art img{display:block;width:100%;height:100%;object-fit:cover}
+.pj-ai{position:absolute;right:6px;bottom:6px;padding:2px 6px;border-radius:5px;background:#ffffffe6;color:var(--muted);font-size:10px;line-height:1.5}
+.pj-body{display:grid;gap:6px;padding:12px 12px 14px;flex:1;align-content:start;min-width:0}
+.pj-body h3{font-size:14px;line-height:1.6;overflow-wrap:anywhere}
+.pj-what,.pj-first{font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+.pj-need{font-size:11px;line-height:1.7;overflow-wrap:anywhere}
+.pj-chip,.pj-safety{justify-self:start}
+.pj-body .btn{justify-self:start;margin-top:4px}
+html[data-mode="es"] .pj-what,html[data-mode="es"] .pj-first{font-size:13px}
+html[data-mode="es"] .pj-need{font-size:12px}
+@media(max-width:1120px){.pj-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.pj-art{aspect-ratio:2.4}}
+@media(max-width:700px){.pj-grid{grid-template-columns:minmax(0,1fr);gap:10px}}

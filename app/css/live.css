@@ -1,0 +1,16 @@
+/* 実サイト app/ 固有の追加（contract-LS §LS-1）。app/css の他のファイルは app-v3 と同一のまま。
+   レーンごとに節を分け、同じセレクタを二重定義しない。 */
+
+/* ==================== L0 土台（シェル） ==================== */
+/* 名前が無い時のアバターはアイコン */
+.avatar .ico{width:14px;height:14px}
+/* 役タブは 子ども / サポーター の 2 つ。モックで最後だった無効ボタン用の区切り（shell.css の :last-child）を サポーター に付けない */
+.role-tabs button:last-child{margin-left:0;border-left:0;border-radius:5px}
+/* 表示設定ダイアログの「このブラウザの保存」: 区切り線 + 小見出し + 文 + 消す（2 段の確認） */
+.live-store{margin-top:22px;padding-top:19px;border-top:1px solid var(--line);display:grid;gap:8px}
+.live-store h3{font-size:13px}
+.live-store p{font-size:12px;color:var(--muted)}
+.live-store-ops{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.live-store-ops .live-store-ask{color:var(--ink);font-weight:600}
+.live-store .btn{min-height:44px}
+html[data-mode="es"] .live-store .btn{min-height:48px}

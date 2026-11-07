@@ -1,0 +1,139 @@
+/* 作品（#works 一覧 / #works/<id> 詳細 / 見せる）。CONTRACT-v3 §W。
+   .work-card / .work-preview / .work-info の codex 移植分と、作品ページの操作領域（44 / es 48px）は make.css。ここは v3 追加。
+   橙は主ボタン（続きを作る・写真を入れる）だけ。構造の強調は墨・青（選んだコマ）で。 */
+
+/* ---------- 一覧（§W-2）: 完成 = 大きいカード / 残した試作 = 小さいカード ---------- */
+.works-sec{margin-bottom:32px;min-width:0}
+.works-sec .section-head{margin-bottom:12px}
+.works-sec h2{font-size:15px;line-height:1.6}
+.works-done{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.works-trial{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
+a.work-card{display:flex;flex-direction:column;color:inherit;text-decoration:none;min-width:0}
+a.work-card:hover{border-color:#cfcabd}
+.work-card:focus{outline:none}
+.work-card:focus-visible{outline:3px solid #a9590b;outline-offset:4px}
+.work-info{display:grid;gap:6px;align-content:start}
+.work-info h3{margin:0;line-height:1.6;overflow-wrap:anywhere}
+.work-foot{display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap}
+.work-meta{font-size:11px;color:var(--muted);line-height:1.6;font-variant-numeric:tabular-nums}
+.chip.k-shown{background:var(--record-soft);color:var(--record)}
+.work-card.is-trial .work-preview{aspect-ratio:1.6}
+.work-card.is-trial .work-info{padding:10px 12px 12px;gap:2px}
+.work-card.is-trial h3{font-size:12px}
+.work-preview.is-empty{background:#f6f3ea}
+.work-note{aspect-ratio:auto;min-height:150px;padding:14px 16px;display:grid;align-content:start;gap:6px;background:#f6f3ea}
+.work-note .wn-title{font-size:13px;font-weight:600;line-height:1.6}
+.work-note ul{margin:0;padding-left:18px;font-size:12px;line-height:1.8}
+.work-card.is-trial .work-note{min-height:0;aspect-ratio:1.6;padding:10px 12px;overflow:hidden}
+.works-empty{display:grid;gap:12px;max-width:520px}
+.work-add{border:1px dashed #cfcabd;border-radius:14px;background:transparent;min-height:180px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;font-size:13px;font-weight:600;color:var(--ink)}
+.work-add .ico{width:24px;height:24px}
+.work-add:hover{background:#fbfaf6;filter:none}
+
+/* ---------- 詳細（§W-3） ---------- */
+.wd-back{margin:0 0 4px}
+.wd-back .link-btn{min-height:44px;font-weight:600;gap:6px}
+.wd-head{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:12px 24px;margin-bottom:18px}
+.wd-title{display:grid;gap:6px;min-width:0;flex:1 1 300px}
+.wd-title .inline-edit{max-width:560px}
+.wd-title-row{display:flex;align-items:center;gap:4px 6px;flex-wrap:wrap;min-width:0}
+.wd-title-row h1{font-size:23px;line-height:1.4;overflow-wrap:anywhere;min-width:0}
+/* 開いた時にフォーカスを置く見出し（tabindex=-1）は、パネル・相談・棚の見出しと同じく輪を出さない（plan.css .panel-head h2 / make.css .chat-head h2） */
+.works-page h1:focus{outline:none}
+.wd-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.wd-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:flex-end;flex:0 1 auto;max-width:100%}
+.chip.k-wdone{background:var(--record-soft);color:var(--record)}
+.chip.k-wtrial{background:var(--sand);color:var(--sand-ink)}
+
+/* 主役「変わってきたところ」: 選んだコマを上に大きく、コマは左→右（狭い幅は縦） */
+.wd-story.card{padding:20px 22px}
+.wd-story:focus{outline:none}
+.wd-story .section-head{margin-bottom:12px}
+.wd-story h2{font-size:15px;line-height:1.6}
+.sf-view{margin:0;display:grid;gap:8px;min-width:0}
+.sf-view .work-preview{aspect-ratio:auto;height:240px;border-radius:12px;background:var(--art-bg);background-image:radial-gradient(#d7d5ca .7px,transparent .7px);background-size:16px 16px;display:grid;place-items:center;padding:10px}
+.sf-view .work-preview svg{width:100%;height:100%;max-height:220px}
+.sf-view .work-note{height:auto;min-height:180px;place-items:start;background:#f6f3ea}
+.is-inherited svg{opacity:.4}
+.sf-view figcaption,.sf-compare figcaption{display:flex;align-items:center;gap:4px 8px;flex-wrap:wrap;font-size:12px;line-height:1.7}
+.sf-time{font-weight:600;font-variant-numeric:tabular-nums}
+.sf-what{overflow-wrap:anywhere;min-width:0}
+.sf-who{display:inline-flex;gap:4px;flex-wrap:wrap}
+.sf-who:empty{display:none}
+.sf-this{font-size:11px;font-weight:600;color:var(--ink);border:1px solid var(--ink);border-radius:999px;padding:0 8px;line-height:1.7;white-space:nowrap}
+.sf-compare{grid-template-columns:repeat(2,minmax(0,1fr))}
+.sf-compare .work-preview{aspect-ratio:1.52;border-radius:8px;background:var(--art-bg)}
+.sf-note{font-size:13px;line-height:1.9;margin-top:10px}
+.sf-tools{display:flex;justify-content:flex-end;margin:6px 0 4px}
+.sf-strip{list-style:none;margin:0;padding:6px 6px 10px;display:flex;gap:10px;overflow-x:auto;overscroll-behavior-x:contain}
+.sf-strip li{flex:0 0 156px;display:flex;min-width:0}
+.sf-frame{display:grid;gap:5px;align-content:start;width:100%;text-align:left;padding:6px;border:1px solid var(--line);border-radius:10px;background:#fff;min-height:44px;color:var(--ink)}
+.sf-frame:hover{filter:none;border-color:#cfcabd}
+.sf-frame.is-last{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+.sf-frame.on{border:2px solid var(--own);padding:5px;box-shadow:none}
+.sf-frame:focus-visible{outline:3px solid #a9590b;outline-offset:2px}
+.sf-thumb{display:block;aspect-ratio:1.52;border-radius:6px;background:var(--art-bg);overflow:hidden}
+.sf-thumb svg{width:100%;height:100%}
+.sf-thumb.is-note{font-size:11px;font-weight:600;padding:6px 8px;line-height:1.5;background:#f6f3ea;overflow-wrap:anywhere}
+.sf-thumb.is-empty{background:#f6f3ea;border:1px dashed #d8d2c4}
+.sf-text{display:grid;gap:2px;font-size:11px;line-height:1.6;min-width:0;justify-items:start}
+
+/* 下の 2 列: 本人の言葉・バディの見立て ｜ 関わり・見せる・同じ活動から */
+.wd-cols{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px;margin-top:16px;align-items:start}
+.wd-col{display:grid;gap:12px;min-width:0}
+.wd-block{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px;display:grid;gap:8px;min-width:0}
+.wd-block:focus{outline:none}
+.wd-block.is-ai{background:var(--ai-soft);border:1px dashed var(--ai)}
+.wb-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.wb-head h2{font-size:13px;line-height:1.6}
+.wb-text{font-size:13px;line-height:1.8;overflow-wrap:anywhere;white-space:pre-wrap}
+.wb-empty{font-size:12px;line-height:1.8;color:var(--muted)}
+.wd-block .actions{gap:4px}
+.wb-roles{font-size:12px;line-height:1.8;display:flex;align-items:center;flex-wrap:wrap;gap:4px}
+.wb-shares,.wb-sib{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.wb-shares li{display:flex;align-items:center;justify-content:space-between;gap:4px 10px;flex-wrap:wrap;font-size:12px;line-height:1.7}
+.wb-shares li p{min-width:0;overflow-wrap:anywhere}
+.wb-sib li{display:flex;align-items:center;gap:4px 8px;flex-wrap:wrap}
+.wb-sib .link-btn{min-height:44px;font-weight:600;overflow-wrap:anywhere;text-align:left}
+
+/* ---------- ダイアログ: 完成 / 試作の 2 択（§W-1）・見せる（§W-4） ---------- */
+.status-pick,.share-pick{border:0;margin:0;padding:0;display:grid;gap:8px;min-width:0}
+.status-pick legend,.share-pick legend{font-size:12px;font-weight:500;margin-bottom:8px;padding:0}
+.status-pick .radio-card,.share-pick .radio-card{min-width:0;flex:1 1 150px}
+.share-work{display:flex;align-items:center;gap:12px;font-size:13px;line-height:1.6;min-width:0}
+.share-work strong{overflow-wrap:anywhere;min-width:0}
+.share-work .share-thumb{width:96px;flex-shrink:0;border-radius:8px;border:1px solid var(--line)}
+.share-work .share-thumb.work-note{min-height:0;padding:6px;font-size:10px}
+.share-preview{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 14px;min-width:0}
+.share-preview .eyebrow{margin-bottom:6px}
+.share-preview ul{margin:0;padding-left:18px;display:grid;gap:4px;font-size:12px;line-height:1.9}
+.share-preview li{overflow-wrap:anywhere}
+.share-need{font-size:11px;color:var(--muted);line-height:1.7}
+.share-need[hidden]{display:none}
+
+/* ---------- 小学生向け（es） ---------- */
+html[data-mode="es"] .wb-text,html[data-mode="es"] .sf-note{font-size:15px}
+html[data-mode="es"] .wb-empty,html[data-mode="es"] .wb-roles,html[data-mode="es"] .wb-shares li,html[data-mode="es"] .share-preview ul,html[data-mode="es"] .sf-view figcaption{font-size:14px}
+html[data-mode="es"] .sf-text,html[data-mode="es"] .work-meta,html[data-mode="es"] .wd-meta{font-size:12px}
+html[data-mode="es"] .sf-frame,html[data-mode="es"] .wd-back .link-btn,html[data-mode="es"] .wb-sib .link-btn,html[data-mode="es"] .works-page .inline-edit input{min-height:48px}
+
+/* ---------- 幅ごと ---------- */
+@media(max-width:1120px){
+.works-done{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:950px){
+.wd-cols{grid-template-columns:minmax(0,1fr)}
+}
+@media(max-width:700px){
+.works-done{grid-template-columns:minmax(0,1fr)}
+.works-trial{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.wd-title-row h1{font-size:20px}
+.wd-actions{justify-content:flex-start}
+.wd-story.card{padding:14px}
+.sf-view .work-preview{height:190px}
+.sf-strip{flex-direction:column;overflow:visible;padding:4px 2px}
+.sf-strip li{flex:none}
+.sf-frame{grid-template-columns:88px minmax(0,1fr);align-items:start;gap:10px}
+.sf-compare{grid-template-columns:repeat(2,minmax(0,1fr))}
+.share-work .share-thumb{width:72px}
+}
