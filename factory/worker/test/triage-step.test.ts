@@ -283,6 +283,7 @@ describe('autoPublishStep（契約 V-7 d）', () => {
   it.each([
     ['スイッチが切られた', () => setSetting(w, 'auto_publish', '0')],
     ['読み直された', () => w.db.prepare("UPDATE material_versions SET reader_status = 'pending', reader_token = NULL WHERE id = 'v1'").run()],
+    ['一時停止された（入口の後）', () => setSetting(w, 'paused', '1')],
   ])('公開の直前に%s → 0 行（何もしない）', async (_n, mutate) => {
     await cleanVersion('m1', 'v1');
     setSetting(w, 'auto_publish', '1');

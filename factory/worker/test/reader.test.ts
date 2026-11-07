@@ -5,8 +5,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { PortError, type CallOpts, type FactoryPort } from '../src/anthropic';
 import type { Env } from '../src/env';
 import {
+  READER_MATERIAL_CUT_MARK,
+  READER_MATERIAL_MAX_CHARS,
   READER_SYSTEM,
   buildReaderInput,
+  materialSection,
   neutralizeReaderText,
   parseReading,
   readVersion,
@@ -442,6 +445,29 @@ describe('入力（契約 V-4 c）', () => {
     expect(r.text.split('\n').filter((l) => l.startsWith('部品 '))).toHaveLength(20);
     m.conditions.supporter_check = true;
     expect((await buildReaderInput(m, async () => null)).text).toContain('サポーターの見守り=要');
+  });
+
+  it('<material> の節が大きい（部品 18 個 × 題名 200 + 最初にやること 400 + 図の説明 200 × 20）→ 節は 20,000 字で切って「（以下省略）」、入力の合計は 80,000 字以内で変奏が入る', async () => {
+    const m = goodMaterial() as Obj;
+    const part = (i: number) => ({
+      ...m.parts[0],
+      id: `p${i}`,
+      title: 'た'.repeat(300),
+      entry_point: { type: 'try', text: 'や'.repeat(500) },
+      files: Array.from({ length: 20 }, (_, k) => ({ path: `parts/p${i}/f${k}.svg`, role: 'figure', alt: 'ず'.repeat(300) })),
+      variants: [{ audience: 'elementary', length: 'short', interest: null, game: false, path: `parts/p${i}/elementary-short.md` }],
+    });
+    m.parts = Array.from({ length: 18 }, (_, i) => part(i + 1));
+    const section = materialSection(m);
+    expect(section.length).toBeLessThanOrEqual(READER_MATERIAL_MAX_CHARS);
+    expect(section.endsWith(`${READER_MATERIAL_CUT_MARK}\n</material>`)).toBe(true);
+    const r = await buildReaderInput(m, async (p) => `本文 ${p} ${'ほ'.repeat(5_000)}`);
+    expect(r.text.length).toBeLessThanOrEqual(80_000);
+    expect(r.included.length).toBeGreaterThanOrEqual(1);
+    expect(r.included.length + r.notRead.length).toBe(18);
+    expect(r.text.match(/<\/material>/g)).toHaveLength(1);
+    // 小さい material は切らない
+    expect(materialSection(goodMaterial())).not.toContain(READER_MATERIAL_CUT_MARK);
   });
 
   it('資料の中の </variants>・<material>・## 見出しで節の区切りを偽れない', async () => {
