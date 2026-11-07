@@ -7,16 +7,22 @@ import type { SessionCreateParams } from '@anthropic-ai/sdk/resources/beta/sessi
 import { PortError, type CallOpts, type FactoryPort, type FileMeta } from './anthropic';
 import { accumulateCitations, applyCarry, finishCitations, isCitationAcc, newCitationAcc, normalizeUrl, type CitationAcc } from './checks/citations';
 import {
+  VERBATIM_PAGES_FILE,
+  VERBATIM_PAGES_PARTS_DIR,
+  assemblePagesFile,
   buildNeedles,
-  inheritParentHits,
   isVerbState,
   mergeHits,
   newVerbState,
   normalizeForMatch,
+  pageRecordOf,
+  parsePagesFile,
   prepareBodies,
   scanPage,
   verbatimStatusOf,
   type VerbState,
+  type VerbatimPage,
+  type VerbatimPagesFile,
 } from './checks/verbatim';
 import { versionVideosOf } from './videos';
 import { models3dSectionLines } from './models3d';
@@ -952,6 +958,16 @@ const MIN_REMAINING_MS = 5_000;
 const CARRY_MIN_REMAINING_MS = 15_000;
 /** §S-8-2 裁定 3: その先送りの上限（1 つの job で。超えたら引き継ぎなしで取り込む） */
 export const CARRY_DEFER_MAX = 3;
+
+/** 版の checks_json に verbatim_status があるか（= 本契約 §AK2 の後に取り込んだ版。読めない値は「ある」側に倒す: 取得記録で代えない） */
+function hasVerbatimStatus(checksJson: string | null): boolean {
+  try {
+    const o = JSON.parse(String(checksJson ?? '')) as unknown;
+    return !o || typeof o !== 'object' || Array.isArray(o) || Object.hasOwn(o, 'verbatim_status');
+  } catch {
+    return true;
+  }
+}
 /** §S-8-3 裁定 1: 前の job の画像も合わせた 1 版の異なる image_id の上限（この job が作った分は IMAGE_JOB_LIMIT まで） */
 export const IMAGE_TOTAL_LIMIT = 16;
 
@@ -1752,6 +1768,18 @@ class Reconciler {
     }
   }
 
+  /** v4 裁定 1: R2 のページの文の記録を 1 回読む（無い = missing・読めない / 形が違う = bad）。throw しない */
+  private async readPagesObject(key: string, requireTruncated: boolean): Promise<{ kind: 'ok'; file: VerbatimPagesFile } | { kind: 'missing' } | { kind: 'bad' }> {
+    try {
+      const obj = await this.env.R2.get(key);
+      if (!obj) return { kind: 'missing' };
+      const file = parsePagesFile(await obj.text(), requireTruncated);
+      return file ? { kind: 'ok', file } : { kind: 'bad' };
+    } catch {
+      return { kind: 'bad' };
+    }
+  }
+
   /** §B-4-d 手順 6: inspected → listed → ingested → versioned。各段階の途中経過は reconcile_state_json に置き、ページ / ファイル単位で再開する */
   private async ingest(job: JobRow, missingError: string): Promise<string> {
     let stage = job.reconcile_stage;
@@ -1967,6 +1995,7 @@ class Reconciler {
       await this.extend();
       const p = await this.port.listEventsPage(sid, { order: 'asc', page: ev.cursor }, this.call);
       const verb = ev.verb;
+      const seen: VerbatimPage[] = [];
       // §AK2-2: 出典照合と同じ use → result の対応で、web_fetch の結果の文ごとに丸写しを探す（ページをまたいでも対応は acc.fetches が持つ）
       accumulateCitations(ev.acc, citeSources, p.data, (url, text) => {
         const r = scanPage(needles, bodies, text, url, quotesOf(url));
@@ -1974,7 +2003,21 @@ class Reconciler {
         verb.total += r.hits.length;
         verb.pages++;
         if (r.incomplete) verb.incomplete = true;
+        // v4 裁定 1: 作り直しが照らし直せるように、ページの文（正規化後）を R2 に残す（D1 の state には入れない）
+        const rec = pageRecordOf(url, text);
+        seen.push(rec.page);
+        if (rec.cut) verb.lost = true;
       });
+      if (seen.length > 0) {
+        // 続き位置（state）を保存する前に置く。置いた後・保存の前に止まったら、次の呼び出しが同じ番号に置き直す
+        try {
+          await this.env.R2.put(`${prefix}${VERBATIM_PAGES_PARTS_DIR}${verb.parts}.json`, JSON.stringify({ v: 1, pages: seen }));
+          verb.parts++;
+        } catch {
+          verb.lost = true;
+          verb.incomplete = true; // 記録を書けない = 作り直しが照らし直せない（fail-closed）
+        }
+      }
       let grader = ev.grader;
       for (const e of p.data) {
         const x = e as { type?: unknown; result?: unknown; explanation?: unknown };
@@ -1996,6 +2039,17 @@ class Reconciler {
     let verbTotal = ev.verb.total;
     let verbPages = ev.verb.pages;
     let verbIncomplete = ev.verb.incomplete || bodies.incomplete || needles.incomplete;
+    /** v4 裁定 1: この版の記録 verbatim-pages.json に入れるページ（この session の分 → 親の版の分）と、入れられなかった文があるか */
+    const recordPages: VerbatimPage[] = [];
+    let recordLost = ev.verb.lost;
+    for (let n = 0; n < ev.verb.parts; n++) {
+      const part = await this.readPagesObject(`${prefix}${VERBATIM_PAGES_PARTS_DIR}${n}.json`, false);
+      if (part.kind === 'ok') recordPages.push(...part.file.pages);
+      else {
+        recordLost = true;
+        verbIncomplete = true;
+      }
+    }
     // 裁定 3: 先送りは 1 つの job で CARRY_DEFER_MAX 回まで（reconcile_state_json.carry_defers）。使い切ったら引き継ぎなしで取り込む
     if (job.kind === 'rework' && job.parent_version_id) {
       const defers = Number.isInteger(state.carry_defers) ? state.carry_defers! : 0;
@@ -2005,8 +2059,7 @@ class Reconciler {
         await this.writeState(job, null, state);
         throw new OutOfTime();
       }
-      // §AK2-2 親の検出の引き継ぎ: 親の版（同じ素材）の checks_json を 1 回読む（r2_prefix は親の取得記録の厳密な読み方に使う）。読めなければ未完了
-      let parentScanned = false;
+      // §AK2-2（v4 裁定 1）: 親の版（同じ素材）が見たページの文を、子の本文と子の引用でもう一度照らす。親の検出は引き継がない
       let parent: { r2_prefix: string; checks_json: string | null } | null = null;
       try {
         parent = await first<{ r2_prefix: string; checks_json: string | null }>(
@@ -2016,47 +2069,56 @@ class Reconciler {
       } catch {
         parent = null;
       }
-      if (!parent) {
-        verbIncomplete = true;
-      } else {
-        let parentChecks: unknown = null;
-        try {
-          parentChecks = JSON.parse(String(parent.checks_json ?? ''));
-        } catch {
-          parentChecks = null;
-        }
-        // 親が本契約の後に取り込まれた版（verbatim_status あり）なら、親の session の web_fetch は全部その時に走査済み → 取得記録は読まず、検出の引き継ぎだけで足りる（v3.2）
-        const pc = parentChecks as Record<string, unknown> | null;
-        parentScanned = !!pc && typeof pc === 'object' && !Array.isArray(pc) && typeof pc.verbatim_status === 'string';
-        const inherited = inheritParentHits(parentChecks, bodies);
-        verbHits = mergeHits(verbHits, inherited.hits);
-        verbTotal += inherited.hits.length;
-        if (inherited.incomplete) verbIncomplete = true;
-      }
       if (!short) {
         await this.extend();
         const carry = await carryForIngest(this.env, job);
         if (carry) cit = applyCarry(sessionCit, citeSources, videosOfVersion, carry.records, Date.now());
-        // §AK2-2 親の取得記録の検査（引用の引き継ぎとは別の厳密な読み方。壊れた行・切り詰めの疑い・missing / truncated があれば未完了）
-        const strict = parentScanned ? null : parent ? await readCapturesStrict(this.env, parent) : ({ ok: false } as const);
-        if (strict === null) {
-          // 親は走査済み（上の引き継ぎで足りる）
-        } else if (!strict.ok) {
-          verbIncomplete = true;
-        } else {
-          for (const c of strict.captures) {
-            const u = normalizeUrl(c.url);
-            const r = scanPage(needles, bodies, c.text, u, quotesOf(u));
-            verbHits = mergeHits(verbHits, r.hits);
-            verbTotal += r.hits.length;
-            verbPages++;
-            if (r.incomplete) verbIncomplete = true;
-          }
-        }
-      } else if (!parentScanned) {
-        // 先送りを使い切った: 親の取得記録を読まずに取り込む → 丸写しの検査は済んでいない（親が走査済みなら引き継ぎで足りる）
-        verbIncomplete = true;
       }
+      const scanParent = (pages: readonly VerbatimPage[]) => {
+        for (const pg of pages) {
+          const u = normalizeUrl(pg.url);
+          const r = scanPage(needles, bodies, pg.text, u, quotesOf(u));
+          verbHits = mergeHits(verbHits, r.hits);
+          verbTotal += r.hits.length;
+          verbPages++;
+          if (r.incomplete) verbIncomplete = true;
+          recordPages.push(pg);
+        }
+      };
+      if (!parent || short) {
+        // 親の版が読めない / 先送りを使い切って親の記録を読まない → 丸写しの検査は済んでいない。この版の記録も祖先の分が欠ける
+        verbIncomplete = true;
+        recordLost = true;
+      } else {
+        const pf = await this.readPagesObject(parent.r2_prefix + VERBATIM_PAGES_FILE, true);
+        if (pf.kind === 'ok') {
+          scanParent(pf.file.pages);
+          if (pf.file.truncated) {
+            verbIncomplete = true;
+            recordLost = true;
+          }
+        } else if (pf.kind === 'missing' && !hasVerbatimStatus(parent.checks_json)) {
+          // 親が本契約の前に取り込んだ版: 親の取得記録（sources.json の URL の文）を厳密な読み方で照らす（v3.2: missing は未完了にしない）
+          const strict = await readCapturesStrict(this.env, parent);
+          if (strict.ok) scanParent(strict.captures.map((c) => pageRecordOf(normalizeUrl(c.url), c.text).page));
+          else {
+            verbIncomplete = true;
+            recordLost = true;
+          }
+        } else {
+          // 親は本契約の後の版なのに記録が無い・記録の形が壊れている
+          verbIncomplete = true;
+          recordLost = true;
+        }
+      }
+    }
+    // v4 裁定 1: この版の記録を書く（書けなければこの版は未完了 = 作り直しが照らし直せない）
+    try {
+      await this.extend();
+      await this.env.R2.put(prefix + VERBATIM_PAGES_FILE, JSON.stringify(assemblePagesFile(recordPages, recordLost)));
+    } catch (e) {
+      if (e instanceof OutOfTime || e instanceof LostLease) throw e;
+      verbIncomplete = true;
     }
     const verbStatus = verbatimStatusOf(verbHits.length, verbIncomplete);
     const grader = ev.grader;
@@ -2099,6 +2161,8 @@ class Reconciler {
       verbatim_total: verbTotal,
       verbatim_pages: verbPages,
       verbatim_status: verbStatus,
+      // v4 裁定 4: 未完了を独立に残す（found かつ未完了を区別する）
+      verbatim_incomplete: verbIncomplete,
     };
     const childTextKinds: Record<string, number> = {};
     for (const h of childText) childTextKinds[h.kind] = (childTextKinds[h.kind] ?? 0) + 1;
@@ -2168,6 +2232,14 @@ class Reconciler {
     );
     const r = await conditionalBatch(this.db, stmts);
     if (!r.ok) return 'discarded';
+    // v4 裁定 1: ページごとの途中の記録は verbatim-pages.json にまとめたので消す（失敗しても版は正しい。残るだけ）
+    if (ev.verb.parts > 0) {
+      try {
+        await this.env.R2.delete(Array.from({ length: ev.verb.parts }, (_, n) => `${prefix}${VERBATIM_PAGES_PARTS_DIR}${n}.json`));
+      } catch {
+        // 残っても読まれない（次の取り込みは番号 0 から置き直す）
+      }
+    }
     console.log(
       JSON.stringify({
         at: 'ingest',

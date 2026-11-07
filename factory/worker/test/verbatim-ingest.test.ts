@@ -185,13 +185,21 @@ describe('AK2-4 5 取り込みの実経路', () => {
     expect(await rec('jd', p.port)).toBe('error'); // 2 ページ目の取得で止まる（1 ページ目の集計は保存済み）
     const saved = JSON.parse(String(one(db, "SELECT reconcile_state_json FROM factory_jobs WHERE id = 'jd'").reconcile_state_json));
     expect(saved.ev.cursor).toBe('p1');
-    expect(saved.ev.verb).toEqual({ v: 1, hits: [], total: 0, pages: 0, incomplete: false });
+    expect(saved.ev.verb).toEqual({ v: 2, hits: [], total: 0, pages: 0, incomplete: false, parts: 0, lost: false });
     expect(await rec('jd', p.port)).toBe('versioned');
     expect(p.reads).toEqual([0, 1]); // 再開は続きのページから（1 ページ目を読み直さない）
     const c = checksOf('jd');
     expect(verb('jd')).toEqual({ status: 'found', total: 1, pages: 1, n: 1 });
     expect(c.verbatim_copy[0]).toMatchObject({ path: BODY_PATH, url: 'https://other.example/article/42' });
     expect(c.verbatim_copy[0].text).toContain(normalizeForMatch(COPY));
+    expect(c.verbatim_incomplete).toBe(false);
+    // v4 裁定 1: 走査したページの文（正規化後）を版の R2 の場所に残す。途中の記録は消す。D1 の state・checks にはページの文を入れない
+    const file = JSON.parse(new TextDecoder().decode(r2.get('materials/m1/jd/verbatim-pages.json')!));
+    expect(file).toEqual({ v: 1, pages: [{ url: 'https://other.example/article/42', text: normalizeForMatch(PAGE) }], truncated: false });
+    expect([...r2.keys()].some((k) => k.includes('verbatim-pages.parts/'))).toBe(false);
+    const st = String(one(db, "SELECT reconcile_state_json FROM factory_jobs WHERE id = 'jd'").reconcile_state_json);
+    expect(st.includes(normalizeForMatch(PAGE).slice(0, 10))).toBe(false);
+    expect(st.includes('ページの前置き')).toBe(false);
   });
 
   it('offload らしい結果・エラーの結果は飛ばす（pages に数えない）', async () => {
@@ -298,58 +306,131 @@ describe('AK2-4 6 作り直し', () => {
     expect(verb('jr')).toEqual({ status: 'clean', total: 0, pages: 1, n: 0 });
   });
 
-  it('v3.2: 親が走査済み（clean）なら、取得記録が無くても clean（記録は読まない）', async () => {
+  it('v4: 親に verbatim_status があるのに verbatim-pages.json が無い → incomplete（取得記録で代えない）', async () => {
     seedParent({ verbatim_copy: [], verbatim_total: 0, verbatim_pages: 2, verbatim_status: 'clean' });
     seedRework();
+    putCaptures(capOk([{ url: URL_S1, text: 'ちがう文' }]));
     expect(await rec('jr', ingestPort(outputsWith('自分で書いた文です。')).port)).toBe('versioned');
-    expect(verb('jr')).toEqual({ status: 'clean', total: 0, pages: 0, n: 0 });
-    db.prepare("DELETE FROM sources").run();
-    db.prepare("DELETE FROM material_versions WHERE job_id = 'jr'").run();
+    expect(verb('jr')).toEqual({ status: 'incomplete', total: 0, pages: 0, n: 0 });
   });
 
-  const parentHit = (o: Record<string, unknown> = {}) => ({
-    path: BODY_PATH,
-    start: 8,
-    length: Array.from(normalizeForMatch(COPY)).length,
-    url: URL_X,
-    sample: Array.from(normalizeForMatch(COPY)).slice(0, 60).join(''),
-    text: normalizeForMatch(COPY),
-    ...o,
-  });
-  const foundChecks = (hits: unknown[]) => ({ verbatim_copy: hits, verbatim_total: hits.length, verbatim_pages: 1, verbatim_status: 'found' });
+  const putPages = (file: unknown) => r2.set(PARENT_PREFIX + 'verbatim-pages.json', enc.encode(JSON.stringify(file)));
+  const scannedParent = { verbatim_copy: [], verbatim_total: 0, verbatim_pages: 1, verbatim_status: 'clean', verbatim_incomplete: false };
 
-  it('親が found で、本文を変えずに作り直した子 → 引き継いだ hit で found（子の session では何も開かず、親の記録にもその URL が無い）', async () => {
-    seedParent(foundChecks([parentHit()]));
+  it('v4: 親の verbatim-pages.json の各ページを子の本文で照らす（親の記録の文は子の記録にも入る）', async () => {
+    seedParent(scannedParent);
     seedRework();
-    putCaptures(capOk([{ url: URL_S1, text: '関係のない記録' }]));
+    putPages({ v: 1, pages: [{ url: URL_X, text: normalizeForMatch(PAGE) }], truncated: false });
+    expect(await rec('jr', ingestPort(outputsWith(COPY)).port)).toBe('versioned');
+    expect(verb('jr')).toEqual({ status: 'found', total: 1, pages: 1, n: 1 });
+    const file = JSON.parse(new TextDecoder().decode(r2.get('materials/m1/jr/verbatim-pages.json')!));
+    expect(file).toEqual({ v: 1, pages: [{ url: URL_X, text: normalizeForMatch(PAGE) }], truncated: false });
+  });
+
+  it.each([
+    ['truncated: true', { v: 1, pages: [], truncated: true }],
+    ['形が壊れている（text が null）', { v: 1, pages: [{ url: URL_X, text: null }], truncated: false }],
+    ['truncated が無い', { v: 1, pages: [] }],
+    ['v が違う', { v: 2, pages: [], truncated: false }],
+  ])('v4: 親の verbatim-pages.json が %s → incomplete（子の記録も truncated）', async (_name, file) => {
+    seedParent(scannedParent);
+    seedRework();
+    putPages(file);
+    expect(await rec('jr', ingestPort(outputsWith('自分で書いた文です。')).port)).toBe('versioned');
+    expect(verb('jr').status).toBe('incomplete');
+    expect(JSON.parse(new TextDecoder().decode(r2.get('materials/m1/jr/verbatim-pages.json')!)).truncated).toBe(true);
+  });
+
+  it('v4: 自分の記録を R2 に書けない → この版は incomplete', async () => {
+    seedDraft();
+    const put = env.R2.put.bind(env.R2);
+    (env.R2 as unknown as { put: (k: string, v: Uint8Array | string) => Promise<void> }).put = async (k, v) => {
+      if (k.endsWith('verbatim-pages.json')) throw new Error('r2 down');
+      return put(k, v as never);
+    };
+    expect(await rec('jd', ingestPort(outputsWith('自分で書いた文です。'), [[use('tu1', URL_X), result('tu1', PAGE)]]).port)).toBe('versioned');
+    expect(checksOf('jd')).toMatchObject({ verbatim_status: 'incomplete', verbatim_incomplete: true });
+  });
+});
+
+describe('v4 回帰（Astra high REVISE の BLOCKING 1・3 の再現）: 作り直しは親が見たページの文を子の本文と子の引用でもう一度照らす', () => {
+  /** すべて異なる字（CJK 統合漢字の連番）の n 字 */
+  const uniq = (n: number, base = 0x4e00): string => Array.from({ length: n }, (_, k) => String.fromCodePoint(base + k)).join('');
+  /** 親の版を本当の取り込みで作る（draft jp）。版の id を返す */
+  async function ingestParent(files: Map<string, Uint8Array>, pages: unknown[][]): Promise<string> {
+    seedDraft('jp');
+    expect(await rec('jp', ingestPort(files, pages).port)).toBe('versioned');
+    return String(one(db, "SELECT id FROM material_versions WHERE job_id = 'jp'").id);
+  }
+  function seedChild(parentVid: string, id = 'jr') {
+    db.prepare(
+      `INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, session_id, parent_version_id, brief_md, created_at, updated_at)
+       VALUES (?, 'm1', 'rework', 'claude-opus-5-5', 'making', 'running', ?, ?, 'b', ?, ?)`,
+    ).run(id, `sesn_${id}`, parentVid, iso(30_000), iso(30_000));
+  }
+  /** sources.json に URL_X の出典（引用 quote）を足した出力 */
+  function withQuote(files: Map<string, Uint8Array>, quote: string) {
+    const src = JSON.parse(new TextDecoder().decode(files.get('sources.json')!)) as { sources: unknown[] };
+    src.sources.push({ id: 's2', url: URL_X, title: 'X', accessed_at: '2026-11-04', quoted_excerpt: quote, license: 'CC BY 4.0', is_primary: false });
+    files.set('sources.json', enc.encode(JSON.stringify(src)));
+    return files;
+  }
+  const P220 = uniq(220);
+
+  it('B1: 親の 220 字の丸写しの先頭 1 字だけ削って 219 字を残した子 → found（子の session では何も開かない）', async () => {
+    const vp = await ingestParent(outputsWith(P220), [[use('tu1', URL_X), result('tu1', `前置き${P220}終わり`)]]);
+    expect(verb('jp').status).toBe('found');
+    seedChild(vp);
+    expect(await rec('jr', ingestPort(outputsWith(P220.slice(1))).port)).toBe('versioned');
+    expect(verb('jr')).toMatchObject({ status: 'found', n: 1 });
+    expect(checksOf('jr').verbatim_copy[0]).toMatchObject({ url: URL_X, length: 219 });
+  });
+
+  it('B1: 親の 31 件目（保存は 30 件まで）だけを残した子 → found', async () => {
+    const regions = Array.from({ length: 31 }, (_, k) => uniq(120, 0x4e00 + k * 130));
+    const vp = await ingestParent(outputsWith(regions.join('。')), [[use('tu1', URL_X), result('tu1', regions.join('、'))]]);
+    expect(verb('jp')).toMatchObject({ status: 'found', total: 31, n: 30 });
+    seedChild(vp);
+    expect(await rec('jr', ingestPort(outputsWith(regions[30])).port)).toBe('versioned');
+    expect(verb('jr')).toMatchObject({ status: 'found', n: 1 });
+  });
+
+  it('B1: 親は P を検出・ページの上限より後ろの Q は未走査（found かつ未完了）→ P を消し Q だけ残した子は clean にならない', async () => {
+    const P = uniq(120);
+    const Q = uniq(120, 0x5000);
+    const vp = await ingestParent(outputsWith(`${P}。${Q}`), [[use('tu1', URL_X), result('tu1', `${P}${'ぬ'.repeat(200_000)}${Q}`)]]);
+    expect(checksOf('jp')).toMatchObject({ verbatim_status: 'found', verbatim_incomplete: true });
+    seedChild(vp);
+    expect(await rec('jr', ingestPort(outputsWith(Q)).port)).toBe('versioned');
+    expect(verb('jr').status).not.toBe('clean');
+  });
+
+  it('B3: 親は found → 子で同じ URL の全文の quoted_excerpt を足した → 子の引用で除かれて clean', async () => {
+    const vp = await ingestParent(outputsWith(COPY), [[use('tu1', URL_X), result('tu1', PAGE)]]);
+    expect(verb('jp').status).toBe('found');
+    seedChild(vp);
+    expect(await rec('jr', ingestPort(withQuote(outputsWith(COPY), COPY)).port)).toBe('versioned');
+    expect(verb('jr')).toMatchObject({ status: 'clean', n: 0 });
+  });
+
+  it('B3: 親は引用の除外で clean → 子で引用を外した → found', async () => {
+    const vp = await ingestParent(withQuote(outputsWith(COPY), COPY), [[use('tu1', URL_X), result('tu1', PAGE)]]);
+    expect(verb('jp').status).toBe('clean');
+    seedChild(vp);
     expect(await rec('jr', ingestPort(outputsWith(COPY)).port)).toBe('versioned');
     expect(verb('jr')).toMatchObject({ status: 'found', n: 1 });
-    expect(checksOf('jr').verbatim_copy[0]).toMatchObject({ path: BODY_PATH, url: URL_X, carried: true, text: normalizeForMatch(COPY) });
   });
 
-  it('子が丸写しを書き直した → 引き継ぐ hit が無く clean', async () => {
-    seedParent(foundChecks([parentHit()]));
-    seedRework();
-    putCaptures(capOk([{ url: URL_S1, text: '関係のない記録' }]));
+  it('停止からの回復: 親は found → 子が丸写しを書き直した → clean。孫も祖父母のページで照らす', async () => {
+    const vp = await ingestParent(outputsWith(COPY), [[use('tu1', URL_X), result('tu1', PAGE)]]);
+    seedChild(vp);
     expect(await rec('jr', ingestPort(outputsWith('信号は遠くまで行くと弱くなる。自分の言葉で書いた。')).port)).toBe('versioned');
-    // v3.2: 親は走査済み（verbatim_status あり）なので取得記録は読まない（pages 0）
-    expect(verb('jr')).toEqual({ status: 'clean', total: 0, pages: 0, n: 0 });
-  });
-
-  it('親が incomplete → 子も incomplete / 親の hit が text_cut → 子は incomplete', async () => {
-    seedParent({ verbatim_copy: [], verbatim_total: 0, verbatim_pages: 0, verbatim_status: 'incomplete' });
-    seedRework();
-    putCaptures(capOk([{ url: URL_S1, text: '関係のない記録' }]));
-    expect(await rec('jr', ingestPort(outputsWith('自分で書いた文です。')).port)).toBe('versioned');
-    expect(verb('jr').status).toBe('incomplete');
-
-    db.prepare("DELETE FROM sources").run();
-    db.prepare("DELETE FROM material_versions WHERE job_id = 'jr'").run();
-    db.prepare("DELETE FROM factory_jobs WHERE id = 'jr'").run();
-    db.prepare("UPDATE material_versions SET checks_json = ? WHERE id = 'vp'").run(JSON.stringify(foundChecks([parentHit({ text_cut: true })])));
-    seedRework();
-    expect(await rec('jr', ingestPort(outputsWith('自分で書いた文です。')).port)).toBe('versioned');
-    expect(verb('jr').status).toBe('incomplete');
+    expect(verb('jr')).toMatchObject({ status: 'clean', n: 0 });
+    // 孫が祖父母の版のページの文をまた写した → found（子の記録が祖父母のページを持っている）
+    const vc = String(one(db, "SELECT id FROM material_versions WHERE job_id = 'jr'").id);
+    seedChild(vc, 'jg');
+    expect(await rec('jg', ingestPort(outputsWith(COPY)).port)).toBe('versioned');
+    expect(verb('jg')).toMatchObject({ status: 'found', n: 1 });
   });
 });
 

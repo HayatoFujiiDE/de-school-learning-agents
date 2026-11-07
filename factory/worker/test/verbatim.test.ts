@@ -150,6 +150,36 @@ describe('AK2-4 3 scanPage', () => {
   });
 });
 
+describe('v4 回帰（Astra high REVISE の BLOCKING 2・NON-BLOCKING の引用の空白）: 書式で見える文を分断しない', () => {
+  const P = uniq(150);
+  const [a, b, c] = [P.slice(0, 50), P.slice(50, 100), P.slice(100)];
+  it.each([
+    ['md: 先頭 50 字 + `中央 50 字` + 末尾 50 字', 'parts/p1/a.md', `${a}\`${b}\`${c}`],
+    ['md: **強調** をまたぐ（従来どおり）', 'parts/p1/a.md', `${a}**${b}**${c}`],
+    ['html: 50 字ずつ隣り合う span', 'parts/p1/app.html', `<p><span>${a}</span><span>${b}</span><span>${c}</span></p>`],
+    ['svg: 50 字ずつ隣り合う tspan', 'parts/p1/figure-1.svg', `<svg xmlns="http://www.w3.org/2000/svg"><text><tspan>${a}</tspan><tspan>${b}</tspan><tspan>${c}</tspan></text></svg>`],
+    ['html: <xmp>', 'parts/p1/app.html', `<xmp>${P}</xmp>`],
+    ['html: <noscript>', 'parts/p1/app.html', `<noscript>${P}</noscript>`],
+    ['html: <textarea>', 'parts/p1/app.html', `<textarea>${P}</textarea>`],
+    ['html: <title>', 'parts/p1/app.html', `<html><head><title>${P}</title></head><body></body></html>`],
+  ])('%s → 1 件', (_name, path, body) => {
+    const bodies = prepareBodies(new Map([[path, body]]));
+    const r = scanPage(buildNeedles(bodies), bodies, `${L}${P}${R}`, 'u', []);
+    expect(r.hits.length).toBe(1);
+    expect(r.hits[0].text.trim()).toBe(P);
+  });
+  it('script と style の中身は入れない・comment も入れない', () => {
+    for (const body of [`<script>var s = "${P}";</script>`, `<style>/* ${P} */</style>`, `<!-- ${P} -->`]) {
+      const bodies = prepareBodies(new Map([['parts/p1/app.html', body]]));
+      expect(scanPage(buildNeedles(bodies), bodies, P, 'u', []).hits).toEqual([]);
+    }
+  });
+  it('引用の前後の空白だけの違いでは丸写しにしない（区間の前後の空白を取ってから引用と比べる）', () => {
+    expect(scan(`あ ${P} い`, `う ${P} え`, [P]).hits).toEqual([]);
+    expect(scan(`あ ${P} い`, `う ${P} え`, []).hits.length).toBe(1);
+  });
+});
+
 describe('AK2-4 6-b 走査はページの全部の位置を調べる', () => {
   const P = uniq(200);
   it('本文 a = P[0:120]（引用に収まる）と b = P[20:140]（収まらない）→ b の 1 件', () => {
@@ -183,11 +213,13 @@ describe('AK2-4 6-b 走査はページの全部の位置を調べる', () => {
 describe('AK2-4 4 mergeHits', () => {
   const hit = (path: string, start: number, length: number, url = 'u1'): VerbatimHit => {
     const text = uniq(length, 0x4e00 + start);
-    return { path, start, length, url, sample: text.slice(0, 60), text };
+    return { path, view: 'spaced', start, length, url, sample: text.slice(0, 60), text };
   };
   it('同じ path の重なる区間は和をとって 1 件（url は先に見つけた方）・text は和の全文', () => {
     const m = mergeHits([hit('p/a.md', 0, 120, 'first')], [hit('p/a.md', 100, 120, 'second')]);
-    expect(m).toEqual([{ path: 'p/a.md', start: 0, length: 220, url: 'first', sample: uniq(60), text: uniq(220) }]);
+    expect(m).toEqual([{ path: 'p/a.md', view: 'spaced', start: 0, length: 220, url: 'first', sample: uniq(60), text: uniq(220) }]);
+    // 同じ path でも読み方が違えば併合しない（v4 裁定 2）
+    expect(mergeHits([hit('p/a.md', 0, 120)], [{ ...hit('p/a.md', 50, 120), view: 'joined' }]).map((h) => h.view)).toEqual(['spaced', 'joined']);
     // 先に見つけた方が後ろの区間でも url はその方
     expect(mergeHits([hit('p/a.md', 100, 120, 'first')], [hit('p/a.md', 0, 120, 'second')])[0].url).toBe('first');
     // 隣り合うだけ（重ならない）は別
@@ -350,7 +382,8 @@ describe('AK2-4 8 公開の止め', () => {
     w.db.prepare("UPDATE materials SET current_version_id = 'v2', publish_status = 'available' WHERE id = 'm1'").run();
     setChecks('v1', INCOMPLETE);
     const rb = () => rollbackMaterial(ctx(w, 'POST', { version_id: 'v1', note: '戻す' }), 'm1');
-    expect((await rb()).status).toBe(409);
+    const refused = await rb();
+    expect([refused.status, ((await refused.json()) as { error: string }).error]).toEqual([409, 'verbatim_incomplete']); // v4 裁定 4: 理由を捨てない
     expect(one(w.db, "SELECT current_version_id FROM materials WHERE id = 'm1'").current_version_id).toBe('v2');
     expect(await publishSwitch(w.env.DB, { kind: 'rollback', material_id: 'm1', version_id: 'v1', reviewer_email: 'x', note: null }, { decision_id: 'd', now: 'n' })).toEqual({
       ok: false,
@@ -388,6 +421,9 @@ describe('AK2-4 9 表示 verbatimHtml', () => {
     expect(f).toContain('a.example');
     expect(f.includes('https://a.example/x')).toBe(false); // host だけ
     expect(verbatimHtml(GREEN_CHECKS)).toBe('');
+    // v4 裁定 4: found かつ未完了
+    expect(verbatimHtml({ ...FOUND, verbatim_incomplete: true })).toContain('丸写し: 1 件（検査は最後まで済んでいません）');
+    expect(verbatimHtml({ ...FOUND, verbatim_incomplete: false })).not.toContain('済んでいません');
     expect(verbatimHtml(null)).toBe('');
   });
   it('path・sample・host は esc する', () => {

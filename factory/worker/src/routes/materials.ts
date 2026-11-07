@@ -229,7 +229,8 @@ export async function rollbackMaterial(c: RouteCtx, id: string): Promise<Respons
     { kind: 'rollback', material_id: id, version_id: v.id, reviewer_email: c.email, note: b.note },
     { decision_id: crypto.randomUUID(), now: new Date().toISOString() },
   );
-  if (!r.ok) return json(409, { error: 'conflict', message: 'already_current_or_changed' });
+  // §AK2-3（v4 裁定 4）: 丸写し・検査未完了の版を戻せない理由は捨てずに返す（画面が ERROR_TEXT の文を出す）
+  if (!r.ok) return json(409, r.reason ? { error: r.reason } : { error: 'conflict', message: 'already_current_or_changed' });
   console.log(JSON.stringify({ at: 'rollback', material_id: id, version_id: v.id }));
   return json(200, { material_id: id, current_version_id: v.id, publish_status: 'available' });
 }

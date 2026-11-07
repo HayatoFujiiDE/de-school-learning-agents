@@ -3978,7 +3978,8 @@
     if (st === 'found') {
       var hits = Array.isArray(c.verbatim_copy) ? c.verbatim_copy.filter(isObj) : [];
       var total = typeof c.verbatim_total === 'number' && c.verbatim_total > hits.length ? c.verbatim_total : hits.length;
-      return '<div class="mk-verbatim" data-verbatim="found"><p class="err">丸写し: ' + esc(total) + ' 件' + (total > hits.length ? '（先頭の ' + esc(hits.length) + ' 件）' : '') + '</p><ul>' +
+      return '<div class="mk-verbatim" data-verbatim="found"><p class="err">丸写し: ' + esc(total) + ' 件' + (total > hits.length ? '（先頭の ' + esc(hits.length) + ' 件）' : '') +
+        (c.verbatim_incomplete === true ? '（検査は最後まで済んでいません）' : '') + '</p><ul>' +
         hits.map(function (h) {
           return '<li><span class="pre">' + esc(h.path) + '</span> 「' + esc(h.sample) + '」 <span class="muted">' + esc(verbatimHostOf(h.url)) + '</span></li>';
         }).join('') + '</ul></div>';
