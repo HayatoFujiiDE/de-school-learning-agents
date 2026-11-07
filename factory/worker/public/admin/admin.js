@@ -3217,7 +3217,7 @@
   // LLM が書いた文（summary・evidence・text・reason）は必ず esc() して出す
   var RETRO_WASTE_LABEL = {
     failed_fetch: '開けないページの試し直し', repeated_fetch: '同じページの取り直し', long_context: '長い文脈', many_requests: 'やり取りの回数が多い',
-    outcome_retry: '採点のやり直し', image_redo: '画像の描き直し', rework_refetch: '作り直しでの取り直し', other: 'その他'
+    outcome_retry: '採点のやり直し', image_redo: '画像の描き直し', rework_refetch: '作り直しでの取り直し', rework_round: '作り直しの回数', other: 'その他'
   };
   var RETRO_TARGET_LABEL = { maker_note: '職人への注意書き', maker_definition: '職人の定義', worker_code: 'Worker（工場のプログラム）', order: '注文の出し方' };
   var RETRO_STATUS_LABEL = { collecting: '集計中', ready: '送信待ち', submitted: '結果待ち', ended: '完了', failed: '失敗', skipped: '上限で飛ばした' };
@@ -3252,11 +3252,22 @@
       '</tbody></table></div></div>';
   }
 
+  /** 工夫ごとの前後の数字（下書きの注文だけ。入れる前に始まった w 件と、入れた後に始まった w 件。§S v2 D 3） */
+  function retroEffectHtml(eff) {
+    if (!eff) return '';
+    var w = Number(eff.window || 5), b = eff.before || {}, a = eff.after || {};
+    var nb = Number(b.n || 0), na = Number(a.n || 0);
+    if (nb < w || na < w) {
+      return '<p class="muted retro-meta" data-retro-effect="short">前後の数字: まだ比べられません（入れる前 ' + esc(nb) + ' 件・入れた後 ' + esc(na) + ' 件。それぞれ ' + esc(w) + ' 件で比べます）</p>';
+    }
+    return '<p class="retro-meta" data-retro-effect="ok">前後の数字（下書きの注文 ' + esc(w) + ' 件ずつ）: 入れる前 費用 ' + esc(retroCents(b.avg_cost_cents)) + '・未確認 + 食い違い ' + esc(retroPct(b.avg_bad_ratio)) +
+      ' → 入れた後 費用 ' + esc(retroCents(a.avg_cost_cents)) + '・未確認 + 食い違い ' + esc(retroPct(a.avg_bad_ratio)) + '</p>';
+  }
   function retroActiveItemHtml(t) {
     return '<li class="retro-item" data-retro-tip="' + esc(t.id) + '"><p class="retro-text">' + esc(t.text) + '</p>' +
-      '<p class="muted retro-meta">' + esc(fmtTime(t.activated_at)) + ' に入れた・' + esc(retroWho(t)) + '・入れてから終わった注文 ' + esc(Number(t.jobs_since || 0)) + ' 件' +
-      (t.target !== 'maker_note' ? '・' + esc(RETRO_TARGET_LABEL[t.target] || t.target) : '') + '</p>' +
-      (t.retire_suggested ? '<p class="retro-warn" data-retro-suggest="1">改善係から「やめる提案」: ' + esc(t.retire_suggested.reason) + '</p>' : '') +
+      '<p class="muted retro-meta">' + esc(fmtTime(t.activated_at)) + ' に入れた・' + esc(retroWho(t)) + '・入れた後に始まって終わった下書きの注文 ' + esc(Number(t.jobs_since || 0)) + ' 件' +
+      (t.target !== 'maker_note' ? '・' + esc(RETRO_TARGET_LABEL[t.target] || t.target) : '') + '</p>' + retroEffectHtml(t.effect) +
+      (t.retire_suggested ? '<p class="retro-warn" data-retro-suggest="1">改善係から「やめる提案」: ' + esc(t.retire_suggested.reason) + '（やめるかどうかは人が決めます）</p>' : '') +
       '<div class="row end"><button type="button" class="btn small" data-retro-act="retire" data-retro-id="' + esc(t.id) + '">やめる</button></div></li>';
   }
   /** いま職人に渡している工夫（active の maker_note）と、人が対応した印（maker_note 以外の active） */
@@ -3267,6 +3278,66 @@
     return '<div class="card" data-retro-active="' + notes.length + '"><h2>いま職人に渡している工夫 <span class="muted">' + esc(notes.length) + ' / ' + esc(limit || 8) + ' 件</span></h2>' +
       (notes.length ? '<ul class="retro-list">' + notes.map(retroActiveItemHtml).join('') + '</ul>' : '<p class="muted">いまは渡している工夫はありません</p>') +
       (others.length ? '<h3>人が対応した提案（職人へは渡りません）</h3><ul class="retro-list">' + others.map(retroActiveItemHtml).join('') + '</ul>' : '') + '</div>';
+  }
+
+  /** 差し戻しの観点キー → 画面の言葉（確認のチェックリストと同じ） */
+  function retroNgText(keys) {
+    keys = Array.isArray(keys) ? keys : [];
+    if (!keys.length) return '—';
+    return keys.map(function (k) {
+      if (k === 'unclassified') return '観点の記録なし';
+      for (var i = 0; i < CHECKLIST.length; i++) if (CHECKLIST[i][0] === k) return CHECKLIST[i][1];
+      return 'その他';
+    }).join('・');
+  }
+  /** 観点キー → 画面の言葉（return_themes の other は「その他」） */
+  function retroNgLabel(k) {
+    for (var i = 0; i < CHECKLIST.length; i++) if (CHECKLIST[i][0] === k) return CHECKLIST[i][1];
+    return 'その他';
+  }
+  /**
+   * 最新の差し戻しの観点の欄（§S v2 追加 A）。チェックリストに ng があればそれを出し、
+   * 無い時（unclassified）は改善係が理由の文を観点に分けたもの（ai_return_themes）を「AI が読んだ観点」として出す。evidence は LLM の文なので esc()
+   */
+  function retroLedgerNgHtml(r) {
+    var keys = Array.isArray(r.latest_return_ng) ? r.latest_return_ng : [];
+    var themes = Array.isArray(r.ai_return_themes) ? r.ai_return_themes : [];
+    if (keys.length === 1 && keys[0] === 'unclassified' && themes.length) {
+      return '<span data-retro-ai-themes="' + esc(themes.length) + '"><span class="muted">AI が読んだ観点:</span> ' +
+        themes.map(function (t) {
+          return esc(retroNgLabel(t.key)) + ' ' + esc(Number(t.count || 0)) + ' 件' + (t.evidence ? ' <span class="muted">（' + esc(t.evidence) + '）</span>' : '');
+        }).join('・') + '</span>';
+    }
+    return esc(retroNgText(keys));
+  }
+  var RETRO_VERSION_STATUS ={ review: ['確認待ち', 'yellow'], approved: ['承認済み', 'green'], rejected: ['差し戻し・却下', 'gray'] };
+  /** 作り直しの台帳（§S v2 A）。教材ごとに作った回数・作り直し・費用・差し戻し・承認。費用の多い行に印を付ける */
+  function retroLedgerHtml(rows) {
+    rows = Array.isArray(rows) ? rows : [];
+    var head = '<h2>作り直しの台帳</h2><p class="muted">教材ごとに、承認されるまでに作った回数と費用です（新しい順）。費用の多い行に印を付けています。教材の名前を押すと、その教材の画面を開きます。差し戻しのチェックリストに観点の記録が無い時は、改善係が理由の文から読んだ観点（AI が読んだ観点）を出します。</p>';
+    if (!rows.length) return '<div class="card" data-retro-ledger="0">' + head + '<p class="muted" data-retro-ledger-empty="1">まだ注文はありません。注文が終わると、ここに教材ごとの回数と費用が出ます</p></div>';
+    var costs = rows.map(function (r) { return Number(r.list_cost_cents || 0); });
+    var avg = costs.reduce(function (s, c) { return s + c; }, 0) / costs.length;
+    var sorted = costs.slice().sort(function (x, y) { return y - x; });
+    var third = sorted[Math.min(2, sorted.length - 1)];
+    var body = rows.map(function (r) {
+      var c = Number(r.list_cost_cents || 0);
+      var hot = c > 0 && c > avg && c >= third;
+      var vs = RETRO_VERSION_STATUS[r.latest_version_status];
+      var ret = Number(r.returns || 0), auto = Number(r.auto_returns || 0);
+      return '<tr data-retro-ledger-row="' + esc(r.material_id) + '"' + (hot ? ' data-hot="1" class="retro-hot"' : '') + '>' +
+        '<th scope="row"><a href="#/material/' + encodeURIComponent(r.material_id) + '">' + esc(r.title || '（題なし）') + '</a>' +
+        (vs ? ' ' + pill(vs[0], vs[1]) : '') + (hot ? ' ' + pill('費用が多い', 'orange') : '') + '</th>' +
+        '<td>' + esc(Number(r.jobs || 0)) + ' 回</td>' +
+        '<td>' + esc(Number(r.reworks || 0)) + ' 回</td>' +
+        '<td>' + (hot ? '<b>' + esc(retroCents(c)) + '</b>' : esc(retroCents(c))) + '</td>' +
+        '<td>' + esc(ret) + ' 回' + (auto ? ' <span class="muted">（うち自動 ' + esc(auto) + '）</span>' : '') + '</td>' +
+        '<td>' + esc(Number(r.approves || 0)) + ' 回</td>' +
+        '<td>' + retroLedgerNgHtml(r) + '</td></tr>';
+    }).join('');
+    return '<div class="card" data-retro-ledger="' + rows.length + '">' + head + '<div class="table-wrap"><table class="retro-ledger"><thead><tr>' +
+      '<th scope="col">教材</th><th scope="col">作った回数</th><th scope="col">作り直し</th><th scope="col">費用</th><th scope="col">差し戻し</th><th scope="col">承認</th><th scope="col">最新の差し戻しの観点</th>' +
+      '</tr></thead><tbody>' + body + '</tbody></table></div></div>';
   }
 
   function retroWastesHtml(ws) {
@@ -3326,11 +3397,12 @@
     var events = Array.isArray(d.events) ? d.events : [];
     var nTips = ['active', 'proposed', 'retired', 'rejected'].reduce(function (n, k) { return n + ((tips[k] || []).length); }, 0);
     var intro = '<p class="muted">終わった注文ごとに費用を振り返り、質を下げずに費用を下げる「工夫」を職人に渡します。今月の振り返りの費用 ' + esc(retroCents(st.month_cents)) + ' / ' + esc(retroCents(st.month_cap_cents)) +
-      '・' + (st.auto_adopt === false ? '工夫は自動では入れません（提案だけ）' : '質に触れない注意書きは自動で入れます') + (st.enabled === false ? '・' + '<b>いまは止めています</b>' : '') + '</p>';
-    if (!(d.retros || []).length && !nTips) {
+      '・' + (st.auto_adopt === false ? '工夫は自動では入れません（提案だけ）' : '質に触れない注意書きは自動で入れます') + '・工夫をやめるかどうかは人が決めます' + (st.enabled === false ? '・' + '<b>いまは止めています</b>' : '') + '</p>';
+    var ledger = Array.isArray(d.rework_ledger) ? d.rework_ledger : [];
+    if (!(d.retros || []).length && !nTips && !ledger.length) {
       return '<h1>改善係の記録</h1>' + intro + '<div class="card" data-retro-empty="1"><p>まだ振り返りはありません。注文が終わると、ここに記録が出ます</p></div>';
     }
-    return '<h1>改善係の記録</h1>' + intro + retroCompareHtml(d.compare) + retroActiveHtml(tips, st.active_maker_note_limit) +
+    return '<h1>改善係の記録</h1>' + intro + retroLedgerHtml(ledger) + retroCompareHtml(d.compare) + retroActiveHtml(tips, st.active_maker_note_limit) +
       '<div class="card"><h2>できごとの記録</h2>' + (events.length ? '<ul class="retro-events">' + events.map(retroEventHtml).join('') + '</ul>' : '<p class="muted">まだありません</p>') + '</div>' +
       retroRecentHtml(d.retros);
   }
@@ -3368,7 +3440,7 @@
     });
   }
   window.FactoryAdminOrders = { machineOrderFactHtml: machineOrderFactHtml, jobHtml: jobHtml };
-  window.FactoryAdminRetro = { WASTE_LABEL: RETRO_WASTE_LABEL, retroHtml: retroHtml, retroCompareHtml: retroCompareHtml, retroEventHtml: retroEventHtml };
+  window.FactoryAdminRetro = { WASTE_LABEL: RETRO_WASTE_LABEL, retroHtml: retroHtml, retroCompareHtml: retroCompareHtml, retroEventHtml: retroEventHtml, retroLedgerHtml: retroLedgerHtml, retroEffectHtml: retroEffectHtml };
 
   // ---- 画面: 編集基準 ----
   function viewStandards(view) {
