@@ -478,6 +478,18 @@ describe('段 a〜d（node:sqlite の実 DB + stub port）', () => {
     expect(await registerRetros(env.DB, SINCE, NOW)).toBe(0);
   });
 
+  it('a 登録（§S v2 B 8）: cancelled はすぐ・budget_reached は 24 時間動かなければ・session の無い cancelled は対象外', async () => {
+    seedJob(raw, { id: 'jc', status: 'cancelled', updated: '2026-11-06T02:00:00.000Z' });
+    seedMaterial(raw, 'm2');
+    seedJob(raw, { id: 'jcn', material: 'm2', status: 'cancelled', session: null, updated: '2026-11-06T02:00:00.000Z' });
+    seedMaterial(raw, 'm3');
+    seedJob(raw, { id: 'jb1', material: 'm3', status: 'budget_reached', updated: '2026-11-05T20:00:00.000Z' }); // 7 時間前
+    seedMaterial(raw, 'm4');
+    seedJob(raw, { id: 'jb2', material: 'm4', status: 'budget_reached', updated: '2026-11-05T02:00:00.000Z' }); // 25 時間前
+    expect(await registerRetros(env.DB, '2026-11-01T00:00:00.000Z', NOW)).toBe(2);
+    expect(rows(raw, 'SELECT job_id FROM job_retros ORDER BY job_id')).toEqual([{ job_id: 'jb2' }, { job_id: 'jc' }]);
+  });
+
   it('retroTick: 初回で retro_since を今にする（それより前に終わった注文は入らない）。retro_enabled=0 なら登録しない', async () => {
     seedMaterial(raw, 'm2');
     seedJob(raw, { id: 'j1', material: 'm2', status: 'failed', updated: '2026-11-06T02:00:00.000Z' });
