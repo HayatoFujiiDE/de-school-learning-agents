@@ -1,4 +1,4 @@
-/* 管理画面「お題の棚」（contract-T T-11）。admin.css の変数・部品（card / btn / pill / tabs）に乗せ、足りない所だけ足す */
+/* 管理画面「今日のお題」（表示名 §N-7。旧名 お題の棚。contract-T T-11）。admin.css の変数・部品（card / btn / pill / tabs）に乗せ、足りない所だけ足す */
 .tp-tabs { margin: 0 0 12px; }
 .tp-meta-line:empty { display: none; }
 .tp-group > h2 .pill { vertical-align: middle; }

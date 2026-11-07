@@ -177,11 +177,11 @@ describe('(n6b) rowStations: §N-6-4 の行の所属', () => {
 });
 
 describe('SCENE（§N-6-8）', () => {
-  it('背景と同じ 1706 × 600、持ち場 11 個・矢印 10 本。矢印の流れ先は持ち場の id（改善係には矢印が無い）', () => {
+  it('背景と同じ 1706 × 600、持ち場 12 個（§N-7 でお題係を足した）・矢印 10 本。矢印の流れ先は持ち場の id（改善係・お題係には矢印が無い）', () => {
     expect([S.SCENE.width, S.SCENE.height]).toEqual([1706, 600]);
     const ids = S.SCENE.stations.map((s) => s.id);
-    expect(ids).toEqual(['intake', 'maker', 'clerk', 'verifier', 'reviewer', 'rework', 'library', 'meeting', 'questions', 'autofix', 'retro']);
-    expect(S.SCENE.arrows.some((a) => a.to === 'retro')).toBe(false);
+    expect(ids).toEqual(['intake', 'maker', 'clerk', 'verifier', 'reviewer', 'rework', 'library', 'meeting', 'questions', 'autofix', 'retro', 'topics']);
+    expect(S.SCENE.arrows.some((a) => a.to === 'retro' || a.to === 'topics')).toBe(false);
     expect(S.SCENE.arrows.map((a) => a.id)).toEqual([
       'intake-maker', 'intake-meeting', 'maker-clerk', 'maker-questions', 'questions-maker',
       'clerk-verifier', 'verifier-autofix', 'verifier-reviewer', 'reviewer-rework', 'reviewer-library',
@@ -225,5 +225,18 @@ describe('キャラ SVG の無害化の許可リスト（差し戻し A1。DOM �
       ['stroke-width', '6', true],
     ];
     for (const [name, value, want] of cases) expect([name, value, S.charSvgAttrAllowed(name, value)]).toEqual([name, value, want]);
+  });
+});
+
+describe('§N-7 お題係（topics）の札: stationStates の 2 番目の引数（/api/status）から', () => {
+  const st = (o: Record<string, unknown> | null) => (S as unknown as { stationStates(f: unknown, s: unknown): Record<string, StationState> }).stationStates(floor(), o);
+  it('要確認（heavy + source + other）があれば人の番「要確認 n」、無ければ待機', () => {
+    expect(st({ topics: { needs_review: { heavy: 1, source: 2, other: 0 } } }).topics).toEqual({ kind: 'human', text: 'お題の要確認 3' });
+    expect(st({ topics: { needs_review: { heavy: 0, source: 0, other: 0 } } }).topics).toEqual(IDLE);
+  });
+  it('status が未着（null）・topics が無い（古い Worker）なら待機。2 番目の引数を渡さない呼び方は 11 個のまま', () => {
+    expect(st(null).topics).toEqual(IDLE);
+    expect(st({}).topics).toEqual(IDLE);
+    expect(Object.keys(S.stationStates(floor()))).not.toContain('topics');
   });
 });

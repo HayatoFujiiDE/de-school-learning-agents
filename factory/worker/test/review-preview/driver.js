@@ -35,6 +35,15 @@
       setTimeout(then, 150);
     });
   }
+  // 工場: 表と状況（お題の要確認のピル）が届くまで待つ
+  var floorReady = function () { return !!$('#floor-queue [data-floor-row]') && !!$('#pause-btn') && !!$('[data-floor-link="topicsReview"]'); };
+  // 札を押す → パネルが開いて状況の値が入る（読み込み中が消える）まで待つ。y = パネルが窓に入るように少し下げる
+  function floorPanel(id) {
+    when(floorReady, function () {
+      click('#scene .scene-hit[data-st="' + id + '"]');
+      when(function () { return !!$('#station-panel .sp') && !$('#station-panel [data-sp-loading]'); }, function () { done(Number(new URLSearchParams(location.search).get('y')) || 0); });
+    });
+  }
   // 項目の場所（「小学生・短い 2 段落目」など）は全部の変奏を読んでから出る
   var located = function () { return !!$('.rv-it-where') || !$('.rv-it'); };
   var steps = {
@@ -105,6 +114,14 @@
         }, 200);
       });
     },
+    // §N-7 工場: 札を押して係のパネルを開いた状態（panel-<持ち場 id>）・メニュー「道具と記録」を開いた状態・あなたの番が出そろった状態
+    'panel-intake': function () { floorPanel('intake'); },
+    'panel-maker': function () { floorPanel('maker'); },
+    'panel-library': function () { floorPanel('library'); },
+    'panel-topics': function () { floorPanel('topics'); },
+    'panel-meeting': function () { floorPanel('meeting'); },
+    'nav-open': function () { when(floorReady, function () { var d = $('.nav-more'); if (d) d.open = true; done(); }); },
+    floor: function () { when(floorReady, done); },
     sticky: function () {
       addSticky(2, 'hard', '「いちばん 数が 多い」の根拠が子どもに伝わらない', function () {
         addSticky(3, 'fact', '核と運搬量の関係は食い違いの指摘あり', function () { done(); });

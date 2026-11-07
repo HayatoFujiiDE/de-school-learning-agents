@@ -1,4 +1,4 @@
-/* コンテンツファクトリー 管理画面「お題の棚」（契約 contract-T T-11。ビルド無し・ES2017・外部読み込み無し。fetch は自サイトの /api/* だけ）。
+/* コンテンツファクトリー 管理画面「今日のお題」（表示名 §N-7。旧名 お題の棚。契約 contract-T T-11。ビルド無し・ES2017・外部読み込み無し。fetch は自サイトの /api/* だけ）。
  * window.FactoryTopics = { mount(view, ctx) } を置くだけで、自分ではルーティングしない（admin.js の route() が #/topics で mount を呼ぶ）。
  * お題の文・出典の名前・検査のメモ・エラーの文は全部 textContent（createTextNode）で出す。HTML の文字列として差し込む API は使わない。
  * 出典のリンクは checkSourceUrl（T-5）と同じ規則を満たす URL だけ a.href に入れる。
@@ -52,12 +52,12 @@
   // ---- 純関数 ----
   function has(o, k) { return !!o && Object.prototype.hasOwnProperty.call(o, k); }
 
-  /** hash がお題の棚か（#/topics・#/topics/…・#/topics?…） */
+  /** hash が今日のお題か（#/topics・#/topics/…・#/topics?…） */
   function isTopicsHash(hash) {
     return /^#\/topics(?:[/?]|$)/.test(String(hash || ''));
   }
 
-  /** #/topics → today / #/topics/held / #/topics/stock?kind=news / #/topics/runs。お題の棚でなければ null。知らないタブは today */
+  /** #/topics → today / #/topics/held / #/topics/stock?kind=news / #/topics/runs。今日のお題でなければ null。知らないタブは today */
   function parseTopicsHash(hash) {
     var s = String(hash || '');
     if (!isTopicsHash(s)) return null;
@@ -1078,13 +1078,13 @@
     S.ctx = ctx || {};
     var r = parseTopicsHash(location.hash) || { tab: 'today', kind: null };
     clear(view);
-    var nav = h('nav', { class: 'tabs tp-tabs', 'aria-label': 'お題の棚のタブ' }, TABS.map(function (t) {
+    var nav = h('nav', { class: 'tabs tp-tabs', 'aria-label': '今日のお題のタブ' }, TABS.map(function (t) {
       var on = t[0] === r.tab;
       return h('a', { class: 'btn small' + (on ? ' on' : ''), href: topicsHash(t[0], null), 'aria-current': on ? 'page' : null, 'data-tp-tab': t[0], text: t[1] });
     }));
     var metaLine = h('p', { class: 'muted tp-meta-line', 'aria-live': 'polite' });
     var box = h('div', { class: 'tp-box', 'data-tp-box': r.tab }, loadingEl());
-    append(view, [h('h1', { text: 'お題の棚' }), nav, metaLine, box]);
+    append(view, [h('h1', { text: '今日のお題' }), nav, metaLine, box]);
     api('GET', '/api/topics/meta').then(function (m) { return normalizeMeta(m); }, function (e) { return { err: e }; }).then(function (m) {
       if (!alive(g)) return;
       if (m && m.err) { S.meta = null; metaLine.className = 'err tp-meta-line'; metaLine.textContent = '表示名を読めませんでした（' + errorText(m.err, null) + '）。種類と理由はコードのまま出します'; }

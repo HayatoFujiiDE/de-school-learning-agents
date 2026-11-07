@@ -1,4 +1,4 @@
-// 管理画面「お題の棚」（contract-T T-11）の DOM に触れない判断。
+// 管理画面「今日のお題」（表示名 §N-7。旧名 お題の棚。contract-T T-11）の DOM に触れない判断。
 // public/admin/topics.js を node:vm で読み（image-admin.test.ts が admin.js を読むのと同じ読み方）、window.FactoryTopics の純関数を確かめる。
 // 読み込んだだけでは DOM に触れない（document を渡さずに評価して例外が出ない）ことも、この読み方で確かめている。
 import { readFileSync } from 'node:fs';
@@ -61,13 +61,13 @@ describe('タブの hash の解釈', () => {
     expect(T.parseTopicsHash('#/topics/held?kind=news')).toEqual({ tab: 'held', kind: null });
     expect(T.parseTopicsHash('#/topics/stock?kind=%E0')).toEqual({ tab: 'stock', kind: null }); // 壊れた % でも落ちない
   });
-  it('知らないタブは today。お題の棚でない hash は null', () => {
+  it('知らないタブは today。今日のお題でない hash は null', () => {
     expect(T.parseTopicsHash('#/topics/zzz')).toEqual({ tab: 'today', kind: null });
     expect(T.parseTopicsHash('#/topicsx')).toBeNull();
     expect(T.parseTopicsHash('#/materials')).toBeNull();
     expect(T.parseTopicsHash('')).toBeNull();
   });
-  it('通信から戻った時の「まだお題の棚か」', () => {
+  it('通信から戻った時の「まだ今日のお題か」', () => {
     expect(T.isTopicsHash('#/topics')).toBe(true);
     expect(T.isTopicsHash('#/topics/runs')).toBe(true);
     expect(T.isTopicsHash('#/topics?x=1')).toBe(true);

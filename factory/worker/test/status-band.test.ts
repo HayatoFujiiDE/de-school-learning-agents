@@ -101,13 +101,13 @@ describe('枠の並びと中身', () => {
     expect([...h.matchAll(/data-card="(\w+)"/g)].map((m) => m[1])).toEqual(CARDS);
     expect(h.startsWith('<div class="status-band">')).toBe(true);
   });
-  it('ボタンはその仕事の枠の中: 止める → 制作（見出し行）・収集 / 会議を今すぐ → 入口', () => {
+  it('ボタンは 止める（制作の見出し行）だけ。収集 / 会議を今すぐは工場の係のパネルへ移した（§N-7）・入口の見出し行に工場の入口へのリンク', () => {
     const h = S.statusBandHtml(ok(), NOW);
     expect(card(h, 'run')).toContain('<div class="sb-head"><span class="sb-title">制作</span><button type="button" class="btn small" id="pause-btn">止める</button></div>');
-    expect(card(h, 'intake')).toContain('id="scout-btn">収集を今すぐ</button>');
-    expect(card(h, 'intake')).toContain('id="meeting-btn">会議を今すぐ</button>');
-    for (const k of ['money', 'media'] as Card[]) expect(card(h, k)).not.toMatch(/<button/);
-    for (const id of ['pause-btn', 'scout-btn', 'meeting-btn', 'cron-rel']) expect(n(h, new RegExp(`id="${id}"`, 'g'))).toBe(1);
+    expect(card(h, 'intake')).toContain('<div class="sb-head"><span class="sb-title">入口（収集・会議）</span><a class="sb-go-floor" href="#/?st=intake">工場の入口を開く ›</a></div>');
+    for (const k of ['money', 'media', 'intake'] as Card[]) expect(card(h, k)).not.toMatch(/<button/);
+    for (const id of ['scout-btn', 'meeting-btn']) expect(n(h, new RegExp(`id="${id}"`, 'g'))).toBe(0);
+    for (const id of ['pause-btn', 'cron-rel']) expect(n(h, new RegExp(`id="${id}"`, 'g'))).toBe(1);
     for (const k of CARDS) {
       expect(n(h, new RegExp(`id="status-card-${k}"`, 'g'))).toBe(1);
       expect(n(h, new RegExp(`id="status-alerts-${k}" aria-live="polite"`, 'g'))).toBe(1);
@@ -124,17 +124,10 @@ describe('枠の並びと中身', () => {
     expect(r).toMatch(/title="定期処理の最終 [^"]+"/);
     expect(h.replace(/<[^>]*>/g, '')).not.toMatch(/cron|職人|設定済み|U で数えた記帳|›\s*・/);
   });
-  it('停止中: 赤の点・再開（primary）・今すぐのボタンは disabled + title', () => {
+  it('停止中: 赤の点・再開（primary）（今すぐのボタンの disabled + title は test/station-panel.test.ts）', () => {
     const h = S.statusBandHtml(ok({ paused: true, paused_note: 'メモ' }), NOW);
     expect(card(h, 'run')).toContain('<span class="dot red" aria-hidden="true"></span><b>停止中</b>');
     expect(card(h, 'run')).toContain('<button type="button" class="btn small primary" id="pause-btn">再開</button>');
-    expect(card(h, 'intake')).toContain('id="scout-btn" disabled title="停止中は実行できません">収集を今すぐ</button>');
-    expect(card(h, 'intake')).toContain('id="meeting-btn" disabled title="停止中は実行できません">会議を今すぐ</button>');
-  });
-  it('収集中・結果待ちの文と disabled は今のまま（停止中でなければ title は付けない）', () => {
-    const h = S.statusBandHtml(ok({ scout: { ...ok().scout, running: true }, meeting: { ...ok().meeting, pending_batch: true } }), NOW);
-    expect(h).toContain('id="scout-btn" disabled>収集中…</button>');
-    expect(h).toContain('id="meeting-btn" disabled>結果待ち</button>');
   });
   it('お金: 今日 $95.55 / $200 とメーター・今月は収集・会議・画像の額だけ（上限・合計は出さない）・¢ は出さない', () => {
     const m = card(S.statusBandHtml(ok({ scout: { ...ok().scout, month_cents: 5 } }), NOW), 'money');

@@ -3,7 +3,7 @@
 // 版は 4 通り（fixtures.mjs）: vfix-0001 見てほしい所がある / vclean-0001 全部通った / vpend-0001 機械の確認中 / vrdr-0001 読み手チェック待ち。
 // 一覧（#/review）・判断の数・自動公開のスイッチ・確認済みのチャンネル（#/videos）・立体モデル（#/models3d）も作り物を返す（POST はメモリの中だけ）。
 // §AJ2: FACTORY_PREVIEW_GLB=<探査車の .glb のパス> を付けると #/review/vm3d-0001 の d3 が回せる（無ければ「読み込めませんでした」）。
-// 上部の状況帯は ?status=alert で異常の作り物（statusFixture）。
+// 上部の状況帯は ?status=alert で異常の作り物（statusFixture）。工場（#/）の /api/floor も作り物（floorFixture。src/routes/floor.ts の形）。
 // ?shot=<名前> を付けると driver.js が画面を操作してから document.title を "ready" にする（headless Chrome で撮るため）。
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
@@ -42,12 +42,56 @@ function statusFixture(variant) {
     meeting: { last_at: ago(1500), last_status: 'ended', last_error: null, month_cents: 0, month_cap_cents: 1000, pending_batch: false },
     images: { halted: null, month_cents: 170, month_cap_cents: 10000, holds_open: 0, dispatched: 0, backup_configured: true, backup_last_used_at: null },
     videos: { enabled: true, configured: true, month_cents: 40, month_cap_cents: 1000, u_cents: 10, model: 'fixture' },
+    // お題のストック（src/routes/topics.ts の topicStatusSummary の形）
+    topics: { enabled: true, last_run: null, failed_24h: 0, needs_review: { heavy: 1, source: 2, other: 0 }, month_cents: 312, month_cap_cents: 3000, today: { empty: 0, stopped: 1 }, tomorrow: { empty: 2, stopped: 0 }, over_reserve: 0 },
   };
   if (variant !== 'alert') return base;
   return {
     ...base, paused: true, paused_note: '費用の確認のため止めています', today_cents: 21040, last_cron_at: ago(48),
     scout: { ...base.scout, last_status: 'failed', month_cents: 1700 },
     images: { ...base.images, halted: 'manual', month_cents: 8400, backup_last_used_at: ago(60 * 26) },
+  };
+}
+
+// 工場（GET /api/floor）の作り物。src/routes/floor.ts の応答の形（stations 8 キー + queue）。行は 回答待ち・確認待ち・制作中・検証中・利用できる の 5 本
+const STEP_LABEL = { order: '注文', questions: '質問', making: '制作', ingest: '取り込み', verify: '検証', review: '確認', publish: '公開' };
+const STEP_KEYS = Object.keys(STEP_LABEL);
+const steps = (states) => states.split(',').map((state, i) => ({ key: STEP_KEYS[i], label: STEP_LABEL[STEP_KEYS[i]], state, detail: null }));
+function floorRow(id, title, kinds, states, pct, o = {}) {
+  return {
+    material: { id, slug: id, title, kinds, work_status: o.work || 'making', publish_status: o.publish || 'none', updated_at: new Date().toISOString() },
+    job: o.job === undefined ? { id: 'job-' + id, status: 'running', phase: 'making', kind: 'draft', error: null, last_error: null, auto_rework: false, parent_version: null } : o.job,
+    version: o.version || null,
+    steps: steps(states),
+    progress_pct: pct,
+    attention: o.attention || null,
+  };
+}
+function floorFixture() {
+  const ago = (min) => new Date(Date.now() - min * 60_000).toISOString();
+  return {
+    now: new Date().toISOString(),
+    paused: false,
+    paused_note: null,
+    cost: { today_cents: 9555, daily_cap_cents: 20000 },
+    attention: { answer: 1, review: 1, failed: 0, budget: 0 },
+    stations: {
+      intake: { proposed: 4, scout_running: false, meeting_pending: false, last_scout_at: ago(300), last_meeting_at: ago(1500) },
+      maker: { queued: 1, creating: 0, running: 1, needs_answer: 1, budget_reached: 0, max_concurrent: 2 },
+      clerk: { ingesting: 0, failed_invalid_outputs: 0 },
+      verifier: { pending: 0, running: 1, failed: 0 },
+      reviewer: { waiting: 1, needs_review_total: 3 },
+      library: { available: 12, stopped: 1 },
+      rework: { auto_active: 0, manual_active: 0 },
+      retro: { pending: 0, last_retro_at: ago(600), last_tips_activated: 1, active_maker_notes: 2 },
+    },
+    queue: [
+      floorRow('fx-redstone', 'レッドストーン回路のきほん', [3, 4], 'done,waiting,pending,pending,pending,pending,pending', 14, { attention: 'answer', job: { id: 'job-fx-redstone', status: 'needs_answer', phase: 'questions', kind: 'draft', error: null, last_error: null, auto_rework: false, parent_version: null } }),
+      floorRow('fx-blood', '赤血球のしごと', [3], 'done,done,done,done,done,waiting,pending', 86, { work: 'review', attention: 'review', job: null, version: { id: VID, version: 3, status: 'review', verification_status: 'done', verify_phase: null, verify_turn: 0, needs_review: 3, auto_ok: 3 } }),
+      floorRow('fx-moon', '月の満ち欠け', [3, 4], 'done,skipped,active,pending,pending,pending,pending', 42),
+      floorRow('fx-volcano', '火山のしくみ', [3], 'done,done,done,done,active,pending,pending', 77, { work: 'review', job: null, version: { id: 'vfx-volcano', version: 2, status: 'review', verification_status: 'running', verify_phase: 'collecting', verify_turn: 2, needs_review: null, auto_ok: null } }),
+      floorRow('fx-seasons', '季節と太陽の高さ', [3], 'done,done,done,done,done,done,done', 100, { work: 'idle', publish: 'available', job: null, version: { id: 'vfx-seasons', version: 1, status: 'current', verification_status: 'done', verify_phase: null, verify_turn: 0, needs_review: null, auto_ok: null } }),
+    ],
   };
 }
 
@@ -82,6 +126,7 @@ createServer((req, res) => {
     return f ? send(res, 200, readFileSync(f), TYPES[extname(f)] || 'application/octet-stream') : send(res, 404, 'not found', 'text/plain');
   }
   if (path === '/api/status') return json(res, 200, statusFixture(statusVariant(req)));
+  if (path === '/api/floor') return json(res, 200, floorFixture());
   if (path === '/api/review') return json(res, 200, { versions: listRows() });
   if (path === '/api/review/stats') return json(res, 200, { auto_publish: state.auto_publish, clean: { approve: 12, return: 1, reject: 0 }, streak: 9, auto_published: state.auto_publish ? 3 : 0 });
   if (path === '/api/review/auto-publish' && req.method === 'POST') return readBody(req).then((b) => { state.auto_publish = !!(b && b.on); json(res, 200, { auto_publish: state.auto_publish }); });

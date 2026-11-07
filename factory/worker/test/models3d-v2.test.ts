@@ -768,9 +768,9 @@ describe('§AJ2-5 9・10 /admin の CSP', () => {
     expect(serve).toContain("'.wasm': 'application/wasm'");
   });
 
-  it('index.html: nav に「立体モデル」（お題の棚の後）と、admin.js の後に model-viewer の module', () => {
+  it('index.html: nav の「道具と記録」の倉庫に「立体モデル」（素材の後。§N-7 でメニューを組み直した）と、admin.js の後に model-viewer の module', () => {
     const html = readFileSync(new URL('../public/admin/index.html', import.meta.url), 'utf8');
-    expect(html).toContain('<a href="#/topics">お題の棚</a>\n      <a href="#/models3d">立体モデル</a>');
+    expect(html).toContain('<span class="nav-grp-h">倉庫</span><a href="#/materials">素材</a><a href="#/models3d">立体モデル</a>');
     expect(html.indexOf('<script type="module" src="/admin/vendor/model-viewer.min.js"></script>')).toBeGreaterThan(html.indexOf('<script src="/admin/admin.js"></script>'));
   });
 });
