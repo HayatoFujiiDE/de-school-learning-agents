@@ -23,7 +23,8 @@ import {
   runMeetingRoute,
   runScoutRoute,
 } from './routes/proposals';
-import { decide, listReview, reverify, reviewDetail, reviewFile } from './routes/review';
+import { decide, listReview, reread, reverify, reviewDetail, reviewFile, reviewStats, setAutoPublish } from './routes/review';
+import { deleteChannel, listChannels } from './routes/channels';
 import { decideRetroTip, getRetro } from './routes/retro';
 import { addStandard, getStandards } from './routes/standards';
 import { getStatus, setPause } from './routes/status';
@@ -60,10 +61,17 @@ const ROUTES: Array<[string, RegExp, Handler]> = [
   ['POST', new RegExp(`^/api/jobs/${ID}/reingest$`), reingestJobRoute],
   ['POST', new RegExp(`^/api/jobs/${ID}/raise-budget$`), raiseBudgetRoute], // §B-4-f（運営の増額操作だけ）
   ['GET', /^\/api\/review$/, listReview],
+  // 契約 V-8（stats・auto-publish は ID の形にも当たるので、詳細より前に置く）
+  ['GET', /^\/api\/review\/stats$/, reviewStats],
+  ['POST', /^\/api\/review\/auto-publish$/, setAutoPublish],
   ['GET', new RegExp(`^/api/review/${ID}$`), reviewDetail],
   ['GET', new RegExp(`^/api/review/${ID}/files/(.*)$`), reviewFile],
   ['POST', new RegExp(`^/api/review/${ID}/decision$`), decide],
   ['POST', new RegExp(`^/api/review/${ID}/reverify$`), reverify],
+  ['POST', new RegExp(`^/api/review/${ID}/reread$`), reread], // 契約 V-4 h
+  // 確認済みのチャンネル（契約 V-8・V-7 f）
+  ['GET', /^\/api\/channels$/, listChannels],
+  ['DELETE', /^\/api\/channels$/, deleteChannel],
   ['GET', /^\/api\/status$/, getStatus],
   ['GET', /^\/api\/floor$/, getFloor], // 工場ビュー（§N-1）
   ['POST', /^\/api\/status\/pause$/, setPause],

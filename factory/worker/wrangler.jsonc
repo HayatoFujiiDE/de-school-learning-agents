@@ -76,6 +76,9 @@
     "TOPIC_CHECK_MAX_ATTEMPTS": "2",
     // 0=日〜6=土（Asia/Tokyo）。talk・philo・make の週 1 回の生成の日
     "TOPIC_WEEKLY_DAY": "0",
-    "TOPIC_DERIVE_PER_WEEK": "3"
+    "TOPIC_DERIVE_PER_WEEK": "3",
+    // 確認を機械に寄せる（契約 V-8）。続けて行う自動の差し戻しの上限（0〜5）と、読み手係のモデル
+    "AUTO_RETURN_MAX": "2",
+    "READER_MODEL": "claude-opus-5-5"
   }
 }

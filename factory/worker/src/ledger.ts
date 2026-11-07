@@ -70,3 +70,20 @@ export function sonnetMicroDollars(u: UsageLike | null | undefined): number {
 
 /** web_search は 1 回 1 セント（$10 / 1,000 回。同じ pricing のページ） */
 export const WEB_SEARCH_CENTS = 1;
+
+/**
+ * Opus 5.5（同期の定価。読み手係 契約 V-4 b）: 検証係（src/verify.ts の listPriceMicro）と同じ単価 —
+ * 入力 $4 / cache write 1.25 倍 / cache read 0.1 倍 / 出力 $20 per 1M（tokens × $/1M = micro-dollars）
+ */
+export function opusMicroDollars(u: UsageLike | null | undefined): number {
+  if (!u) return 0;
+  return (u.input_tokens ?? 0) * 4 + (u.cache_creation_input_tokens ?? 0) * 4 * 1.25 + (u.cache_read_input_tokens ?? 0) * 4 * 0.1 + (u.output_tokens ?? 0) * 20;
+}
+
+/**
+ * 読み手係の台帳の行を実額にする（契約 V-4 f）。実額をそのまま書く（取り置きを超えたら実額。topic 用の MIN の文は使わない）。
+ * pred は版の述語（running と token）。偽なら 0 行（取り置き額のまま）
+ */
+export function readerLedgerSettleStmt(refId: string, cents: number, pred: { sql: string; params: Stmt['params'] }): Stmt {
+  return { sql: `UPDATE cost_ledger SET cents = ? WHERE kind = 'reader' AND ref_id = ? AND ${pred.sql}`, params: [Math.max(0, Math.ceil(cents)), refId, ...pred.params] };
+}

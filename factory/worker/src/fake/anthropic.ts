@@ -396,6 +396,8 @@ export function createFakePort(env: Env): FactoryPort {
         });
         return gen ? fakeTopicGenReply(params, n) : fakeTopicCheckReply(params);
       }
+      // 読み手係（契約 V-4 i）
+      if (isReaderParams(params)) return fakeReaderReply(db, params, o);
       const content = userText(params.messages[0]?.content);
       await appendCall(db, {
         op: 'messages.create',
@@ -577,6 +579,57 @@ const VERIFIER_FAKE_MODEL = 'claude-opus-5-5';
 /** 検証係の params か（report_verdicts を持つ） */
 function isVerifierParams(p: MessageCreateParamsNonStreaming): boolean {
   return (p.tools ?? []).some((t) => (t as { name?: string }).name === 'report_verdicts');
+}
+
+/** 読み手係の params か（report_reading を持つ。契約 V-4 i） */
+function isReaderParams(p: MessageCreateParamsNonStreaming): boolean {
+  return (p.tools ?? []).some((t) => (t as { name?: string }).name === 'report_reading');
+}
+
+/**
+ * 読み手係の応答（契約 V-4 i）。既定は findings 空・learning ok・conditions ok。
+ * 入力（変奏の本文）に `fake_reading: {JSON}` の 1 行があれば、その値で既定を上書きする（fixture の .md に書いて変える）。
+ * {"error": 500} は API のエラー（PortError。"error_detail" で本文の先頭を渡せる）、{"no_tool": true} は report_reading を呼ばない応答
+ */
+async function fakeReaderReply(db: D1Database, params: MessageCreateParamsNonStreaming, o?: CallOpts): Promise<Message> {
+  const text = userText(params.messages[0]?.content);
+  await appendCall(db, {
+    op: 'messages.create',
+    at: nowIso(),
+    params: { kind: 'reader', model: params.model, max_tokens: params.max_tokens, thinking: params.thinking, tool_choice: params.tool_choice, tools: toolSummary(params.tools) },
+    opts: { max_retries: o?.maxRetries ?? null, has_deadline: typeof o?.deadline === 'number', max_timeout_ms: o?.maxTimeoutMs ?? null },
+  });
+  let over: Record<string, unknown> = {};
+  const m = /^fake_reading:\s*(\{.*\})\s*$/m.exec(text);
+  if (m) {
+    try {
+      const v = JSON.parse(m[1]) as unknown;
+      if (v && typeof v === 'object' && !Array.isArray(v)) over = v as Record<string, unknown>;
+    } catch {
+      over = {};
+    }
+  }
+  if (typeof over.error === 'number') throw new PortError(true, over.error, 'api_error', typeof over.error_detail === 'string' ? over.error_detail.slice(0, 200) : undefined);
+  const input = {
+    findings: Array.isArray(over.findings) ? over.findings : [],
+    learning: over.learning ?? { verdict: 'ok', reason: 'fake: 活動が学習につながっている' },
+    conditions: over.conditions ?? { verdict: 'ok', reason: 'fake: 使う条件が本文と合っている' },
+    summary: typeof over.summary === 'string' ? over.summary : 'fake: 読みやすい',
+  };
+  return {
+    id: `msg_fake_${crypto.randomUUID().slice(0, 8)}`,
+    type: 'message',
+    role: 'assistant',
+    model: params.model,
+    container: null,
+    content:
+      over.no_tool === true
+        ? [{ type: 'text', text: 'fake: 読みました', citations: null }]
+        : [{ type: 'tool_use', id: 'toolu_fake_reader_1', name: 'report_reading', input, caller: { type: 'direct' } }],
+    stop_reason: over.no_tool === true ? 'end_turn' : 'tool_use',
+    stop_sequence: null,
+    usage: { input_tokens: 9000, output_tokens: 700, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+  } as unknown as Message;
 }
 
 function toolSummary(tools: MessageCreateParamsNonStreaming['tools']) {

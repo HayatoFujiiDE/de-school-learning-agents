@@ -79,6 +79,10 @@ export interface Env {
   RETRO_MONTHLY_CENTS?: string;
   /** 機械用の注文の入口（§U-3 の 1）の 1 日の件数の上限。無い時は 5。0 以下なら全部止まる */
   ORDER_DAILY_MAX?: string;
+  /** 続けて行う自動の差し戻しの上限（契約 V-0 G4・V-6 a。整数 0〜5 に丸める。数でなければ 2）。wrangler.jsonc に既定値 "2" */
+  AUTO_RETURN_MAX?: string;
+  /** 読み手係のモデル（契約 V-4 b。既定 claude-opus-5-5） */
+  READER_MODEL?: string;
 
   // secrets
   ANTHROPIC_API_KEY?: string;
@@ -154,6 +158,8 @@ export const cfg = (env: Env) => ({
   retroMonthlyCents: intVar(env.RETRO_MONTHLY_CENTS, 300),
   // §U-3 の 1（intVar は負の値を既定に戻すので使わない。0 以下は「全部止まる」）
   orderDailyMax: signedIntVar(env.ORDER_DAILY_MAX, 5),
+  // 契約 V-4 b（AUTO_RETURN_MAX の丸めは checks/triage.ts の clampAutoReturnMax。仕分けの入力に生の値を渡す）
+  readerModel: (env.READER_MODEL || 'claude-opus-5-5').trim(),
 });
 
 /** 整数の var（負の値もそのまま返す）。空・数でない時は既定 */

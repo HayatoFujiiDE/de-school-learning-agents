@@ -1,14 +1,15 @@
-// /api/review（契約 §B-3, §B-6, §G-2）
-import { all, cas, conditionalBatch, first, isUniqueViolation, nowIso, stmt, tokyoDay } from '../db';
+// /api/review（契約 §B-3, §B-6, §G-2。契約 V-8: 仕分け v2・読み手係・承認の追加・読み直し・stats・自動公開のスイッチ）
+import { all, cas, conditionalBatch, first, getSetting, isUniqueViolation, nowIso, setSetting, stmt, tokyoDay } from '../db';
 import { JOB_MODEL, cfg, consoleUrl } from '../env';
 import { isNonEmptyString, json, parseJsonField, readBody, type RouteCtx } from '../http';
 import { getJob, startJob } from '../jobs';
 import { buildReject, buildReturn, buildReworkBrief, publishSwitch } from '../publish';
-import { AUTO_ITEMS, type AutoItem } from '../checks/triage';
-import { computeTriage, latestVerificationOf } from '../triage-step';
+import { CHECK_KEYS, readReaderResult, type CheckKey } from '../checks/triage';
+import { videoSourceIds } from '../checks/citations';
+import { AUTO_PUBLISH_EMAIL, computeTriage, latestVerificationOf } from '../triage-step';
 import { generatedImagesOf } from './images';
 import { serveVersionFile } from './library';
-import { readVersionVideoNotes, readVideoMetaViews, versionVideosOf, type VideoMetaView, type VideoNotesFile } from '../videos';
+import { readVersionVideoNotes, readVideoMetaViews, versionVideosOf, versionVideosOfMaterial, type VideoMetaView, type VideoNotesFile } from '../videos';
 
 export const CHECKLIST_KEYS = [
   'content_and_evidence',
@@ -42,6 +43,15 @@ interface VersionRow {
   verification_started_at: string | null;
   list_cost_cents: number;
   auto_reverified: number;
+  // 契約 V-1
+  reader_status: string;
+  reader_attempts: number;
+  reader_token: string | null;
+  reader_json: string | null;
+  reader_cost_cents: number;
+  evidence_reverified: number;
+  triage_v: number;
+  triage_gate: string | null;
   created_at: string;
 }
 interface VerificationRow {
@@ -74,13 +84,23 @@ export async function listReview(c: RouteCtx): Promise<Response> {
        WHERE v.status = 'review' ORDER BY v.created_at ASC`,
     ),
   );
-  // §L-5: 各行に needs_review / auto_ok を足し、needs_review の多い順 → 作成の古い順
+  // §L-5・契約 V-8: 各行に gate / pending_on / fix / ask / note / needs_review（fix + ask）/ auto_ok（6 項目のうち ok の数）を足し、
+  // needs_review の多い順 → 作成の古い順。R2（動画の公式の情報）を読むのは動画のある版だけ（computeTriage）
   const out: Array<Record<string, unknown> & { needs_review: number; auto_ok: number; created_at: string; version_id: string }> = [];
   for (const r of rows) {
     const v = await getVersion(db, r.version_id);
     if (!v) continue;
-    const t = await computeTriage(db, v, await latestVerificationOf(db, v.id));
-    out.push({ ...r, needs_review: t.needs_review, auto_ok: AUTO_ITEMS.filter((k) => t.auto[k] === 'ok').length });
+    const t = await computeTriage(c.env, v, await latestVerificationOf(db, v.id));
+    out.push({
+      ...r,
+      gate: t.gate,
+      pending_on: t.pending_on,
+      fix: t.counts.fix,
+      ask: t.counts.ask,
+      note: t.counts.note,
+      needs_review: t.needs_review,
+      auto_ok: CHECK_KEYS.filter((k) => t.auto[k] === 'ok').length,
+    });
   }
   out.sort((a, b) => b.needs_review - a.needs_review || (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0) || (a.version_id < b.version_id ? -1 : a.version_id > b.version_id ? 1 : 0));
   return json(200, { versions: out });
@@ -110,6 +130,7 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
         figures?: unknown;
         analogy_gaps?: unknown;
         videos?: unknown;
+        apps?: unknown;
       }>(ver.result_json, {})
     : null;
   const claims = parseJsonField<{ claims?: Array<Record<string, unknown>> }>(v.claims_json, {}).claims ?? [];
@@ -123,7 +144,10 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
     db,
     stmt("SELECT SUM(cents) AS c FROM cost_ledger WHERE kind = 'verify' AND (ref_id = ? OR ref_id GLOB 'vb:' || ? || ':*' OR ref_id GLOB 'vv:' || ? || ':*')", vid, vid, vid),
   );
-  const triage = await computeTriage(db, v, ver ? { id: ver.id, result_json: ver.result_json } : null);
+  // §Q-11 8: 版の動画ごとの公式の情報（記録を読むだけ。oEmbed を呼ばず、呼び出しの数も増やさない）。動画の無い版は []。
+  // 仕分けにも同じ値を渡す（同じリクエストで R2 を 2 回読まない。契約 V-8）
+  const videoMeta = await readVideoMeta(c.env.R2, v.r2_prefix, v.material_json);
+  const triage = await computeTriage(c.env, v, ver ? { id: ver.id, result_json: ver.result_json } : null, { videoMeta });
   // 検証待ちの理由（§L-6 1.・§L-2 3-2）。読んだ時点の停止・飛行中・日次で決める表示用の値（判定は提出段の 1 文が正本）
   const phaseRow = await first<{ verify_phase: string | null }>(db, stmt('SELECT verify_phase FROM material_versions WHERE id = ?', vid));
   const verifyPhase = phaseRow?.verify_phase ?? null;
@@ -148,8 +172,8 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
   const generatedImages = await generatedImagesOf(db, v.job_id, material);
   // §Q-5・§Q-10 9: 版の動画の記録（v1 の video-notes.json か、呼び出しの記録から組み立てたもの。何も無い・読めなければ null）
   const videoNotes = await readVideoNotes(c.env.R2, v.r2_prefix, v.material_json);
-  // §Q-11 8: 版の動画ごとの公式の情報（記録を読むだけ。oEmbed を呼ばず、呼び出しの数も増やさない）。動画の無い版は []
-  const videoMeta = await readVideoMeta(c.env.R2, v.r2_prefix, v.material_json);
+  // 契約 V-8: 読み手係（done でない時・結果が読めない時は findings 等が null）
+  const reading = v.reader_status === 'done' ? readReaderResult(parseJsonField<unknown>(v.reader_json ?? '', null)) : null;
   return json(200, {
     version: {
       id: v.id,
@@ -179,7 +203,15 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
     sources,
     claims: claims.map((cl) => {
       const verdict = report?.verdicts?.find((x) => x.claim_id === cl.id);
-      return { ...cl, verdict: verdict?.verdict ?? null, reason: verdict?.reason ?? null, opened_urls: verdict?.opened_urls ?? [] };
+      // 契約 V-8: 本文の書き方（4 値か null）
+      const pa = (verdict as { presented_as?: unknown } | undefined)?.presented_as;
+      return {
+        ...cl,
+        verdict: verdict?.verdict ?? null,
+        reason: verdict?.reason ?? null,
+        opened_urls: verdict?.opened_urls ?? [],
+        presented_as: pa === 'fact' || pa === 'hedged' || pa === 'analogy' || pa === 'not_in_text' ? pa : null,
+      };
     }),
     verification: ver
       ? {
@@ -198,6 +230,8 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
           analogy_gaps: analogyGapsOf(report?.analogy_gaps),
           // §Q-5: 動画ごとの判定（result_json に videos が無い古い検証は null）
           videos: videoVerdictsOf(report?.videos),
+          // 契約 V-8: 動かせるものごとの判定（result_json に apps が無い古い検証は null）
+          apps: figuresOf(report?.apps),
           cost_cents: ver.cost_cents,
           created_at: ver.created_at,
         }
@@ -206,6 +240,17 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
     verification_history: history,
     verify_cost_cents: Number(verifyCost?.c ?? 0),
     triage,
+    reader: {
+      status: v.reader_status,
+      gen: v.reader_token ?? null,
+      findings: reading?.findings ?? null,
+      learning: reading?.learning ?? null,
+      conditions: reading?.conditions ?? null,
+      summary: reading ? reading.summary : null,
+      not_read: reading?.not_read ?? null,
+      cost_cents: Number(v.reader_cost_cents ?? 0),
+    },
+    auto_publish: (await getSetting(db, 'auto_publish')) === '1',
     generated_images: generatedImages,
     video_notes: videoNotes,
     video_meta: videoMeta,
@@ -303,32 +348,59 @@ export async function decide(c: RouteCtx, vid: string): Promise<Response> {
     if (typeof b.verification_id !== 'string' || !b.verification_id) return json(400, { error: 'verification_id_required' });
     const latest = await latestVerification(db, vid);
     if (!latest || latest.id !== b.verification_id) return json(409, { error: 'stale_verification' });
-    const triage = await computeTriage(db, v, { id: latest.id, result_json: latest.result_json });
-    const autoOk = new Set<string>(AUTO_ITEMS.filter((k: AutoItem) => triage.auto[k] === 'ok'));
-    const cl = checkChecklist(b.checklist, autoOk);
+    // 契約 V-7 e: 画面が読んだ読み手係の世代（reader_token。無ければ null）が今と違えば読み直させる
+    const readerGen = typeof b.reader_gen === 'string' ? b.reader_gen : null;
+    if (readerGen !== (v.reader_token ?? null)) return json(409, { error: 'stale_reader' });
+    const triage = await computeTriage(c.env, v, { id: latest.id, result_json: latest.result_json });
+    // 検証は done なのに結果が読めない版は承認しない。読み手係の未了（pending_on が ['reader'] だけ）では止めない（契約 V-0 の裁定・V-7 e）
+    if (triage.pending_on.includes('verification')) return json(400, { error: 'checks_pending' });
+    const autoOk = new Set<string>(CHECK_KEYS.filter((k: CheckKey) => triage.auto[k] === 'ok'));
+    const cl = checkChecklist(b.checklist === undefined ? {} : b.checklist, autoOk);
     if (!cl.ok) return json(400, { error: 'checklist_incomplete' });
     if (cl.hasNg) return json(400, { error: 'checklist_has_ng' });
     // 自動の処置（差し戻し・再検証）が決まっている版は人が承認しない（§L-4）
     if (triage.action !== 'none') return json(409, { error: 'auto_triage_pending', action: triage.action });
     if (latest.contradicted > 0) return json(400, { error: 'has_contradicted_claims' });
-    // 検証係が confirmed とした claim の一次出典に url_was_fetched=0 が無い
+    // 検証係が confirmed とした claim の一次出典に url_was_fetched=0 が無い（動画の出典を除く。契約 V-6 c・§Q-9.11）
     const report = parseJsonField<{ verdicts?: Array<{ claim_id: string; verdict: string }> }>(latest.result_json, {});
-    const confirmedIds = new Set((report.verdicts ?? []).filter((x) => x.verdict === 'confirmed').map((x) => x.claim_id));
+    const confirmedIds = new Set((Array.isArray(report?.verdicts) ? report.verdicts : []).filter((x) => x?.verdict === 'confirmed').map((x) => x.claim_id));
     const claims = parseJsonField<{ claims?: Array<{ id: string; source_ids?: string[] }> }>(v.claims_json, {}).claims ?? [];
-    const srcRows = await all<{ source_id: string; is_primary: number; url_was_fetched: number }>(
+    const srcRows = await all<{ source_id: string; url: string; is_primary: number; url_was_fetched: number }>(
       db,
-      stmt('SELECT source_id, is_primary, url_was_fetched FROM sources WHERE material_version_id = ?', vid),
+      stmt('SELECT source_id, url, is_primary, url_was_fetched FROM sources WHERE material_version_id = ?', vid),
+    );
+    const videoIds = videoSourceIds(
+      srcRows.map((r) => ({ id: r.source_id, url: r.url })),
+      versionVideosOfMaterial(parseJsonField<unknown>(v.material_json, null)),
     );
     for (const claim of claims) {
       if (!confirmedIds.has(claim.id)) continue;
       for (const sid of claim.source_ids ?? []) {
         const s = srcRows.find((r) => r.source_id === sid);
-        if (s && s.is_primary === 1 && s.url_was_fetched === 0) return json(400, { error: 'primary_source_unfetched', message: `${claim.id}:${sid}` });
+        if (s && Number(s.is_primary) === 1 && Number(s.url_was_fetched) === 0 && !videoIds.has(sid)) return json(400, { error: 'primary_source_unfetched', message: `${claim.id}:${sid}` });
       }
     }
+    // 契約 V-7 e: 初めてのチャンネル（key のあるもの）は、全部を trust_channels で確認済みにしないと承認できない。項目に無い key は書かない
+    const asked = new Set(Array.isArray(b.trust_channels) ? (b.trust_channels as unknown[]).filter((x): x is string => typeof x === 'string') : []);
+    const needed = new Map<string, string>();
+    for (const it of triage.items) if (it.cause === 'video_channel_new' && it.channel_key && !needed.has(it.channel_key)) needed.set(it.channel_key, it.channel_name ?? '');
+    if ([...needed.keys()].some((k) => !asked.has(k))) return json(400, { error: 'channel_trust_required' });
     const r = await publishSwitch(
       db,
-      { kind: 'approve', material_id: v.material_id, version_id: vid, verification_id: latest.id, reviewer_email: c.email, checklist_json: cl.json, note: note || null },
+      {
+        kind: 'approve',
+        material_id: v.material_id,
+        version_id: vid,
+        verification_id: latest.id,
+        reviewer_email: c.email,
+        checklist_json: cl.json,
+        note: note || null,
+        machine_gate: triage.gate,
+        // 読んだ値（読み手係が pending / running ならその値と token）。承認の間に読み手係が済めば 0 行 → 409 conflict（画面が読み直す）
+        reader_guard: { status: v.reader_status, token: v.reader_token ?? null },
+        trusted_keys: triage.trusted_keys,
+        trust_channels: [...needed].map(([channel_key, channel_name]) => ({ channel_key, channel_name })),
+      },
       { decision_id: crypto.randomUUID(), now },
     );
     if (!r.ok) return json(409, { error: 'conflict' });
@@ -339,11 +411,16 @@ export async function decide(c: RouteCtx, vid: string): Promise<Response> {
   if (!isNonEmptyString(note, 4000)) return json(400, { error: 'note_required' });
   const clRaw = b.checklist ? checkChecklist(b.checklist) : null;
   const checklistJson = clRaw && clRaw.ok ? clRaw.json : b.checklist ? JSON.stringify(b.checklist).slice(0, 8000) : null;
+  // 契約 V-8: どの判断でも判断した時の仕分けの gate を記録する
+  const machineGate = (await computeTriage(c.env, v, await latestVerificationOf(db, vid))).gate;
 
   if (decision === 'reject') {
     const r = await conditionalBatch(
       db,
-      buildReject({ material_id: v.material_id, version_id: vid, reviewer_email: c.email, checklist_json: checklistJson, note }, { decision_id: crypto.randomUUID(), now, log_id: crypto.randomUUID() }),
+      buildReject(
+        { material_id: v.material_id, version_id: vid, reviewer_email: c.email, checklist_json: checklistJson, note, machine_gate: machineGate },
+        { decision_id: crypto.randomUUID(), now, log_id: crypto.randomUUID() },
+      ),
     );
     if (!r.ok) return json(409, { error: 'conflict' });
     console.log(JSON.stringify({ at: 'reject', version_id: vid }));
@@ -369,6 +446,7 @@ export async function decide(c: RouteCtx, vid: string): Promise<Response> {
           rework_brief_md: brief,
           rework_model: JOB_MODEL.rework,
           rework_budget_cents: cfg(c.env).budgetReworkCents,
+          machine_gate: machineGate,
         },
         { decision_id: crypto.randomUUID(), now, log_id: crypto.randomUUID() },
       ),
@@ -405,4 +483,55 @@ export async function reverify(c: RouteCtx, vid: string): Promise<Response> {
     return json(409, { error: now2?.verification_status === 'running' ? 'verification_running' : 'conflict' });
   }
   return json(200, { version_id: vid, verification_status: 'pending' });
+}
+
+/** POST /api/review/:version_id/reread（契約 V-4 h）: 読み手係をやり直す（pending・attempts 0・token NULL）。読み手係が済んでから仕分け直す */
+export async function reread(c: RouteCtx, vid: string): Promise<Response> {
+  const db = c.env.DB;
+  const v = await getVersion(db, vid);
+  if (!v) return json(404, { error: 'not_found' });
+  const ok = await cas(
+    db,
+    stmt(
+      `UPDATE material_versions SET reader_status = 'pending', reader_attempts = 0, reader_token = NULL, triaged_verification_id = NULL
+       WHERE id = ? AND status = 'review' AND reader_status IN ('done','failed')`,
+      vid,
+    ),
+  );
+  if (!ok) {
+    const now2 = await getVersion(db, vid);
+    return json(409, { error: now2?.status !== 'review' ? 'not_in_review' : 'reader_running' });
+  }
+  console.log(JSON.stringify({ at: 'reread', version_id: vid }));
+  return json(200, { version_id: vid, reader_status: 'pending' });
+}
+
+/**
+ * GET /api/review/stats（契約 V-8）: 機械が「全部通った」とした教材（machine_gate='clean'）への人の判断の数と、新しい順に approve が続いた数、
+ * 自動で公開した数、自動公開のスイッチ
+ */
+export async function reviewStats(c: RouteCtx): Promise<Response> {
+  const db = c.env.DB;
+  const rows = await all<{ decision: string }>(
+    db,
+    stmt("SELECT decision FROM review_decisions WHERE machine_gate = 'clean' AND substr(reviewer_email, 1, 7) <> 'system:' ORDER BY created_at DESC, id DESC"),
+  );
+  const clean = { approve: 0, return: 0, reject: 0 };
+  for (const r of rows) if (r.decision === 'approve' || r.decision === 'return' || r.decision === 'reject') clean[r.decision]++;
+  let streak = 0;
+  for (const r of rows) {
+    if (r.decision !== 'approve') break;
+    streak++;
+  }
+  const ap = await first<{ n: number }>(db, stmt('SELECT COUNT(*) AS n FROM review_decisions WHERE reviewer_email = ?', AUTO_PUBLISH_EMAIL));
+  return json(200, { auto_publish: (await getSetting(db, 'auto_publish')) === '1', clean, streak, auto_published: Number(ap?.n ?? 0) });
+}
+
+/** POST /api/review/auto-publish {on: boolean}（契約 V-8）: settings auto_publish を '1' / '0' に */
+export async function setAutoPublish(c: RouteCtx): Promise<Response> {
+  const b = await readBody(c.request);
+  if (!b || typeof b.on !== 'boolean') return json(400, { error: 'invalid_body' });
+  await setSetting(c.env.DB, 'auto_publish', b.on ? '1' : '0');
+  console.log(JSON.stringify({ at: 'auto_publish_switch', on: b.on }));
+  return json(200, { auto_publish: b.on });
 }
