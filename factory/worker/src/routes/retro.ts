@@ -5,7 +5,7 @@ import { all, cas, first, getSetting, nowIso, stmt } from '../db';
 import { cfg } from '../env';
 import { json, parseJsonField, readBody, type RouteCtx } from '../http';
 import { monthCostCents } from '../ledger';
-import { autoAdoptBlocked, compareRecent, jobsFinishedSince, RETRO_LIMITS, type RetroOutput, type TipRow } from '../retro';
+import { autoAdoptBlocked, compareRecent, RETRO_LIMITS, reworkLedger, tipEffect, type RetroOutput, type TipEffect, type TipRow } from '../retro';
 
 const TIP_STATUSES = ['active', 'proposed', 'retired', 'rejected'] as const;
 /** 一覧に出す件数 */
@@ -28,6 +28,8 @@ interface RetroListRow {
 type TipView = TipRow & {
   material_title: string | null;
   jobs_since?: number;
+  /** 工夫の前後（draft の job。前 5 件・後 5 件。§S v2 D 3） */
+  effect?: Omit<TipEffect, 'jobs_since'> | null;
   retire_suggested?: { reason: string; job_id: string; at: string } | null;
   /** 自動で入れる前の機械的な検査（autoAdoptBlocked）に当たったか。画面に「自動では入れませんでした」と出す */
   auto_blocked?: boolean;
@@ -94,7 +96,9 @@ export async function getRetro(c: RouteCtx): Promise<Response> {
     for (const t of list) t.auto_blocked = autoAdoptBlocked(t.text);
     if (s === 'active') {
       for (const t of list) {
-        t.jobs_since = t.activated_at ? await jobsFinishedSince(db, t.activated_at) : 0;
+        const eff = await tipEffect(db, t.activated_at);
+        t.jobs_since = eff?.jobs_since ?? 0;
+        t.effect = eff ? { before: eff.before, after: eff.after, window: eff.window } : null;
         t.retire_suggested = retireSuggested.get(t.id) ?? null;
       }
     }
@@ -133,6 +137,8 @@ export async function getRetro(c: RouteCtx): Promise<Response> {
       active_maker_note_limit: RETRO_LIMITS.activeMakerNotes,
     },
     compare: { ...(await compareRecent(db)), window: 10 },
+    // 作り直しの台帳（§S v2 A）。素材ごと・新しい順・retro_since に関係なく全部（30 件まで）
+    rework_ledger: await reworkLedger(c.env),
     retros,
     tips,
     events: events.slice(0, LIST_LIMIT.events),

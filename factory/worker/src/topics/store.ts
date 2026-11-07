@@ -22,7 +22,8 @@ export const TOPIC_GEN_TIMEOUT_MS = 150_000;
 export const TOPIC_CHECK_TIMEOUT_MS = 60_000;
 export const TOPIC_CHECK_PER_TICK = 3;
 export const TOPIC_REFRESH_DAYS = 180;
-export const TOPIC_GEN_MAX_TOKENS = 8000;
+/** 生成・派生の出力の上限（v2.8: 8000 → 16000。本番の philo で 8000 に当たり save_topics が途中で切れた。全部の種類で同じ） */
+export const TOPIC_GEN_MAX_TOKENS = 16000;
 export const TOPIC_CHECK_MAX_TOKENS = 2000;
 export const TOPIC_WEB_SEARCH_MAX_USES = 5;
 export const TOPIC_WEB_FETCH_MAX_USES = 8;
@@ -427,6 +428,8 @@ export interface RunDbRow {
   lease_until: string;
   created_at: string;
   updated_at: string;
+  /** v2.8: 閉じた時の観測（数と列挙値だけの JSON。src/topics/diag.ts）。API（toRunRow）には出さない */
+  diag_json?: string | null;
 }
 
 export function toRunRow(r: RunDbRow): Record<string, unknown> {

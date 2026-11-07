@@ -566,6 +566,19 @@ strict を外した後の本番の 1 回目（run `114fae42`）は、API は通�
 - **催促の見込みも直前の 1 回の実額（2 回目のレビュー。凍結 spec 2 に戻す）**: 1 回目のレビューの後に、催促だけ「前半を cache read で 1 回読む額 + 出力 max_tokens（8〜18 セント）」にしたが、外した。その見込みは「催促ではサーバーツールを使わない」「前半がキャッシュに当たる」の 2 つを前提にしていて、どちらも強制も確認もしていない。tools は変えない（変えるとキャッシュが全部無効）。公式の web-search-tool の「Max uses」では、同じターンの続きは pause_turn の後か、最後の message が tool_result だけのリクエストに限られる。催促は user の文なので新しいターンになり、`max_uses`（検索 5・fetch 8）が新しくなる。催促の 1 回でも検索と開く処理を全部やり直せる。例: 1 回目が 45 セントの end_turn だと、安い見込みでは 45 + 10 = 55 で催促し、催促の 1 回が 40〜50 セントなら合計 85〜95 セントになる。直前の 1 回の実額を見込みにすると 45 + 45 > 60 で `cost_cap` になる。重い 1 回目の後は催促しないことになるが、見込みを安くするかは、催促がサーバーツールを使わないことを実測で確かめてから決める（`topic_call` の turn 1 の `searches`・`fetches`）。公式: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool#max-uses
 - 公式: https://platform.claude.com/docs/en/build-with-claude/prompt-caching （自動のキャッシュ・書くのは区切りの位置だけ・20 block の戻り）・ https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-use-with-prompt-caching （サーバーツールの結果の自動の区切り）
 
+## v2.8 の裁定（2026-11-07、本番の philo の `failed: no_valid_topic` から）
+
+v2.7 を出した後、本番の philo の手動 run が `failed: no_valid_topic`・made 0・dropped 0（28 セント）で終わった（`save_topics` が `topics: []` として扱われた）。司令塔は過去の Worker のログを読めない（`wrangler tail` だけ）ので、原因を後から見分けるための観測を D1 に残す。あわせて、本番のログで見えた原因を直す。
+
+- **観測（本番のログ、run `08a4464e`）**: turn 0 で `stop_reason: max_tokens`・`out` 9083・`blocks` = {thinking 4, server_tool_use 6, web_search_tool_result 2, web_fetch_tool_result 4, tool_use 1}・`fetch_errors` = {url_not_in_prior_context 1, url_not_allowed 1}。run は `failed: no_valid_topic`・made 0・dropped 0・21 セント。
+- **解釈（司令塔）**: 出力の上限（`TOPIC_GEN_MAX_TOKENS` = 8000）に当たって `save_topics` の tool_use が途中で切れ、その入力が `topics` の無いもの = 0 本として読まれた。v2.7 は `save_topics` の有無を `stop_reason` より先に見ていた。最初に挙げた候補のうち、催促への反応はこの run では当たらない（turn 0 で止まり、催促は無い）。web_fetch の失敗・philo の規則を満たせない、は未弁別（fetch のエラーは 4 件中 2 件。切れていなければ何本作れたかは分からない）。`diag_json` と `empty_reason` で次の run から見分ける。
+- **直し**:
+  1. `TOPIC_GEN_MAX_TOKENS` を 8000 → 16000（全部の種類で同じ。本数は変えない）。
+  2. `stop_reason: max_tokens` の応答は、`save_topics` の tool_use があっても中身を使わず `failed: max_tokens`（新しいコード）。台帳は実額で精算。続けない。表示名は「書いている途中で長さの上限に当たりました」（`locale.ts` の `TOPIC_REASON_LABELS`・`topics.js` の `ERR_TEXT`）。v2.7 の「`max_tokens` → `no_output`」はこれで置き換える。
+- **観測の列**: migration 0008 で `topic_runs.diag_json TEXT`（NULL 可・既存の行はそのまま）。run を閉じる全部の経路（done・`failed` の各コード・`save_failed`・`cost_cap`・`max_tokens`・`input_failed`。掃除の `abandoned` は除く）で、閉じる UPDATE と同じ文で書く（diag の組み立ての失敗は NULL にするだけで、閉じ方・台帳・CAS は変わらない）。形: `{ v:1, turns, nudged, calls:[{ turn, stop_reason, in, out, cache_w, cache_r, searches, fetches, fetch_errors:{code:n}, pending_server_tool, ms }], stop, save_called, offered, dropped_reasons:{code:n}, empty_reason }`。`stop` は続けずに止めた理由（`max_tokens` / `cost_cap` / `turn_limit` / `no_time` / `stop_<stop_reason>`。無ければ null）、`offered` は `save_topics` の topics の本数（max_tokens の時も数えるだけ）。本文・URL・検索語・ホスト名は入れない。calls は 4 件まで・文字列は既知の列挙値か `^[a-z_]{1,40}$`（ほかは `other`）・数の map の鍵は 20 まで（超えた分は `other`）・全体 4000 字まで（`src/topics/diag.ts`）。`GET /api/topics/runs` は `diag_json` を返さない（画面と API は変えない。司令塔は D1 で読む）。
+- **empty_reason**: `save_topics` の input schema に任意の `empty_reason`（enum: `no_sources_found` / `sources_not_openable` / `rules_not_met` / `out_of_time_or_budget` / `other`）を足す。「topics が空の時は 1 つ選ぶ」の決まりは、その property の `description` に置く（0 回目の params を v2.7 と同じに保つため、system 文と tool の説明は変えない）。topics が空でない時は無視。`validateTopicBody` などの検査は変えない。
+- 0 回目の params の v2.7 からの違いは、`max_tokens`（16000）と `save_topics` の schema の `empty_reason` だけ。台帳・CAS・queue・検査・続きの上限の振る舞いは変えない。
+
 ## T-14 d の記録（2026-11-06、本番の実測。D1 の集計）
 
 - 生成（news・手動）: 成功 1 回 = 13 セント・47 秒・2 本（捨てた本 0）。形で全部捨てた 1 回 = 18 セント・58 秒。400 で失敗した 7 回 = 0 セント（1 回は cron）。

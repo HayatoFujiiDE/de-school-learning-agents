@@ -3,7 +3,7 @@ import { all, cas, conditionalBatch, first, getSetting, isUniqueViolation, nowIs
 import { JOB_MODEL, cfg, consoleUrl } from '../env';
 import { isNonEmptyString, json, parseJsonField, readBody, type RouteCtx } from '../http';
 import { getJob, startJob } from '../jobs';
-import { buildReject, buildReturn, buildReworkBrief, publishSwitch } from '../publish';
+import { buildReject, buildReturn, buildReworkBrief, CHECKLIST_KEYS, publishSwitch } from '../publish';
 import { CHECK_KEYS, readReaderResult, type CheckKey } from '../checks/triage';
 import { videoSourceIds } from '../checks/citations';
 import { AUTO_PUBLISH_EMAIL, computeTriage, latestVerificationOf } from '../triage-step';
@@ -11,14 +11,8 @@ import { generatedImagesOf } from './images';
 import { serveVersionFile } from './library';
 import { readVersionVideoNotes, readVideoMetaViews, versionVideosOf, versionVideosOfMaterial, type VideoMetaView, type VideoNotesFile } from '../videos';
 
-export const CHECKLIST_KEYS = [
-  'content_and_evidence',
-  'explanation_and_expression',
-  'relation_to_learning',
-  'conditions_of_use',
-  'artifact_behavior',
-  'terms_of_use',
-] as const;
+// 観点の一覧は publish.ts に置く（振り返り係 §S が同じ一覧で差し戻しの観点を数える。route を import しない）
+export { CHECKLIST_KEYS };
 
 interface VersionRow {
   id: string;

@@ -2,7 +2,7 @@
 // (a) pause_turn → 続けて save → done（2 回目の messages の末尾 = 1 回目の content。出典は全部の応答の web_fetch で照合）
 // (b) end_turn で save なし → 催促 → save → done（催促は 1 回だけ）
 // (c) 4 回目まで save が無い → no_output・呼び出し 4 回 / (d) 費用の見込みが取り置きを超える → 続けず cost_cap
-// (e) max_tokens → 続けず no_output・ログに stop_reason / (f) genActualCents の cache の単価
+// (e) max_tokens → 続けず failed: max_tokens（v2.8）・ログに stop_reason / (f) genActualCents の cache の単価
 // (g) 実額 > 60 → 台帳は実額・上限の判定も実額で数える / (h) philo の本数の上限は 2 / (i) tools の最後と top-level に cache_control
 // 費用の見込みは pause_turn の続きも催促も直前の 1 回の実額（凍結 spec 2。催促は新しいターンで max_uses が新しくなるので安く見込まない）
 import type { DatabaseSync } from 'node:sqlite';
@@ -185,17 +185,17 @@ describe('v2.7 続きの呼び出し', () => {
     expect(logs.find((l) => l.at === 'topic_run' && l.no_output)).toMatchObject({ no_output: 'no_time' });
   });
 
-  it('(e) max_tokens → 続けずに no_output。呼び出しのログに stop_reason（本文は出さない）', async () => {
+  it('(e) max_tokens → 続けずに failed: max_tokens（v2.8。v2.7 は no_output）。呼び出しのログに stop_reason（本文は出さない）', async () => {
     const p = scriptedPort([msgOf([{ type: 'text', text: '本文の途中' }], 'max_tokens'), genMessage([talkBody()])]);
     const o = await runTopicRun(topicEnv(db), p.port, genReq(), { deadline: far(), fetchImpl });
     expect(o.status).toBe('failed');
     expect(p.calls).toHaveLength(1);
-    expect(run()).toMatchObject({ status: 'failed', error: 'no_output', cents: 7 });
+    expect(run()).toMatchObject({ status: 'failed', error: 'max_tokens', cents: 7 });
     expect(callLogs()).toHaveLength(1);
     expect(callLogs()[0]).toMatchObject({ run_id: run().id, turn: 0, stop_reason: 'max_tokens', pending_server_tool: false, blocks: { text: 1 } });
     expect(typeof callLogs()[0].ms).toBe('number');
     expect(JSON.stringify(logs)).not.toContain('本文の途中');
-    expect(logs.find((l) => l.at === 'topic_run' && l.no_output)).toMatchObject({ no_output: 'stop_max_tokens' });
+    expect(logs.find((l) => l.at === 'topic_run' && l.no_output)).toMatchObject({ no_output: 'max_tokens' });
   });
 
   it('続きの途中で呼び出しが失敗 → 同じ分類のコードで閉じ、台帳はそれまでの実額', async () => {

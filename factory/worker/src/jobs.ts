@@ -194,6 +194,58 @@ export function defineOutcomeEvent(kinds: number[]): BetaManagedAgentsEventParam
   };
 }
 
+/** 最初の文の「これまでの回答と差し戻し理由」の量（contract-S v2 C 2） */
+export const PHASE1_LOG = { total: 40, otherCount: 15, otherChars: 600 } as const;
+
+/**
+ * 最初の文の「これまでの回答と差し戻し理由」の行（contract-S v2 C 2）。
+ * この素材の回答・差し戻し理由と、全体の編集基準の追記（material_id が NULL の行。/api/standards から足したもの）は全件・全文
+ * （オーナーの指示そのものなので落とさない。新しい順に混ぜて先に数える）。ほかの素材の分は新しい順に 15 件・1 件 600 字まで。
+ * 合わせて 40 件が上限（優先の分を先に数える）。materialId が無ければ、全体の追記だけを優先にして、素材のある行は全部「ほか」として扱う
+ */
+export async function standardsLogLines(db: D1Database, materialId: string | null): Promise<string[]> {
+  type LogRow = { kind: string; question: string | null; answer: string; material_id: string | null };
+  const KINDS = "kind IN ('question','return_reason','note')";
+  const prior = await all<LogRow>(
+    db,
+    materialId
+      ? stmt(
+          `SELECT kind, question, answer, material_id FROM standards_log WHERE ${KINDS} AND (material_id = ? OR material_id IS NULL) ORDER BY created_at DESC LIMIT ?`,
+          materialId,
+          PHASE1_LOG.total,
+        )
+      : stmt(`SELECT kind, question, answer, material_id FROM standards_log WHERE ${KINDS} AND material_id IS NULL ORDER BY created_at DESC LIMIT ?`, PHASE1_LOG.total),
+  );
+  const otherLimit = Math.min(PHASE1_LOG.otherCount, PHASE1_LOG.total - prior.length);
+  const others =
+    otherLimit > 0
+      ? await all<LogRow>(
+          db,
+          stmt(
+            `SELECT kind, question, answer, material_id FROM standards_log WHERE ${KINDS} AND material_id IS NOT NULL${materialId ? ' AND material_id <> ?' : ''}
+             ORDER BY created_at DESC LIMIT ?`,
+            ...(materialId ? [materialId] : []),
+            otherLimit,
+          ),
+        )
+      : [];
+  const cut = (s: string) => {
+    const chars = Array.from(s);
+    return chars.length > PHASE1_LOG.otherChars ? chars.slice(0, PHASE1_LOG.otherChars).join('') + '…' : s;
+  };
+  /** full: 全文で出す（この素材の分・全体の追記）。who: 行の頭の「この素材の」 */
+  const line = (l: LogRow, full: boolean) => {
+    const f = full ? oneLine : (s: string) => cut(oneLine(s));
+    const who = l.material_id !== null && l.material_id === materialId ? 'この素材の' : '';
+    return l.kind === 'question'
+      ? `- ${who}Q: ${f(l.question ?? '')} / A: ${f(l.answer)}`
+      : l.kind === 'return_reason'
+        ? `- ${who}差し戻し: ${f(l.answer)}`
+        : `- ${who}追記: ${f(l.answer)}`;
+  };
+  return [...prior.map((l) => line(l, true)), ...others.map((l) => line(l, false))];
+}
+
 /**
  * prev: §S-8-1 作り直しで前の版のファイルを付けた時だけ（付けたファイル名と開き直さなくてよい出典）。
  * 注文票の直後・編集基準の前に「前の版」の区画を入れる。無ければ従来の文と 1 文字も変わらない
@@ -203,20 +255,9 @@ export async function buildPhase1Message(
   briefMd: string,
   kinds: number[],
   prev: { names: readonly string[]; reopenFree: readonly string[] } | null = null,
+  materialId: string | null = null,
 ): Promise<string> {
-  const logs = await all<{ kind: string; question: string | null; answer: string }>(
-    db,
-    stmt(
-      "SELECT kind, question, answer FROM standards_log WHERE kind IN ('question','return_reason','note') ORDER BY created_at DESC LIMIT 40",
-    ),
-  );
-  const lines = logs.map((l) =>
-    l.kind === 'question'
-      ? `- Q: ${oneLine(l.question ?? '')} / A: ${oneLine(l.answer)}`
-      : l.kind === 'return_reason'
-        ? `- 差し戻し: ${oneLine(l.answer)}`
-        : `- 追記: ${oneLine(l.answer)}`,
-  );
+  const lines = await standardsLogLines(db, materialId);
   const kindLines = kinds.map((k) => `- 型 ${k}（${KIND_LABEL[k] ?? '不明'}）`);
   const kindRubrics = kinds.map((k) => RUBRIC_KINDS[k]).filter(Boolean);
   // §S-5 2: 振り返り係の active の maker_note（古い順 8 件まで）。1 件も無ければ見出しごと出さない（従来の文と 1 文字も変わらない）。
@@ -234,7 +275,7 @@ export async function buildPhase1Message(
     ...(prev ? prevSectionLines(prev.names, prev.reopenFree) : []),
     '# 編集基準',
     EDITORIAL_STANDARDS.trim(),
-    '## これまでの回答と差し戻し理由（全素材・新しい順・最大 40 件）',
+    `## これまでの回答と差し戻し理由（この素材の分と全体の追記は全件・全文、ほかの素材は新しい順に ${PHASE1_LOG.otherCount} 件・1 件 ${PHASE1_LOG.otherChars} 字まで。合わせて最大 ${PHASE1_LOG.total} 件）`,
     ...(lines.length ? lines : ['- （まだありません）']),
     '',
     ...makerNoteLines(notes),
@@ -360,7 +401,7 @@ export async function startJob(env: Env, port: FactoryPort, jobId: string): Prom
   // §S-8-1: 作り直しの最初の create（claim の前に読んだ create_attempts が 0）だけ、前の版のファイルを付ける。
   // 2 回目以降（失敗して queued に戻った後・復旧の後）は付けない（resources が原因で create が失敗し続けない）
   const prev = await prevForStart(env, port, job);
-  const phase1Message = await buildPhase1Message(db, job.brief_md, kinds, prev);
+  const phase1Message = await buildPhase1Message(db, job.brief_md, kinds, prev, job.material_id);
   const params: SessionCreateParams = {
     agent:
       job.kind === 'rework'

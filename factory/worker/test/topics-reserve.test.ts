@@ -122,12 +122,12 @@ describe('再送なしと締め切り（T-4・T-5 の 3）', () => {
     expect(p2.calls[0].opts!.deadline!).toBeLessThanOrEqual(early);
   });
 
-  it('生成の呼び出しは web_search（max_uses 5）・web_fetch（max_uses 8, max_content_tokens 4000。v2.7）・save_topics、max_tokens 8000、tool_choice auto', async () => {
+  it('生成の呼び出しは web_search（max_uses 5）・web_fetch（max_uses 8, max_content_tokens 4000。v2.7）・save_topics、max_tokens 16000（v2.8）、tool_choice auto', async () => {
     const env = topicEnv(db);
     const p = scriptedPort([genMessage([talkBody()])]);
     await runTopicRun(env, p.port, genReq(), { deadline: far(), fetchImpl });
     const params = p.calls[0].params;
-    expect(params.max_tokens).toBe(8000);
+    expect(params.max_tokens).toBe(16000);
     expect(params.tool_choice).toEqual({ type: 'auto' });
     expect(params.tools).toEqual([
       { type: 'web_search_20250305', name: 'web_search', max_uses: 5 },
