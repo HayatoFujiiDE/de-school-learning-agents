@@ -111,6 +111,14 @@
 - ops: payload の検査（key の過不足・uuid・長さ 0 / 32769）。review → 却下 + queue（review_decisions に system:ops-redo、版 rejected、job draft queued、parent null、brief が一致）。idle → queue だけ。making → refused material_busy で却下なし。却下の後 queue が断られた形で、依頼を出し直すと queue だけ走る。migration 0014 の CHECK に 4 kind + material_redo。
 - 既存のテストが全部 green。typecheck 0。`check-no-fake` PASS。
 
+## MC-9 将来の前提: 版は注文ごとに決まる（2026-11-07 オーナー。今は変えない）
+
+ハッカソンの提出（2026-11-08）までは「Java 版の最新の正式版（2026-11-07 時点 26.3）」のままでよい（オーナー確認済み。MC-7 の作り直し 3 件はこの前提のまま進める）。その後の前提:
+
+- **版は注文票ごとに決まる。** 利用者（子ども・教室）が少し前の版で遊んでいることはよくあるので、注文票に書かれた版を基準に作る。職人の定義は既にそうなっている（「注文票に書かれた版。書かれていなければ最新の正式版」）。「最新でなければ差し戻す」という決まりは入れない（MC-1 の範囲外のまま）。「むちゃくちゃ昔」の版は対応しない（どこまでを対応するかの目安は未定。注文が来た時にオーナーが決める）。
+- **コマンドの種類・構文は版で変わる。** 版が最新でない注文では、その版の時点のコマンド・仕様を根拠にする（minecraft.wiki の「歴史」「History」の節でその版の記述を引く。パッチノートで、その版より後に変わったことを本文に書かない）。コマンドを本文に書く素材は、その版の実機で通ることを確かめる手段がある（司令塔の skill `minecraft-command-verify`: 版ごとのヘッドレスサーバー + RCON）。
+- この前提で直す所（次に職人の定義を変える時に一緒に。今は変えない）: `factory/claude/editorial-standards.md` の「Java 版の最新の正式版を基準に」を「注文票の版（書かれていなければ最新の正式版）を基準に」へ。`agents/material-maker.md` の「版が決まっている題材」の節に「版が最新でない時は、その版の時点の記述・コマンドを根拠にする」の 1 行。注文票の手本（`briefs/`）に「版: <版>」の行の例。
+
 ## 未確認の点
 
 - Cloudflare Workers から YouTube の watch ページが 200 で返るか（手元の curl では 200・約 1.4 MB・uploadDate あり）。断られる時は published が空のまま進み、版が決まっている題材の動画は ask（人が見る）になる。deploy 後に `version_reverify` か `material_redo` の実注文で確かめる。
