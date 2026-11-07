@@ -340,7 +340,7 @@ const approve = (vid: string) =>
   decide(ctx(w, 'POST', { decision: 'approve', verification_id: latestOf(vid).id, reader_gen: vrow(vid).reader_token ?? null }), vid);
 
 describe('AK2-4 7 仕分け', () => {
-  it('verbatim_copy の各件と verbatim_incomplete が terms_of_use の fix 項目になり、自動の直しの返し文に原因が出る', async () => {
+  it('verbatim_copy の各件は terms_of_use の fix 項目（返し文に原因）・verbatim_incomplete は ask 項目（v4.3）', async () => {
     seed(w, good('m1', 'v1'));
     setChecks('v1', { ...FOUND, verbatim_status: 'found' });
     const t = await computeTriage(w.env, vrow('v1'), latestOf('v1'));
@@ -355,14 +355,31 @@ describe('AK2-4 7 仕分け', () => {
     seed(w, good('m2', 'v2'));
     setChecks('v2', INCOMPLETE);
     const t2 = await computeTriage(w.env, vrow('v2'), latestOf('v2'));
-    expect(t2.items.filter((i) => i.cause === 'verbatim_incomplete')).toMatchObject([{ key: 'terms_of_use', severity: 'fix', title: '丸写しの検査が最後まで済んでいない' }]);
-    expect(t2.return_note).toContain('丸写しの検査が最後まで済んでいない');
+    // v4.3: 検査が済んでいないのは職人には直せない → 人の項目（ask）。自動の差し戻しは起こさない
+    expect(t2.items.filter((i) => i.cause === 'verbatim_incomplete')).toMatchObject([{ key: 'terms_of_use', severity: 'ask', title: '丸写しの検査が最後まで済んでいない' }]);
+    expect([t2.action, t2.return_note, t2.gate, t2.auto.terms_of_use]).toEqual(['none', null, 'attention', 'review']);
 
     seed(w, good('m3', 'v3'));
     setChecks('v3', CLEAN);
     const t3 = await computeTriage(w.env, vrow('v3'), latestOf('v3'));
     expect(t3.items.some((i) => i.cause.startsWith('verbatim'))).toBe(false);
     expect(t3.gate).toBe('clean');
+  });
+});
+
+describe('v4.3 verbatim_incomplete の版で自動の作り直しが起きない。止めは残る', () => {
+  it('applyTriage は差し戻さない（rework の job ができない）・自動公開しない・承認は 409', async () => {
+    seed(w, good('m1', 'v1'));
+    setChecks('v1', INCOMPLETE);
+    const t = await computeTriage(w.env, vrow('v1'), latestOf('v1'));
+    expect(t.action).toBe('none');
+    expect(await applyTriage(w.env, vrow('v1'), t)).not.toBe('auto_return');
+    expect(Number(one(w.db, "SELECT COUNT(*) AS n FROM factory_jobs WHERE kind = 'rework'").n)).toBe(0);
+    setSetting(w, 'auto_publish', '1');
+    expect(await autoPublishStep(w.env, { deadline: Date.now() + 600_000 })).not.toContain('published');
+    expect(vrow('v1').status).toBe('review');
+    const r = await approve('v1');
+    expect([r.status, ((await r.json()) as { error: string }).error]).toEqual([409, 'verbatim_incomplete']);
   });
 });
 

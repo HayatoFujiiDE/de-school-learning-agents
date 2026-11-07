@@ -77,3 +77,5 @@
 - 本番の観測: §S-8 を入れてから、作り直しは 1 件も取り込めていなかった。0bbb62ca と 5bec54d0 の 2 件が `invalid_outputs`（`duplicate_basename:adapt-rules.md`）で failed になり、費用は 3.26 ドルと 2.70 ドル。files.list には、session に渡した前の版のファイル（resources）も出ていた。Files API はディレクトリを落とすので、職人が書き直したファイルと同じ名前で 2 件並ぶ。渡したファイルの created_at は、どれも session の作成より前だった（例: 02:10:18.722。session_created_at は 02:10:19.306、職人の最初のファイルは 02:10:28）。
 - 直し: 取り込みの files.list で、created_at が job の session_created_at より前のファイルは出力に数えない（`isBeforeSession`、jobs.ts）。どちらかの時刻が読めない時は、今までどおり数える。
 - 残した点: session_created_at は Worker の時計、files の created_at は API の時計で比べている。職人の最初のファイルは session の作成から数秒以上あとにできるので、時計のずれが 1 秒未満なら取り違えない。
+
+> 2026-11-08 追記（§AK2 v4.3）: 丸写しの検査のためだけに、取り込みは祖先の版の session の events を読む（`docs/plans/rights/contract-AK2.md` v4.3）。引用の引き継ぎ（carried）は従来どおり R2 の記録だけで決まり、本節の「取り込みは親の events を読まない」は引用の引き継ぎについて有効のまま。

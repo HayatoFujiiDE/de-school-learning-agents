@@ -6,6 +6,7 @@
 // ページの文は D1 の state と checks には保存しない。R2 の版の場所の verbatim-pages.json（作り直しで照らし直すためだけ）に置く（v4 裁定 1）。
 // ページの文・本文は信頼できない入力なので、ここでは比較にしか使わない（ログに出さない）。
 
+import { isCitationAcc, type CitationAcc } from './citations';
 import { decodeEntities, parseHtml, textOfHtml, type HtmlTagToken } from '../rights-check';
 
 /** 一致とみなす最短の長さ（字） */
@@ -462,8 +463,24 @@ export function verbatimStatusOf(hitCount: number, incomplete: boolean): Verbati
  * 取り込みの events の走査の途中経過（reconcile_state_json.ev.verb。ページごとの writeState に含まれる）。ページの文は持たない
  * （R2 の {prefix}verbatim-pages.parts/<n>.json に置き、parts がその数）
  */
+/**
+ * v4.3: 作り直しの祖先のさかのぼりの位置（時間をまたいで再開する）。depth = 親が 1。vid = いま見ている祖先の版。
+ * acc が null = その祖先の記録 verbatim-pages.json をまだ見ていない / 記録が使えず session の events を cursor から読んでいる時は acc あり
+ */
+export interface VerbAncestorState {
+  depth: number;
+  vid: string;
+  cursor: string | null;
+  acc: CitationAcc | null;
+  /** その祖先の session の events を読んだページ数（ANCESTOR_EVENT_PAGES_MAX を超えたら取得記録に落とす） */
+  read: number;
+  /** さかのぼりの途中の先送りの回数（ANCESTOR_DEFER_MAX まで） */
+  defers: number;
+  done: boolean;
+}
+
 export interface VerbState {
-  v: 2;
+  v: 3;
   hits: VerbatimHit[];
   /** 見つけた hit の数（30 件で切る前の数） */
   total: number;
@@ -474,9 +491,25 @@ export interface VerbState {
   parts: number;
   /** 記録に入れられなかったページの文がある（ページの上限で切った・R2 に置けなかった）→ この版の記録は truncated */
   lost: boolean;
+  /** v4.3: 作り直しの祖先のさかのぼり（作り直しでなければ無い。始める前も無い） */
+  anc?: VerbAncestorState;
 }
 
-export const newVerbState = (): VerbState => ({ v: 2, hits: [], total: 0, pages: 0, incomplete: false, parts: 0, lost: false });
+export const newVerbState = (): VerbState => ({ v: 3, hits: [], total: 0, pages: 0, incomplete: false, parts: 0, lost: false });
+
+function isAncestorState(x: unknown): x is VerbAncestorState {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return false;
+  const o = x as Record<string, unknown>;
+  return (
+    isCount(o.depth) &&
+    typeof o.vid === 'string' &&
+    (o.cursor === null || typeof o.cursor === 'string') &&
+    (o.acc === null || isCitationAcc(o.acc)) &&
+    isCount(o.read) &&
+    isCount(o.defers) &&
+    typeof o.done === 'boolean'
+  );
+}
 
 const isCount = (x: unknown): x is number => typeof x === 'number' && Number.isInteger(x) && x >= 0;
 
@@ -484,8 +517,9 @@ const isCount = (x: unknown): x is number => typeof x === 'number' && Number.isI
 export function isVerbState(x: unknown): x is VerbState {
   if (!x || typeof x !== 'object' || Array.isArray(x)) return false;
   const o = x as Record<string, unknown>;
-  if (o.v !== 2 || !Array.isArray(o.hits) || !isCount(o.total) || !isCount(o.pages) || typeof o.incomplete !== 'boolean') return false;
+  if (o.v !== 3 || !Array.isArray(o.hits) || !isCount(o.total) || !isCount(o.pages) || typeof o.incomplete !== 'boolean') return false;
   if (!isCount(o.parts) || typeof o.lost !== 'boolean') return false;
+  if (o.anc !== undefined && !isAncestorState(o.anc)) return false;
   return (o.hits as unknown[]).every((h) => {
     const r = h as Record<string, unknown> | null;
     return (

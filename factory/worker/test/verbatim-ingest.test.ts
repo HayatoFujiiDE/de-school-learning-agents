@@ -29,8 +29,14 @@ const BODY_PATH = 'parts/p1/elementary-long.md';
 let db: DatabaseSync;
 let r2: Map<string, Uint8Array>;
 let env: Env;
+/** v4.3: 祖先の session の events（作り直しがさかのぼって読む）。ここに無い session は、その port の台本（取り込む job 自身の events） */
+let sessionPages: Map<string, unknown[][]>;
+/** v4.3: events を読めない session（取得記録に落ちる） */
+let unreadable: Set<string>;
 
 beforeEach(() => {
+  sessionPages = new Map();
+  unreadable = new Set();
   db = migratedDb();
   r2 = new Map();
   env = {
@@ -82,6 +88,7 @@ function ingestPort(outputs: Map<string, Uint8Array>, pages: unknown[][] = [[]],
   const bodies = new Map(metas.map((m, i) => [m.id, [...outputs.values()][i]]));
   const all = pages.map((p, i) => (i === pages.length - 1 ? [...p, ...DONE_EVENTS] : p));
   const reads: number[] = [];
+  const ancestorReads: string[] = [];
   let failed = false;
   const port = {
     isFake: true,
@@ -91,7 +98,16 @@ function ingestPort(outputs: Map<string, Uint8Array>, pages: unknown[][] = [[]],
     },
     updateSessionBudget: no,
     listSessionsPage: no,
-    async listEventsPage(_id: string, q: { order: 'asc' | 'desc'; page?: string | null }): Promise<Page<unknown>> {
+    async listEventsPage(id: string, q: { order: 'asc' | 'desc'; page?: string | null }): Promise<Page<unknown>> {
+      if (unreadable.has(id)) throw new Error('session_unreadable');
+      const reg = sessionPages.get(id);
+      if (reg) {
+        const src = reg.map((p, i) => (i === reg.length - 1 ? [...p, ...DONE_EVENTS] : p));
+        if (q.order === 'desc') return { data: src.flat().reverse(), next: null };
+        const k = q.page ? Number(q.page.slice(1)) : 0;
+        ancestorReads.push(`${id}:${k}`);
+        return { data: src[k], next: k + 1 < src.length ? `p${k + 1}` : null };
+      }
       if (q.order === 'desc') return { data: all.flat().reverse(), next: null };
       const idx = q.page ? Number(q.page.slice(1)) : 0;
       if (o.failOnce === idx && !failed) {
@@ -118,7 +134,7 @@ function ingestPort(outputs: Map<string, Uint8Array>, pages: unknown[][] = [[]],
     listBatchesPage: no,
     xaiResponses: no,
   } as unknown as FactoryPort;
-  return { port, reads };
+  return { port, reads, ancestorReads };
 }
 
 /** 本文の 1 本（elementary-long.md）に text を足した出力 */
@@ -152,6 +168,7 @@ function seedParent(checks: unknown = {}) {
        checks_json, public_paths_json, status, created_at)
      VALUES ('vp', 'm1', 1, 'jp', 'sesn_jp', ?, 'sha', '{}', '{"claims":[]}', 'a', ?, '[]', 'rejected', ?)`,
   ).run(PARENT_PREFIX, JSON.stringify(checks), iso(DAY));
+  if (!sessionPages.has('sesn_jp')) sessionPages.set('sesn_jp', [[]]); // 既定: 親の session では何も開いていない
 }
 function seedRework() {
   db.prepare(
@@ -185,7 +202,7 @@ describe('AK2-4 5 取り込みの実経路', () => {
     expect(await rec('jd', p.port)).toBe('error'); // 2 ページ目の取得で止まる（1 ページ目の集計は保存済み）
     const saved = JSON.parse(String(one(db, "SELECT reconcile_state_json FROM factory_jobs WHERE id = 'jd'").reconcile_state_json));
     expect(saved.ev.cursor).toBe('p1');
-    expect(saved.ev.verb).toEqual({ v: 2, hits: [], total: 0, pages: 0, incomplete: false, parts: 0, lost: false });
+    expect(saved.ev.verb).toEqual({ v: 3, hits: [], total: 0, pages: 0, incomplete: false, parts: 0, lost: false });
     expect(await rec('jd', p.port)).toBe('versioned');
     expect(p.reads).toEqual([0, 1]); // 再開は続きのページから（1 ページ目を読み直さない）
     const c = checksOf('jd');
@@ -257,9 +274,10 @@ describe('AK2-4 5 取り込みの実経路', () => {
 
 describe('AK2-4 6 作り直し', () => {
   const page = (txt = COPY) => `前置き ${txt} 終わり`;
-  it('親の記録の文に一致 → 1 件（子の session では何も開いていない）', async () => {
+  it('親の session を読めない時は親の取得記録に落ちる: 記録の文に一致 → 1 件（子の session では何も開いていない）', async () => {
     seedParent();
     seedRework();
+    unreadable.add('sesn_jp');
     putCaptures(capOk([{ url: URL_S1, text: page() }]));
     expect(await rec('jr', ingestPort(outputsWith(COPY)).port)).toBe('versioned');
     expect(verb('jr')).toEqual({ status: 'found', total: 1, pages: 1, n: 1 });
@@ -272,46 +290,55 @@ describe('AK2-4 6 作り直し', () => {
     ['text が 30,000 字（切り詰めの疑い）', capOk([{ url: URL_S1, text: 'あ'.repeat(30_000) }])],
     ['truncated がある', capOk([{ url: URL_S1, text: 'ちがう文' }], { truncated: ['s1'] })],
     ['v が違う', capOk([{ url: URL_S1, text: 'ちがう文' }], { v: 2 })],
-  ])('親の記録: %s → incomplete', async (_name, file) => {
+  ])('親の session を読めず、親の取得記録も %s → incomplete', async (_name, file) => {
     seedParent();
     seedRework();
+    unreadable.add('sesn_jp');
     if (file) putCaptures(file);
     expect(await rec('jr', ingestPort(outputsWith(COPY)).port)).toBe('versioned');
     expect(verb('jr').status).toBe('incomplete');
   });
 
-  it('親の記録が正しく 0 件一致なら clean（29,999 字は切り詰めの疑いにならない）', async () => {
+  it('親の session を読めず、親の記録が正しく 0 件一致なら clean（29,999 字は切り詰めの疑いにならない）', async () => {
     seedParent();
     seedRework();
+    unreadable.add('sesn_jp');
     putCaptures(capOk([{ url: URL_S1, text: 'あ'.repeat(29_999) }]));
     expect(await rec('jr', ingestPort(outputsWith('自分で書いた文です。')).port)).toBe('versioned');
     expect(verb('jr')).toEqual({ status: 'clean', total: 0, pages: 1, n: 0 });
   });
 
-  it('先送りを使い切った → 親の記録を読まずに incomplete', async () => {
+  it('v4.3: 引用の引き継ぎの先送り（carry_defers）を使い切っても、祖先のさかのぼりは続く（親の session を読んで照らす）', async () => {
     seedParent();
     seedRework();
-    putCaptures(capOk([{ url: URL_S1, text: 'ちがう文' }]));
-    const p = ingestPort(outputsWith('自分で書いた文です。'));
+    sessionPages.set('sesn_jp', [[use('tp1', URL_X), result('tp1', PAGE)]]);
+    const p = ingestPort(outputsWith(COPY));
     for (let i = 1; i <= 3; i++) expect(await rec('jr', p.port, 12_000)).toBe('deferred');
     expect(await rec('jr', p.port, 12_000)).toBe('versioned');
-    expect(verb('jr').status).toBe('incomplete');
+    expect(verb('jr')).toMatchObject({ status: 'found', n: 1 });
   });
 
-  it('v3.2: 親の記録の missing（開かなかった出典・YouTube）は未完了にしない', async () => {
+  it('v3.2: 親の session を読めない時の取得記録の missing（開かなかった出典・YouTube）は未完了にしない', async () => {
     seedParent();
     seedRework();
+    unreadable.add('sesn_jp');
     putCaptures(capOk([{ url: URL_S1, text: 'ちがう文' }], { missing: ['s2', 'yt1'] }));
     expect(await rec('jr', ingestPort(outputsWith('自分で書いた文です。')).port)).toBe('versioned');
     expect(verb('jr')).toEqual({ status: 'clean', total: 0, pages: 1, n: 0 });
   });
 
-  it('v4: 親に verbatim_status があるのに verbatim-pages.json が無い → incomplete（取得記録で代えない）', async () => {
+  it('v4.3: 親に verbatim-pages.json が無い → 親の session を読む（clean）。session も取得記録も読めなければ incomplete', async () => {
     seedParent({ verbatim_copy: [], verbatim_total: 0, verbatim_pages: 2, verbatim_status: 'clean' });
     seedRework();
-    putCaptures(capOk([{ url: URL_S1, text: 'ちがう文' }]));
     expect(await rec('jr', ingestPort(outputsWith('自分で書いた文です。')).port)).toBe('versioned');
-    expect(verb('jr')).toEqual({ status: 'incomplete', total: 0, pages: 0, n: 0 });
+    expect(verb('jr')).toEqual({ status: 'clean', total: 0, pages: 0, n: 0 });
+    db.prepare('DELETE FROM sources').run();
+    db.prepare("DELETE FROM material_versions WHERE job_id = 'jr'").run();
+    db.prepare("DELETE FROM factory_jobs WHERE id = 'jr'").run();
+    seedRework();
+    unreadable.add('sesn_jp');
+    expect(await rec('jr', ingestPort(outputsWith('自分で書いた文です。')).port)).toBe('versioned');
+    expect(verb('jr').status).toBe('incomplete');
   });
 
   const putPages = (file: unknown) => r2.set(PARENT_PREFIX + 'verbatim-pages.json', enc.encode(JSON.stringify(file)));
@@ -332,10 +359,24 @@ describe('AK2-4 6 作り直し', () => {
     ['形が壊れている（text が null）', { v: 1, pages: [{ url: URL_X, text: null }], truncated: false }],
     ['truncated が無い', { v: 1, pages: [] }],
     ['v が違う', { v: 2, pages: [], truncated: false }],
-  ])('v4: 親の verbatim-pages.json が %s → incomplete（子の記録も truncated）', async (_name, file) => {
+  ])('v4.3: 親の verbatim-pages.json が %s → 親の session の events を読み直す（読めれば照らせる・読めず取得記録も無ければ incomplete）', async (_name, file) => {
     seedParent(scannedParent);
     seedRework();
     putPages(file);
+    sessionPages.set('sesn_jp', [[use('tp1', URL_X), result('tp1', PAGE)]]);
+    expect(await rec('jr', ingestPort(outputsWith(COPY)).port)).toBe('versioned');
+    expect(verb('jr')).toMatchObject({ status: 'found', n: 1 });
+    expect(checksOf('jr').verbatim_incomplete).toBe(false);
+    expect(JSON.parse(new TextDecoder().decode(r2.get('materials/m1/jr/verbatim-pages.json')!))).toEqual({
+      v: 1,
+      pages: [{ url: URL_X, text: normalizeForMatch(PAGE) }],
+      truncated: false,
+    });
+    db.prepare('DELETE FROM sources').run();
+    db.prepare("DELETE FROM material_versions WHERE job_id = 'jr'").run();
+    db.prepare("DELETE FROM factory_jobs WHERE id = 'jr'").run();
+    seedRework();
+    unreadable.add('sesn_jp');
     expect(await rec('jr', ingestPort(outputsWith('自分で書いた文です。')).port)).toBe('versioned');
     expect(verb('jr').status).toBe('incomplete');
     expect(JSON.parse(new TextDecoder().decode(r2.get('materials/m1/jr/verbatim-pages.json')!)).truncated).toBe(true);
@@ -359,6 +400,7 @@ describe('v4 回帰（Astra high REVISE の BLOCKING 1・3 の再現）: 作り�
   /** 親の版を本当の取り込みで作る（draft jp）。版の id を返す */
   async function ingestParent(files: Map<string, Uint8Array>, pages: unknown[][]): Promise<string> {
     seedDraft('jp');
+    sessionPages.set('sesn_jp', pages); // 親の session（子がさかのぼって読む時も同じ events）
     expect(await rec('jp', ingestPort(files, pages).port)).toBe('versioned');
     return String(one(db, "SELECT id FROM material_versions WHERE job_id = 'jp'").id);
   }
@@ -526,6 +568,133 @@ describe('v4.1 回帰（Astra 2 回目の BLOCKING・NON-BLOCKING の再現）',
       pages: [
         { url: URL_X, text: normalizeForMatch(PAGE) },
         { url: URL_X, text: normalizeForMatch(PAGE2) },
+      ],
+      truncated: false,
+    });
+  });
+});
+
+describe('v4.3 作り直しは祖先の session を読み直す（本番: 本契約の前の親の取得記録が全部 truncated で incomplete になっていた）', () => {
+  const capsTruncated = (text: string) => capOk([{ url: URL_X, text: text.slice(0, 30_000) }], { truncated: ['s1'], missing: ['s2'] });
+  const putRecord = (prefix: string, file: unknown) => r2.set(prefix + 'verbatim-pages.json', enc.encode(JSON.stringify(file)));
+  /** 版 vid（job jid）を足す。parent があれば job は作り直し。record = verbatim-pages.json（null なら置かない） */
+  function seedVersion(o: { vid: string; jid: string; parent?: string; checks?: unknown; record?: unknown }) {
+    seedMaterial();
+    db.prepare(
+      `INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, session_id, parent_version_id, brief_md, reconcile_stage, reconcile_state_json, created_at, updated_at)
+       VALUES (?, 'm1', ?, 'claude-sonnet-5-5', 'making', 'done', ?, ?, 'b', 'versioned', '{}', ?, ?)`,
+    ).run(o.jid, o.parent ? 'rework' : 'draft', `sesn_${o.jid}`, o.parent ?? null, iso(DAY), iso(DAY));
+    db.prepare(
+      `INSERT INTO material_versions (id, material_id, version, job_id, session_id, r2_prefix, content_sha256, material_json, claims_json, adapt_rules_md,
+         checks_json, public_paths_json, status, created_at)
+       VALUES (?, 'm1', (SELECT COALESCE(MAX(version), 0) + 1 FROM material_versions WHERE material_id = 'm1'), ?, ?, ?, 'sha', '{}', '{"claims":[]}', 'a', ?, '[]', 'rejected', ?)`,
+    ).run(o.vid, o.jid, `sesn_${o.jid}`, `materials/m1/${o.jid}/`, JSON.stringify(o.checks ?? {}), iso(DAY));
+    if (o.record) putRecord(`materials/m1/${o.jid}/`, o.record);
+    if (!sessionPages.has(`sesn_${o.jid}`)) sessionPages.set(`sesn_${o.jid}`, [[]]);
+  }
+  function seedChildOf(parentVid: string) {
+    db.prepare(
+      `INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, session_id, parent_version_id, brief_md, created_at, updated_at)
+       VALUES ('jr', 'm1', 'rework', 'claude-opus-5-5', 'making', 'running', 'sesn_jr', ?, 'b', ?, ?)`,
+    ).run(parentVid, iso(30_000), iso(30_000));
+  }
+  const status4 = { verbatim_copy: [], verbatim_total: 0, verbatim_pages: 1, verbatim_status: 'clean', verbatim_incomplete: false };
+
+  it('本契約の前の親（取得記録が全部 truncated）でも、親の session の events を読んで found / clean になる', async () => {
+    seedParent();
+    sessionPages.set('sesn_jp', [[use('tp1', URL_X), result('tp1', PAGE)]]);
+    putCaptures(capsTruncated(PAGE));
+    seedRework();
+    expect(await rec('jr', ingestPort(outputsWith(COPY)).port)).toBe('versioned');
+    expect(checksOf('jr')).toMatchObject({ verbatim_status: 'found', verbatim_incomplete: false });
+    db.prepare('DELETE FROM sources').run();
+    db.prepare("DELETE FROM material_versions WHERE job_id = 'jr'").run();
+    db.prepare("DELETE FROM factory_jobs WHERE id = 'jr'").run();
+    seedRework();
+    expect(await rec('jr', ingestPort(outputsWith('自分で書いた文です。')).port)).toBe('versioned');
+    expect(checksOf('jr')).toMatchObject({ verbatim_status: 'clean', verbatim_incomplete: false });
+  });
+
+  it('親の events の 30,000 字より後ろにある文を子が写した → found（取得記録の経路では見えない位置）', async () => {
+    const long = `${'ぬ'.repeat(30_000)}${COPY}`;
+    seedParent();
+    sessionPages.set('sesn_jp', [[use('tp1', URL_X), result('tp1', long)]]);
+    putCaptures(capsTruncated(long));
+    expect(capsTruncated(long).captures[0].text.includes(COPY.slice(0, 20))).toBe(false);
+    seedRework();
+    expect(await rec('jr', ingestPort(outputsWith(COPY)).port)).toBe('versioned');
+    expect(verb('jr')).toMatchObject({ status: 'found', n: 1 });
+  });
+
+  it('2 世代さかのぼる（親の記録が truncated → 親の session も、その親（祖父母）の session も読む）', async () => {
+    seedVersion({ vid: 'vg', jid: 'jg' }); // 本契約の前の根
+    sessionPages.set('sesn_jg', [[use('tg1', URL_X), result('tg1', PAGE)]]);
+    seedVersion({ vid: 'vp2', jid: 'jp2', parent: 'vg', checks: status4, record: { v: 1, pages: [], truncated: true } });
+    sessionPages.set('sesn_jp2', [[use('tq1', URL_S1), result('tq1', '関係のないページ。'.repeat(20))]]);
+    seedChildOf('vp2');
+    const p = ingestPort(outputsWith(COPY));
+    expect(await rec('jr', p.port)).toBe('versioned');
+    expect(verb('jr')).toMatchObject({ status: 'found', n: 1 });
+    expect(p.ancestorReads).toEqual(['sesn_jp2:0', 'sesn_jg:0']);
+    const file = JSON.parse(new TextDecoder().decode(r2.get('materials/m1/jr/verbatim-pages.json')!));
+    expect(file.truncated).toBe(false);
+    expect(file.pages.map((x: { url: string }) => x.url)).toEqual(['https://minecraft.wiki/w/Redstone_Dust', URL_X]);
+  });
+
+  it.each([
+    [8, 'clean'],
+    [9, 'incomplete'],
+  ])('深さの上限: 祖先 %i 世代（どれも記録が truncated）→ %s', async (n, want) => {
+    for (let k = 1; k <= n; k++) seedVersion({ vid: `v${k}`, jid: `j${k}`, parent: k > 1 ? `v${k - 1}` : undefined, checks: status4, record: { v: 1, pages: [], truncated: true } });
+    seedChildOf(`v${n}`);
+    expect(await rec('jr', ingestPort(outputsWith('自分で書いた文です。')).port)).toBe('versioned');
+    expect(verb('jr').status).toBe(want);
+  });
+
+  it('events が読めず取得記録も truncated → incomplete', async () => {
+    seedParent();
+    unreadable.add('sesn_jp');
+    putCaptures(capsTruncated(PAGE));
+    seedRework();
+    expect(await rec('jr', ingestPort(outputsWith('自分で書いた文です。')).port)).toBe('versioned');
+    expect(checksOf('jr')).toMatchObject({ verbatim_status: 'incomplete', verbatim_incomplete: true });
+  });
+
+  it('再開: さかのぼりの途中（祖先の part を書いた後・保存の前）で止まって再開しても、ページは二重にも欠けにもならない', async () => {
+    const PAGE2 = `二枚目のページ。${'関係のない文。'.repeat(20)}`;
+    seedParent();
+    sessionPages.set('sesn_jp', [[use('tp1', URL_X), result('tp1', PAGE)], [use('tp2', URL_S1), result('tp2', PAGE2)]]);
+    seedRework();
+    const putKeys: string[] = [];
+    const put0 = env.R2.put.bind(env.R2);
+    let armed = false;
+    (env.R2 as unknown as { put: (k: string, v: Uint8Array | string) => Promise<void> }).put = async (k, v) => {
+      await put0(k, v as never);
+      if (k.includes('jr/verbatim-pages.parts/')) {
+        putKeys.push(k.slice(k.lastIndexOf('/') + 1));
+        if (putKeys.length === 1) armed = true;
+      }
+    };
+    const prep0 = env.DB.prepare.bind(env.DB);
+    (env.DB as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+      if (armed && /reconcile_state_json = \?/.test(sql)) {
+        armed = false;
+        throw new Error('d1 save failed');
+      }
+      return prep0(sql);
+    };
+    const p = ingestPort(outputsWith(COPY));
+    expect(await rec('jr', p.port)).toBe('error');
+    expect(await rec('jr', p.port)).toBe('versioned');
+    expect(putKeys).toEqual(['0.json', '0.json', '1.json']);
+    expect(p.ancestorReads).toEqual(['sesn_jp:0', 'sesn_jp:0', 'sesn_jp:1']); // 保存できなかったページだけを読み直す
+    expect(verb('jr')).toMatchObject({ status: 'found', total: 1, n: 1, pages: 2 });
+    const file = JSON.parse(new TextDecoder().decode(r2.get('materials/m1/jr/verbatim-pages.json')!));
+    expect(file).toEqual({
+      v: 1,
+      pages: [
+        { url: URL_X, text: normalizeForMatch(PAGE) },
+        { url: URL_S1, text: normalizeForMatch(PAGE2) },
       ],
       truncated: false,
     });

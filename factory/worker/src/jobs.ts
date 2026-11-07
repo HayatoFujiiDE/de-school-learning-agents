@@ -20,7 +20,9 @@ import {
   prepareBodies,
   scanPage,
   verbatimStatusOf,
+  type VerbAncestorState,
   type VerbState,
+  type VerbatimHit,
   type VerbatimPage,
   type VerbatimPagesFile,
 } from './checks/verbatim';
@@ -958,16 +960,15 @@ const MIN_REMAINING_MS = 5_000;
 const CARRY_MIN_REMAINING_MS = 15_000;
 /** §S-8-2 裁定 3: その先送りの上限（1 つの job で。超えたら引き継ぎなしで取り込む） */
 export const CARRY_DEFER_MAX = 3;
+/**
+ * §AK2-2（v4.3）: 作り直しの祖先のさかのぼりの上限。深さ（親 = 1）は 8 まで。1 つの祖先の session の events は、取り込みの 1 回の呼び出しと同じ
+ * MAX_PAGES ページまで（超えたら取得記録に落とす）。先送りは、1 回の呼び出しで 1 ページ以上読んだ後だけ数え、祖先 1 つあたり carry_defers と同じ 3 回の
+ * 見積りで ANCESTOR_DEPTH_MAX × CARRY_DEFER_MAX = 24 回まで（使い切ったら incomplete で止める。毎回 1 ページ以上進むので、上限が無くても有限）
+ */
+export const ANCESTOR_DEPTH_MAX = 8;
+const ANCESTOR_DEFER_MAX = ANCESTOR_DEPTH_MAX * CARRY_DEFER_MAX;
+const ANCESTOR_EVENT_PAGES_MAX = MAX_PAGES;
 
-/** 版の checks_json に verbatim_status があるか（= 本契約 §AK2 の後に取り込んだ版。読めない値は「ある」側に倒す: 取得記録で代えない） */
-function hasVerbatimStatus(checksJson: string | null): boolean {
-  try {
-    const o = JSON.parse(String(checksJson ?? '')) as unknown;
-    return !o || typeof o !== 'object' || Array.isArray(o) || Object.hasOwn(o, 'verbatim_status');
-  } catch {
-    return true;
-  }
-}
 /** §S-8-3 裁定 1: 前の job の画像も合わせた 1 版の異なる image_id の上限（この job が作った分は IMAGE_JOB_LIMIT まで） */
 export const IMAGE_TOTAL_LIMIT = 16;
 
@@ -1768,6 +1769,150 @@ class Reconciler {
     }
   }
 
+  /**
+   * §AK2-2（v4.3 裁定 1）: 作り直しの祖先をさかのぼり、祖先が見たページの文を子の本文と子の引用で照らす（verb を書き換え、ページは途中の記録 parts に置く）。
+   * 各祖先 A: 完全な（truncated でない・形が正しい）verbatim-pages.json があれば照らして止める。無い・truncated（本契約の前の版も）なら A の session の
+   * events を取り込みと同じ方法（accumulateCitations の onResult）で読み、A の親へ進む。根（作り直しでない job の版）で完了。深さ ANCESTOR_DEPTH_MAX を
+   * 超えたら incomplete。A の events を読めない（session が無い・エラー・ANCESTOR_EVENT_PAGES_MAX を超えた）時は A の取得記録を厳密な読み方（v3.2）で照らし、
+   * それも駄目なら incomplete（さかのぼりは続ける）。位置は verb.anc に置き、events の 1 ページごとに保存する（時間をまたいで再開する）。
+   * この呼び出しで 1 ページ以上読んだ後に時間が足りなければ先送り（ANCESTOR_DEFER_MAX 回まで。使い切ったら incomplete で止める）
+   */
+  private async walkAncestors(
+    job: JobRow,
+    verb: VerbState,
+    o: { prefix: string; scan: (text: string, url: string) => { hits: VerbatimHit[]; incomplete: boolean }; save: () => Promise<void> },
+  ): Promise<void> {
+    if (!job.parent_version_id) return;
+    if (!verb.anc) verb.anc = { depth: 1, vid: job.parent_version_id, cursor: null, acc: null, read: 0, defers: 0, done: false };
+    const scanOne = (url: string, text: string, seen: VerbatimPage[]) => {
+      const u = normalizeUrl(url);
+      const r = o.scan(text, u);
+      verb.hits = mergeHits(verb.hits, r.hits);
+      verb.total += r.hits.length;
+      verb.pages++;
+      if (r.incomplete) verb.incomplete = true;
+      const rec = pageRecordOf(u, text);
+      seen.push(rec.page);
+      if (rec.cut) verb.lost = true;
+    };
+    const putPart = async (seen: VerbatimPage[]) => {
+      if (seen.length === 0) return;
+      try {
+        await this.env.R2.put(`${o.prefix}${VERBATIM_PAGES_PARTS_DIR}${verb.parts}.json`, JSON.stringify({ v: 1, pages: seen }));
+        verb.parts++;
+      } catch {
+        verb.lost = true;
+        verb.incomplete = true;
+      }
+    };
+    const scanPages = async (pages: ReadonlyArray<{ url: string; text: string }>) => {
+      const seen: VerbatimPage[] = [];
+      for (const pg of pages) scanOne(pg.url, pg.text, seen);
+      await putPart(seen);
+    };
+    const giveUp = () => {
+      verb.incomplete = true;
+      verb.lost = true;
+      verb.anc!.done = true;
+    };
+    let readThisCall = 0;
+    walk: while (!verb.anc.done) {
+      const anc: VerbAncestorState = verb.anc;
+      if (anc.depth > ANCESTOR_DEPTH_MAX) {
+        giveUp();
+        await o.save();
+        break;
+      }
+      let a: { id: string; r2_prefix: string; session_id: string | null; job_id: string } | null = null;
+      try {
+        a = await first<{ id: string; r2_prefix: string; session_id: string | null; job_id: string }>(
+          this.db,
+          stmt('SELECT id, r2_prefix, session_id, job_id FROM material_versions WHERE id = ? AND material_id = ?', anc.vid, job.material_id),
+        );
+      } catch {
+        a = null;
+      }
+      if (!a) {
+        giveUp();
+        await o.save();
+        break;
+      }
+      if (anc.acc === null) {
+        const pf = await this.readPagesObject(a.r2_prefix + VERBATIM_PAGES_FILE, true);
+        if (pf.kind === 'ok' && !pf.file.truncated) {
+          // 完全な記録（この祖先より上の分も推移的に入っている）→ 照らして止める
+          await scanPages(pf.file.pages);
+          anc.done = true;
+          await o.save();
+          break;
+        }
+        anc.acc = newCitationAcc();
+        anc.cursor = null;
+        anc.read = 0;
+        await o.save();
+      }
+      let fallback = !a.session_id;
+      while (!fallback) {
+        if (anc.read >= ANCESTOR_EVENT_PAGES_MAX) {
+          fallback = true;
+          break;
+        }
+        if (readThisCall > 0 && Date.now() > this.deadline - CARRY_MIN_REMAINING_MS) {
+          if (anc.defers < ANCESTOR_DEFER_MAX) {
+            anc.defers++;
+            await o.save();
+            throw new OutOfTime();
+          }
+          giveUp();
+          await o.save();
+          break walk;
+        }
+        await this.extend();
+        let p: { data: unknown[]; next: string | null };
+        try {
+          p = await this.port.listEventsPage(a.session_id!, { order: 'asc', page: anc.cursor }, this.call);
+        } catch (e) {
+          if (e instanceof OutOfTime || e instanceof LostLease) throw e;
+          fallback = true;
+          break;
+        }
+        const seen: VerbatimPage[] = [];
+        accumulateCitations(anc.acc!, [], Array.isArray(p.data) ? p.data : [], (url, text) => scanOne(url, text, seen));
+        await putPart(seen);
+        anc.cursor = p.next;
+        anc.read++;
+        readThisCall++;
+        const finished = !p.next;
+        await o.save();
+        if (finished) break;
+      }
+      if (fallback) {
+        // 祖先の events を読めない → その祖先の取得記録（sources.json の URL の文）を厳密な読み方で照らす（v3.2: missing は未完了にしない）
+        const strict = await readCapturesStrict(this.env, a);
+        if (strict.ok) await scanPages(strict.captures);
+        else {
+          verb.incomplete = true;
+          verb.lost = true;
+        }
+      }
+      // 次の祖先（この祖先の job が作り直しなら、その親の版）。根なら完了
+      let pj: { kind: string; parent_version_id: string | null } | null = null;
+      try {
+        pj = await first<{ kind: string; parent_version_id: string | null }>(
+          this.db,
+          stmt('SELECT kind, parent_version_id FROM factory_jobs WHERE id = ? AND material_id = ?', a.job_id, job.material_id),
+        );
+      } catch {
+        pj = null;
+      }
+      if (!pj) giveUp();
+      else if (pj.kind === 'rework' && pj.parent_version_id)
+        verb.anc = { depth: anc.depth + 1, vid: pj.parent_version_id, cursor: null, acc: null, read: 0, defers: anc.defers, done: false };
+      else anc.done = true;
+      await o.save();
+    }
+  }
+
   /** v4 裁定 1: R2 のページの文の記録を 1 回読む（無い = missing・読めない / 形が違う = bad）。throw しない */
   private async readPagesObject(key: string, requireTruncated: boolean): Promise<{ kind: 'ok'; file: VerbatimPagesFile } | { kind: 'missing' } | { kind: 'bad' }> {
     try {
@@ -2034,16 +2179,40 @@ class Reconciler {
     // （親の events は読まず、親の記録も書かない。レビュー裁定 1）。無い・読めない時は引き継がない（取り込みは失敗させない・carried の項目も付けない）。
     // 読み始める時間も残っていなければ、版を書かずに次の reconcile へ回す（events の集計は保存済みなので、次はこの段から始まる）
     let cit = sessionCit;
-    // §AK2-2: 丸写しの検査の結果（この session の分 + 本文・針の上限）。作り直しは下で親の分を足す
-    let verbHits = ev.verb.hits;
-    let verbTotal = ev.verb.total;
-    let verbPages = ev.verb.pages;
+    // 裁定 3: 先送りは 1 つの job で CARRY_DEFER_MAX 回まで（reconcile_state_json.carry_defers）。使い切ったら引き継ぎなしで取り込む
+    if (job.kind === 'rework' && job.parent_version_id) {
+      const defers = Number.isInteger(state.carry_defers) ? state.carry_defers! : 0;
+      const short = Date.now() > this.deadline - CARRY_MIN_REMAINING_MS;
+      if (short && defers < CARRY_DEFER_MAX) {
+        state = { ...state, carry_defers: defers + 1 };
+        await this.writeState(job, null, state);
+        throw new OutOfTime();
+      }
+      if (!short) {
+        await this.extend();
+        const carry = await carryForIngest(this.env, job);
+        if (carry) cit = applyCarry(sessionCit, citeSources, videosOfVersion, carry.records, Date.now());
+      }
+      await this.walkAncestors(job, ev.verb, {
+        prefix,
+        scan: (text, url) => scanPage(needles, bodies, text, url, quotesOf(url)),
+        save: async () => {
+          ev = { ...ev };
+          state = { ...state, ev };
+          await this.writeState(job, null, state);
+        },
+      });
+    }
+    // §AK2-2: 丸写しの検査の結果（この session の分 + 作り直しの祖先の分 + 本文・針の上限）
+    const verbHits = ev.verb.hits;
+    const verbTotal = ev.verb.total;
+    const verbPages = ev.verb.pages;
     let verbIncomplete = ev.verb.incomplete || bodies.incomplete || needles.incomplete;
-    /** v4 裁定 1: この版の記録 verbatim-pages.json に入れるページ（この session の分 → 親の版の分）と、入れられなかった文があるか */
+    /** v4 裁定 1: この版の記録 verbatim-pages.json に入れるページ（この session の分 → 祖先の分。どれも途中の記録 parts にある）と、入れられなかった文があるか */
     const recordPages: VerbatimPage[] = [];
     let recordLost = ev.verb.lost;
     for (let n = 0; n < ev.verb.parts; n++) {
-      // v4.1: まとめる処理も時間の残りを見る。足りなければ先送り（作り直しの親の記録と同じ carry_defers の数え方で 3 回まで）。
+      // v4.1: まとめる処理も時間の残りを見る。足りなければ先送り（carry_defers の数え方で 3 回まで）。
       // 使い切ったら、まとめずに先へ進む（この版の記録は truncated・版は incomplete。取り込みはずっと先送りにしない）
       if (Date.now() > this.deadline - CARRY_MIN_REMAINING_MS) {
         const defers = Number.isInteger(state.carry_defers) ? state.carry_defers! : 0;
@@ -2067,68 +2236,6 @@ class Reconciler {
       } else {
         recordLost = true;
         verbIncomplete = true;
-      }
-    }
-    // 裁定 3: 先送りは 1 つの job で CARRY_DEFER_MAX 回まで（reconcile_state_json.carry_defers）。使い切ったら引き継ぎなしで取り込む
-    if (job.kind === 'rework' && job.parent_version_id) {
-      const defers = Number.isInteger(state.carry_defers) ? state.carry_defers! : 0;
-      const short = Date.now() > this.deadline - CARRY_MIN_REMAINING_MS;
-      if (short && defers < CARRY_DEFER_MAX) {
-        state = { ...state, carry_defers: defers + 1 };
-        await this.writeState(job, null, state);
-        throw new OutOfTime();
-      }
-      // §AK2-2（v4 裁定 1）: 親の版（同じ素材）が見たページの文を、子の本文と子の引用でもう一度照らす。親の検出は引き継がない
-      let parent: { r2_prefix: string; checks_json: string | null } | null = null;
-      try {
-        parent = await first<{ r2_prefix: string; checks_json: string | null }>(
-          this.db,
-          stmt('SELECT r2_prefix, checks_json FROM material_versions WHERE id = ? AND material_id = ?', job.parent_version_id, job.material_id),
-        );
-      } catch {
-        parent = null;
-      }
-      if (!short) {
-        await this.extend();
-        const carry = await carryForIngest(this.env, job);
-        if (carry) cit = applyCarry(sessionCit, citeSources, videosOfVersion, carry.records, Date.now());
-      }
-      const scanParent = (pages: readonly VerbatimPage[]) => {
-        for (const pg of pages) {
-          const u = normalizeUrl(pg.url);
-          const r = scanPage(needles, bodies, pg.text, u, quotesOf(u));
-          verbHits = mergeHits(verbHits, r.hits);
-          verbTotal += r.hits.length;
-          verbPages++;
-          if (r.incomplete) verbIncomplete = true;
-          recordPages.push(pg);
-        }
-      };
-      if (!parent || short) {
-        // 親の版が読めない / 先送りを使い切って親の記録を読まない → 丸写しの検査は済んでいない。この版の記録も祖先の分が欠ける
-        verbIncomplete = true;
-        recordLost = true;
-      } else {
-        const pf = await this.readPagesObject(parent.r2_prefix + VERBATIM_PAGES_FILE, true);
-        if (pf.kind === 'ok') {
-          scanParent(pf.file.pages);
-          if (pf.file.truncated) {
-            verbIncomplete = true;
-            recordLost = true;
-          }
-        } else if (pf.kind === 'missing' && !hasVerbatimStatus(parent.checks_json)) {
-          // 親が本契約の前に取り込んだ版: 親の取得記録（sources.json の URL の文）を厳密な読み方で照らす（v3.2: missing は未完了にしない）
-          const strict = await readCapturesStrict(this.env, parent);
-          if (strict.ok) scanParent(strict.captures.map((c) => pageRecordOf(normalizeUrl(c.url), c.text).page));
-          else {
-            verbIncomplete = true;
-            recordLost = true;
-          }
-        } else {
-          // 親は本契約の後の版なのに記録が無い・記録の形が壊れている
-          verbIncomplete = true;
-          recordLost = true;
-        }
       }
     }
     // v4 裁定 1: この版の記録を書く（書けなければこの版は未完了 = 作り直しが照らし直せない）

@@ -1036,7 +1036,9 @@ export function triageVersion(input: TriageInput): TriageOutput {
       if (!isObj(r)) continue;
       push({ id: idOf('verbatim_copy'), kind: 'check', key: 'terms_of_use', severity: 'fix', cause: 'verbatim_copy', path: str(r.path), quote: cut(r.sample, 200) });
     }
-    if (checks && checks.verbatim_status === 'incomplete') push({ id: 'check:verbatim_incomplete', kind: 'check', key: 'terms_of_use', severity: 'fix', cause: 'verbatim_incomplete' });
+    // v4.3: 検査が済んでいないのは職人には直せない原因（祖先の記録の欠け・上限など）→ 人の項目（ask）にし、自動の差し戻し（fix の数で決まる）を起こさない。
+    // 承認・公開の止めは publishSwitch と承認の route がそのまま持つ
+    if (checks && checks.verbatim_status === 'incomplete') push({ id: 'check:verbatim_incomplete', kind: 'check', key: 'terms_of_use', severity: 'ask', cause: 'verbatim_incomplete' });
     if (['forbidden', 'app_html', 'kakunin_zumi', 'missing_source_refs', 'missing_claim_refs'].some((k) => arr(k) === null))
       push({ id: 'check:checks_missing', kind: 'check', key: 'artifact_behavior', severity: 'ask', cause: 'checks_missing' });
     // 古い版（child_text が無い）は「検査していない」: 項目を作らない（読み手係の mismatch が拾う。契約 V-5）

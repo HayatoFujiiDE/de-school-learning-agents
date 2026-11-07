@@ -613,7 +613,8 @@ describe('§S-8-2 取り込みの引き継ぎ（jobs.ts → citations）', () =>
       { source_id: 's2', url_was_fetched: 1, quote_found: 1, check_detail: 'secondary' },
     ]);
     expect(citationsOf()).toEqual({ total: 2, fetched: 0, quoted: 0, carried: 2 });
-    expect(p.parentReads).toEqual([]); // R2 に記録があれば親の events は読まない
+    // §AK2 v4.3: 丸写しの検査のさかのぼりだけが親の session の events を読む（引用の引き継ぎは従来どおり R2 の記録だけで決まる）
+    expect(p.parentReads).toEqual(['sesn_jp']);
   });
 
   it('draft（親なし）は従来どおり: not_fetched・citations に carried が無い', async () => {
@@ -667,7 +668,8 @@ describe('§S-8-2 取り込みの引き継ぎ（jobs.ts → citations）', () =>
     putParentSourcesJson();
     const p = ingestPort(outputs2(), { parentEvents });
     expect(await rec('jr', 25_000, p.port)).toBe('versioned');
-    expect(p.parentReads).toEqual([]);
+    // §AK2 v4.3: 丸写しの検査のさかのぼりだけが親の events を読む。引用の引き継ぎには使わない（下の not_fetched）・親の記録も書かない
+    expect(p.parentReads).toEqual(['sesn_jp']);
     expect(srcRows()[0]).toEqual({ source_id: 's1', url_was_fetched: 0, quote_found: 0, check_detail: 'not_fetched' });
     expect(r2.has(PARENT_PREFIX + SOURCE_CAPTURES_FILE)).toBe(false);
     const checks = JSON.parse(String(one(db, "SELECT checks_json FROM material_versions WHERE job_id = 'jr'").checks_json));
@@ -699,7 +701,7 @@ describe('§S-8-2 取り込みの引き継ぎ（jobs.ts → citations）', () =>
     db.prepare("UPDATE factory_jobs SET phase = 'making', status = 'running' WHERE id = 'jr'").run();
     const p = ingestPort(outputs2());
     expect(await rec('jr', 25_000, p.port)).toBe('versioned');
-    expect(p.parentReads).toEqual([]);
+    expect(p.parentReads).toEqual(['sesn_jp']); // §AK2 v4.3: 丸写しの検査のさかのぼり（ingestPort は親の events を持たないので取得記録に落ちる）
     expect(srcRows()[0]).toEqual({ source_id: 's1', url_was_fetched: 1, quote_found: 1, check_detail: 'carried' });
     expect(citationsOf()).toEqual({ total: 2, fetched: 0, quoted: 0, carried: 1 });
   });
