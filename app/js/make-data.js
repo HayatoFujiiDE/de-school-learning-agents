@@ -116,6 +116,8 @@
   MD.CANDIDATE_STEP = ['案を選ぶ', '案をえらぶ'];
   MD.STEP_MIN = 5;
   MD.EXT_BUILD_STEPS = [['塔を建てる', 'とうをたてる'], ['塔を 2 倍にする', 'とうを 2 倍にする'], ['屋根を置く', 'やねをおく']];
+  // 題材を決めない外の記録（実サイト。写真を見せる・リンク・予定表の行・作品に入れた写真）の手順。本人が「次」を書き足す
+  MD.EXT_STEPS = [['写真を入れる', '写真を入れる']];
 
   // 見本 6 枚（§AE-3 の順。入口には 3 枚ずつ出す。tool は入れない）
   MD.samples = [
@@ -806,6 +808,8 @@
   }
   MD.photoArt = function (photo) {
     if (!photo) return '';
+    // 実サイト: 題材を決めない外の記録（theme 'ext'）・本物の写真（data あり。描く側は img にする）は写真の枠だけ（ダミーの線画を出さない）
+    if (photo.theme === 'ext' || typeof photo.data === 'string' || !photo.theme) return wrap(corners(), 'is-photo');
     // 今日のお題から作った外の記録（theme 'odai'）はお題の線画（today-data.js が MD.odaiPhotoArt を置く）。無ければ写真の枠だけ（3 題材の絵を出さない）
     if (photo.theme === 'odai') return MD.odaiPhotoArt ? MD.odaiPhotoArt(photo) : wrap(corners(), 'is-photo');
     var n = photo.n || 0, inner;

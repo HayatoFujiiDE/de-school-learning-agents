@@ -141,7 +141,8 @@ window.DES = window.DES || {};
     DES.ui.leaving = false;
     var ae = document.activeElement, k = keySel(ae);
     var cf = ae && ae.closest ? ae.closest('[data-fk]') : null, cfk = cf ? cf.getAttribute('data-fk') : null;
-    DES.store.save();
+    // 各ページの保存の包みが例外を出しても commit は落とさない（保存できなかった扱いにする）
+    try { DES.store.save(); } catch (e) { DES.state.saveFailed = true; }
     APP.render();
     if (ae && ae !== document.body && document.contains(ae) && document.activeElement === ae) return;
     var fk = o.focusFn ? o.focusFn() : o.focus;

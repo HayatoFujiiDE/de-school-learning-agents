@@ -63,15 +63,18 @@ window.DES = window.DES || {};
   }
   // des.live.* に保存されている写真の総数（LS-18-11 の全体上限 60 枚の判定用）。読めない鍵は 0 と数える
   function count() {
-    var n = 0;
+    // 同じ写真の写し（活動と作品の両方に入る）は 1 枚と数える: dataURL の先頭 64 文字 + 長さで同一を見る
+    var seen = {}, n = 0;
     try {
       var ls = window.localStorage;
       for (var i = 0; i < ls.length; i++) {
         var k = ls.key(i);
         if (!k || k.indexOf('des.live.') !== 0) continue;
-        var raw = ls.getItem(k) || '';
-        var m = raw.match(/data:image\/(?:jpeg|png|webp);base64,/g);
-        if (m) n += m.length;
+        var raw = ls.getItem(k) || '', re = /data:image\/(?:jpeg|png|webp);base64,([A-Za-z0-9+/=]{1,64})[A-Za-z0-9+/=]*/g, m;
+        while ((m = re.exec(raw))) {
+          var key = m[1] + ':' + m[0].length;
+          if (!seen[key]) { seen[key] = true; n += 1; }
+        }
       }
     } catch (e) { /* 保存が読めない時は 0 */ }
     return n;

@@ -1,11 +1,48 @@
 /* 作る（#make / #make/<id>）: 活動の状態（純関数）+ 描画 + 操作。CONTRACT-v3 §U、design-v3 §3〜§6・§13。
    純関数は DOM と DES.t に触れない（文言は { k, v } / { r, v } / { text } の形で持ち、描く時に今の表示で読む）。
-   変更は必ず DES.app.change → DES.store.save → 再描画 の 1 経路。保存は既存の DES.store に activities / works / makeSide を足して使う。 */
+   変更は必ず DES.app.change → DES.store.save → 再描画 の 1 経路。保存は DES.store.register で des.live.activities / works / makeSide を足して使う。
+   実サイト（contract-LS §LS-12 / LS-18）: 見本を seed しない・時刻は at（ISO）から・写真は DES.photo の本物・バディの固定の返事を出さない・
+   相談列の送信は本物のバディ（DES.talk.sendFromMake）・工場の素材は /api/library/available。 */
 (function (root) {
   'use strict';
   var DES = root.DES = root.DES || {};
   var MD = DES.makeData || (typeof require === 'function' ? require('./make-data.js') : null);
   var M = DES.make = DES.make || {};
+
+  // ---------- 実サイトの文言（contract-LS §LS-12 / LS-18。「」の文は verbatim）。node から読む時は無い ----------
+  if (DES.i18n && DES.i18n.add) {
+    DES.i18n.add({
+      shelf_h: ['案の棚', 'あんのたな'],
+      card_tentative: ['仮の案', '仮の案'],
+      mk_cannot_send: ['今はバディに送れないよ。話すの画面で確かめてね', 'いまは バディに おくれないよ。はなすの がめんで たしかめてね'],
+      mk_factory_h: ['工場から届いた素材', 'こうじょうから とどいた そざい'],
+      mk_factory_fail: ['今は素材を取ってこられないよ', 'いまは そざいを とってこられないよ'],
+      shared_toast: ['見せる準備をしたよ。教室に届ける仕組みはこれから', '見せるじゅんびをしたよ。きょうしつにとどけるしくみはこれから'],
+      shares_line: ['見せる準備: {to}（{time}）', '見せるじゅんび: {to}（{time}）'],
+      shares_none: ['まだ見せる準備はしていないよ', 'まだ見せるじゅんびはしていないよ'],
+      shown_badge: ['見せる準備中', '見せる準備中'],
+      unshared_toast: ['見せる準備をやめた', '見せるじゅんびをやめた'],
+      ai_read_none: ['何を作ったか、ここに書いておけるよ', '何をつくったか、ここに書いておけるよ'],
+      photo_full: ['写真がいっぱいだよ。いらない写真を外してから足してね', 'しゃしんが いっぱいだよ。いらない しゃしんを はずしてから たしてね'],
+      // 道具が出した案の採用は本人の操作（LS-18-14）。「バディが作った」と書かない
+      adopt_rec: ['案「{what}」にした', '案「{what}」にした'],
+      left_rec: ['案から {what}', '案から {what}'],
+      // 以下は契約に文の指定が無い所の最小の文（報告に記載）
+      origin_material: ['届いた素材から', 'とどいた そざいから'],
+      mk_mat_read: ['読む', 'よむ'],
+      mk_mat_start: ['この素材で始める', 'このそざいで はじめる'],
+      mk_kind_1: ['活動レシピ', 'かつどうレシピ'],
+      mk_kind_2: ['作例と見本', 'さくれいと見本'],
+      mk_kind_3: ['説明と図解', 'せつめいと ずかい'],
+      mk_kind_4: ['動かせるもの', 'うごかせるもの'],
+      mk_kind_5: ['見る', '見る'],
+      mk_kind_6: ['今日のお題', 'きょうのお題'],
+      mk_kind_7: ['基礎学習の足場', 'きそ学習の あしば'],
+      mk_kind_8: ['世界との接続', 'せかいとの つながり'],
+      mk_sent: ['バディに送ったよ。返事は「話す」に届く', 'バディに おくったよ。へんじは「はなす」に とどく'],
+      mk_link_hint: ['上の欄にリンクを貼ってから押してね', 'うえの らんに リンクを はってから おしてね']
+    });
+  }
 
   // ---------- 小道具 ----------
   function clone(v) { return v == null ? v : JSON.parse(JSON.stringify(v)); }
@@ -15,9 +52,37 @@
   function find(list, id) { for (var i = 0; i < (list || []).length; i++) if (list[i].id === id) return list[i]; return null; }
   function idx(list, id) { for (var i = 0; i < (list || []).length; i++) if (list[i].id === id) return i; return -1; }
   function nid(a, p) { a.seq = (a.seq || 0) + 1; return a.id + '-' + p + a.seq; }
-  // モックの時計: 活動ごとに DES.data.now から始め、変化ごとに 2 分進む（決定論。表示の時刻が並びで区別できるように）
-  function tick(a, n) { a.clock = (a.clock || 600) + (n == null ? 2 : n); return toHM(a.clock); }
-  function nowOf(a) { return toHM(a.clock || 600); }
+  // ---------- 時刻（contract-LS §LS-12）: 各記録は at（ISO）を持ち、表示の time 'H:MM' / day 'M/D' は at を JST で読んで導く ----------
+  // 時計は差し替えられる（node の検査用 M.setClock）。JST は夏時間が無いので UTC + 9 時間で読む
+  var nowMs = function () { return Date.now(); };
+  function setClock(fn) { nowMs = typeof fn === 'function' ? fn : function () { return Date.now(); }; }
+  function isoNow() { return new Date(nowMs()).toISOString(); }
+  function jstOf(iso) { var t = typeof iso === 'string' ? Date.parse(iso) : NaN; return isNaN(t) ? null : new Date(t + 9 * 3600000); }
+  function timeOf(iso) { var d = jstOf(iso); return d ? toHM(d.getUTCHours() * 60 + d.getUTCMinutes()) : ''; }
+  function dayOf(iso) { var d = jstOf(iso); return d ? (d.getUTCMonth() + 1) + '/' + d.getUTCDate() : ''; }
+  // { at, time, day }。at が読めなければ今
+  function stampOf(at) {
+    var t = typeof at === 'string' ? Date.parse(at) : NaN, iso = isNaN(t) ? isoNow() : new Date(t).toISOString();
+    return { at: iso, time: timeOf(iso), day: dayOf(iso) };
+  }
+  // 旧データの移行（at が無い記録）: 'H:MM' を今日（JST）のその時刻の ISO にする。読めなければ今
+  function isoFromTime(hm) {
+    var m = /^(\d{1,2}):(\d{2})$/.exec(String(hm == null ? '' : hm)), d = jstOf(isoNow());
+    if (!m || !d) return isoNow();
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), +m[1], +m[2]) - 9 * 3600000).toISOString();
+  }
+  // id（端末の中で重ならない。別タブでも重ならないよう乱数を添える）
+  var idSeq = 0;
+  function newId(p) { idSeq += 1; return String(p || 'x') + nowMs().toString(36) + Math.random().toString(36).slice(2, 6) + idSeq; }
+  // 写真（DES.photo.pick の結果）の形: data:image/(jpeg|png|webp) の dataURL と大きさ。photo.js の valid と同じ規則（node でも使う）
+  var PHOTO_RE = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+  function validPhoto(p) {
+    return !!p && typeof p === 'object' && typeof p.data === 'string' && p.data.length <= 400 * 1024 && PHOTO_RE.test(p.data) &&
+      typeof p.w === 'number' && typeof p.h === 'number' && p.w > 0 && p.h > 0;
+  }
+  // 1 活動の写真は 12 枚・1 作品は 3 枚まで（LS-18-11）
+  var ACT_PHOTO_MAX = 12, WORK_PHOTO_MAX = 3;
+  function photoRoom(a) { return Math.max(0, ACT_PHOTO_MAX - (a && a.ext && Array.isArray(a.ext.photos) ? a.ext.photos.length : 0)); }
   var TIRED = ['疲れた', 'めんどくさい', 'つかれた'];
   var REST = ['飽きた', 'あきた', '休みたい', 'やすみたい'];
   var REQUEST = /作って|つくって|直して|なおして|変えて|かえて|出して|探して|さがして/;
@@ -42,17 +107,18 @@
   // v3: 98f0a71 の移行で stepsKind を写真の有無で決めてしまった v:2 の活動を作り直す（Astra 4 回目）
   var SCHEMA = 3;
   // ---------- 活動を作る ----------
+  // o.at（ISO）が無ければ今。o.now（モックの 'H:MM'）は使わない（呼び手の互換のため受けるだけ）
   function newAct(o) {
-    var clock = toMin(o.now || '10:20');
+    var s = stampOf(o.at);
     var a = {
       id: o.id, title: o.title, origin: o.origin || 'make', theme: o.theme || 'mc', catalogId: o.catalogId || null, sampleId: o.sampleId || null,
-      quote: o.quote || null, stage: o.stage || null, base: clone(o.stage || null), baseTime: toHM(clock),
+      quote: o.quote || null, stage: o.stage || null, base: clone(o.stage || null), at: s.at, baseTime: s.time, day: s.day,
       ext: o.ext || null, steps: clone(o.steps || []), stepIdx: 0, next: null,
       // stepsKind 'theme' = 手順を今の作業対象（案）から作り直す / 'ext' 'build' = 外の記録の決まった手順
       stepsKind: o.stepsKind || 'theme', candidate: !!o.candidate, baseVis: o.ext ? clone(o.ext.visible || []) : null,
       changes: [], shelf: [], thread: [],
       state: 'working', pauseCount: 0, declined: 0, offered: false, resumeNote: null, lastPause: null,
-      clock: clock, seq: 0, draft: '', v: SCHEMA
+      seq: 0, draft: '', v: SCHEMA
     };
     return refreshSteps(a);
   }
@@ -65,13 +131,9 @@
     if (A.stepIdx > A.steps.length - 1) A.stepIdx = A.steps.length - 1;
     return A;
   }
-  function pushMsg(a, m) { m.id = nid(a, 'm'); m.time = nowOf(a); a.thread.push(m); return m; }
-  // 返事は作った時点の表示の文字列で持つ（§U-11 指摘 16。表示を切り替えても書き換えない）
-  function say(a, r, mode, extra) {
-    var m = { who: 'buddy', r: r, text: MD.pick(MD.replies[r], mode) };
-    if (extra) Object.keys(extra).forEach(function (k) { m[k] = extra[k]; });
-    return pushMsg(a, m);
-  }
+  // 相談列の 1 件（本人の発言 / 記録 / 道具の操作の問い）。at（ISO）と表示の time を持つ。
+  // バディの固定の返事（MD.replies / MD.testReply）は相談列に積まない（contract-LS §LS-12。返事は本物のバディだけ）
+  function pushMsg(a, m) { var s = stampOf(); m.id = nid(a, 'm'); m.at = s.at; m.time = s.time; a.thread.push(m); return m; }
   function sampleDef(id) { for (var i = 0; i < MD.samples.length; i++) if (MD.samples[i].id === id) return MD.samples[i]; return null; }
   function stageOf(theme, variant, kind, values) {
     return { kind: kind || 'draft', theme: theme, variant: variant, values: values ? clone(values) : MD.variantValues(theme, variant) };
@@ -81,48 +143,73 @@
     o = o || {};
     // 知らない見本 id はマイクラ（§AE-3 で並びが変わっても、今までの落ち先を変えない）
     var s = sampleDef(sampleId) || sampleDef('mc'), th = MD.theme(s.theme);
-    var a = newAct({ id: o.id, title: MD.pick(MD.variant(s.theme, s.variant).title, o.mode), origin: o.origin || 'sample', theme: s.theme,
-      sampleId: s.id, catalogId: o.catalogId, stage: stageOf(s.theme, s.variant, 'sample'), now: o.now });
-    say(a, 'open', o.mode);
-    return a;
+    return newAct({ id: o.id, title: MD.pick(MD.variant(s.theme, s.variant).title, o.mode), origin: o.origin || 'sample', theme: s.theme,
+      sampleId: s.id, catalogId: o.catalogId, stage: stageOf(s.theme, s.variant, 'sample'), at: o.at });
   }
   // 仮の案 3 つ（U-2）。作品のスクショの読み取りがあれば、題材の 1 枚に出所 1 行（design-v3 §6-10 (e)）
   function captureHook(works, theme) {
     var hit = null;
     (works || []).forEach(function (w) {
-      if (hit || w.from !== 'capture' || w.theme !== theme || !w.read || w.read.declined || w.read.excluded || !w.read.text) return;
+      // 本人が書いた読み取り（LS-18-13）は提案の出所にしない（道具の案を本人の写真から作ったように見せない）
+      if (hit || w.from !== 'capture' || w.theme !== theme || !w.read || w.read.declined || w.read.excluded || !w.read.text || w.read.who === 'own') return;
       hit = w;
     });
     return hit;
   }
   function addIdeas(a, theme, works) {
-    var th = MD.theme(theme), batch = nid(a, 'b'), time = nowOf(a), hook = captureHook(works, theme), cards = [];
+    var th = MD.theme(theme), batch = nid(a, 'b'), st = stampOf(), hook = captureHook(works, theme), cards = [];
     th.ideas.forEach(function (v) {
-      var c = { id: nid(a, 'k'), batch: batch, kind: 'draft', theme: theme, variant: v, values: MD.variantValues(theme, v), time: time, state: 'new' };
+      var c = { id: nid(a, 'k'), batch: batch, kind: 'draft', theme: theme, variant: v, values: MD.variantValues(theme, v), at: st.at, time: st.time, state: 'new' };
       if (hook && v === th.capIdea) { c.srcCapture = hook.id; c.srcTitle = hook.title; }
       cards.push(c);
     });
     a.shelf = cards.concat(a.shelf);
     return cards;
   }
+  // 棚に案を置いた記録（記録行 shelf_new_rec。名前は両方の表示で持ち、描く時に今の表示で読む）
+  function ideasRec(a, cards) {
+    var js = cardNames(a.shelf, 'js'), es = cardNames(a.shelf, 'es'), ids = cards.map(function (c) { return c.id; });
+    var pair = [ids.map(function (id) { return js[id]; }).filter(Boolean).join('」「'), ids.map(function (id) { return es[id]; }).filter(Boolean).join('」「')];
+    return pushMsg(a, { who: 'record', k: 'shelf_new_rec', v: { title: pair } });
+  }
   // 話す の bridge / 入口の「思いつきから」: 引用枠（本人の言葉）+ 棚に仮の案 3 つ
   function fromText(text, o) {
     o = o || {};
     var theme = pickTheme(text), th = MD.theme(theme);
     var a = newAct({ id: o.id, title: MD.pick(th.topic, o.mode), origin: o.origin || 'make', theme: theme, catalogId: o.catalogId,
-      quote: text ? { text: String(text), removed: false } : null, candidate: true, now: o.now });
-    addIdeas(a, theme, o.works);
-    say(a, 'land', o.mode);
+      quote: text ? { text: String(text), removed: false } : null, candidate: true, at: o.at });
+    ideasRec(a, addIdeas(a, theme, o.works));
     return a;
   }
-  // 入口の「写真を見せる」「リンクを貼る」: 作業対象 = 外の記録（モックの写真はダミーの線画）
+  // 外で作って写真で記録する活動の題材（題材を決めない。contract-LS §LS-12: theme 'mc' 固定をやめる）。
+  // 任せる候補は「手順を整理して」だけ（活動の手順から）。写真の無い時は枠だけの絵
+  var EXT_THEME = 'ext';
+  function isPlainExt(a) { return !!(a && a.theme === EXT_THEME); }
+  // 入口の「写真を見せる」「リンクを貼る」・予定表の行・届いた素材から: 作業対象 = 外の記録。
+  // o: { id, title（必須の文字列）, origin, catalogId, link（'link' の時の URL）, photos: [{data,w,h}]（本物の写真）, steps, at }
   function fromExt(kind, o) {
     o = o || {};
-    var th = MD.theme('mc');
-    var a = newAct({ id: o.id, title: MD.pick(th.topic, o.mode), origin: o.origin || 'make', theme: 'mc', catalogId: o.catalogId,
-      ext: { link: kind === 'link' ? 'Minecraft（リンクの体験例）' : null, photos: [], visible: [] }, steps: th.extSteps, stepsKind: 'ext', now: o.now });
-    if (kind !== 'link') a = addPhoto(a, 'photo').act;
+    var link = kind === 'link' && typeof o.link === 'string' && /^https?:\/\/\S+$/.test(o.link) ? o.link : null;
+    var steps = Array.isArray(o.steps) && o.steps.length ? o.steps : MD.EXT_STEPS;
+    var a = newAct({ id: o.id, title: String(o.title == null ? '' : o.title), origin: o.origin || 'make', theme: EXT_THEME, catalogId: o.catalogId,
+      ext: { link: link, photos: [], visible: [] }, steps: steps, stepsKind: 'ext', at: o.at });
+    a.baseVis = [];
+    (o.photos || []).slice(0, ACT_PHOTO_MAX).forEach(function (p) { var r = addPhoto(a, 'photo', p); if (r) a = r.act; });
     return a;
+  }
+  // 工場から届いた素材の「この素材で始める」（contract-LS §LS-12 / LS-18-10）: 外で作る活動（origin 'material'・materialId・手順 = parts の題）。
+  // m は normMaterial の形。同じ素材の活動があれば作らずにその id を返す。戻り値 { id, act, created }
+  function fromMaterial(m, o) {
+    o = o || {};
+    if (!m || typeof m.id !== 'string' || !m.id) return null;
+    var hit = null;
+    (o.acts || []).forEach(function (x) { if (!hit && x && x.materialId === m.id) hit = x; });
+    if (hit) return { id: hit.id, act: hit, created: false };
+    var steps = (m.steps || []).map(function (t) { return [t, t]; });
+    var a = fromExt('plain', { id: o.id, title: m.title, origin: 'material', steps: steps, at: o.at });
+    a.materialId = m.id;
+    if (m.safety) a.safety = true;
+    return { id: a.id, act: a, created: true };
   }
   // 自己理解の工夫・本人の場面から（contract-Y §Y-4 / Y-8）: 題材 tool の作業台。selfLink = 工夫の id か 'scene:' + 場面 id。
   // o: { id, linkId, text, variant（既定 memo）, src: 'buddy'|'own', mode, now, works }。linkId の形が違えば null
@@ -134,11 +221,10 @@
     var th = MD.theme('tool'), variant = th.variants.indexOf(o.variant) >= 0 ? o.variant : th.sample, text = String(o.text == null ? '' : o.text);
     var quote = text ? { text: text, removed: false, src: o.src === 'buddy' ? 'buddy' : 'own' } : null;
     var a = newAct({ id: o.id, title: MD.pick(MD.variant('tool', variant).title, o.mode), origin: 'self', theme: 'tool',
-      stage: stageOf('tool', variant, 'sample'), quote: quote, now: o.now });
+      stage: stageOf('tool', variant, 'sample'), quote: quote, at: o.at });
     a.selfLink = o.linkId;
-    // 任せる・仮の案（Y-8 の 3）: ひとこと合図 / ひとつずつリスト / 話の地図 を棚に置く
-    addIdeas(a, 'tool', o.works);
-    say(a, 'open', o.mode);
+    // 任せる・仮の案（Y-8 の 3）: ひとこと合図 / ひとつずつリスト / 話の地図 を棚に置く（記録行で残す）
+    ideasRec(a, addIdeas(a, 'tool', o.works));
     return a;
   }
   // 同じ紐づけ（selfLink）の活動（あれば最初の 1 件）
@@ -158,8 +244,10 @@
     if (!odai || !odai.id) return null;
     var q = String(o.question == null ? '' : o.question).replace(/^\s+|\s+$/g, '');
     var own = !!q && !(Array.isArray(odai.title) && odai.title.indexOf(q) >= 0);
-    var hit = null;
-    (o.acts || []).forEach(function (x) { if (!hit && x && x.odaiId === odai.id) hit = x; });
+    // 活動に書くお題の id は lineage があればそれ（配信が入れ替わっても同じお題に結び付く。L3 からの引き継ぎ）。無ければ odai.id。
+    // 既にある活動は lineage でも odai.id でも見つける
+    var oid = typeof odai.lineage === 'string' && odai.lineage ? odai.lineage : odai.id, hit = null;
+    (o.acts || []).forEach(function (x) { if (!hit && x && (x.odaiId === oid || x.odaiId === odai.id)) hit = x; });
     if (hit) {
       if (!q || hit.title === q) return { id: hit.id, act: hit, created: false, changed: false };
       var X = clone(hit);
@@ -171,16 +259,15 @@
     var theme = MD.THEMES.indexOf(odai.makeTheme) >= 0 ? odai.makeTheme : null, a;
     if (theme) {
       var th = MD.theme(theme), variant = th.variants.indexOf(odai.makeVariant) >= 0 ? odai.makeVariant : th.sample;
-      a = newAct({ id: o.id, title: title, origin: 'today', theme: theme, stage: stageOf(theme, variant, 'sample'), now: o.now });
+      a = newAct({ id: o.id, title: title, origin: 'today', theme: theme, stage: stageOf(theme, variant, 'sample'), at: o.at });
     } else {
       var steps = Array.isArray(odai.makeSteps) && odai.makeSteps.length ? odai.makeSteps : MD.theme('mc').extSteps;
       // 題材は 'odai'（写真のダミー・任せる候補はお題から。3 題材の中身を出さない）
-      a = newAct({ id: o.id, title: title, origin: 'today', theme: ODAI_THEME, ext: { link: null, photos: [], visible: [] }, steps: steps, stepsKind: 'ext', now: o.now });
+      a = newAct({ id: o.id, title: title, origin: 'today', theme: ODAI_THEME, ext: { link: null, photos: [], visible: [] }, steps: steps, stepsKind: 'ext', at: o.at });
     }
-    a.odaiId = odai.id;
+    a.odaiId = oid;
     pushMsg(a, { who: 'record', k: 'odai_rec', v: { q: odai.title, step: odai.firstStep, need: odai.need }, text: o.recText || null });
     if (own) pushMsg(a, { who: 'child', text: q });
-    if (theme) say(a, 'open', o.mode);
     return { id: a.id, act: a, created: true, changed: false };
   }
 
@@ -194,7 +281,7 @@
     (o.acts || []).forEach(function (x) { if (!hit && x && x.projectId === p.id) hit = x; });
     if (hit) return { id: hit.id, act: hit, created: false };
     var a = newAct({ id: o.id, title: MD.pick(p.title, o.mode), origin: 'project', theme: PROJECT_THEME, catalogId: p.catalogId || null,
-      ext: { link: null, photos: [], visible: [] }, steps: p.steps, stepsKind: 'ext', now: o.now });
+      ext: { link: null, photos: [], visible: [] }, steps: p.steps, stepsKind: 'ext', at: o.at });
     a.projectId = p.id;
     return { id: a.id, act: a, created: true };
   }
@@ -251,9 +338,9 @@
     var A = clone(a);
     ch = clone(ch);
     if (withName && ch.who === 'own' && !ch.with) ch.with = withName;
-    var photoLike = ch.kind === 'photo' || ch.kind === 'shot';
+    var photoLike = ch.kind === 'photo' || ch.kind === 'shot', s = stampOf();
     ch.id = nid(A, 'c');
-    ch.time = tick(A);
+    ch.at = s.at; ch.time = s.time; ch.day = s.day;
     ch.snap = clone(photoLike ? committed(A) : A.stage);
     ch.vis = A.ext ? clone(visibleIds(A)) : null;
     refreshSteps(A);
@@ -356,7 +443,9 @@
   function odaiDef(a) { var K = DES.todayData; return K && a && a.odaiId ? K.get(a.odaiId) : null; }
   // 対話のお題（§AF。news / talk / philo）から作った活動: 必要な物の欄が無いので、任せる候補は「手順を整理して」だけ（レビューへの裁定）
   function isDialogAct(a) { var K = DES.todayData; return !!(isOdaiExt(a) && a.odaiId && K && K.getDialog && K.getDialog(a.odaiId)); }
-  function odaiOpts(a) { return isDialogAct(a) ? ['osteps'] : ODAI_OPTS.slice(); }
+  // 題材を決めない外の記録（EXT_THEME）も「手順を整理して」だけ（必要な物のデータが無い）
+  function odaiOpts(a) { return isDialogAct(a) || isPlainExt(a) ? ['osteps'] : ODAI_OPTS.slice(); }
+  function isNoteExt(a) { return isOdaiExt(a) || isProjectExt(a) || isPlainExt(a); }
   // メモの中身: お題のデータから（today-data.js の leaveNote）。データが無い時は活動の手順だけ
   function odaiNote(a, opt, alt) {
     var pjd = isProjectExt(a) ? MD.project(a.projectId) : null;
@@ -374,17 +463,18 @@
     // 同じ種類のメモを作り直す時は、もう一方の形にする（§U-11 指摘 13 と同じ）
     var alt = !!(card && card.kind === 'note' && card.opt === opt && !card.alt), n = odaiNote(A, opt, alt);
     if (!n) return { act: a, ids: [] };
-    var spec = { kind: 'note', theme: isProjectExt(A) ? PROJECT_THEME : ODAI_THEME, title: clone(n.title), lines: clone(n.lines), opt: opt, alt: alt };
-    spec.batch = nid(A, 'b'); spec.time = tick(A, 1); spec.id = nid(A, 'k'); spec.state = 'making';
+    var spec = { kind: 'note', theme: isProjectExt(A) ? PROJECT_THEME : (isPlainExt(A) ? EXT_THEME : ODAI_THEME), title: clone(n.title), lines: clone(n.lines), opt: opt, alt: alt };
+    var st = stampOf();
+    spec.batch = nid(A, 'b'); spec.at = st.at; spec.time = st.time; spec.id = nid(A, 'k'); spec.state = 'making';
     A.shelf = [spec].concat(A.shelf);
     return { act: A, ids: [spec.id], opt: opt };
   }
   function remakeOptions(a, c) {
-    if (isOdaiExt(a) || isProjectExt(a)) return odaiOpts(a);
+    if (isNoteExt(a)) return odaiOpts(a);
     return c && c.kind === 'note' ? ['calc', 'steps', 'cmd'] : ['redo', 'two', 'fix'];
   }
   function leaveOptions(a) {
-    if (isOdaiExt(a) || isProjectExt(a)) return odaiOpts(a);
+    if (isNoteExt(a)) return odaiOpts(a);
     if (a.stage && a.stage.kind === 'sample') return ['find', 'one'];
     if (a.stage && a.stage.kind === 'draft') return ['redo', 'two', 'fix'];
     if (a.ext) return ['calc', 'steps', 'cmd'];
@@ -437,14 +527,14 @@
   // 任せる（作っている の破線カードを置く。中身は settle で決まる）
   function leave(a, opt, o) {
     o = o || {};
-    if (isOdaiExt(a) || isProjectExt(a)) return leaveOdai(a, opt, o);
+    if (isNoteExt(a)) return leaveOdai(a, opt, o);
     if (opt === 'aspect') opt = (isToolAct(a) ? TOOL_ASPECT : ASPECT_OPT)[Math.max(0, Math.min(4, o.aspect | 0))];
     var A = clone(a), base = o.card ? { stage: cardStage(find(A.shelf, o.card)), fromStage: false } : baseStage(A);
     if (!base.stage || (base.stage.kind === 'note' && opt !== 'calc' && opt !== 'steps' && opt !== 'cmd')) base = baseStage(A);
     var specs = specsFor(A, opt, base);
     if (!specs.length) return { act: a, ids: [] };
-    var batch = nid(A, 'b'), time = tick(A, 1), ids = [];
-    specs.forEach(function (s) { s.id = nid(A, 'k'); s.batch = batch; s.time = time; s.state = 'making'; ids.push(s.id); });
+    var batch = nid(A, 'b'), st = stampOf(), ids = [];
+    specs.forEach(function (s) { s.id = nid(A, 'k'); s.batch = batch; s.at = st.at; s.time = st.time; s.state = 'making'; ids.push(s.id); });
     A.shelf = specs.concat(A.shelf);
     return { act: A, ids: ids, opt: opt };
   }
@@ -463,7 +553,7 @@
     return A;
   }
   function cardTitle(c) { return c.kind === 'note' ? c.title : MD.variant(c.theme, c.variant).title; }
-  // これにする: 作業対象に取り込み、変化 +1（バディ）。同じ回に出た他の案は「見送った案」へ
+  // これにする: 作業対象に取り込み、変化 +1（本人の操作。LS-18-14: 道具が出した案の採用は who 'own'）。同じ回に出た他の案は「見送った案」へ
   function adopt(a, cardId) {
     var A = clone(a), c = find(A.shelf, cardId);
     if (!c || c.state === 'making') return null;
@@ -473,7 +563,7 @@
     c.state = 'adopted';
     if (!wasPassed) A.shelf.forEach(function (x) { if (x.batch === c.batch && x.id !== c.id && x.state === 'new') x.state = 'passed'; });
     var what = c.kind === 'value' ? { k: 'left_rec', v: { what: c.what } } : { k: 'adopt_rec', v: { what: cardTitle(c) } };
-    return commitChange(A, { who: 'ai', kind: 'adopt', what: what, cardId: c.id, advance: true });
+    return commitChange(A, { who: 'own', kind: 'adopt', what: what, cardId: c.id, advance: true });
   }
   // 違う（棚のカード）: 見送った案へ畳む。5 秒は戻せる
   function decline(a, cardId) {
@@ -490,23 +580,21 @@
   }
 
   // ---------- 外の記録（写真・スクショ） ----------
-  function addPhoto(a, kind) {
+  // 本物の写真（DES.photo.pick の {data,w,h}）を 1 枚足して変化 +1。写真は { id, at, time, kind, data, w, h }（contract-LS §LS-12）。
+  // 形が違う・1 活動 12 枚を超える時は null。o: { what（変化の文。既定は「写真を足した」）, advance（既定 true） }
+  function addPhoto(a, kind, img, o) {
+    o = o || {};
+    if (!validPhoto(img) || photoRoom(a) <= 0) return null;
     var A = clone(a);
     if (!A.ext) A.ext = { link: null, photos: [], visible: [] };
-    var last = A.ext.photos[A.ext.photos.length - 1];
-    // お題の活動の写真はそのお題の線画（ダミー 3 枚を順に。theme 'odai' + odai）
-    var odai = isOdaiExt(A), cnt = odai && DES.todayData ? DES.todayData.photoCount(A.odaiId) : (odai ? 3 : MD.PHOTO_COUNT);
-    var n = last ? (last.n + 1) % cnt : 0;
-    var ph = { id: nid(A, 'ph'), theme: odai ? ODAI_THEME : (last ? last.theme : A.theme), n: n, kind: kind === 'shot' ? 'shot' : 'photo', time: nowOf(A) };
-    if (odai) ph.odai = A.odaiId;
-    // 提案から作った活動の写真は提案のカテゴリの線画（§AE-4）
-    var pjd = isProjectExt(A) ? MD.project(A.projectId) : null;
-    if (pjd) ph.cat = pjd.cat;
+    var k = kind === 'shot' ? 'shot' : 'photo';
+    var ph = { id: nid(A, 'ph'), at: null, time: null, kind: k, data: img.data, w: img.w, h: img.h };
     A.ext.visible = visibleIds(A).concat([ph.id]);
     A.ext.photos.push(ph);
-    var res = commitChange(A, { who: 'own', kind: ph.kind, what: { k: ph.kind === 'shot' ? 'added_shot' : 'added_photo' }, photoId: ph.id, advance: true });
-    res.act.ext.photos[res.act.ext.photos.length - 1].time = res.change.time;
-    return { act: res.act, change: res.change, photo: ph };
+    var res = commitChange(A, { who: 'own', kind: k, what: o.what || { k: k === 'shot' ? 'added_shot' : 'added_photo' }, photoId: ph.id, advance: o.advance !== false });
+    var saved = res.act.ext.photos[res.act.ext.photos.length - 1];
+    saved.at = res.change.at; saved.time = res.change.time;
+    return { act: res.act, change: res.change, photo: saved };
   }
   // 「何を変えた？」（候補 5 つ + 任意の 1 行。確定 Q5）。1 行があれば本人の言葉で、無ければ候補で
   function describePhoto(a, changeId, aspect, line) {
@@ -607,7 +695,7 @@
     return 'unknown';
   }
   function requestOpt(a) {
-    if (isOdaiExt(a) || isProjectExt(a)) return 'osteps';
+    if (isNoteExt(a)) return 'osteps';
     if (a.stage && a.stage.kind === 'sample') return 'one';
     if (a.stage && a.stage.kind === 'draft') return 'fix';
     if (a.ext) return 'cmd';
@@ -624,11 +712,10 @@
     // 自己理解と紐づく活動は題材を選び直さない（Y-8 の 4）。紐づけも外さない
     var theme = A.selfLink ? A.theme : pickTheme(t);
     A.theme = theme;
-    tick(A, 1);
-    addIdeas(A, theme, works);
+    var cards = addIdeas(A, theme, works);
     // 題材が変わったら手順も新しい題材に（§U-11 指摘 8）。作業対象がまだ無ければ候補状態の手順から
     if (A.stepsKind === 'theme' && !A.stage) { A.candidate = true; A.stepIdx = 0; refreshSteps(A); }
-    say(A, 'land', mode);
+    ideasRec(A, cards);
     return { act: A, changed: true };
   }
   function removeQuote(a) {
@@ -653,7 +740,6 @@
     A.theme = s.theme; A.sampleId = s.id;
     if (A.stepsKind === 'theme') { A.candidate = false; if (!A.changes.length) A.stepIdx = 0; refreshSteps(A); }
     if (!A.changes.length) A.base = clone(A.stage);
-    say(A, 'open', mode);
     return A;
   }
   function setNext(a, text) {
@@ -694,7 +780,8 @@
     });
     return out;
   }
-  // 作品に残す（活動は閉じない）。o: { id, at, title, like, date }
+  // 作品に残す（活動は閉じない）。o: { id, at（変化の id。日時ではない）, title, like, status }。
+  // 日時は createdAt（ISO）に持ち、表示の date 'M/D' はそこから導く（LS-18-9）
   // 「今」で残す時、まだ試していない値があれば、保存の前に変化として積む（本人・結果はまだ確かめていない。§U-12 補足 4）
   function withPending(a) {
     if (!isDirty(a)) return a;
@@ -722,8 +809,9 @@
       : (snap ? { stage: clone(snap) } : (photo ? { photo: clone(photo) } : null));
     var title = String(o.title || '').replace(/^\s+|\s+$/g, '') || a.title;
     var like = String(o.like || '').replace(/^\s+|\s+$/g, '');
+    var made = stampOf();
     var work = { id: o.id, actId: a.id, at: ch ? ch.id : null, atTime: ch ? ch.time : null, title: title, like: like || null, from: 'make',
-      theme: a.theme, art: art, roles: roles(a, ch ? ch.id : null), date: o.date || null, snap: clone(st), snapTime: ch ? ch.time : nowOf(a),
+      theme: a.theme, art: art, roles: roles(a, ch ? ch.id : null), createdAt: made.at, date: made.day, snap: clone(st), snapTime: ch ? ch.time : made.time,
       status: status, craft: null, shares: [] };
     // 提案から作った活動の作品は提案の id を持つ（作品展示の種類を提案のカテゴリにする。レビューへの裁定）
     if (a.projectId) work.projectId = a.projectId;
@@ -758,57 +846,35 @@
     return W;
   }
   // 作品に写真・スクショを入れる → 作品 +1 と、外の記録を持つ活動 +1（design-v3 §6-10）
-  // o: { workId, actId, images:[captureId], title, made, madeLine, catalogId, read:{ text, edited, declined }, now, date, mode }
+  // o: { workId, actId, images:[{data,w,h}]（本物の写真 1〜3 枚）, title, fallbackTitle（題が空の時）, made, madeLine, catalogId,
+  //      read:{ text, edited, declined }（本人が書いた「何を作った」。LS-18-13 で who 'own'）, status }
+  // 作品の images[] は活動の写真と同じ { id, at, time, kind, data, w, h }。日時は createdAt（ISO）
   function addCapture(acts, works, o) {
     o = o || {};
-    var caps = (o.images || []).map(MD.capture).filter(Boolean).slice(0, 3);
-    if (!caps.length) return null;
-    var theme = caps[0].theme, th = MD.theme(theme);
-    var title = String(o.title || '').replace(/^\s+|\s+$/g, '') || MD.pick(caps[0].title, o.mode);
-    var a = newAct({ id: o.actId, title: title, origin: 'works', theme: theme, catalogId: o.catalogId || null, steps: th.extSteps, stepsKind: 'ext', now: o.now });
+    var imgs = (o.images || []).filter(validPhoto).slice(0, WORK_PHOTO_MAX);
+    if (!imgs.length) return null;
+    var title = String(o.title || '').replace(/^\s+|\s+$/g, '') || String(o.fallbackTitle || '');
+    var a = newAct({ id: o.actId, title: title, origin: 'works', theme: EXT_THEME, catalogId: o.catalogId || null, steps: MD.EXT_STEPS, stepsKind: 'ext' });
     a.ext = { link: null, photos: [], visible: [] };
     a.baseVis = [];
     var line = String(o.madeLine || '').replace(/^\s+|\s+$/g, '');
     // 写真 1 枚 = 変化 1 つ（本人）。1 行は最初の 1 枚に付ける（§U-11 指摘 15）
-    caps.forEach(function (c, i) {
-      var ph = { id: nid(a, 'ph'), theme: c.theme, n: c.n, kind: 'photo', time: nowOf(a) };
-      a.ext.photos.push(ph);
-      a.ext.visible = a.ext.visible.concat([ph.id]);
-      a = commitChange(a, { who: 'own', kind: 'photo', what: i === 0 && line ? { text: line } : { k: 'added_photo' }, photoId: ph.id, advance: i === 0 }).act;
+    imgs.forEach(function (p, i) {
+      var r = addPhoto(a, 'photo', p, { what: i === 0 && line ? { text: line } : null, advance: i === 0 });
+      if (r) a = r.act;
     });
-    var read = o.read ? clone(o.read) : { text: null, edited: false, declined: true };
-    if (read.text && !read.declined) pushMsg(a, { who: 'buddy', text: read.text, src: 'read' });
-    var work = { id: o.workId, actId: a.id, from: 'capture', title: title, images: caps.map(function (c) { return c.id; }), read: read,
-      made: o.made == null ? null : o.made, madeLine: line || null, catalogId: o.catalogId || null, theme: theme,
-      art: { photo: clone(a.ext.photos[0]) }, roles: roles(a), date: o.date || null, like: null,
-      at: a.changes[a.changes.length - 1].id, atTime: a.changes[a.changes.length - 1].time, snap: clone(curState(a)),
+    var rd = o.read || {}, text = typeof rd.text === 'string' ? rd.text.replace(/^\s+|\s+$/g, '') : '';
+    var read = text && !rd.declined ? { text: text, edited: true, declined: false, who: 'own' } : { text: null, edited: !!rd.edited, declined: true, who: 'own' };
+    var made = stampOf(), last = a.changes[a.changes.length - 1];
+    var work = { id: o.workId, actId: a.id, from: 'capture', title: title, images: a.ext.photos.map(clone), read: read,
+      made: o.made == null ? null : o.made, madeLine: line || null, catalogId: o.catalogId || null, theme: EXT_THEME,
+      art: { photo: clone(a.ext.photos[0]) }, roles: roles(a), createdAt: made.at, date: made.day, like: null,
+      at: last.id, atTime: last.time, snap: clone(curState(a)),
       // 写真から入れる作品の既定は完成（外で作ったものを撮る想定。§W-1）
       status: pickStatus(o.status, 'done'), craft: null, shares: [] };
     return { activities: [a].concat(acts || []), works: [work].concat(works || []), work: work, act: a };
   }
 
-  // ---------- 決定論のデモ（render / check 用。#make/demo-* で開くと同じものが作られる） ----------
-  function demo(id, o) {
-    o = o || {};
-    var base = { id: id, now: o.now || '10:20', mode: o.mode, works: o.works };
-    if (id === 'demo-mc' || id === 'demo-py' || id === 'demo-circuit') return fromSample(id.slice(5), base);
-    if (id === 'demo-cand') { base.origin = 'talk'; return fromText('Python のゲーム作りやってみたい', base); }
-    if (id === 'demo-full') {
-      var a = fromSample('mc', base), r;
-      a = setParam(a, 'size', 6); r = test(a); a = r.act;
-      pushMsg(a, { who: 'buddy', r: 'test', text: MD.testReply(a.stage, r.key, r.from, o.mode), change: r.change.id });
-      a = setParam(a, 'block', 1); r = test(a); a = r.act;
-      pushMsg(a, { who: 'child', text: 'もう少し大きくしたい' });
-      r = leave(a, 'one'); a = settle(r.act, r.ids);
-      var name = cardNames(a.shelf, o.mode)[r.ids[0]], ad = adopt(a, r.ids[0]);
-      a = ad.act;
-      // 画面の「これにする」と同じ 1 文（i18n の adopt_reply_pre と同じ形）
-      pushMsg(a, { who: 'buddy', r: 'left', text: '「' + name + '」にしたよ。' + MD.pick(MD.replies.left, o.mode), change: ad.change.id });
-      r = leave(a, 'find'); a = settle(r.act, r.ids);
-      return a;
-    }
-    return null;
-  }
   // 相談の返事の「違う」が戻すもの（§U-11 指摘 9）: 返事に紐づく変化の 1 つ前へ / 紐づく新しいカードは見送る
   function replyTarget(a, m) {
     var out = { revertTo: null, cards: [] };
@@ -856,8 +922,32 @@
     if (badSrc) delete A.quote.src;
     return A;
   }
+  // at（ISO）の無い記録の移行（contract-LS §LS-12）: 活動の base・変化・相談列・棚・写真に、表示の 'H:MM' から今日の ISO を補う。
+  // 補う物が無ければ同じものを返す（書き換えない）。day（'M/D'）が無ければ at から
+  function fillAt(a) {
+    if (!a || typeof a !== 'object') return a;
+    function need(x) { return x && typeof x === 'object' && (typeof x.at !== 'string' || !x.at); }
+    var lists = [a.changes, a.thread, a.shelf, a.ext && a.ext.photos], miss = need(a) || typeof a.day !== 'string';
+    lists.forEach(function (l) { if (Array.isArray(l) && l.some(need)) miss = true; });
+    if (!miss) return a;
+    var A = clone(a);
+    if (need(A)) A.at = isoFromTime(A.baseTime);
+    if (typeof A.day !== 'string') A.day = dayOf(A.at);
+    [A.changes, A.thread, A.shelf, A.ext && A.ext.photos].forEach(function (l) {
+      if (Array.isArray(l)) l.forEach(function (x) { if (need(x)) x.at = isoFromTime(x.time); });
+    });
+    return A;
+  }
+  // 作品の日時（createdAt）が無ければ表示の時刻から今日の ISO を補う（LS-18-9。at は変化の id のまま）
+  function fillCreated(w) {
+    if (!w || typeof w !== 'object' || (typeof w.createdAt === 'string' && w.createdAt)) return w;
+    var W = clone(w);
+    W.createdAt = isoFromTime(W.atTime || W.snapTime);
+    if (typeof W.date !== 'string' || !W.date) W.date = dayOf(W.createdAt);
+    return W;
+  }
   function migrate(a, resolve) {
-    a = fixSelfLink(fixOdaiTheme(a));
+    a = fixSelfLink(fixOdaiTheme(fillAt(a)));
     if (a && a.v >= SCHEMA) return a;
     var A = clone(a);
     // 作業対象の主の種類で決める（§U-12 補足 3）: 見本・バディの試作なら theme（写真があっても）、外の記録だけなら ext / build
@@ -945,16 +1035,91 @@
     var total = Math.max(1, Math.ceil((samples ? MD.samples : MD.projects).length / (samples ? 3 : 4)));
     return trySave(st, ['makeSide'], function (s) { s.makeSide[key] = ((cur | 0) + 1) % total; }, save);
   }
-  // §AE-6: 見本を足した回が古ければ不足分の活動と作品を足し、活動・作品・番号を順に保存する。番号を進めるのは全部保存できた時だけ
-  // （1 つでも失敗したら足した見本も番号も前に戻す。次の読み込みでまた足す）。本人が外した見本は MD.addSeeds が足さない
-  function applySeeds(s, save) {
-    if (!s.makeSide || s.makeSide.seedV >= MD.SEED_V) return true;
-    var add = MD.addSeeds(s.activities, s.works, s.makeSide.seedV);
-    return trySave(s, add.changed ? ['activities', 'works', 'makeSide'] : ['makeSide'], function (x) {
-      if (add.changed) { x.activities = add.activities; x.works = add.works; }
-      x.makeSide.seedV = MD.SEED_V;
-    }, save);
+
+  // ---------- 工場から届いた素材（contract-LS §LS-12 / LS-18-10）: 配信の形 → 画面の形（DOM に触れない） ----------
+  // 知らない項目は無視・無い項目は null。schema 1 / 2 のどちらでも落ちない。題・要約から主張の印 [cN] を除く。spark は持たない
+  function stripMarks(t) { return String(t == null ? '' : t).replace(/\[c\d+\]/g, '').replace(/\s+$/, ''); }
+  function strOr(v) { return typeof v === 'string' && v.replace(/\s/g, '') ? stripMarks(v).replace(/^\s+/, '') : null; }
+  // 配信の URL は工場の中の相対パス（/api/library/files/…）だけ受ける（別のオリジン・// 始まりは捨てる）
+  function relUrl(u) { return typeof u === 'string' && /^\/api\/library\/files\/[^\s?#]+$/.test(u) && u.indexOf('..') < 0 ? u : null; }
+  function normMaterial(x) {
+    if (!x || typeof x !== 'object' || typeof x.material_id !== 'string' || !x.material_id || !strOr(x.title)) return null;
+    var schema = x.schema_version === 2 ? 2 : 1, parts = Array.isArray(x.parts) ? x.parts.filter(function (p) { return p && typeof p === 'object'; }) : [];
+    var read = { body: null, elementary: null, secondary: null };
+    parts.forEach(function (p) {
+      if (schema === 2) { if (!read.body) read.body = relUrl(p.body_url); return; }
+      (Array.isArray(p.variants) ? p.variants : []).forEach(function (v) {
+        if (!v || typeof v !== 'object') return;
+        var u = relUrl(v.url), au = v.audience === 'elementary' || v.audience === 'secondary' ? v.audience : null;
+        if (u && au && !read[au]) read[au] = u;
+      });
+    });
+    // 「読む」は schema 2 の parts[0].body_url（無ければ他の part）・schema 1 は表示モードに合う audience の url
+    if (schema === 2 && parts[0] && relUrl(parts[0].body_url)) read.body = relUrl(parts[0].body_url);
+    return {
+      id: x.material_id, title: strOr(x.title), schema: schema,
+      summary: schema === 2 ? strOr(x.summary) : null, summaryEl: strOr(x.summary_elementary), summarySec: strOr(x.summary_secondary),
+      kinds: (Array.isArray(x.kinds) ? x.kinds : []).filter(function (k, i, l) { return typeof k === 'number' && k % 1 === 0 && k >= 1 && k <= 8 && l.indexOf(k) === i; }),
+      steps: parts.map(function (p) { return strOr(p.title); }).filter(Boolean).slice(0, 8),
+      safety: parts.some(function (p) { return p.needs_supporter_check === true; }),
+      read: read
+    };
   }
+  function normMaterials(j) {
+    if (!j || typeof j !== 'object' || !Array.isArray(j.materials)) return null;
+    var seen = {};
+    return j.materials.map(normMaterial).filter(function (m) { if (!m || seen[m.id]) return false; seen[m.id] = true; return true; });
+  }
+  // 表示モードで読む: 要約（schema 2 は summary・schema 1 は es = 小学生 / js = 中学生の要約）と「読む」の url
+  function materialSummary(m, mode) { return m.schema === 2 ? m.summary : (mode === 'es' ? (m.summaryEl || m.summarySec) : (m.summarySec || m.summaryEl)); }
+  function materialReadUrl(m, mode) {
+    var r = m.read || {};
+    if (m.schema === 2) return r.body || null;
+    return mode === 'es' ? (r.elementary || r.secondary || null) : (r.secondary || r.elementary || null);
+  }
+  // markdown の最小の変換（見出し・段落・箇条書き・太字・リンク）。HTML は通さない（タグは捨てて文字として描く）。
+  // 戻り値はブロックの配列: { t:'h', n, c } / { t:'p', c } / { t:'ul'|'ol', items:[c] }。c は行内の配列: { t:'text'|'b', v } / { t:'a', href, v }
+  // リンクは https:// だけ a にする（相対・他の形は文字のまま）。主張の印 [cN] を除く
+  function mdInline(s) {
+    s = String(s).replace(/<[^>]*>/g, '').replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/`([^`]*)`/g, '$1');
+    // リンクの URL は括弧を 1 段まで含められる（例: …(1) の形）
+    var out = [], re = /\*\*([^*]+)\*\*|__([^_]+)__|\[([^\]]+)\]\(((?:[^()\s]|\([^()\s]*\))+)(?:\s+"[^"]*")?\)/g, last = 0, m;
+    function text(v) { v = v.replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1$2'); if (v) out.push({ t: 'text', v: v }); }
+    while ((m = re.exec(s))) {
+      if (m.index > last) text(s.slice(last, m.index));
+      if (m[1] != null || m[2] != null) out.push({ t: 'b', v: m[1] != null ? m[1] : m[2] });
+      else if (/^https:\/\/[^\s"'<>]+$/.test(m[4])) out.push({ t: 'a', href: m[4], v: m[3] });
+      else text(m[3]);
+      last = re.lastIndex;
+    }
+    if (last < s.length) text(s.slice(last));
+    return out;
+  }
+  function mdBlocks(src) {
+    var lines = String(src == null ? '' : src).replace(/\r\n?/g, '\n').replace(/\[c\d+\]/g, '').split('\n'), out = [], para = [], list = null;
+    function flushP() { if (para.length) { out.push({ t: 'p', c: mdInline(para.join(' ')) }); para = []; } }
+    function flushL() { if (list) { out.push(list); list = null; } }
+    lines.forEach(function (ln) {
+      var s = ln.replace(/\s+$/, '');
+      if (!s.replace(/\s/g, '') || /^\s*(```|~~~|---+$|\*\*\*+$|___+$)/.test(s)) { flushP(); flushL(); return; }
+      var h = /^\s{0,3}(#{1,6})\s+(.*)$/.exec(s), ul = /^\s*[-*+]\s+(.*)$/.exec(s), ol = /^\s*\d+[.)]\s+(.*)$/.exec(s), q = /^\s*>\s?(.*)$/.exec(s);
+      if (h) { flushP(); flushL(); out.push({ t: 'h', n: h[1].length, c: mdInline(h[2].replace(/\s+#+\s*$/, '')) }); return; }
+      if (ul || ol) {
+        flushP();
+        var t = ul ? 'ul' : 'ol';
+        if (list && list.t !== t) flushL();
+        if (!list) list = { t: t, items: [] };
+        list.items.push(mdInline((ul || ol)[1]));
+        return;
+      }
+      flushL();
+      para.push((q ? q[1] : s).replace(/^\s+/, ''));
+    });
+    flushP(); flushL();
+    return out.filter(function (b) { return b.t === 'ul' || b.t === 'ol' ? b.items.length : b.c.length; });
+  }
+  // 相談列の送信に付ける活動の文脈 1 行（contract-LS §LS-12）
+  function ctxLine(title) { return '（作る「' + String(title == null ? '' : title) + '」で）'; }
 
   var pure = {
     pickTheme: pickTheme, fromSample: fromSample, fromText: fromText, fromExt: fromExt, committed: committed, isDirty: isDirty, setParam: setParam,
@@ -963,7 +1128,7 @@
     addPhoto: addPhoto, describePhoto: describePhoto, stepNow: stepNow, stepNext: stepNext, pause: pause, confirmPause: confirmPause, takeStep: takeStep,
     resume: resume, stop: stop, undoStop: undoStop, replyKind: replyKind, requestOpt: requestOpt, editQuote: editQuote, removeQuote: removeQuote,
     undoRemoveQuote: undoRemoveQuote, pickSample: pickSample, setNext: setNext, setTitle: setTitle, roles: roles, saveWork: saveWork, addCapture: addCapture,
-    demo: demo, cardStage: cardStage, pushMsg: pushMsg, lastWhat: lastWhat, reopenAt: reopenAt, replyTarget: replyTarget,
+    cardStage: cardStage, pushMsg: pushMsg, lastWhat: lastWhat, reopenAt: reopenAt, replyTarget: replyTarget,
     finishMaking: finishMaking, cardNames: cardNames, visiblePhotos: visiblePhotos, cardTitle: cardTitle,
     canRevertTo: canRevertTo, restoreState: restoreState, findMsg: findMsg, declineReply: declineReply, undoDeclineReply: undoDeclineReply, migrate: migrate,
     migrateWork: migrateWork, withPending: withPending, fromOdai: fromOdai, isOdaiExt: isOdaiExt, remakeOptions: remakeOptions, ODAI_THEME: ODAI_THEME,
@@ -973,11 +1138,17 @@
     // §AE
     fromProject: fromProject, samplePage: samplePage, projectPage: projectPage, isProjectExt: isProjectExt, PROJECT_THEME: PROJECT_THEME,
     // レビューへの裁定（保存の失敗を戻す）
-    trySave: trySave, addAct: addAct, swapPage: swapPage, applySeeds: applySeeds,
+    trySave: trySave, addAct: addAct, swapPage: swapPage,
     // contract-AD §18-1
     setWith: setWith,
     // 子どもに見える関わり（contract-AD AD-0 / AD-10）
-    rolesParts: rolesParts
+    rolesParts: rolesParts,
+    // 実サイト（contract-LS §LS-12 / LS-18）: 時刻・写真・外の記録・届いた素材・markdown・送信の文脈
+    setClock: setClock, isoNow: isoNow, timeOf: timeOf, dayOf: dayOf, stampOf: stampOf, isoFromTime: isoFromTime, newId: newId,
+    validPhoto: validPhoto, photoRoom: photoRoom, ACT_PHOTO_MAX: ACT_PHOTO_MAX, WORK_PHOTO_MAX: WORK_PHOTO_MAX,
+    fillAt: fillAt, fillCreated: fillCreated, isPlainExt: isPlainExt, EXT_THEME: EXT_THEME, fromMaterial: fromMaterial,
+    normMaterial: normMaterial, normMaterials: normMaterials, materialSummary: materialSummary, materialReadUrl: materialReadUrl,
+    mdBlocks: mdBlocks, mdInline: mdInline, stripMarks: stripMarks, ctxLine: ctxLine, ideasRec: ideasRec
   };
   Object.keys(pure).forEach(function (k) { M[k] = pure[k]; });
   // ---------- あしあと（CONTRACT-v3 §Z-5 / Z-14）: 「もう一度試す」= 同じ始まりから新しい活動。元の活動 a は変えない（既存の活動を再利用しない） ----------
@@ -988,24 +1159,23 @@
     o = o || {};
     if (!a || !o.id) return null;
     var K = DES.todayData, od = a.odaiId ? (o.odai || (K && K.get ? K.get(a.odaiId) : null)) : null, n = null;
-    var base = { id: o.id, now: o.now, mode: o.mode, origin: 'trail', catalogId: a.catalogId || null };
-    if (od) { var r = fromOdai(od, { id: o.id, now: o.now, mode: o.mode, acts: [], recText: o.recText }); n = r ? r.act : null; }
+    var base = { id: o.id, mode: o.mode, origin: 'trail', catalogId: a.catalogId || null };
+    if (od) { var r = fromOdai(od, { id: o.id, mode: o.mode, acts: [], recText: o.recText }); n = r ? r.act : null; }
     else if (isSelfLink(a.selfLink)) {
       n = fromSelf({ id: o.id, linkId: a.selfLink, text: a.quote ? a.quote.text : '', src: a.quote ? a.quote.src : null, variant: a.base && a.base.variant,
-        mode: o.mode, now: o.now, works: o.works });
+        mode: o.mode, works: o.works });
     }
     else if (a.sampleId && sampleDef(a.sampleId)) n = fromSample(a.sampleId, base);
     else if (a.quote && a.quote.text) { base.works = o.works; n = fromText(a.quote.text, base); }
     else if (a.stepsKind === 'ext' || a.stepsKind === 'build') {
       n = newAct({ id: o.id, title: a.title, origin: 'trail', theme: a.theme, catalogId: a.catalogId, ext: { link: a.ext ? a.ext.link : null, photos: [], visible: [] },
-        steps: a.steps, stepsKind: a.stepsKind, now: o.now });
+        steps: a.steps, stepsKind: a.stepsKind });
+      n.baseVis = [];
     } else if (a.base && a.base.kind !== 'note') {
-      n = newAct({ id: o.id, title: a.title, origin: 'trail', theme: a.base.theme || a.theme, catalogId: a.catalogId, stage: clone(a.base), now: o.now });
-      say(n, 'open', o.mode);
+      n = newAct({ id: o.id, title: a.title, origin: 'trail', theme: a.base.theme || a.theme, catalogId: a.catalogId, stage: clone(a.base) });
     } else {
-      n = newAct({ id: o.id, title: a.title, origin: 'trail', theme: a.theme, catalogId: a.catalogId, candidate: true, now: o.now });
-      addIdeas(n, a.theme, o.works);
-      say(n, 'land', o.mode);
+      n = newAct({ id: o.id, title: a.title, origin: 'trail', theme: a.theme, catalogId: a.catalogId, candidate: true });
+      ideasRec(n, addIdeas(n, a.theme, o.works));
     }
     if (!n) return null;
     n.origin = 'trail';
@@ -1014,6 +1184,9 @@
     if (a.odaiId) n.odaiId = a.odaiId;
     // 提案から作った活動（§AE-4）: 提案の id を引き継ぐ（必要な物のメモ・写真のカテゴリ・展示の種類が提案から決まる）
     if (a.projectId) n.projectId = a.projectId;
+    // 届いた素材から作った活動（contract-LS §LS-12）: 素材の id・サポーターと確認の印を引き継ぐ
+    if (a.materialId) n.materialId = a.materialId;
+    if (a.safety) n.safety = true;
     return n;
   }
   pure.fromTrail = M.fromTrail = fromTrail;
@@ -1028,7 +1201,7 @@
     if (hit) return { id: hit.id, act: hit, created: false };
     var theme = MD.THEMES.indexOf(o.theme) >= 0 ? o.theme : 'mc';
     var steps = Array.isArray(o.steps) && o.steps.length ? o.steps : MD.theme(theme).extSteps;
-    var a = newAct({ id: o.id, title: String(o.title), origin: 'gallery', theme: theme, ext: { link: null, photos: [], visible: [] }, steps: steps, stepsKind: 'ext', now: o.now });
+    var a = newAct({ id: o.id, title: String(o.title), origin: 'gallery', theme: theme, ext: { link: null, photos: [], visible: [] }, steps: steps, stepsKind: 'ext', at: o.at });
     a.promiseId = p.id;
     return { id: a.id, act: a, created: true };
   }
@@ -1040,70 +1213,55 @@
   // ここから下はブラウザ専用
   // ======================================================================
 
-  // ---------- 保存（U-8）: 既存の DES.store に des3.activities / des3.works / des3.makeSide を足す ----------
-  var EXTRA = ['activities', 'works', 'makeSide'];
+  // ---------- 保存（contract-LS §LS-2）: des.live.activities / works / makeSide を DES.store.register で足す（見本は seed しない。初回は空） ----------
+  // validate は形の粗い検査だけ（1 件の壊れた活動で全部を既定に戻さない）。1 件ずつの検査・旧データの移行は読み込んだ後に S() が 1 回だけ行う
   var STATES = ['working', 'paused', 'closed', 'stopped'];
-  function isObj(v) { return v && typeof v === 'object' && !Array.isArray(v); }
+  function isObj(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
   function validAct(a) {
     return isObj(a) && typeof a.id === 'string' && typeof a.title === 'string' && Array.isArray(a.changes) && Array.isArray(a.shelf) &&
       Array.isArray(a.thread) && Array.isArray(a.steps) && typeof a.stepIdx === 'number' && STATES.indexOf(a.state) >= 0;
   }
-  // §AE: seedV = 見本を足した回（MD.SEED_V より古ければ読み込み時に足す）/ samplePage・projectPage = 入口の組の位置（リロードで残る）
-  function sideDefaults() { return { chatHidden: false, shelfFolded: false, tab: 'stage', paused: null, lastStop: null, seedV: 0, samplePage: 0, projectPage: 0 }; }
+  function validWork(w) { return isObj(w) && typeof w.id === 'string' && typeof w.title === 'string'; }
+  // samplePage・projectPage = 入口の組の位置（リロードで残る）
+  function sideDefaults() { return { chatHidden: false, shelfFolded: false, tab: 'stage', paused: null, lastStop: null, samplePage: 0, projectPage: 0 }; }
   function count0(v) { return typeof v === 'number' && v >= 0 && v % 1 === 0 && v < 1000 ? v : 0; }
-  var CLEAN = {
-    activities: function (v) { return Array.isArray(v) ? v.filter(validAct) : null; },
-    works: function (v) { return Array.isArray(v) ? v.filter(function (w) { return isObj(w) && typeof w.id === 'string' && typeof w.title === 'string'; }) : null; },
-    makeSide: function (v) {
-      if (!isObj(v)) return null;
-      var d = sideDefaults();
-      return { chatHidden: v.chatHidden === true, shelfFolded: v.shelfFolded === true, tab: v.tab === 'consult' ? 'consult' : 'stage',
-        paused: typeof v.paused === 'string' ? v.paused : d.paused, lastStop: typeof v.lastStop === 'string' ? v.lastStop : d.lastStop,
-        seedV: count0(v.seedV), samplePage: count0(v.samplePage), projectPage: count0(v.projectPage) };
-    }
-  };
-  if (DES.store && !DES.store._make) {
-    var load0 = DES.store.load, save0 = DES.store.save;
-    DES.store._make = true;
-    DES.store.load = function () {
-      var s = load0.apply(DES.store, arguments), failed = false;
-      s.activities = MD.seedActivities(); s.works = null; s.makeSide = sideDefaults();
-      EXTRA.forEach(function (k) {
-        try {
-          var raw = window.localStorage.getItem('des3.' + k);
-          if (raw == null) return;
-          var v = CLEAN[k](JSON.parse(raw));
-          if (v) s[k] = v;
-        } catch (e) { failed = true; }
-      });
-      if (failed) s.saveFailed = true;
-      // 前の版の活動は不足欄を補う（§U-12 指摘 6）。返事の文は今の表示で作って固定する
-      s.activities = s.activities.map(function (a) { return migrate(a, tx); });
-      // 作品が保存されていない（初めて・はじめの状態に戻した）時は見本の作品（§W-6）。活動に結び付くものだけ
-      if (!s.works) s.works = MD.seedWorks(s.activities);
-      // §AE-6: 見本を足した回が古ければ、不足分の活動と作品だけ足して番号を上げる（既存の活動・作品は変えない）。
-      // 番号は読み込みの時に保存する（作品だけ保存する操作が続いても、本人が外した見本を次の読み込みでまた足さないように）。
-      // 番号を進めるのは活動・作品・番号の保存が全部できた時だけ（レビューへの裁定。失敗したら足さずに save_fail、次の読み込みでまた足す）
-      applySeeds(s, function (k) { return save0.call(DES.store, k); });
-      // 前の版の作品は 残した時点（at / snap）を補い（§U-12 補足 2）、§W の欄（status / craft / shares）を補う（§W-5）
-      s.works = normalizeWorks(s.works.map(function (w) { return migrateWork(w, s.activities); }));
-      // 「作っている」の途中で閉じた・読み込んだ活動は、ここで完了させる（§U-11 指摘 11）。新しいカードが入るので棚は開く
-      s.activities = s.activities.map(function (a) {
-        var ids = a.shelf.filter(function (c) { return c.state === 'making'; }).map(function (c) { return c.id; });
-        if (ids.length) s.makeSide.shelfFolded = false;
-        return ids.length ? finishMaking(a, readyLine(settle(a, ids), ids)) : a;
-      });
-      return s;
-    };
-    DES.store.save = function (only) {
-      var ok = save0.call(DES.store, only);
-      if (!only) EXTRA.forEach(function (k) { if (!save0.call(DES.store, k)) ok = false; });
-      return ok;
-    };
+  function cleanSide(v) {
+    var d = sideDefaults();
+    if (!isObj(v)) return d;
+    return { chatHidden: v.chatHidden === true, shelfFolded: v.shelfFolded === true, tab: v.tab === 'consult' ? 'consult' : 'stage',
+      paused: typeof v.paused === 'string' ? v.paused : d.paused, lastStop: typeof v.lastStop === 'string' ? v.lastStop : d.lastStop,
+      samplePage: count0(v.samplePage), projectPage: count0(v.projectPage) };
   }
-
+  if (DES.store && DES.store.register) {
+    DES.store.register('activities', function (v) { return Array.isArray(v); }, function () { return []; });
+    DES.store.register('works', function (v) { return Array.isArray(v); }, function () { return []; });
+    DES.store.register('makeSide', isObj, sideDefaults);
+  }
+  // 読み込んだ状態（DES.store.load が作る DES.state。別タブの変更で作り直される）ごとに 1 回: 壊れた要素を外し、旧データを移行する。
+  // 保存はしない（次の変更の保存で一緒に書かれる）。作品の移行は 残した時点（at / snap）・§W の欄・日時 createdAt を補う
+  // 1 件の移行が例外になっても、その 1 件は読んだままにする（他の記録を巻き込んで消さない）
+  function safely(fn, x) { try { return fn(x); } catch (e) { return x; } }
+  function normalizeState(s) {
+    s.activities = (Array.isArray(s.activities) ? s.activities : []).filter(validAct).map(function (a) { return safely(function (x) { return migrate(x, tx); }, a); });
+    s.makeSide = cleanSide(s.makeSide);
+    s.works = normalizeWorks((Array.isArray(s.works) ? s.works : []).filter(validWork).map(function (w) {
+      return safely(function (x) { return fillCreated(migrateWork(x, s.activities)); }, w);
+    }));
+    // 「作っている」の途中で閉じた・読み込んだ活動は、ここで完了させる（§U-11 指摘 11）。新しいカードが入るので棚は開く
+    s.activities = s.activities.map(function (a) {
+      var ids = a.shelf.filter(function (c) { return c && c.state === 'making'; }).map(function (c) { return c.id; });
+      if (ids.length) s.makeSide.shelfFolded = false;
+      return ids.length ? safely(function (x) { return finishMaking(x, readyLine(settle(x, ids), ids)); }, a) : a;
+    });
+  }
+  var normedFor = null;
   // ---------- 状態の読み書き ----------
-  function S() { return DES.state; }
+  function S() {
+    var s = DES.state;
+    if (s && normedFor !== s) { normedFor = s; normalizeState(s); }
+    return s;
+  }
+  M.ensure = S;
   function T(k, v) { return DES.t(k, v); }
   function H() { return DES.h.apply(null, arguments); }
   function icon(n) { return DES.raw(DES.icon(n)); }
@@ -1127,7 +1285,6 @@
     else { var i = idx(S().activities, a.id); list.splice(i < 0 ? 0 : i, 0, a); }
     S().activities = list;
   }
-  function newId(p) { return DES.plan.newId(p); }
   // 文言の読み（{ k, v } / { r, v } / { text } / [js, es]）
   function tx(x) {
     if (x == null) return '';
@@ -1163,7 +1320,8 @@
   }
   function go(hash) { if (window.location.hash !== hash) window.location.hash = hash; else DES.app.render(); }
   function esc(v) { return window.CSS && CSS.escape ? CSS.escape(v) : String(v).replace(/"/g, '\\"'); }
-  function storeSave(k) { return DES.store.save(k); }
+  // 1 つの鍵の保存。他のページが包んだ save が例外を出しても「保存できなかった」として扱う（画面の状態は trySave が戻す）
+  function storeSave(k) { try { return DES.store.save(k); } catch (e) { return false; } }
   // 保存に失敗した時（共通の約束）: 状態は trySave が戻してある。描き直して押したボタンへフォーカスを戻し、save_fail を出す
   function saveFailUi(sel) {
     DES.app.renderSaveState();
@@ -1172,7 +1330,27 @@
     if (n) n.focus();
     DES.app.toast(T('save_fail'));
   }
-  function today() { var d = DES.data.today.split('-'); return (+d[1]) + '/' + (+d[2]); }
+  // 本物の写真は img（dataURL の形を確かめてから）、無ければ枠だけの線画（contract-LS §LS-12）
+  function photoNode(p) {
+    var ok = DES.photo && DES.photo.valid ? DES.photo.valid(p) : validPhoto(p);
+    if (!ok) return DES.raw(MD.photoArt(p || { theme: EXT_THEME }));
+    return H('img', { class: 'mk-photo', src: p.data, alt: '', width: String(p.w), height: String(p.h), decoding: 'async' });
+  }
+  M.photoNode = photoNode;
+  // 写真の総数（des.live.* の中の全部）が上限（60 枚）に届いていれば true（LS-18-11）
+  function photoFull(adding) {
+    var P = DES.photo, lim = P && P.LIMIT ? P.LIMIT : 60;
+    return !!(P && P.count) && P.count() + (adding || 0) > lim;
+  }
+  function photoLeft() { var P = DES.photo, lim = P && P.LIMIT ? P.LIMIT : 60; return P && P.count ? Math.max(0, lim - P.count()) : lim; }
+  // 写真を選ぶ（本物）。max は 1 活動・1 作品・全体の残りで切る。選ばれた順に、形を確かめたものだけ
+  function pickPhotos(max) {
+    var n = Math.min(max, photoLeft());
+    if (n <= 0 || !DES.photo || !DES.photo.pick) { DES.app.toast(T('photo_full')); return Promise.resolve([]); }
+    return DES.photo.pick({ multiple: n > 1, max: n }).then(function (list) {
+      return (list || []).filter(function (p) { return DES.photo.valid ? DES.photo.valid(p) : validPhoto(p); }).slice(0, n);
+    }, function () { return []; });
+  }
 
   // ---------- 入口から活動を作る（話す bridge / 予定表 / 入口） ----------
   function createAndOpen(a) {
@@ -1184,15 +1362,19 @@
   }
   // 話す の bridge（U-2）: 直近の本人発言で題材を決め、引用枠 + 仮の案 3 つの作業台へ
   M.fromTalk = function () {
-    var msgs = DES.talk.messages(), said = '';
-    for (var i = msgs.length - 1; i >= 0; i--) if (msgs[i].who === 'child') { said = msgs[i].text; break; }
-    createAndOpen(fromText(said, { id: newId('a'), origin: 'talk', now: DES.data.now, mode: mode(), works: S().works }));
+    var T2 = DES.talk || {}, said = '';
+    if (typeof T2.lastOwnText === 'function') said = T2.lastOwnText() || '';
+    else if (typeof T2.messages === 'function') {
+      var msgs = T2.messages() || [];
+      for (var i = msgs.length - 1; i >= 0; i--) if (msgs[i] && (msgs[i].who === 'child' || msgs[i].who === 'user')) { said = msgs[i].text || ''; break; }
+    }
+    createAndOpen(fromText(said, { id: newId('a'), origin: 'talk', mode: mode(), works: S().works }));
   };
   // 学びマップの「これで作る」（CONTRACT-v3 §AB-6）: 入口の「思いつきから」（mk-start）と同じ経路で、言葉から作業台へ
   M.fromIdea = function (text) {
     var t = String(text == null ? '' : text).replace(/^\s+|\s+$/g, '');
     if (!t) return;
-    createAndOpen(fromText(t, { id: newId('a'), origin: 'make', now: DES.data.now, mode: mode(), works: S().works }));
+    createAndOpen(fromText(t, { id: newId('a'), origin: 'make', mode: mode(), works: S().works }));
   };
   // サポーターのアイデアの「作るで試す」（contract-AD §18-3）: 言葉から作るが、本人の言葉の枠には入れない（quote = null）。
   // 活動に idea を持たせ、o.onAdded(a) を同じ change の中で呼んでから作業台へ
@@ -1200,7 +1382,7 @@
     o = o || {};
     var t = String(o.text == null ? '' : o.text).replace(/^\s+|\s+$/g, '');
     if (!t || !o.id) return null;
-    var a = fromText(t, { id: newId('a'), origin: 'talk', now: DES.data.now, mode: mode(), works: S().works });
+    var a = fromText(t, { id: newId('a'), origin: 'talk', mode: mode(), works: S().works });
     a.quote = null;
     a.idea = o.id;
     mk().makeFrom = null;
@@ -1208,18 +1390,47 @@
     go('#make/' + a.id);
     return a;
   };
-  // 予定表 mine 行の「作るで開く」: その取り組みの制作中があれば作業台、無ければ入口（同じカテゴリの見本を先頭に）
+  // 予定表 mine 行の「作るで開く」（contract-LS §LS-12）: row = L1 の行 { id（event id）, title, start, end, activity? }。
+  // 取り組み id（row.activity。無ければ題の別名照合 DES.aliases）があれば: その取り組みの制作中があれば作業台、無ければ入口（同じカテゴリの見本を先頭に）。
+  // 取り組みが分からなければ、題を題名にした外の記録の活動を作って作業台へ（同じ行から作った活動があればそれを開く）
   var CAT_THEME = { minecraft: 'mc', programming: 'py', digital: 'circuit', media: 'stop' };
+  function aliasOf(title) {
+    var t = String(title == null ? '' : title).replace(/^\s+|\s+$/g, ''), hit = null;
+    if (!t) return null;
+    (DES.data.catalog || []).forEach(function (c) { (c.items || []).forEach(function (it) { if (!hit && it.title === t) hit = it.id; }); });
+    var al = DES.aliases || {};
+    if (!hit) Object.keys(al).forEach(function (id) { if (!hit && Array.isArray(al[id]) && al[id].indexOf(t) >= 0) hit = id; });
+    return hit;
+  }
+  function knownCatalog(id) {
+    var ok = false;
+    (DES.data.catalog || []).forEach(function (c) { (c.items || []).forEach(function (it) { if (it.id === id) ok = true; }); });
+    return ok;
+  }
   M.openFromPlan = function (row) {
     if (!row) return;
-    var hit = null;
-    S().activities.forEach(function (a) { if (!hit && row.activity && a.catalogId === row.activity && (a.state === 'working' || a.state === 'paused')) hit = a; });
+    var catId = row.activity && knownCatalog(row.activity) ? row.activity : aliasOf(row.title), hit = null;
+    S().activities.forEach(function (a) { if (!hit && catId && a.catalogId === catId && (a.state === 'working' || a.state === 'paused')) hit = a; });
     if (hit) { openAct(hit.id); return; }
-    var cat = null;
-    DES.data.catalog.forEach(function (c) { c.items.forEach(function (it) { if (it.id === row.activity) cat = c.id; }); });
-    mk().makeFirst = CAT_THEME[cat] || null;
-    mk().makeFrom = row.activity ? { catalogId: row.activity, origin: 'plan' } : null;
-    go('#make');
+    if (catId) {
+      var cat = null;
+      DES.data.catalog.forEach(function (c) { c.items.forEach(function (it) { if (it.id === catId) cat = c.id; }); });
+      mk().makeFirst = CAT_THEME[cat] || null;
+      mk().makeFrom = { catalogId: catId, origin: 'plan' };
+      go('#make');
+      return;
+    }
+    var ev = typeof row.id === 'string' && row.id ? row.id : null, same = null;
+    if (ev) S().activities.forEach(function (a) { if (!same && a.planEventId === ev) same = a; });
+    if (same) { openAct(same.id); return; }
+    var title = String(row.title == null ? '' : row.title).replace(/^\s+|\s+$/g, '') || T('ext_label');
+    var a = fromExt('plain', { id: newId('a'), title: title, origin: 'plan' });
+    if (ev) a.planEventId = ev;
+    mk().makeFrom = null;
+    if (!addAct(S(), a, storeSave)) { saveFailUi(null); return; }
+    S().saveFailed = false;
+    DES.app.commit();
+    go('#make/' + a.id);
   };
   function openAct(id) {
     var a = act(id);
@@ -1237,7 +1448,7 @@
     if (!isSelfLink(o.linkId)) return null;
     var hit = findSelfLink(S().activities, o.linkId);
     if (hit) { openAct(hit.id); return hit.id; }
-    var a = fromSelf({ id: newId('a'), linkId: o.linkId, text: o.text, variant: o.variant || 'memo', src: o.src, mode: mode(), now: DES.data.now, works: S().works });
+    var a = fromSelf({ id: newId('a'), linkId: o.linkId, text: o.text, variant: o.variant || 'memo', src: o.src, mode: mode(), works: S().works });
     if (!a) return null;
     DES.app.change(function () { if (freshCards(a)) S().makeSide.shelfFolded = false; S().activities = [a].concat(S().activities); });
     go('#make/' + a.id);
@@ -1247,7 +1458,7 @@
   M.openOdai = function (odai, question) {
     if (!odai) return null;
     var m = mode();
-    var r = fromOdai(odai, { id: newId('a'), mode: m, now: DES.data.now, acts: S().activities, question: question,
+    var r = fromOdai(odai, { id: newId('a'), mode: m, acts: S().activities, question: question,
       recText: T('odai_rec', { q: MD.pick(odai.title, m), step: MD.pick(odai.firstStep, m), need: MD.pick(odai.need, m) }) });
     if (!r) return null;
     if (r.created) {
@@ -1316,25 +1527,27 @@
 
   // ---------- 描画: 入口（#make） ----------
   function stageArt(st) { return st && st.kind !== 'note' ? MD.art(st) : ''; }
+  // 活動の小さな絵（DOM）。本物の写真があれば img、無ければ線画（外の記録で写真が無い時は枠だけ）
   function actArt(a) {
-    if (a.stage && a.stage.kind !== 'note') return MD.art(a.stage);
+    if (a.stage && a.stage.kind !== 'note') return DES.raw(MD.art(a.stage));
     var vp = visiblePhotos(a);
-    if (vp.length) return MD.photoArt(vp[vp.length - 1]);
+    if (vp.length) return photoNode(vp[vp.length - 1]);
     // お題の活動（theme 'odai'）はお題の絵（3 題材の見本を出さない）
-    if (isOdaiExt(a)) { var od = odaiDef(a); return od ? DES.todayData.cardArt(od) : MD.photoArt({ theme: ODAI_THEME }); }
+    if (isOdaiExt(a)) { var od = odaiDef(a); return DES.raw(od && DES.todayData.cardArt ? DES.todayData.cardArt(od) : MD.photoArt({ theme: ODAI_THEME })); }
     // 提案から作った活動は提案のカテゴリの線画（§AE-4。マイクラの絵に落とさない）
-    if (isProjectExt(a)) { var pjd = MD.project(a.projectId); return MD.catArt(pjd ? pjd.cat : null); }
+    if (isProjectExt(a)) { var pjd = MD.project(a.projectId); return DES.raw(MD.catArt(pjd ? pjd.cat : null)); }
+    if (isPlainExt(a) || a.ext) return DES.raw(MD.photoArt({ theme: EXT_THEME }));
     var th = MD.theme(a.theme), c = a.shelf.filter(function (x) { return x.kind !== 'note'; })[0];
-    return MD.art(c ? cardStage(c) : stageOf(a.theme, th.sample, 'sample'));
+    return DES.raw(MD.art(c ? cardStage(c) : stageOf(a.theme, th.sample, 'sample')));
   }
   function originChip(a) { return H('span', { class: 'pill origin-chip' }, T('origin_' + (a.origin || 'make'))); }
   function projectRow(a) {
     var last = a.changes[a.changes.length - 1], nx = stepNext(a);
     return H('div', { class: 'project-row' }, [
-      H('div', { class: 'project-thumb' }, [DES.raw(actArt(a))]),
+      H('div', { class: 'project-thumb' }, [actArt(a)]),
       H('div', { class: 'project-text' }, [
         H('h3', null, a.title),
-        H('p', { class: 'muted' }, last ? tx(last.what) + ' · ' + today() + ' ' + last.time : T('origin_' + (a.origin || 'make'))),
+        H('p', { class: 'muted' }, last ? tx(last.what) + ' · ' + (last.day || dayOf(last.at)) + ' ' + last.time : T('origin_' + (a.origin || 'make'))),
         nx ? H('p', { class: 'project-next' }, T('next_line') + ': ' + tx(nx)) : null
       ]),
       H('button', { class: 'btn orange small', type: 'button', 'data-action': 'mk-open', 'data-id': a.id }, T('resume_make'))
@@ -1347,6 +1560,8 @@
     return H('article', { class: 'idea-option sample-card' }, [
       H('div', { class: 'sample-art' }, [DES.raw(MD.art(stageOf(s.theme, s.variant, 'sample')))]),
       H('div', { class: 'sample-body' }, [
+        // 見本のラベル（contract-LS §LS-10 / LS-12。見本から始めた活動は本人の活動）
+        H('span', { class: 'pill mk-sample-pill' }, T('sample_label')),
         H('h3', null, MD.pick(v.title, mode())),
         H('p', { class: 'muted' }, T('changeable') + ': ' + changeableText(s.theme)),
         H('button', { class: 'btn orange small', type: 'button', 'data-action': o.action || 'mk-sample', 'data-arg': s.id, 'data-id': o.id || null }, [T('try_sample')])
@@ -1375,7 +1590,7 @@
     return H('article', { class: 'pj-card' }, [
       projectArt(p),
       H('div', { class: 'pj-body' }, [
-        H('span', { class: 'pill pj-chip' }, T('pj_cat_' + p.cat)),
+        H('div', { class: 'mk-pill-row' }, [H('span', { class: 'pill pj-chip' }, T('pj_cat_' + p.cat)), H('span', { class: 'pill mk-sample-pill' }, T('sample_label'))]),
         H('h3', null, MD.pick(p.title, m)),
         H('p', { class: 'pj-what' }, MD.pick(p.what, m)),
         H('p', { class: 'pj-first' }, T('pj_first', { step: MD.pick(p.first, m) })),
@@ -1384,6 +1599,64 @@
         H('button', { class: 'btn orange small', type: 'button', 'data-action': 'mk-project', 'data-arg': p.id }, T('pj_start'))
       ])
     ]);
+  }
+  // ---------- 工場から届いた素材（contract-LS §LS-12 / LS-18-10 / 18-26 / 18-28） ----------
+  // 入口を初めて描く時に 1 回だけ取る（8 秒で打ち切る。自動の再試行はしない。再読み込みで取り直す）。
+  // 0 件・読み込み中は節を出さない。取れなかった時は節の位置に 1 文（mk_factory_fail）。spark は出さない
+  function factoryBase() {
+    if (typeof window.DES_FACTORY_BASE === 'string') return window.DES_FACTORY_BASE.replace(/\/+$/, '');
+    return (DES.factory && typeof DES.factory.base === 'string' ? DES.factory.base : '').replace(/\/+$/, '');
+  }
+  function factoryMs() { return DES.factory && DES.factory.timeoutMs > 0 ? DES.factory.timeoutMs : 8000; }
+  // 工場の GET（abort つき）。ok なら Response
+  function factoryGet(path) {
+    var ctl = typeof AbortController === 'function' ? new AbortController() : null, timer = null;
+    if (ctl) timer = setTimeout(function () { ctl.abort(); }, factoryMs());
+    return fetch(factoryBase() + path, { signal: ctl ? ctl.signal : undefined, cache: 'no-store', redirect: 'error' }).then(function (res) {
+      if (timer) clearTimeout(timer);
+      if (!res.ok) throw new Error('status ' + res.status);
+      return res;
+    }, function (e) { if (timer) clearTimeout(timer); throw e; });
+  }
+  function loadMaterials() {
+    var u = mk();
+    if (u.mat) return;
+    u.mat = { state: 'loading', list: [] };
+    factoryGet('/api/library/available').then(function (res) { return res.json(); }).then(function (j) {
+      var list = normMaterials(j);
+      u.mat = list ? { state: 'ok', list: list } : { state: 'fail', list: [] };
+      paintMaterials();
+    }).catch(function () { u.mat = { state: 'fail', list: [] }; paintMaterials(); });
+  }
+  function material(id) { var l = (mk().mat && mk().mat.list) || []; for (var i = 0; i < l.length; i++) if (l[i].id === id) return l[i]; return null; }
+  function materialCard(m) {
+    var md = mode(), sum = materialSummary(m, md), url = materialReadUrl(m, md);
+    return H('article', { class: 'pj-card mat-card', 'data-fk': 'mat:' + m.id }, [H('div', { class: 'pj-body' }, [
+      m.safety ? H('span', { class: 'pill orange pj-safety' }, T('td_safety')) : null,
+      H('h3', null, m.title),
+      sum ? H('p', { class: 'pj-what' }, sum) : null,
+      m.kinds.length ? H('div', { class: 'mk-pill-row' }, m.kinds.map(function (k) { return H('span', { class: 'pill' }, T('mk_kind_' + k)); })) : null,
+      H('div', { class: 'mat-ops' }, [
+        url ? H('button', { class: 'btn small', type: 'button', 'data-action': 'mk-mat-read', 'data-arg': m.id, 'aria-haspopup': 'dialog' }, T('mk_mat_read')) : null,
+        H('button', { class: 'btn orange small', type: 'button', 'data-action': 'mk-mat-start', 'data-arg': m.id }, T('mk_mat_start'))
+      ])
+    ])]);
+  }
+  function materialSection() {
+    var st = mk().mat;
+    if (!st || st.state === 'loading' || (st.state === 'ok' && !st.list.length)) return null;
+    var kids = [H('div', { class: 'section-head' }, [H('h2', { id: 'mk-mat-h' }, T('mk_factory_h'))])];
+    if (st.state === 'fail') kids.push(H('p', { class: 'empty-line mat-fail' }, T('mk_factory_fail')));
+    else kids.push(H('div', { class: 'pj-grid mat-grid' }, st.list.map(materialCard)));
+    return H('section', { class: 'make-sec make-materials', 'aria-labelledby': 'mk-mat-h' }, kids);
+  }
+  // 届いた時は節の置き場だけ差し替える（入口の入力欄・フォーカスを描き直しで失わない）
+  function paintMaterials() {
+    var slot = document.querySelector('[data-mk-mat]');
+    if (!slot) return;
+    slot.textContent = '';
+    var sec = materialSection();
+    if (sec) slot.appendChild(sec);
   }
   // 入れ替えた直後の描画だけ、新しい組をふわっと出す（150ms。reduced-motion は CSS で止まる）
   function fadeCls(kind) { var u = mk(); if (u.fadeIn !== kind) return ''; u.fadeIn = null; return ' is-fadein'; }
@@ -1403,6 +1676,8 @@
         H('div', { class: 'more-row' }, [H('button', { class: 'link-btn', type: 'button', 'data-action': 'mk-more-samples' }, T('more_samples'))]),
         H('p', { class: 'sr-only', 'aria-live': 'polite', 'data-live': 'samples' }, '')
       ]),
+      // 工場から届いた素材（見本から始めるの下。0 件・読み込み中は何も出さない）
+      H('div', { class: 'mk-mat-slot', 'data-mk-mat': '' }, [materialSection()]),
       // §AE-4「こんなのも作れる」（見本と思いつきの間）
       H('section', { class: 'make-sec make-projects', 'aria-labelledby': 'mk-pj-h' }, [
         H('div', { class: 'section-head' }, [H('div', null, [H('h2', { id: 'mk-pj-h' }, T('pj_h')), H('p', { class: 'sec-sub' }, T('pj_sub'))])]),
@@ -1424,6 +1699,7 @@
       ]),
       H('p', { class: 'make-today' }, [H('a', { class: 'link-btn', href: '#today' }, T('see_today'))])
     ]));
+    loadMaterials();
   }
 
   // ---------- 描画: 作業台（#make/<id>） ----------
@@ -1472,7 +1748,7 @@
     acts.push(H('button', { class: 'icon-btn head-more', type: 'button', 'data-action': 'mk-head-menu', 'data-id': a.id, 'aria-haspopup': 'menu',
       'aria-expanded': u.headMenu ? 'true' : 'false', 'aria-label': T('row_ops', { title: a.title }) }, [icon('more')]));
     var head = H('div', { class: 'studio-header' }, [
-      H('div', { class: 'sh-main' }, [originChip(a), titleEl]),
+      H('div', { class: 'sh-main' }, [originChip(a), a.safety ? H('span', { class: 'pill orange pj-safety' }, T('td_safety')) : null, titleEl]),
       H('div', { class: 'sh-actions' }, acts)
     ]);
     if (u.headMenu) {
@@ -1522,15 +1798,24 @@
     if (!ta) {
       ta = H('textarea', { id: 'mk-composer', rows: '2', placeholder: T('composer_ph'), 'data-ui': 'mk-composer', 'data-act': a.id, value: a.draft || '' });
     } else ta.placeholder = T('composer_ph');
-    var dis = mk().sending || !String(ta.value || '').replace(/\s/g, '');
+    var bs = buddyState(), dis = mk().sending || !bs.ok || !String(ta.value || '').replace(/\s/g, '');
     return H('div', { class: 'composer mk-composer' }, [
       H('label', { class: 'sr-only', for: 'mk-composer' }, T('composer_label')),
       ta,
       H('div', { class: 'composer-bottom' }, [
         H('span', { class: 'hint' }, T('sample_note')),
         H('button', { class: 'btn orange small', id: 'mk-send', type: 'button', 'data-action': 'mk-send', 'data-id': a.id, disabled: dis }, [icon('send'), H('span', null, T('send'))])
-      ])
+      ]),
+      // 送れない時（バディにつながっていない / 返事を待っている）は composer の下に 1 文（contract-LS §LS-12）
+      bs.ok ? null : H('p', { class: 'mk-cannot', role: 'status' }, T('mk_cannot_send'))
     ]);
+  }
+  // 相談列の送り先（contract-LS §LS-12 / LS-18-27）: DES.talk.sendFromMake があれば本物のバディへ直接、無ければ話すの下書きへ。
+  // ok = 今送れるか（DES.live がつながっていて保存の問題が無い。直接送る時は返事待ち pending も無い）
+  function buddyState() {
+    var L = DES.live, direct = !!(DES.talk && typeof DES.talk.sendFromMake === 'function');
+    var avail = !!(L && L.available && !L.issue), pending = !!(L && L.state && L.state.pending);
+    return { ok: avail && !(direct && pending), direct: direct };
   }
   function quoteEl(a) {
     var q = a.quote, u = mk();
@@ -1556,7 +1841,9 @@
     if (q) sec.appendChild(q);
     // サポーターのアイデアから作った活動（contract-AD §18-3）: 引用枠の場所に 読むだけの枠
     var it = !q && a.idea && DES.sup && DES.sup.ideaText ? DES.sup.ideaText(a.idea) : null;
-    if (it) sec.appendChild(H('div', { class: 'quote-frame idea-frame' }, [H('div', { class: 'qf-head' }, [chip('record', T('idea_label', { sup: DES.sup.supName() }))]), H('p', { class: 'qf-text' }, it)]));
+    // サポーターの名前（L6）が無い時は「サポーター」（架空の名前を出さない）
+    var supNm = it && DES.sup.supName ? DES.sup.supName() : null;
+    if (it) sec.appendChild(H('div', { class: 'quote-frame idea-frame' }, [H('div', { class: 'qf-head' }, [chip('record', T('idea_label', { sup: supNm || T('sup') }))]), H('p', { class: 'qf-text' }, it)]));
     var list = H('div', { class: 'message-list', id: 'mk-messages' });
     a.thread.forEach(function (m, i) { list.appendChild(messageEl(a, m, i === a.thread.length - 1)); });
     sec.appendChild(list);
@@ -1599,7 +1886,8 @@
   }
   function stageBlock(a) {
     var st = a.stage, kids = [], dirty = isDirty(a);
-    var label = st.kind === 'draft' ? chip('ai', T('who_ai')) : (st.kind === 'note' ? chip('ai', T('who_ai')) : H('span', { class: 'pill' }, T('sample_label')));
+    // 道具が出した案（試作・メモ）は「仮の案」（contract-LS §LS-12。「バディが作った」と書かない）
+    var label = st.kind === 'draft' || st.kind === 'note' ? chip('ai', T('card_tentative')) : H('span', { class: 'pill' }, T('sample_label'));
     var title = st.kind === 'note' ? tx(st.title) : MD.pick(MD.variant(st.theme, st.variant).title, mode());
     kids.push(H('div', { class: 'stage-top' }, [H('div', { class: 'st-name' }, [label, H('strong', null, title)]),
       H('span', { class: 'untested', 'data-untested': a.id, hidden: !dirty }, T('untested'))]));
@@ -1624,16 +1912,18 @@
     var e = a.ext, u = mk(), photos = visiblePhotos(a), latest = photos[photos.length - 1], kids = [];
     kids.push(H('div', { class: 'stage-top' }, [H('div', { class: 'st-name' }, [H('span', { class: 'pill' }, T('ext_label')), H('strong', null, e.link || a.title)])]));
     if (latest) {
-      kids.push(H('figure', { class: 'photo-main' }, [DES.raw(MD.photoArt(latest)), H('figcaption', null, (latest.kind === 'shot' ? T('add_shot') : T('add_photo')).replace(/を.+$/, '') + ' · ' + latest.time)]));
+      kids.push(H('figure', { class: 'photo-main' }, [photoNode(latest), H('figcaption', null, (latest.kind === 'shot' ? T('add_shot') : T('add_photo')).replace(/を.+$/, '') + ' · ' + latest.time)]));
       if (photos.length > 1) {
         kids.push(H('div', { class: 'photo-thumbs' }, photos.slice(0, -1).reverse().map(function (p) {
-          return H('figure', { class: 'photo-thumb' }, [DES.raw(MD.photoArt(p)), H('figcaption', null, p.time)]);
+          return H('figure', { class: 'photo-thumb' }, [photoNode(p), H('figcaption', null, p.time)]);
         })));
       }
     }
+    // 1 活動 12 枚まで（LS-18-11）。いっぱいの時は押せない
+    var full = photoRoom(a) <= 0;
     kids.push(H('div', { class: 'actions ext-actions' }, [
-      btn(T('add_photo'), 'mk-photo', { id: a.id, arg: 'photo', icon: 'camera' }),
-      btn(T('add_shot'), 'mk-photo', { id: a.id, arg: 'shot', icon: 'plus' }),
+      btn(T('add_photo'), 'mk-photo', { id: a.id, arg: 'photo', icon: 'camera', disabled: full, title: T('photo_full') }),
+      btn(T('add_shot'), 'mk-photo', { id: a.id, arg: 'shot', icon: 'plus', disabled: full, title: T('photo_full') }),
       photos.length >= 2 ? btn(T('compare'), 'mk-compare-photos', { id: a.id, kls: 'ghost' }) : null
     ]));
     if (u.edit && u.edit.type === 'photo' && u.edit.act === a.id) kids.push(photoForm(a));
@@ -1655,10 +1945,10 @@
   function compareItems(a, c) {
     return c.picks.map(function (pid) {
       if (c.src === 'shelf') { var k = find(a.shelf, pid); return k ? { art: k.kind === 'note' ? '' : MD.art(cardStage(k)), lines: k.kind === 'note' ? k.lines : null, label: k.time + ' · ' + (cardName(a, k.id) || tx(cardTitle(k))) + (k.kind === 'value' ? ' · ' + tx(k.what) : '') } : null; }
-      if (c.src === 'photos') { var p = find(a.ext && a.ext.photos, pid); return p ? { art: MD.photoArt(p), label: p.time } : null; }
+      if (c.src === 'photos') { var p = find(a.ext && a.ext.photos, pid); return p ? { node: photoNode(p), label: p.time } : null; }
       var ch = find(a.changes, pid);
       if (!ch) return null;
-      if ((ch.kind === 'photo' || ch.kind === 'shot') && a.ext) { var ph = find(a.ext.photos, ch.photoId); return { art: MD.photoArt(ph), label: ch.time + ' · ' + tx(ch.what) }; }
+      if ((ch.kind === 'photo' || ch.kind === 'shot') && a.ext) { var ph = find(a.ext.photos, ch.photoId); return { node: photoNode(ph), label: ch.time + ' · ' + tx(ch.what) }; }
       return { art: stageArt(ch.snap), lines: ch.snap && ch.snap.kind === 'note' ? ch.snap.lines : null, label: ch.time + ' · ' + tx(ch.what) };
     }).filter(Boolean);
   }
@@ -1669,7 +1959,7 @@
     return H('div', { class: 'compare-view', 'data-fk': 'compare:' + a.id, tabindex: '-1', role: 'group', 'aria-label': T('compare') }, [
       H('div', { class: 'cv-head' }, [H('strong', null, T('compare')), btn(T('close'), 'mk-compare-close', { id: a.id, kls: 'ghost', icon: 'close' })]),
       H('div', { class: 'compare-pair' }, items.map(function (it) {
-        return H('figure', { class: 'compare-item' }, [it.art ? DES.raw(it.art) : H('ul', { class: 'stage-note' }, (it.lines || []).map(function (l) { return H('li', null, tx(l)); })), H('figcaption', null, it.label)]);
+        return H('figure', { class: 'compare-item' }, [it.node || (it.art ? DES.raw(it.art) : H('ul', { class: 'stage-note' }, (it.lines || []).map(function (l) { return H('li', null, tx(l)); }))), H('figcaption', null, it.label)]);
       }))
     ]);
   }
@@ -1720,7 +2010,8 @@
     var title = cardName(a, c.id) || tx(cardTitle(c));
     kids.push(c.kind === 'note' ? H('ul', { class: 'card-note' }, c.lines.map(function (l) { return H('li', null, tx(l)); })) : H('div', { class: 'card-art' }, [DES.raw(MD.art(st))]));
     var body = [H('h3', { class: 'card-title' }, title), H('p', { class: 'card-desc' }, c.kind === 'value' ? tx(c.what) : (c.kind === 'note' ? '' : MD.desc(st, mode()))),
-      H('div', { class: 'card-chips' }, [chip('ai', T('who_ai') + ' ' + c.time, T('ai_proposal') + ' ' + T('who_ai') + ' ' + c.time), c.state === 'adopted' ? H('span', { class: 'chip k-adopted' }, T('adopted')) : null])];
+      // 道具が出した候補の印「仮の案」（contract-LS §LS-12。「バディが作った」と書かない）
+      H('div', { class: 'card-chips' }, [chip('ai', T('card_tentative') + ' ' + c.time), c.state === 'adopted' ? H('span', { class: 'chip k-adopted' }, T('adopted')) : null])];
     if (c.srcTitle) body.push(H('p', { class: 'card-src' }, T('from_capture', { title: c.srcTitle })));
     kids.push(H('div', { class: 'card-body' }, body));
     var ops = [], pt = pickToggle(a, 'shelf', c.id, title);
@@ -1811,11 +2102,7 @@
     var parts = String(arg || '').split('/'), id = parts[0], sub = parts[1] || null, u = mk();
     if (!id) { renderEntry(main); return; }
     var a = act(id);
-    if (!a && /^demo-/.test(id)) {
-      a = demo(id, { now: DES.data.now, mode: mode(), works: S().works });
-      if (a) { S().activities = [a].concat(S().activities); if (!DES.store.save('activities')) S().saveFailed = true; }
-    }
-    // 無い id は一覧へ（履歴に残さない）+ トースト（作品・お題と同じ。§AA-3）
+    // 無い id は一覧へ（履歴に残さない）+ トースト（作品・お題と同じ。§AA-3）。#make/demo-* の自動生成は外した（contract-LS §LS-12）
     if (!a) {
       renderEntry(main);
       if (u.missing !== id) { u.missing = id; DES.app.toast(T('not_found_work')); }
@@ -1823,6 +2110,8 @@
       return;
     }
     renderStudio(main, a);
+    // 相談列から本物のバディへ送るので、バディの接続の確認を先に始めておく（L1。1 回だけ。無ければ何もしない）
+    if (DES.talk && typeof DES.talk.ensureService === 'function') DES.talk.ensureService();
     // 開いたら h1 へ（作品・お題の詳細と同じ）。同じ作業台の描き直しでは動かさない
     if (u.shownStudio !== a.id) { u.shownStudio = a.id; var h = main.querySelector('.studio h1'); if (h) h.focus(); }
     if (sub && !u.opened[arg]) {
@@ -1885,7 +2174,7 @@
     if (b === 'm') { var sec = document.querySelector('.studio-chat'); if (sec && sec.scrollIntoView) sec.scrollIntoView({ block: 'nearest' }); }
   }
 
-  A['mk-sample'] = function (el) { createAndOpen(fromSample(el.getAttribute('data-arg'), { id: newId('a'), now: DES.data.now, mode: mode() })); };
+  A['mk-sample'] = function (el) { createAndOpen(fromSample(el.getAttribute('data-arg'), { id: newId('a'), mode: mode() })); };
   A['mk-open'] = function (el) { openAct(el.getAttribute('data-id')); };
   // §AE-3 / AE-4「別の見本を見る」「別の提案を見る」: 次の組へ（最後の次は最初）。今の組が 150ms で消え、次の組が 150ms で現れる（reduced-motion は即時）。
   // フォーカスはボタンに残し、aria-live で入れ替えたことを伝える。組の位置は makeSide に保存（リロードで残る）。
@@ -1918,7 +2207,7 @@
   A['mk-project'] = function (el) {
     var p = MD.project(el.getAttribute('data-arg'));
     if (!p) return;
-    var r = fromProject(p, { id: newId('a'), mode: mode(), now: DES.data.now, acts: S().activities });
+    var r = fromProject(p, { id: newId('a'), mode: mode(), acts: S().activities });
     if (!r) return;
     if (!r.created) { openAct(r.id); return; }
     // 保存できなければ活動を足さず、作業台へ移らない・トーストも出さない（save_fail。共通の約束）
@@ -1932,11 +2221,35 @@
     var text = mk().ideaText.replace(/^\s+|\s+$/g, '');
     if (!text) return;
     mk().ideaText = '';
-    createAndOpen(fromText(text, { id: newId('a'), origin: 'make', now: DES.data.now, mode: mode(), works: S().works }));
+    createAndOpen(fromText(text, { id: newId('a'), origin: 'make', mode: mode(), works: S().works }));
   };
+  // 入口の「写真を見せる」: 本物の写真を選んで外の記録の活動を作る（選ばなければ何もしない）。題は思いつきの欄の文、無ければ「外で作ったもの」。
+  // 「リンクを貼る」: 思いつきの欄に貼った https のリンクで外の記録の活動を作る（欄がリンクでなければ欄へ案内）。保存できなければ足さない（save_fail）
   A['mk-from-ext'] = function (el) {
-    DES.app.toast(T('demo_media'));
-    createAndOpen(fromExt(el.getAttribute('data-arg'), { id: newId('a'), now: DES.data.now, mode: mode() }));
+    var kind = el.getAttribute('data-arg') === 'link' ? 'link' : 'photo', u = mk(), text = u.ideaText.replace(/^\s+|\s+$/g, '');
+    var sel = '[data-action="mk-from-ext"][data-arg="' + kind + '"]';
+    function place(a) {
+      if (!addAct(S(), a, storeSave)) { saveFailUi(sel); return; }
+      S().saveFailed = false;
+      u.ideaText = '';
+      DES.app.commit();
+      go('#make/' + a.id);
+    }
+    if (kind === 'link') {
+      if (!/^https?:\/\/\S+$/.test(text)) {
+        DES.app.toast(T('mk_link_hint'));
+        var inp = document.getElementById('mk-idea');
+        if (inp) inp.focus();
+        return;
+      }
+      place(fromExt('link', { id: newId('a'), title: T('ext_label'), link: text }));
+      return;
+    }
+    if (photoFull(1)) { DES.app.toast(T('photo_full')); return; }
+    pickPhotos(3).then(function (list) {
+      if (!list.length) return;
+      place(fromExt('photo', { id: newId('a'), title: text && !/^https?:\/\//.test(text) ? text : T('ext_label'), photos: list }));
+    });
   };
   A['mk-show-samples'] = function (el) { var id = el.getAttribute('data-id'); mk().showSamples[id] = true; DES.app.render(); var f = document.querySelector('.mini-samples button'); if (f) f.focus(); };
   A['mk-pick-sample'] = function (el) {
@@ -1950,9 +2263,10 @@
     var r = test(a);
     if (!r) return;
     if (r.same) { DES.app.toast(T('result_label') + ': ' + MD.result(a.stage, mode())); return; }
+    // 試した記録は記録行（バディの固定の返事 MD.testReply は出さない。contract-LS §LS-12）
     change(function () {
       var x = r.act;
-      if (r.key) pushMsg(x, { who: 'buddy', r: 'test', text: MD.testReply(x.stage, r.key, r.from, mode()), change: r.change.id });
+      if (r.key) pushMsg(x, { who: 'record', text: tx(r.change.what), change: r.change.id });
       setAct(x, true);
     });
     if (r.key) afterChatPush();
@@ -2011,11 +2325,10 @@
     var r = adopt(a, cid);
     if (!r) return;
     if (mk().compare && mk().compare.act === a.id) mk().compare = null;
-    var name = cardName(a, cid);
-    // これにした後の 1 文（§U-11 (c)）: 「{案}にしたよ。」+ §7 の「任せた後」の返事。違う でこの採用を戻せる
+    // 採用は本人の操作（LS-18-14）。相談列には記録行で残す（バディの固定の返事「{案}にしたよ。」は出さない。戻すは「前に戻す」）
     change(function () {
       var x = r.act;
-      pushMsg(x, { who: 'buddy', r: 'left', text: T('adopt_reply_pre', { title: name }) + MD.pick(MD.replies.left, mode()), change: r.change.id });
+      pushMsg(x, { who: 'record', text: tx(r.change.what), change: r.change.id });
       setAct(x, true);
     }, { focus: 'stage:' + a.id });
     afterChatPush();
@@ -2118,14 +2431,25 @@
     DES.app.commit({});
     DES.app.focusFk('compare:' + a.id);
   };
+  // 写真・スクショを足す（本物。DES.photo.pick で 1〜3 枚）: 1 枚 = 変化 1 つ。最後の 1 枚に「何を変えた？」を開く。
+  // 1 活動 12 枚・全体 60 枚まで（LS-18-11）。保存できなければ足さずに save_fail（画面の状態を戻す）
   A['mk-photo'] = function (el) {
-    var a = cur(el), kind = el.getAttribute('data-arg');
+    var a = cur(el), kind = el.getAttribute('data-arg') === 'shot' ? 'shot' : 'photo', id = a ? a.id : null;
     if (!a) return;
-    var r = addPhoto(a, kind);
-    change(function () { setAct(r.act, true); mk().edit = { type: 'photo', act: a.id, change: r.change.id, opt: null, value: '' }; });
-    DES.app.toast(T('demo_media'));
-    var f = document.querySelector('.photo-form .opt-chip');
-    if (f) f.focus();
+    var sel = '[data-action="mk-photo"][data-id="' + esc(id) + '"][data-arg="' + kind + '"]';
+    if (photoRoom(a) <= 0 || photoFull(1)) { DES.app.toast(T('photo_full')); return; }
+    pickPhotos(Math.min(3, photoRoom(a))).then(function (list) {
+      var x = act(id), r = null;
+      if (!x || !list.length) return;
+      list.forEach(function (p) { var rr = addPhoto(x, kind, p); if (rr) { x = rr.act; r = rr; } });
+      if (!r) return;
+      if (!trySave(S(), ['activities'], function () { setAct(x, true); }, storeSave)) { saveFailUi(sel); return; }
+      S().saveFailed = false;
+      mk().edit = { type: 'photo', act: id, change: r.change.id, opt: null, value: '' };
+      DES.app.commit({});
+      var f = document.querySelector('.photo-form .opt-chip');
+      if (f) f.focus();
+    });
   };
   A['mk-photo-opt'] = function (el) {
     var e = mk().edit, i = +el.getAttribute('data-arg');
@@ -2176,11 +2500,11 @@
       var d = describePhoto(a, e.change, e.opt, e.value);
       change(function () {
         var x = d.act;
+        // 書いた 1 行は本人の発言、候補だけなら記録行（バディの固定の返事「…んだね。」は出さない。比べるは作業台の「比べる」）
         if (d.what) {
-          var opts = visiblePhotos(x).length >= 2 ? [{ a: 'mk-compare-photos', label: { k: 'compare' } }] : null;
           var line = String(e.value || '').replace(/^\s+|\s+$/g, '');
           if (line) pushMsg(x, { who: 'child', text: line });
-          sayText(x, { r: 'photo', v: { what: d.what }, opts: opts, change: e.change });
+          else pushMsg(x, { who: 'record', text: tx(d.what), change: e.change });
         }
         setAct(x, true);
       }, { focus: 'ext:' + a.id });
@@ -2245,40 +2569,52 @@
     var ta = document.getElementById('mk-composer');
     if (ta) ta.focus();
   };
-  // 相談列の送信（応答はサンプル・決定論。150ms 送信中）
+  // 相談列の送信（contract-LS §LS-12）: 本文の先頭に活動の文脈 1 行「（作る「{title}」で）」を付けて本物のバディへ。返事は話すの画面に残る。
+  // DES.talk.sendFromMake（L1）があれば直接送る（文脈の 1 行は sendFromMake が付ける。送れたら本人の発言を相談列に残し、入力欄を空に。
+  // 失敗は入力欄に残してトースト）。無い間は文脈の 1 行を付けて話すの下書きの末尾に足し、#talk へ移る（DES.talk.prefill と同じ動き）
   function send(a) {
     var ta = document.getElementById('mk-composer'), u = mk();
     if (!ta || u.sending) return;
-    var text = ta.value;
-    if (!text.replace(/\s/g, '')) return;
-    u.sending = true;
-    ta.value = '';
-    var free = !!u.freeReq[a.id];
-    u.freeReq[a.id] = false;
-    change(function () {
-      var x = clone(act(a.id));
-      pushMsg(x, { who: 'child', text: text });
-      x.draft = '';
-      setAct(x, true);
-    });
-    syncSend();
-    setTimeout(function () {
-      u.sending = false;
-      if (!act(a.id)) { syncSend(); return; }
-      var x = clone(act(a.id)), kind = replyKind(x, text, free);
-      if (kind === 'request') { runLeave(x, requestOpt(x)); syncSend(); return; }
-      change(function () {
-        if (kind === 'accept') sayText(x, { k: 'accept_msg', v: { last: { k: 'tokoro', v: { what: lastWhat(x) } } } });
-        else sayText(x, { r: 'unknown' });
-        setAct(x, true);
+    var text = ta.value, bs = buddyState(), id = a.id;
+    if (!text.replace(/\s/g, '') || !bs.ok) { syncSend(); return; }
+    var raw = text.replace(/^\s+|\s+$/g, ''), body = ctxLine(a.title) + '\n' + raw;
+    u.freeReq[id] = false;
+    if (!bs.direct) {
+      ta.value = '';
+      var x0 = act(id);
+      if (x0) { x0 = clone(x0); x0.draft = ''; setAct(x0, false); }
+      if (DES.talk && typeof DES.talk.prefillText === 'function') { DES.talk.prefillText(body); return; }
+      DES.app.change(function () {
+        var st = S(), cur = ((st.draft && st.draft.text) || '').replace(/\s+$/, '');
+        st.draft = { text: cur ? cur + '\n' + body : body, scroll: (st.draft && st.draft.scroll) || 0 };
       });
-      afterChatPush();
+      DES.app.toast(T('prefilled'));
+      DES.ui.focusComposer = true;
+      window.location.hash = '#talk';
+      return;
+    }
+    u.sending = true;
+    syncSend();
+    var p;
+    try { p = Promise.resolve(DES.talk.sendFromMake(raw, a.title)); } catch (e) { p = Promise.resolve({ ok: false }); }
+    p.then(function (res) { return res; }, function () { return { ok: false }; }).then(function (res) {
+      u.sending = false;
+      if (!res || res.ok !== true) {
+        DES.app.toast(res && typeof res.message === 'string' && res.message ? res.message : T('mk_cannot_send'));
+        syncSend();
+        return;
+      }
+      var cur = document.getElementById('mk-composer'), mine = cur && cur.getAttribute('data-act') === id;
+      if (mine && cur.value === text) cur.value = '';
+      // 送っている間に書き足した文は下書きに残す
+      if (act(id)) change(function () { var x = clone(act(id)); pushMsg(x, { who: 'child', text: text }); x.draft = mine ? cur.value : ''; setAct(x, true); });
+      DES.app.toast(T('mk_sent'));
       syncSend();
-    }, 150);
+    });
   }
   function syncSend() {
     var ta = document.getElementById('mk-composer'), b = document.getElementById('mk-send');
-    if (ta && b) b.disabled = mk().sending || !ta.value.replace(/\s/g, '');
+    if (ta && b) b.disabled = mk().sending || !buddyState().ok || !ta.value.replace(/\s/g, '');
   }
   A['mk-send'] = function (el) { var a = cur(el); if (a) send(a); };
 
@@ -2287,7 +2623,8 @@
   function field(label, forId, control) { return H('div', { class: 'field' }, [H('label', { for: forId }, label), control]); }
   // サポーターは名前だけ（回数なし）。並びは rolesParts（純関数）
   function rolesText(r) {
-    var sd = DES.supData, sup = sd && sd.supporter && sd.supporter.name ? [sd.supporter.name] : [];
+    // サポーターの名前は L6 の DES.sup.supName()（無ければ null = サポーターとして見分けない）
+    var nm = DES.sup && typeof DES.sup.supName === 'function' ? DES.sup.supName() : null, sup = nm ? [nm] : [];
     return rolesParts(r, sup).map(function (p) {
       if (p.who === 'sup') return T('roles_with_sup', { sup: p.name });
       return T('roles_count', { who: p.who === 'own' ? T('who_own') : (p.who === 'ai' ? T('who_ai') : p.name), n: p.n });
@@ -2367,7 +2704,7 @@
     if (!a) return;
     // 再試行も毎回フォームの今の値で作る（§U-11 指摘 10）。失敗した試みの作品はメモリにも残さない（§W-5）
     var prevWorks = S().works;
-    var r = saveWork(prevWorks, a, { id: newId('w'), at: d.at || null, title: d.title, like: d.like, status: d.status, date: today() });
+    var r = saveWork(prevWorks, a, { id: newId('w'), at: d.at || null, title: d.title, like: d.like, status: d.status });
     S().works = r.works;
     // 未試行の値を残した時は、積んだ変化を活動にも反映する（保存に失敗しても活動の変化は残す。§U-12 補足 4。戻すのは作品だけ）
     if (r.act !== a) setAct(r.act, true);
@@ -2446,6 +2783,84 @@
     go('#make/' + a.id);
   };
   A['mk-paused-resume'] = function (el) { var id = el.getAttribute('data-id'); change(function () { S().makeSide.paused = null; }); openAct(id); };
+
+  // ---------- 届いた素材を読む（#make-dialog）・この素材で始める（contract-LS §LS-12 / LS-18-10） ----------
+  // 読む: 開いたら見出しと枠だけ先に描き、本文（text/markdown・64KB まで）が届いたら差し替える。取れなければ 1 文（mk_factory_fail）
+  var MD_MAX = 64 * 1024, matSeq = 0;
+  function mdDom(blocks) {
+    function inl(c) {
+      return c.map(function (x) {
+        if (x.t === 'b') return H('strong', null, x.v);
+        if (x.t === 'a') return H('a', { href: x.href, rel: 'noopener noreferrer', target: '_blank' }, x.v);
+        return document.createTextNode(x.v);
+      });
+    }
+    return blocks.map(function (b) {
+      if (b.t === 'h') return H('h' + Math.min(6, b.n + 2), null, inl(b.c));
+      if (b.t === 'ul' || b.t === 'ol') return H(b.t, null, b.items.map(function (it) { return H('li', null, inl(it)); }));
+      return H('p', null, inl(b.c));
+    });
+  }
+  function fetchMarkdown(url) {
+    return factoryGet(url).then(function (res) {
+      var ct = String(res.headers.get('content-type') || ''), len = +res.headers.get('content-length');
+      if (ct.toLowerCase().indexOf('text/markdown') < 0 || len > MD_MAX) throw new Error('type');
+      return res.text();
+    }).then(function (t) { if (t.length > MD_MAX) throw new Error('size'); return t; });
+  }
+  function openMaterial(id, opener) {
+    var m = material(id), url = m ? materialReadUrl(m, mode()) : null, dlg = dlgEl();
+    if (!m || !url) return;
+    var token = ++matSeq;
+    mk().dlg = { type: 'mat', id: id, token: token, state: 'loading', blocks: null };
+    renderMat();
+    DES.app.openDialog(dlg, opener);
+    var c = dlg.querySelector('[data-action="dialog-close"]');
+    if (c) c.focus();
+    fetchMarkdown(url).then(function (text) {
+      var d = mk().dlg;
+      if (!d || d.token !== token) return;
+      d.state = 'ok'; d.blocks = mdBlocks(text);
+      renderMat();
+    }).catch(function () {
+      var d = mk().dlg;
+      if (!d || d.token !== token) return;
+      d.state = 'fail';
+      renderMat();
+    });
+  }
+  function renderMat() {
+    var d = mk().dlg, dlg = dlgEl(), m = d ? material(d.id) : null;
+    if (!d || d.type !== 'mat' || !m) return;
+    var putBack = clearDialog(dlg);
+    dlg.setAttribute('aria-labelledby', 'mk-dlg-h');
+    dlg.appendChild(H('div', { class: 'dialog-head' }, [H('h2', { id: 'mk-dlg-h' }, m.title), H('button', { class: 'icon-btn', type: 'button', 'data-action': 'dialog-close', 'aria-label': T('close') }, [icon('close')])]));
+    var body = H('div', { class: 'dialog-body mk-md', 'aria-busy': d.state === 'loading' ? 'true' : 'false' });
+    if (m.safety) body.appendChild(H('span', { class: 'pill orange pj-safety' }, T('td_safety')));
+    if (d.state === 'fail') body.appendChild(H('p', { class: 'empty-line' }, T('mk_factory_fail')));
+    else if (d.state === 'ok') mdDom(d.blocks || []).forEach(function (n) { body.appendChild(n); });
+    dlg.appendChild(body);
+    dlg.appendChild(H('div', { class: 'dialog-footer' }, [
+      H('button', { class: 'btn primary', type: 'button', 'data-action': 'mk-mat-start', 'data-arg': m.id }, T('mk_mat_start')),
+      H('button', { class: 'btn', type: 'button', 'data-action': 'dialog-close' }, T('close'))
+    ]));
+    putBack();
+  }
+  A['mk-mat-read'] = function (el) { openMaterial(el.getAttribute('data-arg'), el); };
+  // この素材で始める: 外で作る活動（同じ素材の活動があればそれを開く）。保存できなければ足さない（save_fail）
+  A['mk-mat-start'] = function (el) {
+    var m = material(el.getAttribute('data-arg'));
+    if (!m) return;
+    var dlg = dlgEl();
+    if (dlg && dlg.open && dlg.contains(el)) { DES.app.closeDialog(dlg, true); mk().dlg = null; }
+    var r = fromMaterial(m, { id: newId('a'), acts: S().activities });
+    if (!r) return;
+    if (!r.created) { openAct(r.id); return; }
+    if (!addAct(S(), r.act, storeSave)) { saveFailUi('[data-action="mk-mat-start"][data-arg="' + esc(m.id) + '"]'); return; }
+    S().saveFailed = false;
+    DES.app.commit();
+    go('#make/' + r.id);
+  };
 
   // ---------- 入力の受け口 ----------
   function patchStage(a) {

@@ -2,7 +2,9 @@
    一覧 = 完成（大きいカード）+ 残した試作（小さいカード）。詳細の主役は「変わってきたところ」（元の活動の変化のうち、残した時点まで）。
    画面に「版」の語は出さない（時刻で指す。design-v3）。評価の語・件数・順位は出さない。
    純関数（W.group / storyFrames / setStatus / edit / remove / restore / share / unshare / normalize …）は DOM と DES.t に触れず、
-   node からも読める（tools/make-test.js）。変更は DES.store.save('works') → DES.app.commit の 1 経路（失敗したら画面の状態を戻す。§W-5）。 */
+   node からも読める（tools/live-make-test.js）。変更は DES.store.save('works') → DES.app.commit の 1 経路（失敗したら画面の状態を戻す。§W-5）。
+   実サイト（contract-LS §LS-12 / LS-18）: 見本の作品を seed しない（初回は空状態）・写真は本物（images[] に dataURL）・日時は createdAt（ISO）・
+   見せる = 「見せる準備」（教室に届ける仕組みはこれから）・「何を作った」は本人の言葉（read.who 'own'）。 */
 (function (root) {
   'use strict';
   var DES = root.DES = root.DES || {};
@@ -124,7 +126,9 @@
     if (!w || !to.length) return null;
     var list = Array.isArray(w.shares) ? w.shares : [], k = list.length + 1;
     while (find(list, w.id + '-s' + k)) k += 1;
-    var sh = { id: o.id || (w.id + '-s' + k), to: to, scope: o.scope === 'story' ? 'story' : 'work', time: String(o.time || '') };
+    // at（ISO）を持ち、表示の time 'M/D H:MM' は at から導く（o.at が無ければ今）。o.time（表示の文字列）が来たらそれを使う（互換）
+    var st = M.stampOf(o.at), time = o.time != null ? String(o.time) : st.day + ' ' + st.time;
+    var sh = { id: o.id || (w.id + '-s' + k), to: to, scope: o.scope === 'story' ? 'story' : 'work', at: st.at, time: time };
     return { works: patch(works, id, function (x) { x.shares = (Array.isArray(x.shares) ? x.shares : []).concat([clone(sh)]); }), share: sh };
   }
   function unshare(works, id, shareId) {
@@ -152,10 +156,11 @@
     if (scope !== 'story') return out;
     var fr = storyFrames(a, w);
     out.push(fr.length ? { k: 'pv_story', v: { n: fr.length } } : { k: 'pv_story_lost' });
+    // 「何を作った」（本人が書いた read。LS-18-13）は本人の言葉として出す
     var read = w.from === 'capture' && w.read && w.read.text && !w.read.declined ? w.read.text : null;
     // 相手に見せるものには個人名を入れない（§W-4）: 手伝った人は名前でなく「いっしょに作った人 n 回」にまとめる。名前は本人の詳細だけ
     // サポーターの手伝いは回数に入れない（contract-AD AD-0 / AD-10: 子どもに見える面に手伝いの量を出さない。見分け方は make.js rolesParts と同じ名前一致）
-    var r = w.roles || null, withN = 0, withSup = false, sd = DES.supData && DES.supData.supporter, supName = sd ? sd.name : null;
+    var r = w.roles || null, withN = 0, withSup = false, supName = DES.sup && typeof DES.sup.supName === 'function' ? DES.sup.supName() : null;
     if (r && r.people) r.people.forEach(function (p) { if (supName && p.name === supName) withSup = true; else withN += p.n || 0; });
     var rr = r ? { own: r.own || 0, ai: r.ai || 0, with: withN } : null;
     if (rr && withSup) rr.withSup = true;
@@ -175,7 +180,8 @@
   // ======================================================================
   // ここから下はブラウザ専用
   // ======================================================================
-  function S() { return DES.state; }
+  // 読み込んだ状態は作る（make.js）が 1 回だけ移行してから渡す（壊れた要素を外す・createdAt を補う）
+  function S() { return M.ensure ? M.ensure() : DES.state; }
   function T(k, v) { return DES.t(k, v); }
   function H() { return DES.h.apply(null, arguments); }
   function icon(n) { return DES.raw(DES.icon(n)); }
@@ -189,7 +195,6 @@
   function dlgEl() { return document.getElementById('works-dialog'); }
   function act(id) { return find(S().activities || [], id); }
   function work(id) { return find(S().works || [], id); }
-  function stamp() { var p = DES.data.today.split('-'); return (+p[1]) + '/' + (+p[2]); }
   function chip(kind, text, label) {
     var ic = { own: 'quote', ai: 'spark', record: 'record' }[kind];
     return H('span', { class: 'chip src-' + kind, role: 'img', 'aria-label': label || text }, [icon(ic), H('span', null, text)]);
@@ -215,16 +220,19 @@
   function metaText(w) { return [w.date || '', w.atTime || ''].filter(Boolean).join(' '); }
   function toNames(to) { return (to || []).filter(function (t) { return TO.indexOf(t) >= 0; }).map(function (t) { return T('to_' + t); }).join('・'); }
 
-  // 作品の絵（線画 / 写真 / メモ）。cls = 置き場所の印
+  // 作品の絵（線画 / 写真 / メモ）。cls = 置き場所の印。本物の写真は img（M.photoNode が dataURL の形を確かめる）
+  function isPic(p) { return !!(p && typeof p.data === 'string' && (DES.photo && DES.photo.valid ? DES.photo.valid(p) : M.validPhoto(p))); }
   function preview(art, cls) {
     var k = 'work-preview' + (cls ? ' ' + cls : '');
     if (art && art.note) {
       return H('div', { class: k + ' work-note' }, [H('p', { class: 'wn-title' }, MD.pick(art.note.title, mode())),
         H('ul', null, (art.note.lines || []).map(function (l) { return H('li', null, MD.pick(l, mode())); }))]);
     }
+    if (art && isPic(art.photo)) return H('div', { class: k + ' has-photo' }, [M.photoNode(art.photo)]);
     var svg = art && art.photo ? MD.photoArt(art.photo) : (art && art.stage ? MD.art(art.stage) : '');
     return H('div', { class: k + (svg ? '' : ' is-empty') }, svg ? [DES.raw(svg)] : null);
   }
+  W.artNode = preview;
 
   // ---------- 一覧（§W-2） ----------
   function workCard(w, size) {
@@ -279,6 +287,7 @@
   function thumb(fr) {
     var art = fr.art, cls = 'sf-thumb' + (fr.inherited ? ' is-inherited' : '');
     if (art && art.note) return H('span', { class: cls + ' is-note' }, MD.pick(art.note.title, mode()));
+    if (art && isPic(art.photo)) return H('span', { class: cls + ' has-photo' }, [M.photoNode(art.photo)]);
     var svg = art && art.photo ? MD.photoArt(art.photo) : (art && art.stage ? MD.art(art.stage) : '');
     return H('span', { class: cls + (svg ? '' : ' is-empty') }, svg ? [DES.raw(svg)] : null);
   }
@@ -353,18 +362,17 @@
     else kids = [H('p', { class: 'wb-empty' }, T('not_written')), H('div', { class: 'actions' }, [btn(T('write'), 'wd-edit', { id: w.id, arg: field, kls: 'ghost', icon: 'plus', attrs: { 'aria-label': label + ' ' + T('write') } })])];
     return block(w, field, label, kids, [chip('own', T('own_label'), T('own_label') + ' ' + label)]);
   }
-  // バディの見立て（写真から作った作品だけ。琥珀の出所・直す・違う。違うと言った見立ては出さない）
+  // 「何を作った」（写真から作った作品だけ）: 本人が書く本人の言葉（LS-18-13。保存は read.who 'own'・チップは本人の言葉）。
+  // 見立ての生成は無い。前の版の AI の読み取り（who が 'own' でない）だけ「違う」を出す
   function readBlock(w) {
-    var r = w.read || {}, kids, has = r.text && !r.declined;
-    if (editing(w, 'read')) kids = [inlineEdit(w.id, 'read', T('ai_read'), wk().edit.value)];
+    var r = w.read || {}, kids, has = r.text && !r.declined, own = r.who === 'own' || !has;
+    if (editing(w, 'read')) kids = [inlineEdit(w.id, 'read', T('what_made'), wk().edit.value)];
     else {
-      kids = [H('p', { class: 'wb-text' }, has ? r.text : T('ai_read_none')), H('div', { class: 'actions' }, [
-        btn(T('quote_edit'), 'wd-edit', { id: w.id, arg: 'read', kls: 'ghost', attrs: { 'aria-label': T('ai_read') + ' ' + T('quote_edit') } }),
-        has ? btn(T('decline'), 'wd-read-decline', { id: w.id, kls: 'ghost', attrs: { 'aria-label': T('ai_read') + ' ' + T('decline') } }) : null])];
+      kids = [H('p', { class: has ? 'wb-text' : 'wb-empty' }, has ? r.text : T('ai_read_none')), H('div', { class: 'actions' }, [
+        btn(has ? T('quote_edit') : T('write'), 'wd-edit', { id: w.id, arg: 'read', kls: 'ghost', icon: has ? null : 'plus', attrs: { 'aria-label': T('what_made') + ' ' + (has ? T('quote_edit') : T('write')) } }),
+        has && !own ? btn(T('decline'), 'wd-read-decline', { id: w.id, kls: 'ghost', attrs: { 'aria-label': T('what_made') + ' ' + T('decline') } }) : null])];
     }
-    var sec = block(w, 'read', T('ai_read'), kids, [chip('ai', T('who_ai'), T('ai_proposal') + ' ' + T('ai_read'))]);
-    sec.classList.add('is-ai');
-    return sec;
+    return block(w, 'read', T('what_made'), kids, [own ? chip('own', T('own_label'), T('own_label') + ' ' + T('what_made')) : chip('ai', T('who_ai'), T('ai_proposal') + ' ' + T('ai_read'))]);
   }
   function rolesBlock(w) {
     if (!w.roles) return null;
@@ -451,22 +459,15 @@
   }
 
   // ---------- 写真・スクショを入れる（ダイアログ。§U-6 + §W-1 の 2 択） ----------
-  function syncDefaults(d) {
-    var c = MD.capture(d.imgs[0]);
-    if (!c) return;
-    if (!d.titleEdited) d.title = MD.pick(c.title, mode());
-    if (!d.madeEdited) d.made = c.made;
-    if (!d.catEdited) d.catalogId = c.catalogId || '';
-    if (!d.read.edited) d.read = { text: MD.pick(c.read, mode()), edited: false, declined: false };
-  }
+  // 画像は本物（DES.photo.pick で選んだ 1〜3 枚。contract-LS §LS-12）。見本の題・見立て・分類を流し込まない（本人が書く）。
+  // d.pics = 選んだ写真（最大 3 枚）、d.imgs = そのうち作品に入れるもの（押すと外す・戻す。最後の 1 枚は外せない）
   W.openCapture = function (opener) {
-    var d = { type: 'capture', imgs: [MD.captures[0].id], title: '', titleEdited: false, made: null, madeEdited: false, madeLine: '', catalogId: '', catEdited: false,
-      read: { text: null, edited: false, declined: false }, readEdit: null, status: 'done', failed: false };
-    syncDefaults(d);
+    var d = { type: 'capture', pics: [], imgs: [], title: '', titleEdited: false, made: null, madeEdited: false, madeLine: '', catalogId: '', catEdited: false,
+      read: { text: null, edited: false, declined: false, who: 'own' }, readEdit: null, status: 'done', failed: false, picking: false };
     wk().dlg = d;
     render();
     DES.app.openDialog(dlgEl(), opener);
-    var f = dlgEl().querySelector('.cap-thumb');
+    var f = dlgEl().querySelector('[data-action="wk-file"]');
     if (f) f.focus();
   };
   function render() {
@@ -485,15 +486,16 @@
     dlg.setAttribute('aria-labelledby', 'wk-h');
     dlg.appendChild(dialogHead(T('add_capture')));
     var body = H('div', { class: 'dialog-body' });
-    // 画像（1〜3 枚。モックはダミーの線画から選ぶ）
+    // 画像（本物の写真 1〜3 枚。選んだ写真が無い間は「写真を足す」だけ）
+    var room = M.WORK_PHOTO_MAX - d.pics.length;
     body.appendChild(H('fieldset', { class: 'cap-images' }, [
       H('legend', null, T('images')),
-      H('div', { class: 'cap-thumbs' }, MD.captures.map(function (c) {
-        var on = d.imgs.indexOf(c.id) >= 0, only = on && d.imgs.length === 1;
-        return H('button', { class: 'cap-thumb' + (on ? ' on' : ''), type: 'button', 'data-action': 'wk-img', 'data-arg': c.id, 'aria-pressed': on ? 'true' : 'false',
-          'aria-disabled': only ? 'true' : null, 'aria-label': T('images') + ': ' + MD.pick(c.title, mode()) }, [DES.raw(MD.photoArt({ theme: c.theme, n: c.n })), on ? H('span', { class: 'cap-check', 'aria-hidden': 'true' }, [icon('check')]) : null]);
-      })),
-      btn(T('add_photo'), 'wk-file', { kls: 'ghost', icon: 'camera' })
+      d.pics.length ? H('div', { class: 'cap-thumbs' }, d.pics.map(function (p, i) {
+        var on = d.imgs.indexOf(p.id) >= 0, only = on && d.imgs.length === 1;
+        return H('button', { class: 'cap-thumb' + (on ? ' on' : ''), type: 'button', 'data-action': 'wk-img', 'data-arg': p.id, 'aria-pressed': on ? 'true' : 'false',
+          'aria-disabled': only ? 'true' : null, 'aria-label': T('images') + ': ' + (i + 1) }, [M.photoNode(p), on ? H('span', { class: 'cap-check', 'aria-hidden': 'true' }, [icon('check')]) : null]);
+      })) : null,
+      btn(T('add_photo'), 'wk-file', { kls: 'ghost', icon: 'camera', disabled: room <= 0 || d.picking, title: T('photo_full') })
     ]));
     body.appendChild(H('div', { class: 'field' }, [H('label', { for: 'wk-title' }, T('title_label')),
       H('input', { id: 'wk-title', type: 'text', 'data-ui': 'wk', 'data-key': 'title', value: d.title, autocomplete: 'off' })]));
@@ -512,22 +514,22 @@
     body.appendChild(H('div', { class: 'field' }, [H('label', { for: 'wk-cat' }, T('which_activity')), H('select', { id: 'wk-cat', 'data-ui': 'wk', 'data-key': 'catalogId' }, cats)]));
     // 完成 / 試作（§W-1。既定 = 完成）
     body.appendChild(M.statusField('wk', d.status, 'wk-status'));
-    // バディの見立て（本人の言葉とは別欄。直す・違う）
-    var rd = d.read, readKids = [H('div', { class: 'ar-head' }, [chip('ai', T('ai_read'))])];
+    // 「何を作った」は本人が書く本人の言葉（LS-18-13。見立ての生成は無い）。直すで書く
+    var rd = d.read, readKids = [H('div', { class: 'ar-head' }, [chip('own', T('own_label'))])];
     if (d.readEdit != null) {
-      readKids.push(H('label', { class: 'sr-only', for: 'wk-read' }, T('ai_read')));
+      readKids.push(H('label', { class: 'sr-only', for: 'wk-read' }, T('what_made')));
       readKids.push(H('input', { id: 'wk-read', type: 'text', 'data-ui': 'wk', 'data-key': 'readEdit', value: d.readEdit, autocomplete: 'off' }));
       readKids.push(H('div', { class: 'actions' }, [btn(T('keep_text'), 'wk-read-ok', { kls: 'primary' }), btn(T('cancel'), 'wk-read-cancel')]));
     } else {
       readKids.push(H('p', { class: 'ar-text' }, rd.declined || !rd.text ? T('ai_read_none') : rd.text));
-      readKids.push(H('div', { class: 'actions' }, [btn(T('quote_edit'), 'wk-read-edit', { kls: 'ghost' }), rd.declined ? null : btn(T('decline'), 'wk-read-decline', { kls: 'ghost' })]));
+      readKids.push(H('div', { class: 'actions' }, [btn(T('quote_edit'), 'wk-read-edit', { kls: 'ghost' })]));
     }
-    body.appendChild(H('div', { class: 'ai-read-box', 'data-fk': 'wk-read', tabindex: '-1' }, readKids));
+    body.appendChild(H('div', { class: 'ai-read-box is-own', 'data-fk': 'wk-read', tabindex: '-1' }, readKids));
     body.appendChild(H('p', { class: 'face-note' }, T('face_note')));
     if (d.failed) body.appendChild(H('p', { class: 'dlg-error', role: 'alert' }, T('save_work_fail')));
     dlg.appendChild(body);
     dlg.appendChild(H('div', { class: 'dialog-footer' }, [
-      H('button', { class: 'btn primary', type: 'button', 'data-action': 'wk-save' }, d.failed ? T('retry_save') : T('save_work')),
+      H('button', { class: 'btn primary', type: 'button', 'data-action': 'wk-save', disabled: !d.imgs.length }, d.failed ? T('retry_save') : T('save_work')),
       H('button', { class: 'btn', type: 'button', 'data-action': 'dialog-close' }, T('cancel'))
     ]));
     putBack();
@@ -560,7 +562,8 @@
       if (r) kids.push(' ', ownPeople(r));
       // バディの分は出所チップ付きで（本人の作と混ぜない）
       if (r && r.ai) kids.push(' ', chip('ai', T('roles_count', { who: T('who_ai'), n: r.ai }), T('ai_proposal') + ' ' + T('roles_count', { who: T('who_ai'), n: r.ai })));
-      if (it.read) kids.push(' ', chip('ai', T('ai_read'), T('ai_proposal') + ' ' + T('ai_read')), ' ', it.read);
+      // 「何を作った」は本人の言葉（LS-18-13）
+      if (it.read) kids.push(' ', chip('own', T('own_label'), T('own_label') + ' ' + T('what_made')), ' ', it.read);
       return H('li', null, kids);
     }
     var out = [];
@@ -613,14 +616,36 @@
   var A = DES.actions = DES.actions || {};
   function cur(el) { return work(el.getAttribute('data-id')); }
   A['wk-open'] = function (el) { W.openCapture(el); };
-  A['wk-file'] = function () { DES.app.toast(T('demo_media')); };
+  // 写真を足す（本物。1 作品 3 枚・全体 60 枚まで。LS-18-11）。選んだ写真は作品に入れる側で並ぶ
+  var picSeq = 0;
+  A['wk-file'] = function () {
+    var d = wk().dlg;
+    if (!d || d.type !== 'capture' || d.picking) return;
+    var P = DES.photo, lim = P && P.LIMIT ? P.LIMIT : 60, left = P && P.count ? lim - P.count() : lim;
+    var n = Math.min(M.WORK_PHOTO_MAX - d.pics.length, left);
+    if (n <= 0 || !P || !P.pick) { DES.app.toast(T('photo_full')); return; }
+    d.picking = true;
+    P.pick({ multiple: n > 1, max: n }).then(function (list) { return list; }, function () { return []; }).then(function (list) {
+      d.picking = false;
+      if (wk().dlg !== d) return;
+      (list || []).filter(isPic).slice(0, n).forEach(function (p) {
+        picSeq += 1;
+        var pic = { id: 'pic' + picSeq, data: p.data, w: p.w, h: p.h };
+        d.pics.push(pic);
+        if (d.imgs.length < M.WORK_PHOTO_MAX) d.imgs.push(pic.id);
+      });
+      var last = d.pics[d.pics.length - 1];
+      rerender(last ? '.cap-thumb[data-arg="' + esc(last.id) + '"]' : '[data-action="wk-file"]');
+    });
+  };
   A['wk-img'] = function (el) {
     var d = wk().dlg, id = el.getAttribute('data-arg');
     if (!d) return;
     var i = d.imgs.indexOf(id);
-    if (i >= 0) { if (d.imgs.length > 1) d.imgs.splice(i, 1); } else if (d.imgs.length < 3) d.imgs.push(id);
-    syncDefaults(d);
-    rerender('.cap-thumb[data-arg="' + id + '"]');
+    if (i >= 0) { if (d.imgs.length > 1) d.imgs.splice(i, 1); } else if (d.imgs.length < M.WORK_PHOTO_MAX) d.imgs.push(id);
+    // 作品に入れる順は選んだ順
+    d.imgs = d.pics.map(function (p) { return p.id; }).filter(function (x) { return d.imgs.indexOf(x) >= 0; });
+    rerender('.cap-thumb[data-arg="' + esc(id) + '"]');
   };
   A['wk-made'] = function (el) {
     var d = wk().dlg, i = +el.getAttribute('data-arg');
@@ -635,7 +660,7 @@
     var d = wk().dlg;
     if (!d) return;
     var v = trim(d.readEdit);
-    d.read = v ? { text: v, edited: true, declined: false } : { text: null, edited: true, declined: true };
+    d.read = v ? { text: v, edited: true, declined: false, who: 'own' } : { text: null, edited: true, declined: true, who: 'own' };
     d.readEdit = null;
     rerender('[data-action="wk-read-edit"]');
   };
@@ -651,10 +676,11 @@
     if (!d || d.type !== 'capture') return;
     // 再試行も毎回フォームの今の値で作る（§U-11 指摘 10）。失敗した試みはメモリにも残さない（§W-5）
     var prevActs = S().activities, prevWorks = S().works;
+    var imgs = d.imgs.map(function (id) { return find(d.pics, id); }).filter(Boolean);
     var res = M.addCapture(prevActs, prevWorks, {
-      workId: DES.plan.newId('w'), actId: DES.plan.newId('a'), images: d.imgs, title: d.title,
+      workId: M.newId('w'), actId: M.newId('a'), images: imgs, title: d.title, fallbackTitle: T('ext_label'),
       made: d.made == null ? null : d.made, madeLine: trim(d.madeLine), status: d.status,
-      catalogId: d.catalogId || null, read: d.read, now: DES.data.now, date: stamp(), mode: mode()
+      catalogId: d.catalogId || null, read: d.read, mode: mode()
     });
     if (!res) return;
     S().activities = res.activities;
@@ -684,7 +710,7 @@
   A['wk-share-ok'] = function () {
     var d = wk().dlg;
     if (!d || d.type !== 'share') return;
-    var r = share(S().works, d.id, { to: d.to, scope: d.scope, time: stamp() + ' ' + DES.data.now });
+    var r = share(S().works, d.id, { to: d.to, scope: d.scope });
     if (!r) return;
     var prev = S().works;
     S().works = r.works;
@@ -736,7 +762,8 @@
     var next, sel = '[data-action="wd-edit"][data-arg="' + e.field + '"]';
     if (e.field === 'read') {
       var t = trim(e.value), w = work(e.id), prev = w && w.read ? w.read : {};
-      next = setRead(S().works, e.id, t ? { text: t, edited: true, declined: false } : { text: prev.text || null, edited: true, declined: true });
+      // 本人が書いた「何を作った」は本人の言葉（LS-18-13）
+      next = setRead(S().works, e.id, t ? { text: t, edited: true, declined: false, who: 'own' } : { text: prev.text || null, edited: true, declined: true, who: 'own' });
     } else next = edit(S().works, e.id, e.field, e.value);
     // 変わらない（空のタイトルなど）時は元の表示に戻す
     if (next === S().works) { DES.app.render(); refocus(sel); return; }
