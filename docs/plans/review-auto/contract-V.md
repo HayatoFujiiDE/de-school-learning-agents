@@ -515,6 +515,24 @@ f. 操作のループ（ui-interaction-completeness）
 
 配備: 採点表と編集基準は Worker に同梱される（`scripts/sync-claude-assets.sh`）。職人の定義は `ant apply`（ふじさんの操作）で反映する。
 
+## V-12 自動の差し戻しの作り直しで職人が質問した時（2026-11-07 追加。ふじさんの「承認を待たず進める」の指示で司令塔が裁定）
+
+- 目的: 機械の仕分けが差し戻した作り直し（`review_decisions.reviewer_email = 'system:auto-triage'`）で職人が質問（needs_answer）すると人待ちになり、V-7 の「人に出す前に自動で直す」が止まる。人の差し戻しの質問は今までどおり人が答える。
+- a. 自動の差し戻しの brief には `## 追記` として `AUTO_RETURN_APPEND`（`src/triage-step.ts`。「質問は出さず、迷う点は自分で選んで selfcheck.md に書く。質問を出した時は既定案が回答として返る」）を付ける。人の差し戻しの brief は変えない。 お願い文は前の brief の `## 追記` として後の作り直し（人の差し戻しを含む）にも引き継がれる。前の brief に既にあれば足さない（1 回だけ入る）。後の人の差し戻しの brief に残っても事実と食い違わないよう、約束の文は「機械の差し戻しの作り直しで質問を出した時は」に限定する。
+- b. 自動回答の段 `autoAnswerStep`（`src/auto-answer.ts`。cron の回収の直後・読み手係の前）: `paused` なら何もしない。候補は「needs_answer・answer_state が none か saved・rework で parent_version_id あり・親の版の return の decision が system:auto-triage」の job を古い順に 1 tick 2 件まで。全部の質問に `default`（空でなく、接頭辞を含めて 4,000 字以内）がある時だけ、`answerJob` に `（自動回答・職人の既定案のとおり）` + default を渡す（人の回答と同じ経路: standards_log に残り、session に「運営からの回答」として届く）。default が欠ける質問が 1 つでもあれば何もしない（人が答える）。その job には `reconcile_state_json.auto_answer.skip = 'no_default'` を CAS で 1 回だけ書き（述語 needs_answer・answer_state none）、以後の候補から外す（ログは最初の 1 回だけ。後ろの job が詰まらない。人が答える時の answerJob はこの key を見ない）。
+- c. 有限化: job ごとの自動回答の試行は 3 回まで（`reconcile_state_json.auto_answer.attempts`。CAS で +1 してから呼ぶ。`paused` と no_default では増やさない）。送信に失敗して saved に戻った回答は次の tick で送り直す（3 回で止まり、残りは人の操作）。試行が 3 回に達した job は候補の SQL（`auto_answer.attempts < 3`）で外れ、毎 tick の cap のログは出ず、後ろの job も詰まらない。1 回の呼び出しに `ANSWER_BUDGET_MS`（25 秒）+ 5 秒の残り時間が無ければ始めない。 attempts の CAS に負けた時は何もせず skip `raced`（ログ `{ at: 'auto_answer', job_id, result: 'raced' }`）。`reconcile_state_json` が `''`・壊れた JSON・object でない JSON の行は 0 回として扱い（候補の SELECT・attempts の CAS・skip の CAS の全部で `json_valid` を通す）、CAS で `'{}'` から書き直す（`BUMP_SAVE_FAILURES_SQL` と同じ考え方）。no_default の job は同じ UPDATE で `last_error = COALESCE(last_error, 'auto_answer:no_default')` も書く（管理画面で見える。既にある last_error は残す）。
+- d. 見える所: 管理画面の job ページの質問と回答（standards_log）に接頭辞つきで残る。cron のログ `{ at: 'auto_answer', job_id, result }`（本文は出さない）。
+- e. 守ること: 回答の中身は職人自身の `default` だけ（機械が文を作らない）。人の差し戻しの job には触らない。`answerJob` の述語（needs_answer・answer_state・answer_token）はそのまま使い、別の経路で状態を書かない。
+- f. 契約の穴（2026-11-07 レビュー。今回は直さない）: `answer_state = 'sending'` のまま止まった job と、answerJob の終端の失敗（failed）は自動回答で拾わない（人の操作）。`POST /api/jobs` で親を自動の差し戻しの版にした rework も、親の版の return が system:auto-triage なので自動回答の対象になる（管理画面からは作れない）。
+
+## V-13 作り直しが基盤の都合で failed になった時（2026-11-07 追加。司令塔の裁定）
+
+- 目的: session の stop reason `retries_exhausted`（基盤側の再試行切れ）で作り直しの job が failed になると、素材は idle・版は rejected のまま誰にも拾われない（V-7 の自動の直しが途中で消える）。
+- a. 再投入の段 `retryFailedReworkStep`（`src/retry-step.ts`。cron の自動回答の直後）: `paused` なら何もしない。候補は「failed・`error = 'retries_exhausted'`・rework で parent_version_id あり・24 時間以内・まだ再投入していない（`last_error` が `auto_retry:` で始まらない）・同じ素材に新しい job が無い・素材が idle」の job を古い順に 1 tick 1 件。failed の job の `brief_md` をそのまま使って `queueJobForMaterial` で rework を 1 つ queued にする（失敗した job は failed のまま。状態機械は変えない）。 人の差し戻し（人の注文）の作り直しも対象（基盤の都合の失敗なので同じ brief で 1 回だけ。費用は session 1 本分）。印が `auto_retry:pending` のまま 10 分以上止まった job（印を付けた後に落ちた）は拾い直す（候補の SQL と印の CAS の両方で `last_error = 'auto_retry:pending' AND updated_at < 10 分前` を許す。queue 済みで印だけ書けなかった時は「同じ素材に新しい job が無い」で外れ、二重に作らない）。
+- b. 有限化: 同じ親の版から作った作り直しが 2 回 `retries_exhausted` になっていれば自動では作らない（親の版ごとに自動の再投入は 1 回。残りは人）。印 `last_error = 'auto_retry:<新しい job_id>'`（断られた時は `auto_retry:refused:<code>`）で二度拾わない。
+- c. 範囲外: `refusal`・`unknown_stop_reason`・`invalid_outputs`（§W-2 の取り込み直し）・`create_abandoned` は今までどおり（契約の穴として残す: create_abandoned も基盤の都合だが、起動の段に別の再試行があるため今回は含めない）。
+- d. 見える所: cron のログ `{ at: 'auto_retry', job_id, new_job_id | result }`。管理画面の失敗した job の last_error に `auto_retry:<job_id>`。
+
 ## V-11 受け入れ（vitest・smoke。fake で）
 
 - (u1) 抜粋: 同じ URL を 3 つの出典が別の引用で使う記録（30,000 字 × 13 出典ぶん）で、全出典が `excerpt` になり、各抜粋が自分の引用を含む / 引用が記録に無い出典は冒頭の印 / 61 件目は omitted / 60 出典・引用が各 1,000 字でも抜粋の本文の合計が 120,000 字以下 / `available` が小さい時は後ろから omitted、全部だめなら節なし / `C` の式の境界（n=1・n=60）/ YouTube の出典は今のまま / 写した取得記録（§S-8）でも抜粋になる / `usedIds` が動画の主張の確かめ（§Q-9.11）で今と同じ意味で使われる / meta に `evidence_v: 2`（同期・Batch の両方。古い plan の回収では付かない）/ system の差し替えた 3 行と最後の指示文（図 × 動画 × 動かせるもの の 8 通り）が文字列として一致し、ほかの行が変わっていない。
@@ -528,3 +546,5 @@ f. 操作のループ（ui-interaction-completeness）
 - (u9) 画面: gate の 3 通り・見てほしい所 0 件 / N 件で描画 / 項目の OK・直してもらうで「公開する」の可否と理由の文が変わる / blocking の項目に「このまま出す」が無い / 検証の id か読み手係の世代が変わると項目の状態が戻る / 送信の payload（省略する項目・trust_channels・reader_gen）/ 太字と番号つきの一覧が出る / 「さわってみよう」の見出し / 印 OFF で番号の印・札が出ない / 一覧の 3 区画とスイッチ / キー N・P・O。smoke は数える DOM を新しい画面に合わせて直す。
 - (u9 追加) 読み手チェック待ちの版で「公開する」が押せて理由が「公開できます（読み手チェックはまだです）」/ 400 `channel_trust_required` で項目へ動く・`checks_pending` で読み直す / 検証 failed の帯の文。
 - (u10) 既存のテストは、意味が変わった所（§L-3 の自動 OK・画面の DOM・取得記録の入れ方）を新しい決まりに合わせて直し、それ以外は緑のまま。migration 0009 のテスト（既存の行・索引の定義）。tsc・vitest・smoke・check-no-fake の verdict を報告する。
+- (u11) 自動回答（V-12）: 自動の差し戻しの job が needs_answer で全質問に default あり → 1 tick で answerJob が呼ばれ running / making・standards_log に接頭辞つきの回答・`auto_answer.attempts` が 1・ログ / 人の差し戻しの job は触らない / default の無い質問が 1 つでもあれば no_default で触らない（attempts 不変・`auto_answer.skip` の印で以後の候補から外れ、先頭に居ても後ろの job が答えられる）/ `paused` なら何もしない（attempts 不変）/ attempts 3 で cap（候補に出ず cap のログも出ない。先頭に居ても後ろの job が同じ tick で答えられる）/ 送信の失敗で saved に戻り、次の tick で送り直し、3 回で止まる / 残り時間が 30 秒未満なら始めない / 1 tick 2 件 / 自動の差し戻しの brief に `## 追記` の `AUTO_RETURN_APPEND` が入り、人の差し戻しの brief は変わらない / 2 回目の自動の差し戻しの brief にもお願い文は 1 回だけ / attempts の CAS に負ければ raced のログで answerJob を呼ばない / `''` や壊れた JSON の reconcile_state_json の行があっても段は止まらず答える / no_default は last_error に `auto_answer:no_default`（既にあれば残す）。
+- (u12) 再投入（V-13）: failed・retries_exhausted・rework・素材 idle・新しい job なし → 同じ親・同じ brief の rework が queued、素材が queued、failed の job の last_error が `auto_retry:<id>`、ログ / draft・refusal・新しい job あり・素材が idle でない・24 時間より前・印つき、はどれも 0 件 / 同じ親で 2 回目の retries_exhausted は作らない / `paused` なら何もしない / 1 tick 1 件 / queueJobForMaterial が 409 なら `auto_retry:refused:material_busy` で二度拾わない / `auto_retry:pending` のまま 10 分超は拾い直し、10 分未満は拾わず、同じ素材に新しい job があれば拾わない。
