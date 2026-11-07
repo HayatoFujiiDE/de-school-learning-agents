@@ -73,7 +73,7 @@ window.DES = window.DES || {};
     keep_text: ['残す', 'のこす'],
     undo: ['元に戻す', 'もとにもどす'],
     removed_toast: ['外したよ', 'はずしたよ'],
-    returned_toast: ['「{title}」を 今まで取り組んできたこと に戻した', '「{title}」を 今までやってきたこと にもどした'],
+    returned_toast: ['「{title}」を 取り組みの一覧 に戻した', '「{title}」を とりくみのいちらん にもどした'],
     confirm_mode: ['この表示にする', 'この表示にする'],
     choose_mode: ['表示を選ぶ', '表示をえらぶ'],
     widen: ['広く見る →', '広く見る →'],
