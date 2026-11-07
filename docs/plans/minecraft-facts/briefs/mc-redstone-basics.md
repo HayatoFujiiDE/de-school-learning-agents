@@ -2,7 +2,7 @@
 
 版の前提（いちばん大事）:
 - うちで使っているのは Java 版です。Java 版の最新の正式版を基準にしてください。最新の正式版は https://piston-meta.mojang.com/mc/game/version_manifest_v2.json の latest.release で確かめます（2026-11-07 時点では 26.3）。
-- material.json の conditions.tools に "Minecraft Java 版 <版>" と書きます。詳しい版の本文に「この説明は Java 版 <版> のものです。スマホや Switch の統合版では、少しちがうことがあります。」の 1 文を入れます。
+- material.json の conditions.tools に "Minecraft Java 版 <版>" と書きます。子ども向けの本文のすべてのファイル（小学生・中学生 × 短い・詳しい、game.md）に「この説明は Java 版 <版> のものです。スマホや Switch の統合版では、少しちがうことがあります。」の 1 文を入れます（短い版は「この説明は Java 版 <版> のものです。」だけでもよい。版を書かない本文は機械検査で差し戻しになります）。
 - 情報は Java 版と統合版（Bedrock Edition）を分けて集めてください。minecraft.wiki では Java 版の記述の箇所だけを引用し、「Bedrock Edition」「統合版」「BE」の箇所を根拠にしないでください。ページの「歴史」「History」の節で、引く仕様が今の版で変わっていないことを確かめてください。統合版の仕様は本文に書きません。
 - 古い情報を根拠にしないでください。動画を使う時は youtube_info の published（公開日）が 3 年以内の、Java 版の動画だけにします。合う動画が無ければ動画なしで作ります。
 

@@ -10,6 +10,7 @@
 ## MC-0 保証（有界）と範囲
 
 - 版が決まっている題材（今は Minecraft）の素材は、`conditions.tools` に edition と版（`Minecraft Java 版 26.3` の形）を宣言し、仕分けがそれを機械で確かめる。宣言が無い・Java 版でない版は自動の差し戻し（fix）。
+  - 当たるのは、deploy の後に仕分けする版（新しく取り込んだ版と、検証が新しくなった版）。仕分け済みの既存の版（`triage_v = 2` で最新の検証を仕分け済み）には自動では当たらない（仕分けの世代は上げない: 世代を上げると全部の版を一度に仕分けし直し、MC-7 の作り直しと競合する）。既存の Minecraft の版に当てたい時は `version_reverify`（§W-3）を出す（検証が新しくなれば仕分けし直す）。本番の該当 3 版は MC-7 の `material_redo` で却下する。
 - 動画は YouTube の公開日（`published`）を Worker が取り、版が決まっている題材では **公開日から 3 年（1095 日）より前の動画は fix・公開日が取れない動画は ask**。職人の道具 `youtube_info` も公開日を返し、職人は 3 年以内の動画だけ使う。
 - 職人・検証係は edition を分けて扱う（Java 版の記述だけを根拠にし、統合版の仕様を Java 版の事実として書かない）。検証係は版の食い違いを hypothesis（reason の先頭「版:」）にする。
 - 運用の依頼箱に `material_redo`（版を却下して、新しい注文票で draft を 1 件作る）を足し、mc-redstone の 3 素材を新しい前提で作り直す。
@@ -18,11 +19,12 @@
 ## MC-1 判定と宣言（新規 `src/checks/edition.ts`）
 
 1. `isVersionBoundMaterial(material)`: `catalog_item_id` が `mc-` で始まる、または title・slug・`conditions.tools[]` のどれかが `/minecraft|マイクラ|マインクラフト/i` に合う → true。material が読めない時は false。
-2. `declaredEdition(material)`: `conditions.tools[]` の文字列のうち、`/minecraft|マイクラ|マインクラフト/i` に合い、かつ `/\b(\d{1,2}\.\d{1,2}(?:\.\d{1,2})?)\b/` の版番号を含むものを探す。
-   - その文字列が `/java(?!script)/i` に合う → `{ edition: 'java', version }`。
-   - `/bedrock|統合版|\bbe\b/i` に合う → `{ edition: 'bedrock', version }`。
-   - どちらでもない・版番号が無い・tools が無い → `null`。
-3. **本文の版の 1 文（オーナー指示 2026-11-07「マイクラのコンテンツを作るときは必ずバージョンを記載」）**: 版が決まっている題材で `declaredEdition` が java の時、parts/ 配下の子ども向け本文（.md。短い・詳しい・小学生・中学生・game のすべて）の各ファイルに「Java 版」と宣言した版番号（例 `26.3`）の両方が書かれていること。取り込みの機械検査 `src/checks/childtext.ts` に kind `edition_text`（`{ path, kind: 'edition_text', sample: '' }`。無い本文ごとに 1 件。20 件の上限は既存のまま）を足し、`checks_json.child_text` に入れる。`declaredEdition` が null の版は本文を見ない（宣言の無さは MC-2 の `edition_missing` が拾う）。
+2. `declaredEdition(material)`: `conditions.tools[]` の文字列のうち `/minecraft|マイクラ|マインクラフト/i` に合うものを順に見て、**edition の語の直後の版番号**だけを宣言と読む（Astra の指摘: 後ろの説明文や別の数字を拾わない）。
+   - `JAVA_DECL_RE = /java(?!script)\s*(?:版|edition)?[\s)）:：]*v?(\d{1,2}\.\d{1,2}(?:\.\d{1,2})?)(?![\d.])/i` に合う → `{ edition: 'java', version }`（java を先に試す。両方合う文字列は java）。
+   - `BEDROCK_DECL_RE = /(?:bedrock(?:\s*edition)?|統合版)[\s)）:：]*v?(\d{1,2}\.\d{1,2}(?:\.\d{1,2})?)(?![\d.])/i` に合う → `{ edition: 'bedrock', version }`。
+   - どちらも合わない（版番号が無い・3 桁・edition の語から離れている）・tools が無い → `null`。例: `Minecraft Java 版 26.3` → java/26.3、`Minecraft（Java 版）26.3` → java/26.3、`Minecraft 統合版 1.21（Java 版ではない）` → bedrock/1.21、`Minecraft Java 版 126.3.1` → null、`Minecraft 画面比 16.9 / Java 版 26.3` → java/26.3。
+   - 範囲外（契約の穴として記す）: 「最新の正式版か」は機械では見ない（職人の指示と注文票の版。古い版を宣言した素材は人が見る）。題名に「マイクラ」を含むだけの題材（例: マイクラ好きのための英語）も版が決まっている題材になる（宣言を書けば通る。意図どおり）。
+3. **本文の版の 1 文（オーナー指示 2026-11-07「マイクラのコンテンツを作るときは必ずバージョンを記載」）**: 版が決まっている題材で `declaredEdition` が java の時、parts/ 配下の子ども向け本文（.md。短い・詳しい・小学生・中学生・game のすべて）の各ファイルに「Java 版 <版>」の並び（`/Java\s*版\s*v?<版>(?![\d.])/`。例 `Java 版 26.3`）が書かれていること（「Java 版の話。温度は 26.3 度」のように離れているものは通さない。Astra の指摘）。取り込みの機械検査 `src/checks/childtext.ts` に kind `edition_text`（`{ path, kind: 'edition_text', sample: '' }`。無い本文ごとに 1 件。20 件の上限は既存のまま）を足し、`checks_json.child_text` に入れる。`declaredEdition` が null の版は本文を見ない（宣言の無さは MC-2 の `edition_missing` が拾う）。
 4. 定数: `VERSION_BOUND_VIDEO_MAX_AGE_DAYS = 1095`。`isVideoTooOld(published, now)`: `published` が `YYYY-MM-DD` で、now − published > 1095 日 → true。形が違えば false（「不明」は別に扱う）。
 
 ## MC-2 仕分け（`src/checks/triage.ts`）
@@ -35,7 +37,7 @@
 | `edition:not_java` | conditions_of_use | fix | `edition_not_java` | edition が bedrock |
 | `video:<id>:age` | terms_of_use | fix | `video_too_old` | meta.outcome が ok で `isVideoTooOld(meta.published)` |
 | `video:<id>:age` | terms_of_use | ask | `video_date_unknown` | meta.outcome が ok で published が無い |
-| `text:edition_text:<path>` | explanation_and_expression | fix | `edition_text_missing` | checks_json.child_text に kind `edition_text` がある（path ごとに 1 件。古い版で child_text が無ければ項目を作らない） |
+| `text:edition_text:<path>` | explanation_and_expression | fix | `edition_text_missing` | 版が決まっている題材で、checks_json.child_text に kind `edition_text` がある（path ごとに 1 件。版が決まっていない題材の child_text の edition_text は無視。古い版で child_text が無ければ項目を作らない） |
 
 - `CAUSE_TEXT`: `edition_missing` 「使う条件に Minecraft の版（Java 版 ○○）が書かれていない」/ `edition_not_java` 「Java 版でない版（統合版）を宣言している」/ `video_too_old` 「動画の公開日が 3 年より前（古い情報）」/ `video_date_unknown` 「動画の公開日が取れていない」/ `edition_text_missing` 「本文に版（Java 版 ○○）の 1 文が無い」。
 - 差し戻し文（`buildReturnNote`）の該当行には、`edition_text_missing` は「<path> に『この説明は Java 版 <版> のものです。』の 1 文を入れる」、edition は「conditions.tools に『Minecraft Java 版 <版>』の形で書く（最新の正式版は version manifest の latest.release）」、動画は「公開日 <published> の動画。3 年以内の Java 版の動画に替えるか、動画なしにする」を detail に出す。
@@ -45,7 +47,7 @@
 ## MC-3 公開日（`src/youtube-oembed.ts`・`src/videos.ts`・`src/verify.ts`・`src/anthropic.ts`・`src/fake/`）
 
 1. `OEmbedFields` に `published: string`（`YYYY-MM-DD`。分からなければ空）を足す。`sanitizeOEmbedFields` は `published` が `^\d{4}-\d{2}-\d{2}$` に合う文字列の時だけ残し、それ以外は空。
-2. 本物の port の `lookup`: oEmbed が ok の時だけ、続けて `https://www.youtube.com/watch?v=<id>` を GET する（`redirect: 'manual'`、headers `accept: text/html`・`accept-language: ja,en;q=0.8`）。締め切りは fetch の直前に測った `min(WATCH_TIMEOUT_MS = 8_000, 試行の締め切りまでの残り)`。本文は `WATCH_BODY_MAX_BYTES = 2 MiB` まで読み、`itemprop="uploadDate" content="YYYY-MM-DD` か `"uploadDate":"YYYY-MM-DD` の最初の一致で読むのをやめる（手元の実測: 一致の位置は約 790 KB、ページ全体は約 1.4 MB）。status が 200 でない・時間切れ・上限超え・一致なし → `published` は空（oEmbed の結果は ok のまま。失敗で ok を崩さない）。GET は 1 回だけ（再試行なし）。
+2. 本物の port の `lookup`: oEmbed が ok の時だけ、続けて `https://www.youtube.com/watch?v=<id>` を GET する（`redirect: 'manual'`、headers `accept: text/html`・`accept-language: ja,en;q=0.8`）。締め切りは fetch の直前に測った `min(WATCH_TIMEOUT_MS = 8_000, 試行の締め切りまでの残り)`。本文は `WATCH_BODY_MAX_BYTES = 2 MiB` まで読み、`itemprop="uploadDate" content="YYYY-MM-DD` か `"uploadDate":"YYYY-MM-DD` の最初の一致で読むのをやめる（手元の実測: 一致の位置は約 790 KB、ページ全体は約 1.4 MB）。status が 200 でない・時間切れ・上限超え・一致なし → `published` は空（oEmbed の結果は ok のまま。失敗で ok を崩さない）。受信量が上限に達したら一致が無くても読むのをやめる（cancel。次の chunk を待たない）。GET は 1 回だけ（再試行なし）。
    - §Q-11 の「fetch を 1 回だけ」は「oEmbed の GET 1 回 + ok の時の watch ページの GET 1 回」に改める。回数の権利（版 × 動画で 5 回・job で 12 回）は lookup の数のまま。
 3. 記録（R2 `video-meta/{video_id}.json`、`v: 1` のまま）: ok の時 `published` を足す（空なら key を書かない）。`parseVideoMetaRecord` は `published` が形に合う時だけ持つ。`VideoMetaState`・`VideoMetaView` に `published: string | null`。
    - 既存の記録（published 無し）は final のまま（呼び直さない）。版が決まっている題材では ask（`video_date_unknown`）になる。
@@ -72,6 +74,7 @@
    | 同じ素材に人が同時に差し戻した | 却下の CAS か queue の idle 条件で片方だけ通る | 1 job |
 4. `scripts/ops-request.sh redo <material_id> <注文票.md>`: uuid の形を `is_uuid` で検査、ファイルを python で読んで JSON にし、SQL の `'` を `''` に倍にして INSERT。32768 文字を超えたら送らない。`--wait` は他の mode と同じ。
 5. migration 0014: ops_requests の CHECK に `material_redo` を足す（0013 と同じ作り直し）。`test/d1-shim.ts` に足す。
+6. 範囲外（契約の穴として記す）: 依頼は恒久的には重複排除しない。元の job が終わった後に同じ依頼を出せば、もう 1 件 draft ができる（運用者が出す依頼なので、識別子は持たない）。
 
 ## MC-5 職人・編集基準・採点表・取得先（司令塔が書く。`factory/claude/`）
 
@@ -97,7 +100,7 @@
 
 ## MC-8 受け入れ（vitest。新しいテストは直す前のコードで落ちる）
 
-- `edition.ts`: mc- の catalog / 題名のマイクラ / tools の Minecraft で version-bound。`Minecraft Java 版 26.3`・`Minecraft Java Edition 1.21.4`・`Minecraft（Java 版）26.3` → java。`Minecraft 統合版 1.21` → bedrock。`Minecraft` だけ・版番号なし → null。`isVideoTooOld`: 1095 日ちょうどは false、1096 日は true、形が違えば false。
+- `edition.ts`: mc- の catalog / 題名のマイクラ / tools の Minecraft で version-bound。宣言は MC-1 2 の例のとおり（3 桁・離れた数字・否定文の Java 版を拾わない）。本文の検査は「Java 版 <版>」の並びだけ通す。triage は版が決まっていない題材の child_text の edition_text を無視する。watch の読み取りは上限ちょうどで cancel して次の chunk を待たない。`Minecraft Java 版 26.3`・`Minecraft Java Edition 1.21.4`・`Minecraft（Java 版）26.3` → java。`Minecraft 統合版 1.21` → bedrock。`Minecraft` だけ・版番号なし → null。`isVideoTooOld`: 1095 日ちょうどは false、1096 日は true、形が違えば false。
 - childtext: java 宣言ありで、4 つの変奏のうち 1 つに「Java 版」か版番号が無い → その path の `edition_text` 1 件。全部にある → 0 件。宣言なし・version-bound でない → 0 件（本文を見ない）。triage: `child_text` の `edition_text` → fix `edition_text_missing`（path つき）・差し戻し文に path と 1 文。
 - triage: version-bound で宣言なし → fix `edition_missing`・action auto_return・差し戻し文に『Minecraft Java 版』の文。bedrock → `edition_not_java`。宣言ありの動画で published が 4 年前 → fix `video_too_old`、published 無し → ask `video_date_unknown`、2 年前 → 項目なし。version-bound でない版では、同じ動画・同じ tools でも項目が出ない（反対側）。
 - oEmbed port: ok + watch ページに `itemprop="uploadDate" content="2019-05-21T03:03:18-07:00"` → published `2019-05-21`。watch が 403 / 時間切れ / 2 MiB 超えで一致なし / 一致なし → ok のまま published 空。oEmbed が 404 なら watch を呼ばない（fetch の回数で確かめる）。
