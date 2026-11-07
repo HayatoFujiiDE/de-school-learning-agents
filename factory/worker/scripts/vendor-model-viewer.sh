@@ -42,3 +42,9 @@ cp three/package/examples/jsm/libs/draco/gltf/draco_wasm_wrapper.js "$OUT/draco/
   echo '```'
 } > "$OUT/LICENSES.md"
 ls -l "$OUT" "$OUT/draco" | awk 'NF>=9 {print $5, $NF}'
+# 契約 §AJ2-3: model-viewer が shadow root に入れる <style> の本文の hash（/admin の CSP の style-src に置く。src/index.ts の MODEL_VIEWER_STYLE_HASH）
+node -e '
+const fs=require("fs"),c=require("crypto");const s=fs.readFileSync(process.argv[1],"utf8");
+const i=s.indexOf("<style>"),j=s.indexOf("</style>",i);if(i<0||j<0){console.error("no <style> in bundle");process.exit(1)}
+console.log("MODEL_VIEWER_STYLE_HASH=sha256-"+c.createHash("sha256").update(s.slice(i+7,j),"utf8").digest("base64"));
+' "$OUT/model-viewer.min.js"

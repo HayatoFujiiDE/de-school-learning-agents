@@ -17,11 +17,21 @@
 
 - 自前で見せる立体モデルは、一覧の `kind: download` のうち **運営が確認画面の「立体モデル」ページで取り込んだもの**（D1 `models3d_files` に行があり、R2 に同じ sha の GLB がある）だけ。取り込み元の url は一覧の `download_url`（静的・人が確かめた）だけで、画面や API から url を受け取る口は作らない。
 - 上限: 1 件 24 MiB（`MAX_MODEL3D_BYTES = 24 * 1024 * 1024`）。超えるものは取り込めない。
-- GLB の形の検査（取り込み時。純関数 `inspectGlb(bytes: ArrayBuffer)` を `src/models3d-file.ts`（新規）に置く）: 先頭 4 byte が `glTF`・version が 2・ヘッダの length が全長と一致・chunk0 の種別が JSON で parse できる・`buffers[].uri` と `images[].uri` が 1 つも無い（自己完結）・`extensionsRequired` ⊆ {`KHR_draco_mesh_compression`, `KHR_mesh_quantization`, `KHR_texture_transform`, `EXT_texture_webp`}（KTX2 / meshopt は復号器を置かないので落とす）。返り値は `{ ok: true, meshes, images, draco: boolean }` か `{ ok: false, reason }`（reason は `magic` / `version` / `length` / `json` / `external` / `extension`）。
-- 配信（認証なし）: `GET /api/library/models3d/files/<catalog_id>/<sha256>.glb`。`catalog_id` は `/^[a-z0-9-]{3,40}$/`、`sha256` は `/^[0-9a-f]{64}$/`。D1 の行の sha と一致する時だけ R2 の `models3d/<catalog_id>/<sha256>.glb` を返す。headers: `content-type: model/gltf-binary`・`cache-control: public, max-age=31536000, immutable`・`x-content-type-options: nosniff`・`access-control-allow-origin: *`（公開の資料。学習者のアプリは別オリジンになる）。他の `/api/library/*` に CORS は足さない（範囲外）。
-- 一覧 API `GET /api/library/models3d`: D1 を読む（async に）。返すのは v1 と同じ埋め込める件 + **取り込み済みの download**。download の件は v1 の 8 キーに `file_url`（上の配信パス。相対・先頭 `/`）・`bytes`・`sha256` を足した 11 キー。埋め込みの件は v1 のまま 8 キー（増やさない）。順は一覧の順。`cache-control: public, max-age=3600` は v1 のまま。`access-control-allow-origin: *` を足す。
+- GLB の形の検査（取り込み時。純関数 `inspectGlb(bytes: ArrayBuffer)` を `src/models3d-file.ts`（新規）に置く。glTF 2.0 の GLB の仕様どおりに読む）。順に:
+  1. `magic`: 全長 < 20 byte、または先頭 4 byte が `glTF` でない。
+  2. `version`: ヘッダの version が 2 でない。
+  3. `length`: ヘッダの length が全長と一致しない。
+  4. `chunk`: chunk0 の種別が `JSON` でない / chunk の長さがファイルの外に出る / chunk が 3 つ以上 / 2 つ目があるのに種別が `BIN` でない。
+  5. `json`: chunk0 が JSON として parse できない、または object でない / `buffers`・`images`・`extensionsRequired`・`extensionsUsed` があるのに配列でない / その要素の型が違う（buffers・images は object、extensions は string）。
+  6. `asset`: `asset.version` が `"2.0"` でない。
+  7. `external`: `buffers[].uri` または `images[].uri` が 1 つでもある（自己完結でない）/ `images[]` に `bufferView` が無い / `images[].mimeType` が `image/png`・`image/jpeg`・`image/webp` 以外。
+  8. `buffer`: `buffers` が 2 件以上 / `buffers[0]` があるのに BIN chunk が無い / `buffers[0].byteLength` が BIN chunk の長さより大きい。
+  9. `extension`: `extensionsRequired` ⊄ {`KHR_draco_mesh_compression`, `KHR_mesh_quantization`, `KHR_texture_transform`, `EXT_texture_webp`}、**または** `extensionsRequired ∪ extensionsUsed` に復号器が要る拡張 {`KHR_texture_basisu`, `EXT_meshopt_compression`} が 1 つでもある（optional でも model-viewer が KTX2 側を選ぶ経路があるため）。
+  - 返り値は `{ ok: true, meshes, images, draco: boolean }`（draco は `extensionsRequired ∪ extensionsUsed` に `KHR_draco_mesh_compression` がある時）か `{ ok: false, reason }`（reason は上の 9 語のどれか 1 つ。最初に当たったもの）。
+- 配信（認証なし）: `GET /api/library/models3d/files/<catalog_id>/<sha256>.glb`。`catalog_id` は `/^[a-z0-9-]{3,40}$/`、`sha256` は `/^[0-9a-f]{64}$/`（完全一致の正規表現。合わなければ 404）。**D1 は見ない**: 形が合えば key `models3d/<catalog_id>/<sha256>.glb` を組み立てて R2 から get し、無ければ 404（DB の `r2_key` を信用して配信する実装にはしない）。取り直しの後も古い sha の object は残す（下の AJ2-2）ので、1 時間 cache された一覧の url が取り直しの直後に死なない。headers: `content-type: model/gltf-binary`・`content-length: <R2 object の size>`・`cache-control: public, max-age=31536000, immutable`・`x-content-type-options: nosniff`・`access-control-allow-origin: *`（公開の資料。学習者のアプリは別オリジンになる）。他の `/api/library/*` に CORS は足さない（範囲外）。
+- 一覧 API `GET /api/library/models3d`: D1 を読む（async に。index.ts の分岐は `return await libraryModels3d(env)` で既存の catch に乗せる）。返すのは v1 と同じ埋め込める件 + **取り込み済みの download**。download の件は v1 の 8 キーに `file_url`（**絶対 url**。要求の `url.origin` + 上の配信パス。学習者のアプリは別オリジンなので相対では解決を誤る）・`bytes`・`sha256` を足した 11 キー。埋め込みの件は v1 のまま 8 キー（増やさない）。順は一覧の順。`cache-control: public, max-age=3600` は v1 のまま。`access-control-allow-origin: *` を足す。
 - 職人: 注文票の「使ってよい立体モデル（一覧）」に取り込み済みの download を含める（行の形は v1 と同じ。`kind` は書かない）。職人の定義・rubric・allowlist・作業場は変えない（**`ant apply` は不要**）。
-- 取り込み検査（`validateOutputs`）: `checkModels3d` に渡す一覧を「見せられる一覧」= 埋め込める + 取り込み済み download にする。未取り込みの download は v1 と同じく `bad_model3d:…:catalog` で落ちる。
+- 取り込み検査（`validateOutputs`）: `validateOutputs(files, opts?: { models3dHosted?: ReadonlySet<string> })`（同期のまま。既定は空集合）。`checkModels3d` に渡す Map を `viewableCatalogMap(hosted)`（埋め込める + hosted にある download。`src/models3d.ts`）にし、**`checkModels3d` の中の「`kind` が `download` なら `catalog`」の判定は外す**（Map に無いことで落ちる）。未取り込みの download は v1 と同じく `bad_model3d:…:catalog` で落ちる。呼び出し側 `src/jobs.ts`（取り込み。1892 行付近）は async なので先に `hostedModels3d(db)` の id の集合を取って渡す。
 - 検証係・仕分け・verify の子ども向け文（`childTextsBlocks`）: 変えない（download も ask「人が回して見る」のまま。v1 では自動公開しない）。
 - 範囲外: 子ども向けアプリ（app-v3）の描画（API の形だけ決める）/ 一覧に無いモデルの探索 / Sketchfab のライセンスの自動再確認 / OBJ の変換（BodyParts3D）/ 24 MiB 超の軽量化（ISS）/ 検証係によるモデルの判定。
 - 費用: 新しい API の呼び出しは無い。R2 の保存は数 MB、配信の egress は R2 は無料。Worker の取り込みは 1 回数秒（人が押した時だけ）。
@@ -43,49 +53,59 @@ CREATE TABLE models3d_files (
 ```
 
 - `src/models3d-file.ts`（新規・I/O あり）: `hostedModels3d(db): Promise<Map<catalog_id, { sha256, bytes, draco, fetched_at }>>`（全行。一覧は ≤200 件）/ `inspectGlb` / `MAX_MODEL3D_BYTES` / `R2_KEY(catalogId, sha)` / `fileUrlOf(catalogId, sha)` = `/api/library/models3d/files/<id>/<sha>.glb` / `MODEL3D_FILE_URL_RE = /^\/api\/library\/models3d\/files\/[a-z0-9-]{3,40}\/[0-9a-f]{64}\.glb$/`。
-- `src/models3d.ts` に `isViewableModel3d(e, hosted: ReadonlySet<string>)` = 埋め込める or（`kind === 'download'` かつ hosted にある）と `viewableModels3d(hosted, catalog = MODELS3D)` を足す。`embeddableModels3d` は残す（v1 のテストが使う）。`models3dSectionLines(list)` は **渡された一覧をそのまま出す**（中で埋め込み判定をしない。呼び出し側が viewable を渡す）。既定引数 `MODELS3D` は外す（呼び出し側が必ず渡す）。
+- `src/models3d.ts` に `isViewableModel3d(e, hosted: ReadonlySet<string>)` = 埋め込める or（`kind === 'download'` かつ hosted にある）、`viewableModels3d(hosted, catalog = MODELS3D)`、`viewableCatalogMap(hosted, catalog = MODELS3D): ReadonlyMap<string, Model3dEntry>` を足す。`embeddableModels3d` は残す（v1 のテストが使う）。`models3dSectionLines(list)` は **渡された一覧をそのまま出す**（中で埋め込み判定をしない。呼び出し側が viewable を渡す）。既定引数 `MODELS3D` は外し、引数を必須にする（tsc が呼び出し側を全部拾う）。呼び出し側: `src/jobs.ts` の `buildPhase1Message`（259 行）は `models3d` 引数を必須にし、注文の開始側（412 行。今は省略している）で `viewableModels3d(await hostedIds(db))` を渡す。作り物の注文（テスト）も同じ。
 - `Model3dView` に任意の `file_url?`・`bytes?`・`sha256?` を足す。`model3dViewOf(e, hostedRow?)`: hostedRow があり `e.kind === 'download'` の時だけ 3 キーを足す。
 
 ## AJ2-2 取り込み（運営の操作。Access の中）
 
-- `POST /api/models3d/<catalog_id>/fetch`（`ROUTES`。`c.service` なら 403 `human_only`）。handler は `fetchModel3d(c, fetchImpl = fetch)`（テストは stub を渡す）。順に:
+- `POST /api/models3d/<catalog_id>/fetch`（`ROUTES`。Access の中。service token はこの route では `allowCommonName` に入れないので Access の層で 401 になる。handler でも `c.service` なら 403 `human_only` を返す = 二重の守り）。handler は `fetchModel3d(c, fetchImpl = fetch)`（テストは stub を渡す）。順に:
   1. 一覧に無い id → 404 `not_found`。`kind !== 'download'` または `download_url` が null → 400 `not_download`。
-  2. `fetchImpl(download_url, { redirect: 'follow', headers: { accept: 'model/gltf-binary, */*' } })`。例外 → 502 `fetch_failed:network`。`!res.ok` → 502 `fetch_failed:<status>`。
-  3. `content-length` があり上限超え → 413 `too_large`（本文を読まない）。`arrayBuffer()` の後も上限超え → 413 `too_large`。
+  2. `fetchImpl(download_url, { redirect: 'manual', headers: { accept: 'model/gltf-binary, */*' }, signal: AbortSignal.timeout(60_000) })`。**リダイレクトは追わない**（3xx は `!res.ok` なので 502 `fetch_failed:<status>`。取得先は一覧の静的な url そのものだけ）。例外 → 502 `fetch_failed:network`（timeout は `fetch_failed:timeout`）。`!res.ok` → 502 `fetch_failed:<status>`。
+  3. `content-length` があり上限超え → 413 `too_large`（本文を読まない）。本文は **stream で読みながら累計を数え**、上限を超えた時点で `reader.cancel()` して 413 `too_large`（`arrayBuffer()` で全量を先に読まない。純関数に近い `readCapped(body, max): Promise<ArrayBuffer | 'too_large'>` を `src/models3d-file.ts` に置く）。
   4. `inspectGlb` が ng → 422 `bad_glb:<reason>`。
-  5. sha256（`crypto.subtle.digest`）。既存行と同じ sha → 200 `{ status: 'unchanged', catalog_id, sha256, bytes }`（R2 に触らない）。
-  6. `env.R2.put(R2_KEY, buf, { httpMetadata: { contentType: 'model/gltf-binary' }, sha256 })` → D1 upsert（`INSERT … ON CONFLICT(catalog_id) DO UPDATE`）→ 古い行の sha が違えば古い object を `delete`（失敗しても応答は成功。ログだけ）→ 200 `{ status: 'fetched', catalog_id, sha256, bytes, draco }`。
-  - 失敗の時は D1 も R2 も変えない。同じ id の二重押しは同じ key への put なので無害。
+  5. sha256（`crypto.subtle.digest`）。既存行と同じ sha → `env.R2.head(key)` で object の存在を確かめ、あれば 200 `{ status: 'unchanged', catalog_id, sha256, bytes }`（書かない）、無ければ 6 へ進む（欠けた object の修復。応答は `fetched`）。
+  6. `env.R2.put(key, buf, { httpMetadata: { contentType: 'model/gltf-binary' }, sha256 })` → D1 upsert（`INSERT … ON CONFLICT(catalog_id) DO UPDATE`）→ 200 `{ status: 'fetched', catalog_id, sha256, bytes, draco }`。**古い sha の object は消さない**（配信は sha で引くので古い url も生きる。並行の取り込みで現行の object を消す競合も起きない。回収は範囲外）。
+  - 保証（有界）: 1〜4 で落ちた時は D1 も R2 も書かない。R2 の put が成功して D1 の upsert が失敗した時は D1 は前のまま（一覧・確認画面は前の sha を指し続ける）で、R2 に参照されない object が残る（害なし。回収は範囲外。応答は 500 `internal_error` = 既存の catch）。**D1 に行がある ⇒ その sha の object は R2 にある**（put → upsert の順だから。R2 側で外から消された場合は上の 5 で直せる）。
+  - 並行: 同じ id の二重押し・別タブからの同時取り込みは、どちらも put → upsert で、最後の upsert が勝つ。object は両方残るのでどちらの sha の url も配信できる。
   - ログは 1 行の JSON（`at: 'model3d_fetch', catalog_id, status, bytes`）。url や本文はログに出さない。
-- `GET /api/models3d`（Access の中・ページ用）: `{ models: [{ id, title, org, kind, license, page_url, has_download_url, state, bytes?, sha256?, fetched_at? }] }`。`state` は `embed`（sketchfab / voyager）/ `hosted` / `not_hosted`（download かつ url あり）/ `unavailable`（download かつ url 無し）。
+- `GET /api/models3d`（Access の中・ページ用）: `{ models: [{ id, title, org, kind, license, page_url, has_download_url, state, bytes?, sha256?, fetched_at?, object_ok? }] }`。`state` は `embed`（sketchfab / voyager）/ `hosted` / `not_hosted`（download かつ url あり）/ `unavailable`（download かつ url 無し）。`hosted` の件は `env.R2.head(key)` で `object_ok`（boolean）を付ける（hosted は数件なので head は数回）。
 
 ## AJ2-3 確認画面（`public/admin/`・`src/routes/review.ts`・`src/index.ts`）
 
-- `GET /api/review/:id` の `models3d_meta` の 1 件に、取り込み済み download の時だけ `file_url`・`bytes` を足す（`hostedModels3d(db)` を 1 回読む）。埋め込みの件は v1 のまま。
-- 子どもの画面（`previewMedia` → `model3dPreviewHtml`）: `meta.kind === 'download'` の時、`meta.file_url` が `MODEL3D_FILE_URL_RE` と同じ形（admin.js にも同じ正規表現を書く）に合えば `<model-viewer src="<file_url>" alt="<title>" camera-controls touch-action="pan-y" loading="eager"></model-viewer>` を `.mp-model3d` の中の iframe と同じ位置に出す（caption「<題名>（<提供元>・<ライセンス>）提供元で開く」と「見方」は v1 と同じ）。合わなければ `<p class="mp-missing">立体モデル <id> はまだ取り込まれていません（<a href="#/models3d">立体モデル</a> のページで取り込んでください）</p>`。値はすべてエスケープ。src は `models3d_meta` の値だけ（material.json の値を使わない）。
+- `GET /api/review/:id` の `models3d_meta` の 1 件に、取り込み済み download の時だけ `file_url`（**相対**。先頭 `/` の配信パス。確認画面は同じオリジンなので相対でよい。学習者向けの一覧 API だけ絶対）・`bytes` を足す（`hostedModels3d(db)` を 1 回読む）。埋め込みの件は v1 のまま。
+- 子どもの画面（`previewMedia` → `model3dPreviewHtml`）: `meta.kind === 'download'` の時、`meta.file_url` が `MODEL3D_FILE_URL_RE`（相対の形。admin.js にも同じ正規表現を書く）に合えば `<model-viewer src="<file_url>" alt="<title>" camera-controls touch-action="pan-y" loading="eager"></model-viewer>` を `.mp-model3d` の中の iframe と同じ位置に出す（caption「<題名>（<提供元>・<ライセンス>）提供元で開く」と「見方」は v1 と同じ）。合わなければ `<p class="mp-missing">立体モデル <id> はまだ取り込まれていません（<a href="#/models3d">立体モデル</a> のページで取り込んでください）</p>`。値はすべてエスケープ。src は `models3d_meta` の値だけ（material.json の値を使わない）。
+  - 見た目: `admin.css` の `.mp-model3d iframe` の箱（幅 100%・16:9）を `.mp-model3d model-viewer` にも当てる（`display: block` は model-viewer 自身の style が持つ。背景は薄い灰色）。
+  - 読み込みに失敗した時（url の形は合うが 404 等。`model-viewer` の `error` イベント）: admin.js が要素の直後に `<p class="mp-missing">立体モデル <id> を読み込めませんでした（取り直してください）</p>` を足す（描画後にイベントを登録。純関数の HTML には含めない）。
 - 新しいページ `#/models3d`（nav「立体モデル」を「お題の棚」の後に）。`GET /api/models3d` を読み、表（題名 / 提供元 / ライセンス / 種類 / 状態 / 操作）。状態の文言: `embed` → 「埋め込み」、`hosted` → 「取り込み済み（<MB を小数 1 桁> MB・<日付>）」、`not_hosted` → 「未取り込み」、`unavailable` → 「取り込めない（配布の url が無い）」。操作: `not_hosted` と `hosted` に「取り込む」/「取り直す」ボタン（`action()`。確認文「提供元から GLB を取り込みます（24 MB まで）」→ POST → busy「取り込み中…」→ toast「取り込みました（<MB> MB）」/ `unchanged` は「変わっていません」→ 表を描き直す）。失敗は toast に日本語（`too_large` → 「24 MB を超えています」、`bad_glb:<reason>` → 「GLB の形が合いません（<reason>）」、`fetch_failed:<x>` → 「提供元から取れませんでした（<x>）」、他は応答の error）。読み込み中・失敗（再試行ボタン）の 2 状態も出す（videos ページと同じ形）。題名は `page_url` へのリンク。
 - vendor（repo に入れる。`public/admin/vendor/`）: `model-viewer.min.js`（4.4.0）・`draco/draco_decoder.wasm`・`draco/draco_wasm_wrapper.js`（three 0.183.2 の `examples/jsm/libs/draco/gltf/`）・`LICENSES.md`（両方の Apache-2.0 全文・版・取得元・取得日）。`factory/worker/scripts/vendor-model-viewer.sh` が `npm pack` で取り直す（版は script に固定。実行後に `ls -l` の bytes を出す）。
 - `public/admin/index.html`: admin.js の後に `<script type="module" src="/admin/vendor/model-viewer.min.js"></script>`。admin.js の先頭（IIFE の中の最初）で `window.ModelViewerElement = { dracoDecoderLocation: '/admin/vendor/draco/' };`（module は deferred なので admin.js が先に走る。既に要素が作られた後では効かない）。
-- `/admin` の CSP（`src/index.ts` の `ADMIN_CSP` と `test/review-preview/serve.mjs` の `CSP`。同じ文字列）: `script-src 'self' 'wasm-unsafe-eval'` と `worker-src blob:` を足す。他の指示子は v1 のまま（`frame-src` を変えない。`/api/library/*` の CSP も変えない）。`serveAdmin` は path が `.wasm` で終わる時 `content-type: application/wasm` を上書きする（ASSETS の既定は未確認）。serve.mjs の `TYPES` に `.wasm` を足す。
+- `/admin` の CSP（`src/index.ts` の `ADMIN_CSP` と `test/review-preview/serve.mjs` の `CSP`。同じ文字列）。**実ブラウザ（Chrome・2026-11-07）で探査車の GLB を vendor の model-viewer + Draco で出して、拒否ゼロ・質感つきで描けることを確かめた最小の組**:
+  - `script-src 'self' 'wasm-unsafe-eval'`（Draco の wasm のコンパイル）
+  - `worker-src blob:`（DRACOLoader の Blob の Worker）
+  - `connect-src 'self' blob:`（three の GLTFLoader が埋め込みの画像を `blob:` の URL を fetch して読む。無いと質感が全部落ちる。`img-src` に `blob:` を足しても効かないことを実測）
+  - `style-src 'self' 'sha256-<model-viewer が shadow root に入れる `<style>` の本文の hash>'`（model-viewer 4.4.0 は adoptedStyleSheets を使わず、template の `<style>`（`:host { display: block; …` 4,891 字）を shadow root に入れる。これが拒否されると要素が 0×0 になり何も見えない。`'unsafe-inline'` は使わず、本文の sha256（base64）を hash で許す。hash の値は `src/index.ts` の定数 `MODEL_VIEWER_STYLE_HASH` に置き、**テストが `public/admin/vendor/model-viewer.min.js` の `<style>…</style>` の本文から同じ hash を計算して一致を確かめる**（vendor を上げたら定数も上げる。`scripts/vendor-model-viewer.sh` が最後に hash を出す））
+  - 他の指示子は v1 のまま（`img-src`・`frame-src` を変えない。`/api/library/*` の CSP も変えない）。
+  - `serveAdmin` は path が `.wasm` で終わる時 `content-type: application/wasm` を上書きする（ASSETS の既定は未確認）。serve.mjs の `TYPES` に `.wasm` を足す。
 - serve.mjs: 作り物の版 `vm3d-0001`（fixtures.mjs の `models3d()`。着地済み）に `d3`（`nasa-perseverance-rover`・`file_url` 付き）を足し、環境変数 `FACTORY_PREVIEW_GLB=<手元の .glb のパス>` がある時だけ `/api/library/models3d/files/nasa-perseverance-rover/<sha>.glb` でそのファイルを返す（無ければ 404。GLB は repo に入れない）。`GET /api/models3d` の作り物も返す（`#/models3d` を手元で見るため）。
 
 ## AJ2-4 学習者側（`src/routes/library.ts`・`src/index.ts`）
 
 - `libraryModels3d(env)`（async）と `libraryModel3dFile(env, catalogId, sha)`（上の配信）。index.ts の `/api/library/` の分岐に 2 行足す（正規表現は `^/api/library/models3d/files/([a-z0-9-]{3,40})/([0-9a-f]{64})\.glb$`）。
-- 子ども向けアプリ向けの書き方を `factory/models3d/README.md` に 1 節足す: `file_url` を `<model-viewer src>` に渡す・Draco 復号器は自前に置いて `dracoDecoderLocation` を指す・CSP に `'wasm-unsafe-eval'` と `worker-src blob:` が要る・ライセンス表示は `attribution` をそのまま出す。
+- 子ども向けアプリ向けの書き方を `factory/models3d/README.md` に 1 節足す: 一覧 API の `file_url` は絶対 url なのでそのまま `<model-viewer src>` に渡す（アプリ側の CSP の `connect-src` に工場のオリジンが要る）・Draco 復号器は自前に置いて `dracoDecoderLocation` を指す・CSP に `'wasm-unsafe-eval'`・`worker-src blob:`・`connect-src blob:`・model-viewer の style の hash（または自前の許し方）が要る（本契約 AJ2-3 の実測）・ライセンス表示は `attribution` をそのまま出す。
 
 ## AJ2-5 受け入れ（vitest。fake で。実物の GLB は repo に入れず、テストは最小の GLB を合成する）
 
-1. `inspectGlb`: 合成した最小 GLB（JSON chunk だけ・`asset.version "2.0"`）で ok / draco は `extensionsRequired` で判定 / magic・version・length・json・external（buffers.uri と images.uri の両方）・extension（`KHR_texture_basisu`）の各 ng。
-2. `POST /api/models3d/<id>/fetch`: not_found / not_download（voyager の id と download_url 無しの id）/ too_large（content-length で・本文で）/ fetch_failed（status と例外）/ bad_glb / fetched（R2 に key が入り D1 に行が入る。応答の sha が本文の sha256 と一致）/ unchanged（2 回目は R2 に触らない）/ 取り直し（sha が変わると古い key が消える）/ service token は 403。
-3. `GET /api/library/models3d/files/…`: 行と sha が合う → 200 と 4 つの headers・本文が R2 の bytes / sha 違い・id 違い・R2 に無い → 404 / POST は 405。
-4. `GET /api/library/models3d`: 取り込み済みの download があれば一覧の順で入り 11 キー・`file_url` が `MODEL3D_FILE_URL_RE` に合う / 無ければ v1 と同じ（`test/models3d-library.test.ts` の既存の期待は維持）/ CORS の header。
-5. 注文票: 取り込み済みの download の行が出る・未取り込みは出ない・埋め込みの行は v1 と同じ位置。
-6. `validateOutputs`: hosted を渡すと download の id が通り、渡さないと `catalog` で落ちる。
-7. `GET /api/review/:id`: 取り込み済み download の `models3d_meta` に `file_url`・`bytes`。
-8. admin.js の純関数: download + 正しい `file_url` → `<model-viewer src=…>` が 1 つ（src は meta の値・エスケープ）/ 形が違う・`file_url` 無し → 「まだ取り込まれていません」/ `#/models3d` の表の 4 状態の文言とボタンの有無 / `/admin` の CSP に `'wasm-unsafe-eval'` と `worker-src blob:` があり `frame-src` は v1 と同じ（既存のテストの期待を更新）。
-9. serve.mjs の CSP 文字列が Worker と同じ（既存の形）。
-10. 実ブラウザ（AI が着地後に手元で）: `FACTORY_PREVIEW_GLB` に実測の探査車 GLB を指して serve.mjs を上げ、`#/review/vm3d-0001` で探査車が回せる・console に CSP の拒否が無い・`#/models3d` の表が出る。本番: deploy 後に **ふじさんが `#/models3d` で探査車を「取り込む」**（Access の中の操作。TODO に出す）→ AI が `GET /api/library/models3d` に `nasa-perseverance-rover` が `file_url` 付きで入ること・その url が 200 で `content-length: 4987176` を返すことを curl で確かめる。
+1. `inspectGlb`: 合成した最小 GLB（JSON chunk + BIN chunk・`asset.version "2.0"`・buffers 1 件・images は bufferView 付き）で ok / draco は `extensionsUsed` だけにあっても true / 9 つの reason をそれぞれ 1 つ以上の反例で（magic・version・length・chunk（3 つ目の chunk / 2 つ目が BIN でない）・json（配列でない extensionsUsed）・asset（"1.0"）・external（buffers.uri / images.uri / mimeType が gif）・buffer（BIN 無し / byteLength 超過）・extension（required に `KHR_texture_basisu` / used だけに `KHR_texture_basisu` / required に未知の拡張））。
+2. `readCapped`: 上限ちょうど → 通る / 上限 + 1 byte（content-length 無しの stream）→ `too_large` で cancel が呼ばれる。
+3. `POST /api/models3d/<id>/fetch`: not_found / not_download（voyager の id と download_url 無しの id）/ too_large（content-length で・本文で）/ fetch_failed（status 500・302（追わない）・例外・timeout）/ bad_glb / fetched（R2 に key が入り D1 に行が入る。応答の sha が本文の sha256 と一致）/ unchanged（同じ本文の 2 回目は put を呼ばない）/ 欠けた object の修復（D1 に行・R2 に無し → 2 回目で put が呼ばれ `fetched`）/ 取り直し（sha が変わっても古い key は残る）/ 落ちた時に D1・R2 が変わらない（not_download・too_large・bad_glb の後に行も object も無い）/ handler 単体で `c.service` は 403 / route は common_name の request が Access の層で 401。
+4. `GET /api/library/models3d/files/…`: object があれば 200 と 5 つの headers（content-length は object の size）・本文が R2 の bytes / D1 の行が別の sha を指していても object があれば 200（古い url が生きる）/ 形が違う（sha が 63 桁・id に `.`）・object 無し → 404 / POST は 405。
+5. `GET /api/library/models3d`: 取り込み済みの download があれば一覧の順で入り 11 キー・`file_url` が `http://localhost/api/library/models3d/files/<id>/<sha>.glb`（絶対）/ 無ければ v1 と同じ（`test/models3d-library.test.ts` の既存の期待は維持。Env に空の D1 を渡す）/ CORS の header。
+6. 注文票: 取り込み済みの download の行が出る・未取り込みは出ない・埋め込みの行は v1 と同じ位置（`buildPhase1Message` に一覧を渡す形で。注文の開始側が `viewableModels3d` を渡すことは `test/models3d-order.test.ts` か jobs のテストで 1 本）。
+7. `validateOutputs`: `models3dHosted` に id を入れると download の id が通り、入れないと `catalog` で落ちる。
+8. `GET /api/review/:id`: 取り込み済み download の `models3d_meta` に相対の `file_url`・`bytes`。
+9. admin.js の純関数: download + 正しい `file_url` → `<model-viewer src=…>` が 1 つ（src は meta の値・エスケープ）/ 形が違う（絶対 url・`..`）・`file_url` 無し → 「まだ取り込まれていません」/ `#/models3d` の表の 4 状態の文言とボタンの有無・`object_ok: false` の時の「取り直す」/ `/admin` の CSP: `script-src` に `'wasm-unsafe-eval'`・`worker-src blob:`・`connect-src 'self' blob:`・`style-src 'self' 'sha256-…'` があり、`img-src`・`frame-src` は v1 と同じ（既存のテストの期待を更新）/ `MODEL_VIEWER_STYLE_HASH` が vendor の bundle の `<style>` 本文の sha256 と一致。
+10. serve.mjs の CSP 文字列が Worker と同じ（既存の形）。
+11. 実ブラウザ（AI が着地後に手元で）: `FACTORY_PREVIEW_GLB` に実測の探査車 GLB を指して serve.mjs を上げ、`#/review/vm3d-0001` で探査車が回せる・console に CSP の拒否が無い・`#/models3d` の表が出る。本番: deploy 後に **ふじさんが `#/models3d` で探査車を「取り込む」**（Access の中の操作。TODO に出す）→ AI が `GET /api/library/models3d` に `nasa-perseverance-rover` が `file_url` 付きで入ること・その url が 200 で `content-length: 4987176` を返すことを curl で確かめる。
 
 ## AJ2-6 PR の分け方と着地
 
@@ -95,5 +115,5 @@ CREATE TABLE models3d_files (
 ## 未確認の点（推測を事実として書かない）
 
 - Cloudflare の静的アセット（ASSETS）が `.wasm` にどの content-type を付けるか（未確認。`serveAdmin` が上書きするので動作には関係しない）。
-- `<model-viewer>` が Draco 以外に外部へ出る経路（環境マップ等）を持たないか。手元の実ブラウザで console と network を見て確かめる（AJ2-5 10）。出る経路があれば v2 の範囲で塞ぐ（CSP は広げない）。
-- three 0.183.2 の復号器と model-viewer 4.4.0（gstatic 1.5.6 想定）の版の整合。実ブラウザで探査車が出れば OK、出なければ gstatic の 1.5.6 と同じ版の復号器（`draco` npm）へ差し替える。
+- `<model-viewer>` が Draco 以外に外部へ出る経路（環境マップ等）: 手元の実ブラウザ（Chrome）では上の CSP で拒否ゼロ・外部への要求なしを確かめた（`default-src 'self'` のまま）。Safari / Firefox は未確認（three は `createImageBitmap` が無い環境では `<img>` で読むので、その時は `img-src blob:` が要る可能性がある — 推測。確認画面は運営の Chrome だけなので v2 では足さない）。
+- three 0.183.2 の復号器と model-viewer 4.4.0 の整合: 実ブラウザで探査車（Draco 必須）が出たので OK（2026-11-07）。
