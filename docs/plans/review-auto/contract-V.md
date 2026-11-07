@@ -347,6 +347,8 @@ c. 項目の作り方（report = 最新の verification の result。report が�
 - 公式の情報（videoMeta）: `outcome` が `ok` でない → ask `video_meta_unknown`「YouTube の公式の情報が取れていない」/ `channel_match` が `mismatch` → fix `video_channel_mismatch`「チャンネル名が公式の情報と違う」（key `terms_of_use`、id `video:{id}:meta`）。`partial` は項目にしない（確認画面の動画の補足に今の印を出し続ける §Q-11）。
 - チャンネル（`outcome` が `ok` の動画）: `author_url` が空でなく `trustedChannels` にある → 項目なし（その key を `trusted_keys` に入れる）。`trustedChannels` に無い → ask `video_channel_new`「初めてのチャンネル（本人のアップかを見てください）」（key `terms_of_use`、id `video:{id}:channel`、`channel_key` = author_url、`channel_name` = author_name）。`author_url` が空 → ask `video_channel_new`（`channel_key` なし。毎回人が見る）。
 
+版が決まっている題材（Minecraft。§MC-2。版が決まっていない題材には足さない）: fix `edition_missing`（`edition:missing`、key `conditions_of_use`）/ fix `edition_not_java`（`edition:not_java`、同）/ fix `video_too_old`・ask `video_date_unknown`（`video:{id}:age`、key `terms_of_use`）/ fix `edition_text_missing`（`text:edition_text:{path}`、key `explanation_and_expression`）。文と条件は `docs/plans/minecraft-facts/contract-MC.md` §MC-2。
+
 読み手係:
 - `reader.status='done'` の時、findings の 1 件ごと: id `reader:{path と quote と kind から作る短い id（同じ内容なら同じ id。重なったら連番を足す）}`、key `explanation_and_expression`、kind `reader`、`path`（空文字なら付けない）・`quote`・`suggestion` つき、detail = note。severity はそのまま（fix / note）。cause と title は finding の kind で: `word`「言葉がむずかしい」/ `sentence`「文が分かりにくい」/ `structure`「流れが分かりにくい」/ `mismatch`「本文と図・動かせるものが合わない」/ `tone`「言い方が気になる」/ `other`「読み手がつまずく」。
 - `learning.verdict`: `problem` → fix `learning_problem`「学習とのつながりが弱い」/ `unclear` → ask `learning_unclear`「学習とのつながりを機械では決められなかった」（key `relation_to_learning`、kind `learning`、detail = reason、id `learning`）。

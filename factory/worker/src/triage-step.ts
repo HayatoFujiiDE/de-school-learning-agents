@@ -10,7 +10,7 @@ import { all, cas, conditionalBatch, first, getSetting, isUniqueViolation, nowIs
 import { JOB_MODEL, cfg, type Env } from './env';
 import { parseJsonField } from './http';
 import { buildReturn, buildReworkBrief, publishSwitch, type ReaderGuard } from './publish';
-import { CHECK_KEYS, triageVersion, type TriageOutput, type TriageSource, type TriageVideoMeta } from './checks/triage';
+import { CHECK_KEYS, autoReturnChecklistJson, triageVersion, type TriageOutput, type TriageSource, type TriageVideoMeta } from './checks/triage';
 import { readVideoMetaViews, versionVideosOfMaterial } from './videos';
 
 export const AUTO_TRIAGE_EMAIL = 'system:auto-triage';
@@ -229,7 +229,7 @@ export async function applyTriage(env: Env, v: TriageApplyRow, t: TriageOutput):
           material_id: v.material_id,
           version_id: v.id,
           reviewer_email: AUTO_TRIAGE_EMAIL,
-          checklist_json: null,
+          checklist_json: autoReturnChecklistJson(t.items), // §S v2 B 7: 改善係へ観点と原因の列挙だけを渡す
           note,
           new_job_id: newJobId,
           // お願い文は前の brief の ## 追記 として引き継がれるので、まだ無い時だけ足す（自動の差し戻しが続いても 1 回だけ）

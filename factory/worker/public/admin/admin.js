@@ -2019,6 +2019,9 @@
         ? '<a href="' + esc(url) + '" rel="noopener noreferrer" target="_blank" data-video-meta-link="1">' + esc(name) + '</a>'
         : esc(name);
       line = '<p data-video-meta="ok">YouTube の公式情報: ' + esc(typeof m.title === 'string' ? m.title : '') + ' / ' + ch + '</p>';
+      // §MC-6: YouTube の公開日（YYYY-MM-DD の形の時だけ。無い・形が違えば「不明」）
+      var pub = typeof m.published === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(m.published) ? m.published : '不明';
+      line += '<p data-video-meta-published="1">公開日: ' + esc(pub) + '</p>';
       // 照合できなかった（正規化の後でどちらかの名前が空）時も印を出す
       mark = m.channel_match === 'partial' || m.channel_match === 'mismatch' ? m.channel_match : m.channel_match === 'unknown' ? 'unknown_match' : '';
     }

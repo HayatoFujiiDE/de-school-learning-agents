@@ -2,9 +2,12 @@
 // 見る文: (1) parts の variants の .md の本文（path はその path）。(2) summary_elementary / summary_secondary・各 part の title・entry_point.text・各動画の why（path は material.json）。
 // file_name: この版のファイル名（variants / files の path の最後の / より後ろ）か最上位のファイル名が文に出ている。
 // raw_markup（.md だけ）: 教材の記法 v1（見出し #〜#### / 段落 / - / 1. / **…** / コード / リンク）で整形されない記号が行に残っている。
+// edition_text（.md だけ。§MC-1 3）: 版が決まっている題材で Java 版を宣言した版の変奏の本文に、「Java 版 <宣言した版番号>」の並びが無い（path ごとに 1 件・sample は空）。
 // material・本文は職人が書いた信頼できない値なので、形が違う所は黙って飛ばす（例外を投げない）。
 
-export type ChildTextKind = 'file_name' | 'raw_markup';
+import { declaredEdition, isVersionBoundMaterial } from './edition';
+
+export type ChildTextKind = 'file_name' | 'raw_markup' | 'edition_text';
 export interface ChildTextHit {
   path: string;
   kind: ChildTextKind;
@@ -113,9 +116,21 @@ function versionFileNames(material: unknown): Set<string> {
   return names;
 }
 
+/**
+ * 本文に「Java 版 <version>」の並びがあるか（§MC-1 3・Astra R1。続け書きの「Java版26.3」と v つきも通す）。
+ * 離れた所の数字（「Java 版の話。温度は26.3度。」）・後ろに数字や「.」が続く別の版番号（26.30・26.3.1）は数えない
+ */
+function hasJavaVersionText(text: string, version: string): boolean {
+  const esc = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`Java\\s*版\\s*v?${esc}(?!\\d|\\.\\d)`).test(text);
+}
+
 export function checkChildText(material: unknown, texts: ReadonlyMap<string, string>): ChildTextHit[] {
   const out: ChildTextHit[] = [];
   const names = versionFileNames(material);
+  // §MC-1 3: 版が決まっている題材で Java 版を宣言した時だけ本文の版の 1 文を見る（宣言が無い・統合版・版が決まっていない題材は見ない）
+  const declared = isVersionBoundMaterial(material) ? declaredEdition(material) : null;
+  const javaVersion = declared?.edition === 'java' ? declared.version : null;
   const full = () => out.length >= CHILD_TEXT_MAX;
   const seenName = new Set<string>();
 
@@ -143,7 +158,13 @@ export function checkChildText(material: unknown, texts: ReadonlyMap<string, str
       seenPath.add(path);
       const body = texts.get(path);
       if (!isStr(body)) continue;
-      for (const raw of stripMarkdownForCheck(body).split('\n')) {
+      const stripped = stripMarkdownForCheck(body);
+      if (javaVersion !== null) {
+        if (full()) return out;
+        const one = oneSpace(stripped);
+        if (!hasJavaVersionText(one, javaVersion)) out.push({ path, kind: 'edition_text', sample: '' });
+      }
+      for (const raw of stripped.split('\n')) {
         if (full()) return out;
         const line = oneSpace(raw);
         fileNames(path, line);

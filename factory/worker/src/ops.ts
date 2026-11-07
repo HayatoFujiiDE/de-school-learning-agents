@@ -3,11 +3,15 @@
 // できるのはお題の run と、invalid_outputs で failed になった job の取り込み直し（§W-2。route の POST /api/jobs/:id/reingest と同じ claimReingest。session は作らない・費用なし）と、
 // review の版の検証し直し（§W-3。route の POST /api/review/:version_id/reverify と同じ claimReverify。検証を pending に戻すだけ）。
 // 自動で入った工夫をやめる（§W-4。理由コードだけを受け、人が入れた工夫は止めない）。
+// 作り直し（§W-5・§MC-4）: review の版を route の reject と同じ buildReject で却下し（system:ops-redo）、新しい注文票で draft を 1 件 queue する
+// （queueJobForMaterial。queued の job は次の tick の起動段が拾う）。brief はログ・result に出さない。
 // お題は手動の route と同じ queueTopicRun を通す（台帳・上限・run_in_progress・trigger 'manual' が同じ）。
 // payload は信用しない（形を確かめ、合わなければ failed: bad_payload）。ログに payload の中身（note）は出さない。
 
-import { all, cas, first, isoPlus, nowIso, stmt, tokyoDay } from './db';
-import { claimReingest } from './jobs';
+import { all, cas, conditionalBatch, first, isoPlus, nowIso, stmt, tokyoDay } from './db';
+import { claimReingest, queueJobForMaterial } from './jobs';
+import { buildReject } from './publish';
+import { computeTriage, latestVerificationOf, type TriageVersionRow } from './triage-step';
 import { claimReverify } from './reverify';
 import type { Env } from './env';
 import { PARENT_ID_RE, type RunRequest } from './topics/gen';
@@ -43,6 +47,63 @@ export function parseReverifyPayload(raw: string): string | null {
   const p = v as Record<string, unknown>;
   if (Object.keys(p).some((k) => k !== 'version_id')) return null;
   return typeof p.version_id === 'string' && JOB_ID_RE.test(p.version_id) ? p.version_id : null;
+}
+
+/** material_redo の brief_md の長さの上限（§MC-4 1。文字 = code point。道具 scripts/ops-request.sh と同じ数え方） */
+export const REDO_BRIEF_MAX_CHARS = 32768;
+/** material_redo の却下の reviewer_email と note（§MC-4 2。verbatim） */
+export const REDO_REVIEWER_EMAIL = 'system:ops-redo';
+export const REDO_REJECT_NOTE = 'オーナー指示: Java 版の最新を前提に作り直すため、この版を却下';
+
+/** material_redo の payload: { material_id, brief_md }（key はこの 2 つだけ。uuid の形・brief は 1〜32768 文字）。合わなければ null */
+export function parseRedoPayload(raw: string): { materialId: string; briefMd: string } | null {
+  let v: unknown;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const p = v as Record<string, unknown>;
+  if (Object.keys(p).some((k) => k !== 'material_id' && k !== 'brief_md')) return null;
+  if (typeof p.material_id !== 'string' || !JOB_ID_RE.test(p.material_id)) return null;
+  if (typeof p.brief_md !== 'string') return null;
+  const n = Array.from(p.brief_md).length;
+  if (n < 1 || n > REDO_BRIEF_MAX_CHARS) return null;
+  return { materialId: p.material_id, briefMd: p.brief_md };
+}
+
+/**
+ * 作り直し（§MC-4 2）。review なら最新の review の版を却下（CAS が通らなければ failed conflict）→ idle なら draft を queue。
+ * queued / making は却下せず refused material_busy（done）。queue が断られたら refused（done。却下は済んでいるので出し直すと queue だけ走る）
+ */
+async function redoMaterial(env: Env, materialId: string, briefMd: string): Promise<{ status: 'done' | 'failed'; result: Record<string, unknown> }> {
+  const db = env.DB;
+  const m = await first<{ work_status: string }>(db, stmt('SELECT work_status FROM materials WHERE id = ?', materialId));
+  if (!m) return { status: 'failed', result: { refused: 'not_found' } };
+  let rejectedVersionId: string | null = null;
+  if (m.work_status === 'review') {
+    const v = await first<TriageVersionRow>(db, stmt("SELECT * FROM material_versions WHERE material_id = ? AND status = 'review' ORDER BY version DESC LIMIT 1", materialId));
+    if (!v) return { status: 'failed', result: { refused: 'conflict' } };
+    // route の reject と同じ組: 判断した時の仕分けの gate を machine_gate に入れる（契約 V-8）
+    const machineGate = (await computeTriage(env, v, await latestVerificationOf(db, v.id))).gate;
+    const r = await conditionalBatch(
+      db,
+      buildReject(
+        { material_id: materialId, version_id: v.id, reviewer_email: REDO_REVIEWER_EMAIL, checklist_json: '{}', note: REDO_REJECT_NOTE, machine_gate: machineGate },
+        { decision_id: crypto.randomUUID(), now: nowIso(), log_id: crypto.randomUUID() },
+      ),
+    );
+    if (!r.ok) return { status: 'failed', result: { refused: 'conflict' } };
+    rejectedVersionId = v.id;
+  } else if (m.work_status !== 'idle') {
+    return { status: 'done', result: { refused: 'material_busy' } };
+  }
+  const q = await queueJobForMaterial(env, { material_id: materialId, kind: 'draft', parent_version_id: null, brief_md: briefMd });
+  const jobId = q.body.job_id;
+  if (q.status !== 201 || typeof jobId !== 'string') return { status: 'done', result: { refused: typeof q.body.error === 'string' ? q.body.error : 'refused' } };
+  console.log(JSON.stringify({ at: 'material_redo', material_id: materialId, job_id: jobId, rejected_version_id: rejectedVersionId }));
+  return { status: 'done', result: { material_id: materialId, job_id: jobId, rejected_version_id: rejectedVersionId } };
 }
 
 /** tip_retire の理由コード（§W-4）。自由文は受けない。retire_reason には 'ops:<code>' で書く */
@@ -206,6 +267,18 @@ export async function opsTick(env: Env, opts: { now?: Date } = {}): Promise<OpsT
           status = 'done';
           result = { tip_id: p.tipId, status: 'retired' };
         }
+      }
+      await finish(db, row.id, status, result);
+      console.log(JSON.stringify({ at: 'ops_request', id: row.id, kind: row.kind, status }));
+      return { expired, request: { id: row.id, kind: row.kind, status } };
+    }
+    if (row.kind === 'material_redo') {
+      const p = parseRedoPayload(row.payload_json);
+      if (!p) {
+        status = 'failed';
+        result = { error: 'bad_payload' };
+      } else {
+        ({ status, result } = await redoMaterial(env, p.materialId, p.briefMd));
       }
       await finish(db, row.id, status, result);
       console.log(JSON.stringify({ at: 'ops_request', id: row.id, kind: row.kind, status }));

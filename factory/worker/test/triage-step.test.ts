@@ -6,6 +6,8 @@ import { decide, reverify } from '../src/routes/review';
 import { AUTO_PUBLISH_EMAIL, AUTO_RETURN_APPEND, AUTO_TRIAGE_EMAIL, applyTriage, autoPublishStep, autoRoundsOf, computeTriage, triageStep, type TriageApplyRow } from '../src/triage-step';
 import { one, rows } from './d1-shim';
 import { CH, WATCH, addVerification, ctx, fixable, good, material, seed, setSetting, world, type V, type World } from './review-auto-helpers';
+import { CHECK_KEYS, ITEM_CAUSES } from '../src/checks/triage';
+import { checklistNgKeys } from '../src/publish';
 
 const FAR = () => Date.now() + 10 * 60_000;
 /** 契約 V-12 a の文（verbatim。レビュー後の版: 約束を「機械の差し戻しの作り直しでは」に限定） */
@@ -45,9 +47,17 @@ describe('triageStep（契約 V-7 b）', () => {
     expect(String(jobs[0].brief_md)).toContain(`\n## 追記\n${AUTO_RETURN_APPEND_TEXT}`);
     expect(one(w.db, "SELECT work_status FROM materials WHERE id = 'm1'").work_status).toBe('queued');
     expect(count('SELECT COUNT(*) AS n FROM standards_log')).toBe(0);
-    expect(rows(w.db, "SELECT decision, reviewer_email, checklist_json, machine_gate FROM review_decisions WHERE material_version_id = 'v1'")).toEqual([
-      { decision: 'return', reviewer_email: AUTO_TRIAGE_EMAIL, checklist_json: null, machine_gate: 'attention' },
+    expect(rows(w.db, "SELECT decision, reviewer_email, machine_gate FROM review_decisions WHERE material_version_id = 'v1'")).toEqual([
+      { decision: 'return', reviewer_email: AUTO_TRIAGE_EMAIL, machine_gate: 'attention' },
     ]);
+    // §S v2 B 7: 機械の checklist。6 項目すべて note auto、直す所のある観点が ng で、causes は原因の一覧の値と整数だけ
+    const cl = JSON.parse(String(one(w.db, "SELECT checklist_json FROM review_decisions WHERE material_version_id = 'v1'").checklist_json)) as Record<string, { result: string; note: string; causes?: Record<string, number> }>;
+    expect(Object.keys(cl)).toEqual([...CHECK_KEYS]);
+    expect(Object.values(cl).every((x) => x.note === 'auto' && (x.result === 'ok' || x.result === 'ng'))).toBe(true);
+    const ng = Object.values(cl).filter((x) => x.result === 'ng');
+    expect(ng.length).toBeGreaterThan(0);
+    for (const x of ng) for (const [c, n] of Object.entries(x.causes ?? {})) expect([ITEM_CAUSES.includes(c), Number.isInteger(n) && n >= 1]).toEqual([true, true]);
+    expect(checklistNgKeys(JSON.stringify(cl))).not.toEqual(['unclassified']);
   });
 
   it('続けて 2 回（AUTO_RETURN_MAX 既定 2）自動で差し戻した後の版は none で人に出る（triage_v 2・triage_gate attention）', async () => {

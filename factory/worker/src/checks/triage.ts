@@ -8,8 +8,11 @@
 // 引用の不一致の割合の集計（分子・分母）から外す。
 // §AJ-3: 立体モデルの出典（版の立体モデルの source_id が指す行で、url が一覧の page_url と一致するもの）も同じく外す（職人はページを開けない）。
 // 立体モデルは v1 では機械が中身を見ないので、1 件ごとに「人が回して見る」の ask を出す（自動公開しない）。
+// §MC-2: 版が決まっている題材（Minecraft）だけ、版の宣言（edition_missing / edition_not_java）と動画の公開日（video_too_old / video_date_unknown）の項目を足す。
+// 本文の版の 1 文（edition_text_missing）は取り込みの機械検査（checks_json.child_text の edition_text）から作る。版が決まっていない題材には何も足さない。
 
 import { model3dSourceIds, videoSourceIds } from './citations';
+import { declaredEdition, isVersionBoundMaterial, isVideoTooOld, parsePublishedDay } from './edition';
 import { PRIMARY_HOSTS } from './hosts';
 import { figureShowsMetaOf } from './schema';
 import { versionVideosOfMaterial } from '../videos';
@@ -23,7 +26,13 @@ export type Cause =
   | 'verifier_limit'
   | 'not_confirmed'
   | 'no_source'
-  | 'license_unknown';
+  | 'license_unknown'
+  // §MC-2（版が決まっている題材の項目の原因。groups には出ない）
+  | 'edition_missing'
+  | 'edition_not_java'
+  | 'video_too_old'
+  | 'video_date_unknown'
+  | 'edition_text_missing';
 
 export type Reason = 'contradicted' | 'few_confirmed' | 'quote_mismatch_many' | 'needs_fix' | 'many_hypotheses';
 /** §L-3 の古い 3 項目（工場ビューと古い呼び出しが使う。6 項目の一覧は CHECK_KEYS） */
@@ -60,7 +69,18 @@ export const CAUSE_TEXT: Record<Cause, string> = {
   not_confirmed: '出典で確かめられなかった',
   no_source: '出典が付いていない',
   license_unknown: '利用条件が分からない',
+  // §MC-2（verbatim）
+  edition_missing: '使う条件に Minecraft の版（Java 版 ○○）が書かれていない',
+  edition_not_java: 'Java 版でない版（統合版）を宣言している',
+  video_too_old: '動画の公開日が 3 年より前（古い情報）',
+  video_date_unknown: '動画の公開日が取れていない',
+  edition_text_missing: '本文に版（Java 版 ○○）の 1 文が無い',
 };
+
+/** §MC-2: 差し戻し文の detail（verbatim。<版> は職人が書く版の置き場所） */
+export const EDITION_DECLARE_DETAIL = 'conditions.tools に『Minecraft Java 版 <版>』の形で書く（最新の正式版は version manifest の latest.release）';
+export const videoAgeDetail = (published: string): string => `公開日 ${published} の動画。3 年以内の Java 版の動画に替えるか、動画なしにする`;
+export const editionTextDetail = (path: string, version: string): string => `${path} に『この説明は Java 版 ${version} のものです。』の 1 文を入れる`;
 
 /** return_note の固定文（§L-3 の固定文。verbatim。§Q-11 9 で「開けなかったページは出典に使わない」の後に動画の出典の例外の一言を足した） */
 export const RETURN_FIXED_TEXT =
@@ -169,7 +189,80 @@ export const ITEM_TITLE: Record<string, string> = {
   many_hypotheses: '仮説の主張が 3 分の 1 を超えている',
   few_confirmed: '確かめられた主張が半分に届かない',
   quote_mismatch_many: '引用が本文と一致しない出典が多い',
+  // 版が決まっている題材（§MC-2。CAUSE_TEXT と同じ文）
+  edition_missing: CAUSE_TEXT.edition_missing,
+  edition_not_java: CAUSE_TEXT.edition_not_java,
+  video_too_old: CAUSE_TEXT.video_too_old,
+  video_date_unknown: CAUSE_TEXT.video_date_unknown,
+  edition_text_missing: CAUSE_TEXT.edition_text_missing,
 };
+
+/** 項目の原因の一覧（ITEM_TITLE のキー。§S v2 B 7 の機械の差し戻しの checklist に書いてよい値） */
+export const ITEM_CAUSES: readonly string[] = Object.keys(ITEM_TITLE);
+/** 原因ごとの数の上限（書く時も読む時も切る） */
+export const AUTO_CAUSE_MAX = 999;
+
+/**
+ * 機械の差し戻しの checklist_json（§S v2 B 7）。自動の承認（AUTO_CHECKLIST_JSON）と同じ形で 6 項目を書き、
+ * 直す必要のある項目（severity = 'fix'）がある観点を ng、それ以外を ok にする。ng の観点には原因ごとの数（causes。ITEM_CAUSES の値と整数だけ）を添える。
+ * 職人の出力の文字列は入れない（改善係へ渡すのはこの列挙と数だけ。注入の経路を作らない）
+ */
+export function autoReturnChecklistJson(items: readonly TriageItem[]): string {
+  const per = new Map<CheckKey, Map<string, number>>();
+  for (const i of items) {
+    if (i.severity !== 'fix' || !CHECK_KEYS.includes(i.key)) continue;
+    const m = per.get(i.key) ?? new Map<string, number>();
+    per.set(i.key, m);
+    if (ITEM_CAUSES.includes(i.cause)) m.set(i.cause, Math.min(AUTO_CAUSE_MAX, (m.get(i.cause) ?? 0) + 1));
+  }
+  return JSON.stringify(
+    Object.fromEntries(
+      CHECK_KEYS.map((k) => {
+        const m = per.get(k);
+        if (!m) return [k, { result: 'ok', note: 'auto' }];
+        const causes = Object.fromEntries([...m.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)));
+        return [k, { result: 'ng', note: 'auto', causes }];
+      }),
+    ),
+  );
+}
+
+/**
+ * 機械の差し戻しの checklist_json から原因ごとの数を読む（観点をまたいで足す）。読む側でも一覧と照合し直す:
+ * 知らない観点・知らない原因・整数でない数は捨て、数は 1〜AUTO_CAUSE_MAX に切る。読めなければ空
+ */
+export function autoReturnCauses(checklistJson: string | null | undefined): Record<string, number> {
+  let o: unknown = null;
+  try {
+    o = checklistJson ? JSON.parse(checklistJson) : null;
+  } catch {
+    o = null;
+  }
+  const out: Record<string, number> = {};
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return out;
+  const rec = o as Record<string, unknown>;
+  for (const k of CHECK_KEYS) {
+    const item = Object.hasOwn(rec, k) ? rec[k] : undefined;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const it = item as Record<string, unknown>;
+    if (it.result !== 'ng') continue;
+    for (const [cause, n] of Object.entries(cleanCauses(it.causes))) out[cause] = Math.min(AUTO_CAUSE_MAX, (out[cause] ?? 0) + n);
+  }
+  return cleanCauses(out);
+}
+
+/** 原因ごとの数を一覧と照合し直す（知らない原因・整数でない数・1 未満を捨て、AUTO_CAUSE_MAX に切る。キーの順に並べる） */
+export function cleanCauses(v: unknown): Record<string, number> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+  const c = v as Record<string, unknown>;
+  const out: Record<string, number> = {};
+  for (const cause of [...ITEM_CAUSES].sort()) {
+    const n = Object.hasOwn(c, cause) ? c[cause] : undefined;
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1) continue;
+    out[cause] = Math.min(AUTO_CAUSE_MAX, n);
+  }
+  return out;
+}
 
 /** 読み手係ができなかった・全部を読めていない時の 3 項目の title（契約 V-6 c。verbatim） */
 export const READER_FALLBACK_TITLE: Record<'reader_failed' | 'reader_partial', Record<'explanation_and_expression' | 'relation_to_learning' | 'conditions_of_use', string>> = {
@@ -283,6 +376,8 @@ export interface TriageVideoMeta {
   author_name: string | null;
   author_url: string | null;
   channel_match: string;
+  /** YouTube の公開日（YYYY-MM-DD。§MC-3）。無い・形が違う → 公開日が分からない */
+  published?: string | null;
 }
 export interface TriageInput {
   claims: unknown;
@@ -307,6 +402,8 @@ export interface TriageInput {
   /** 版の verification_status（無い時は report があれば done とみなす） */
   verificationStatus?: string | null;
   evidenceReverified?: boolean | number;
+  /** 動画の公開日の古さを測る時刻（§MC-2。無ければ Date.now()） */
+  now?: number;
 }
 
 export interface TriageGroup {
@@ -810,8 +907,29 @@ export function triageVersion(input: TriageInput): TriageOutput {
       if (!isObj(r)) continue;
       push({ id: idOf('missing_ref'), kind: 'check', key: 'content_and_evidence', severity: 'fix', cause: 'missing_ref', path: itemPathOf(str(r.path)), detail: str(r.ref) });
     }
+    const editionTextPaths = new Set<string>();
+    // §MC-2・Astra R1: 本文の版の 1 文の項目は版が決まっている題材だけ（そうでない題材の edition_text は無視する）
+    const editionTextApplies = isVersionBoundMaterial(material);
     for (const r of arr('child_text') ?? []) {
-      if (!isObj(r) || (r.kind !== 'file_name' && r.kind !== 'raw_markup')) continue;
+      if (!isObj(r)) continue;
+      if (r.kind === 'edition_text') {
+        if (!editionTextApplies) continue;
+        // §MC-2: 本文の版の 1 文が無い（path ごとに 1 件）
+        const path = str(r.path);
+        if (!path || editionTextPaths.has(path)) continue;
+        editionTextPaths.add(path);
+        push({
+          id: `text:edition_text:${path}`,
+          kind: 'text',
+          key: 'explanation_and_expression',
+          severity: 'fix',
+          cause: 'edition_text_missing',
+          path,
+          detail: editionTextDetail(path, declaredEdition(material)?.version ?? '<版>'),
+        });
+        continue;
+      }
+      if (r.kind !== 'file_name' && r.kind !== 'raw_markup') continue;
       push({ id: idOf(r.kind), kind: 'text', key: 'explanation_and_expression', severity: 'fix', cause: r.kind, path: itemPathOf(str(r.path)), quote: cut(r.sample, 200) });
     }
     // §O-13-4 4: 絵の主張の機械検査（古い版の checks_json にはキーが無い = 項目を作らない）
@@ -835,6 +953,15 @@ export function triageVersion(input: TriageInput): TriageOutput {
     if (['forbidden', 'app_html', 'kakunin_zumi', 'missing_source_refs', 'missing_claim_refs'].some((k) => arr(k) === null))
       push({ id: 'check:checks_missing', kind: 'check', key: 'artifact_behavior', severity: 'ask', cause: 'checks_missing' });
     // 古い版（child_text が無い）は「検査していない」: 項目を作らない（読み手係の mismatch が拾う。契約 V-5）
+  }
+
+  // §MC-2: 版の宣言（版が決まっている題材だけ。report の有無に関係なく material から決まる）
+  const versionBound = isVersionBoundMaterial(material);
+  if (versionBound) {
+    const declared = declaredEdition(material);
+    const eb = { kind: 'check' as const, key: 'conditions_of_use' as const, severity: 'fix' as const, detail: EDITION_DECLARE_DETAIL };
+    if (declared === null) push({ ...eb, id: 'edition:missing', cause: 'edition_missing' });
+    else if (declared.edition === 'bedrock') push({ ...eb, id: 'edition:not_java', cause: 'edition_not_java' });
   }
 
   // 動画（report があり動画がある時）
@@ -891,6 +1018,21 @@ export function triageVersion(input: TriageInput): TriageOutput {
       title: entry ? entry.title_ja : d.catalog_id,
       detail: ITEM_TITLE[cause],
     });
+  }
+
+  // §MC-2: 動画の公開日（版が決まっている題材だけ。公式の情報が ok の動画を videoMeta から。report の有無に関係なく）
+  if (versionBound && videos.length > 0) {
+    const now = typeof input.now === 'number' && Number.isFinite(input.now) ? input.now : Date.now();
+    const metaById = new Map<string, TriageVideoMeta>();
+    for (const m of input.videoMeta ?? []) if (isObj(m) && typeof m.video_id === 'string' && !metaById.has(m.video_id)) metaById.set(m.video_id, m);
+    for (const v of videos) {
+      const meta = metaById.get(v.id);
+      if (meta?.outcome !== 'ok') continue;
+      const ab = { kind: 'video' as const, video_id: v.id, id: `video:${v.id}:age`, key: 'terms_of_use' as const };
+      const published = parsePublishedDay(meta.published) === null ? null : (meta.published as string);
+      if (published === null) push({ ...ab, severity: 'ask', cause: 'video_date_unknown' });
+      else if (isVideoTooOld(published, now)) push({ ...ab, severity: 'fix', cause: 'video_too_old', detail: videoAgeDetail(published) });
+    }
   }
 
   // 読み手係

@@ -12,7 +12,8 @@ export function goodMaterial(): Record<string, unknown> {
     slug: 'mc-redstone-basics',
     title: 'レッドストーン回路のしくみ',
     kinds: [3],
-    catalog_item_id: 'mc-redstone',
+    // §MC: 既存のテストは版が決まっていない題材の仕分け（mc- の catalog は版が決まっている題材になる。版の項目は test/mc-edition.test.ts）
+    catalog_item_id: 'redstone',
     concept_codes: [],
     summary_elementary: 'レッドストーンで信号を運ぶ',
     summary_secondary: '信号の伝わり方を図で見る',

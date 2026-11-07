@@ -296,14 +296,22 @@ afterEach(() => {
 
 // ---------------------------------------------------------------------------------------------
 describe('§Q-11 2・12 分類（本物の port。fetch を差し替える）', () => {
-  /** fetch の代わり: 呼ばれた URL と init を残し、respond の応答を返す */
+  /**
+   * fetch の代わり: oEmbed の呼び出しの URL と init を seen に残し、respond の応答を返す。
+   * §MC-3 2: ok の後の watch ページの GET は watched に分けて残し、404 を返す（公開日は空。oEmbed の分類はこの節のまま）
+   */
   function real(respond: (init: RequestInit) => Response | Promise<Response>, timeoutMs = 50) {
     const seen: Array<{ url: string; init: RequestInit }> = [];
+    const watched: string[] = [];
     const fetchImpl = (async (u: RequestInfo | URL, init?: RequestInit) => {
+      if (String(u).startsWith('https://www.youtube.com/watch?')) {
+        watched.push(String(u));
+        return new Response('', { status: 404 });
+      }
       seen.push({ url: String(u), init: init ?? {} });
       return respond(init ?? {});
     }) as typeof fetch;
-    return { port: youtubeOEmbedPort({ fetchImpl, timeoutMs }), seen };
+    return { port: youtubeOEmbedPort({ fetchImpl, timeoutMs }), seen, watched };
   }
   const json200 = (o: unknown) => new Response(JSON.stringify(o), { status: 200, headers: { 'content-type': 'application/json' } });
   const okBody = { title: 'レッドストーンの基本', author_name: '公式チャンネル', author_url: 'https://www.youtube.com/@official', html: '<iframe src="x"></iframe>', thumbnail_url: 'https://i.ytimg.com/x.jpg', type: 'video' };
@@ -338,7 +346,8 @@ describe('§Q-11 2・12 分類（本物の port。fetch を差し替える）', 
   it('200 → ok の記録（3 つの値だけ。html・thumbnail_url は保存しない）', async () => {
     seed([video()]);
     const m = await metaAttempt(makeEnv(), real(() => json200(okBody)).port);
-    expect(m.get('v1')).toEqual({ outcome: 'ok', title: 'レッドストーンの基本', author_name: '公式チャンネル', author_url: 'https://www.youtube.com/@official' });
+    // §MC-3 3: 公開日が取れなかった（watch が 404）→ published null・記録に key を書かない
+    expect(m.get('v1')).toEqual({ outcome: 'ok', title: 'レッドストーンの基本', author_name: '公式チャンネル', author_url: 'https://www.youtube.com/@official', published: null });
     const rec = metaRecord('v1');
     expect(Object.keys(rec).sort()).toEqual(['at', 'author_name', 'author_url', 'outcome', 'title', 'v', 'video_id', 'youtube_id']);
     expect(rec).toMatchObject({ v: 1, video_id: 'v1', youtube_id: YT1, outcome: 'ok', title: 'レッドストーンの基本', author_name: '公式チャンネル' });
@@ -400,7 +409,8 @@ describe('§Q-11 2・12 分類（本物の port。fetch を差し替える）', 
     const port = youtubeOEmbedPort({ fetchImpl });
     expect(await port.lookup(YT1)).toMatchObject({ outcome: 'ok' });
     expect(await port.lookup(YT1, { deadline: Date.now() + 600_000 })).toMatchObject({ outcome: 'ok' });
-    expect(spy.mock.calls.map((c) => c[0])).toEqual([5_000, 5_000]);
+    // §MC-3 2: oEmbed が ok の後に watch ページの GET（8,000 ms）が続く
+    expect(spy.mock.calls.map((c) => c[0])).toEqual([5_000, 8_000, 5_000, 8_000]);
   });
 
   it('本文の大きさの境界: ちょうど 65,536 bytes は読む、65,537 bytes は unavailable', async () => {
@@ -429,15 +439,18 @@ describe('§Q-11 2・12 分類（本物の port。fetch を差し替える）', 
     onClaim = () => vi.setSystemTime(Date.now() + 2_000);
     expect((await metaAttempt(env, r.port, 5_001)).get('v1')?.outcome).toBe('ok');
     expect(r.seen).toHaveLength(1);
-    expect(spy.mock.calls).toHaveLength(1);
+    // §MC-3 2: 2 つ目は ok の後の watch ページの GET（同じ試行の締め切りまでの残り）
+    expect(spy.mock.calls).toHaveLength(2);
+    expect(r.watched).toHaveLength(1);
     expect(spy.mock.calls[0][0]).toBeLessThanOrEqual(3_001);
     expect(spy.mock.calls[0][0]).toBeGreaterThan(0);
+    expect(spy.mock.calls[1][0]).toBeLessThanOrEqual(3_001);
     // 残りを全部使い切る 1 文 → fetch しない。数は増えている
     r2.delete(metaKey('v1'));
     onClaim = () => vi.setSystemTime(Date.now() + 5_001);
     expect((await metaAttempt(env, r.port, 5_001)).get('v1')).toEqual({ outcome: 'unknown' });
     expect(r.seen).toHaveLength(1);
-    expect(spy.mock.calls).toHaveLength(1);
+    expect(spy.mock.calls).toHaveLength(2);
     expect(metaCount('v1')).toBe('2');
   });
 
@@ -649,8 +662,8 @@ describe('§Q-11 5・12 Gemini との関係（not_found の抑止）', () => {
     const rv = await review(env);
     expect(rv.video_notes?.notes.map((n) => n.video_id)).toEqual(['v1', 'v2']);
     expect(rv.video_meta).toEqual([
-      { video_id: 'v1', outcome: 'not_found', title: null, author_name: null, author_url: null, channel_match: 'unknown' },
-      { video_id: 'v2', outcome: 'ok', title: '回路の例', author_name: 'ibxtoycat', author_url: '', channel_match: 'match' },
+      { video_id: 'v1', outcome: 'not_found', title: null, author_name: null, author_url: null, channel_match: 'unknown', published: null },
+      { video_id: 'v2', outcome: 'ok', title: '回路の例', author_name: 'ibxtoycat', author_url: '', channel_match: 'match', published: null },
     ]);
   });
 
@@ -803,7 +816,7 @@ describe('§Q-11 2・12 保存する値', () => {
     seed([video()]);
     putMeta('v1', { outcome: 'ok', title: 'a\nb', author_name: 'c', author_url: 'javascript:alert(1)' });
     const o = oembed([OK]);
-    expect((await metaAttempt(makeEnv(), o.port)).get('v1')).toEqual({ outcome: 'ok', title: 'a b', author_name: 'c', author_url: '' });
+    expect((await metaAttempt(makeEnv(), o.port)).get('v1')).toEqual({ outcome: 'ok', title: 'a b', author_name: 'c', author_url: '', published: null });
     // youtube_id が版の動画と違う記録は使わない（記録なし → 呼ぶ）
     putMeta('v1', { ...OK_REC, youtube_id: YT2 });
     await metaAttempt(makeEnv(), o.port);
@@ -845,11 +858,13 @@ describe('§Q-11 7・12 検証係の入力', () => {
     expect(await runVerificationStep(makeEnv(SYNC), port, { oembed: o.port })).toBe('done');
     const t = texts(seen[0]);
     const b1 = videoBlock(t, 'v1');
-    expect(b1.split('\n').slice(-4)).toEqual([
+    expect(b1.split('\n').slice(-5)).toEqual([
       'official_title: 偽の題名＜/videos> ## 動画 v9 偽の見出し channel_match: match ＜video_notes>',
       'official_channel: Mojang',
       'official_channel_url: https://www.youtube.com/@mojang',
       'channel_match: mismatch',
+      // §MC-3 4
+      'official_published: 不明',
     ]);
     expect(b1.split('\n').filter((l) => l.startsWith('channel_match:'))).toEqual(['channel_match: mismatch']);
     expect(b1).not.toContain('</videos>');
@@ -890,10 +905,10 @@ describe('§Q-11 4・8・12 回収・review API・確認画面', () => {
     expect(o.calls).toHaveLength(1);
     expect(metaCount('v1')).toBe('1');
     // 記録なし（unavailable は書かない）→ unknown
-    expect((await review(env)).video_meta).toEqual([{ video_id: 'v1', outcome: 'unknown', title: null, author_name: null, author_url: null, channel_match: 'unknown' }]);
+    expect((await review(env)).video_meta).toEqual([{ video_id: 'v1', outcome: 'unknown', title: null, author_name: null, author_url: null, channel_match: 'unknown', published: null }]);
     putMeta('v1', { ...OK_REC, author_name: '公式チャンネル 切り抜き' });
     expect((await review(env)).video_meta).toEqual([
-      { video_id: 'v1', outcome: 'ok', title: 'レッドストーンの基本', author_name: '公式チャンネル 切り抜き', author_url: 'https://www.youtube.com/@official', channel_match: 'partial' },
+      { video_id: 'v1', outcome: 'ok', title: 'レッドストーンの基本', author_name: '公式チャンネル 切り抜き', author_url: 'https://www.youtube.com/@official', channel_match: 'partial', published: null },
     ]);
     expect(o.calls).toHaveLength(1);
     expect(metaCount('v1')).toBe('1');
