@@ -233,7 +233,8 @@ describe('MC-4 5 migration 0014', () => {
       db.prepare("INSERT INTO ops_requests (id, kind, payload_json, status, result_json, created_at, updated_at) VALUES ('x', 'material_delete', '{}', 'pending', NULL, ?, ?)").run(t, t),
     ).toThrow(/CHECK constraint failed/);
     const sql = String((db.prepare("SELECT sql FROM sqlite_master WHERE name = 'ops_requests'").get() as { sql: string }).sql);
-    expect(sql).toContain("kind IN ('topic_run','job_reingest','version_reverify','tip_retire','material_redo')");
+    // 0015（§W-6）が後ろに job_raise_budget を足す。0014 の 5 つは並びもそのまま残る
+    expect(sql).toContain("kind IN ('topic_run','job_reingest','version_reverify','tip_retire','material_redo','job_raise_budget')");
     expect(rows(db, "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_ops_requests_status'")).toHaveLength(1);
   });
 });

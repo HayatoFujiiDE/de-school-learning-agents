@@ -61,3 +61,11 @@
 - review の版を route の reject と同じ `buildReject`（reviewer_email `system:ops-redo`・machine_gate は `computeTriage` の gate）で却下し、idle なら `queueJobForMaterial` で draft を 1 件 queue。queued / making は却下せず `{ refused: 'material_busy' }` で done。失敗の表は §MC-4 3。
 - 道具: `scripts/ops-request.sh redo <material_id> <注文票.md> [--wait]`（注文票の中身は画面・ログ・result に出さない）。費用は draft 1 件分（job の予算と日次の上限は通常の注文と同じ）。
 
+## §W-6 予算の増額（2026-11-07 追加）
+
+- kind `job_raise_budget`、payload `{ job_id, add_cents }`。job_id は uuid の形だけ、add_cents は 500（$5）だけ。ほかの額・余計な項目・形違いは bad_payload。migration 0015 で CHECK を広げた（0014 の 5 つに足す。表を作り直して行を写す）。
+- opsTick は管理画面の「$5 増やして続ける」と同じ `raiseBudget`（src/raise-budget.ts）を呼ぶ。予算で止まった job だけ・paused で断る・1 job $50 まで・同時実行数・日次上限、の守りがすべて同じ。cron の port を opsTick に渡す（無い時は failed: no_port）。成功は done で、result に `{ job_id, budget_cents }`。断られた時は `{ refused: <raiseBudget の error> }`。
+- 道具: `scripts/ops-request.sh raise <job_id>`。
+- 理由: 赤血球の作り直し（3400483e、budget_reached）をオーナーが「A（$5 増やして続ける）」と決めた（2026-11-07）。管理画面のログインは AI からできないので依頼箱に足した。AI が自分の判断で増額はしない（オーナーが決めた job だけ。運用の約束で、コードでは区別しない）。
+- 費用: 依頼 1 件で外部費用の上限が最大 $5 増える。1 tick 1 件・60 分で失効。
+

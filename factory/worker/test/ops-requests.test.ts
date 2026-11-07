@@ -4,6 +4,7 @@
 // (f) send が投げる → run の行と台帳が消え、依頼は failed。route の 202 / 503 は test/topics-queue.test.ts がそのまま見る
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { FactoryPort } from '../src/anthropic';
 import type { Env, FactoryQueueMessage, TopicRunQueueMessage } from '../src/env';
 import { opsTick, OPS_REQUEST_TTL_MS } from '../src/ops';
 import { runTopicsRoute } from '../src/routes/topics';
@@ -406,5 +407,65 @@ describe('§W-4 tip_retire: 自動で入った active の工夫だけをやめ�
       expect(result(`b${i}`)).toEqual({ error: 'bad_payload' });
     }
     expect(tip().status).toBe('active');
+  });
+});
+
+describe('§W-6 job_raise_budget: 予算で止まった job を $5 だけ増やす（管理画面と同じ raiseBudget）', () => {
+  const JOB = '1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f';
+  const T0 = '2026-11-07T02:00:00.000Z';
+  const updates: Array<{ id: string; cents: number }> = [];
+  const port = {
+    async retrieveSession(id: string) {
+      return { id, status: 'idle', listCostCents: 1007, metadata: {}, created_at: T0 };
+    },
+    async updateSessionBudget(id: string, cents: number) {
+      updates.push({ id, cents });
+    },
+  } as unknown as FactoryPort;
+  const addRaise = (id: string, payload: unknown) => {
+    const t = new Date().toISOString();
+    db.prepare("INSERT INTO ops_requests (id, kind, payload_json, status, result_json, created_at, updated_at) VALUES (?, 'job_raise_budget', ?, 'pending', NULL, ?, ?)").run(id, JSON.stringify(payload), t, t);
+  };
+  const seedJob = (status = 'budget_reached') => {
+    db.prepare("INSERT INTO materials (id, slug, title, kinds_json, work_status, publish_status, brief_md, created_at, updated_at) VALUES ('m1', 'm-1', 't', '[3]', 'making', 'none', 'b', ?, ?)").run(T0, T0);
+    db.prepare(
+      `INSERT INTO factory_jobs (id, material_id, kind, model, phase, status, session_id, brief_md, budget_cents, list_cost_cents, created_at, updated_at) VALUES (?, 'm1', 'rework', 'claude-opus-5-5', 'making', ?, 'sesn_1', 'b', 1000, 1007, ?, ?)`,
+    ).run(JOB, status, T0, T0);
+  };
+  const budget = () => (db.prepare('SELECT budget_cents FROM factory_jobs WHERE id = ?').get(JOB) as { budget_cents: number }).budget_cents;
+  beforeEach(() => void (updates.length = 0));
+
+  it('(a) budget_reached → Anthropic 側と D1 の予算を 1508 に。依頼は done', async () => {
+    seedJob();
+    addRaise('q1', { job_id: JOB, add_cents: 500 });
+    const o = await opsTick(envWith(), { port });
+    expect(updates).toEqual([{ id: 'sesn_1', cents: 1508 }]);
+    expect(budget()).toBe(1508);
+    expect(result('q1')).toEqual({ job_id: JOB, budget_cents: 1508 });
+    expect(o.request).toEqual({ id: 'q1', kind: 'job_raise_budget', status: 'done' });
+  });
+
+  it('(b) 予算で止まっていない job → refused: not_budget_reached（Anthropic は呼ばない）', async () => {
+    seedJob('running');
+    addRaise('q1', { job_id: JOB, add_cents: 500 });
+    await opsTick(envWith(), { port });
+    expect(updates).toEqual([]);
+    expect(result('q1')).toEqual({ refused: 'not_budget_reached' });
+  });
+
+  it('(c) $5 以外・余計な項目・uuid でない → bad_payload。port が無い → no_port', async () => {
+    seedJob();
+    addRaise('b1', { job_id: JOB, add_cents: 1000 });
+    addRaise('b2', { job_id: JOB, add_cents: 500, note: 'x' });
+    addRaise('b3', { job_id: 'nope', add_cents: 500 });
+    for (const id of ['b1', 'b2', 'b3']) {
+      await opsTick(envWith(), { port });
+      expect(result(id)).toEqual({ error: 'bad_payload' });
+    }
+    addRaise('n1', { job_id: JOB, add_cents: 500 });
+    await opsTick(envWith());
+    expect(result('n1')).toEqual({ error: 'no_port' });
+    expect(updates).toEqual([]);
+    expect(budget()).toBe(1000);
   });
 });

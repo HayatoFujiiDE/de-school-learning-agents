@@ -1,4 +1,4 @@
-// 予算に当たった job の増額（契約 §B-4-f。2026-11-05 オーナー指示）。運営の明示操作（管理画面のボタン）だけが呼ぶ。
+// 予算に当たった job の増額（契約 §B-4-f。2026-11-05 オーナー指示）。運営の明示操作（管理画面のボタン）と、運用の依頼箱の job_raise_budget（§W-6。$5 だけ。2026-11-07 オーナー承認）だけが呼ぶ。
 // cron・webhook・職人からは増額しない。外部の費用を増やす操作なので、上限（1 job・日次・paused）を全部通してから Anthropic を呼ぶ。
 // 順序: 検査 → sessions.retrieve（使った額）→ 上限の判定 → sessions.update（Anthropic 側を先に上げる）→ D1 の CAS。
 // 公式（platform.claude.com/docs/en/managed-agents/budgets）: 予算を上げる update が受理されると止まった作業は自動で再開し、

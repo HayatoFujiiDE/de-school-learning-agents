@@ -162,7 +162,7 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
 
   // 運用の依頼箱（契約 §W）。お題の段の直前に 1 回・1 件だけ（手動と同じ経路で取って queue へ送るだけ。外部は呼ばない）
   try {
-    out.ops = await opsTick(env);
+    out.ops = await opsTick(env, { port });
   } catch (e) {
     out.ops_error = e instanceof Error ? e.name : 'error';
   }

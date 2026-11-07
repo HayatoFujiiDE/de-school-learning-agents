@@ -4,6 +4,7 @@
 #         scripts/ops-request.sh reingest <job_id>   （invalid_outputs で failed になった job の取り込み直し。§W-2。session は作らない）
 #         scripts/ops-request.sh reverify <version_id>   （review の版の検証し直し。§W-3。検証を pending に戻すだけ）
 #         scripts/ops-request.sh tip-retire <tip_id>   （自動で入った active の工夫をやめる。§W-4。理由は factory_fault 固定。人が入れた工夫は止めない）
+#         scripts/ops-request.sh raise <job_id>   （予算で止まった job を $5 だけ増やして続ける。§W-6。管理画面の「$5 増やして続ける」と同じ上限を通す）
 #         scripts/ops-request.sh redo <material_id> <注文票.md> [--wait]   （作り直し。§W-5・§MC-4。review の版を却下し、注文票で draft を 1 件 queue。注文票は 1〜32768 文字）
 #   本番の D1（factory）の ops_requests に 1 行 INSERT する。次の cron（最大 10 分）が拾い、管理画面の「今すぐ作る」と同じ経路で始める。
 #   --wait: 30 秒ごとに依頼と run の status を読み、run が閉じるか 20 分で止まる。出すのは status・error・made・cents だけ。
@@ -31,6 +32,7 @@ usage() {
   say '        scripts/ops-request.sh reingest <job_id>' >&2
   say '        scripts/ops-request.sh reverify <version_id>' >&2
   say '        scripts/ops-request.sh tip-retire <tip_id>' >&2
+  say '        scripts/ops-request.sh raise <job_id>' >&2
   say '        scripts/ops-request.sh redo <material_id> <注文票.md> [--wait]' >&2
   exit 1
 }
@@ -198,6 +200,26 @@ if [ "$1" = 'reverify' ]; then
   rm -rf "$WORK"
   say "依頼: ${ID}（検証し直し）"
   say '次の cron（最大 10 分）で検証が pending に戻り、その後の検証の段が走ります'
+  exit 0
+fi
+if [ "$1" = 'raise' ]; then
+  [ $# -eq 2 ] || usage
+  JOB=$2
+  # uuid の形だけを通してから SQL に入れる。額は $5（500）固定
+  is_uuid "$JOB" || { say 'job_id は uuid の形にしてください' >&2; exit 1; }
+  command -v uuidgen >/dev/null 2>&1 || { say 'uuidgen が見つかりません' >&2; exit 1; }
+  cd "$(dirname "$0")/.." || exit 1
+  ID=$(uuidgen | tr 'A-Z' 'a-z')
+  umask 077
+  WORK=$(mktemp -d "${TMPDIR:-/tmp}/de-ops.XXXXXX") || { say '一時フォルダを作れません' >&2; exit 1; }
+  SQL="INSERT INTO ops_requests (id, kind, payload_json, status, result_json, created_at, updated_at) VALUES ('${ID}', 'job_raise_budget', '{\"job_id\":\"${JOB}\",\"add_cents\":500}', 'pending', NULL, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+  if ! npx --yes "wrangler@${WRANGLER_VER}" d1 execute factory --remote --json --command "$SQL" >"$WORK/out.json" 2>"$WORK/wrangler.log"; then
+    say "依頼を書けませんでした（wrangler の出力: ${WORK}/wrangler.log）" >&2
+    exit 1
+  fi
+  rm -rf "$WORK"
+  say "依頼: ${ID}（予算を 5 ドル増やす）"
+  say '次の cron（最大 10 分）で、予算で止まった job なら予算を上げ、session が自動で再開します'
   exit 0
 fi
 if [ "$1" = 'tip-retire' ]; then

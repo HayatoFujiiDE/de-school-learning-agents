@@ -10,6 +10,8 @@
 
 import { all, cas, conditionalBatch, first, isoPlus, nowIso, stmt, tokyoDay } from './db';
 import { claimReingest, queueJobForMaterial } from './jobs';
+import type { FactoryPort } from './anthropic';
+import { raiseBudget } from './raise-budget';
 import { buildReject } from './publish';
 import { computeTriage, latestVerificationOf, type TriageVersionRow } from './triage-step';
 import { claimReverify } from './reverify';
@@ -142,6 +144,24 @@ async function retireAutoTip(db: D1Database, tipId: string, reason: TipRetireRea
   return { ok: false, error: 'not_auto' };
 }
 
+/** job_raise_budget で 1 回に増やせる額（§W-6。管理画面のいちばん小さい段 $5 だけ） */
+export const OPS_RAISE_CENTS = 500;
+
+/** job_raise_budget の payload: { job_id, add_cents }（uuid の形と OPS_RAISE_CENTS だけ）。合わなければ null */
+export function parseRaisePayload(raw: string): string | null {
+  let v: unknown;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const p = v as Record<string, unknown>;
+  if (Object.keys(p).some((k) => k !== 'job_id' && k !== 'add_cents')) return null;
+  if (p.add_cents !== OPS_RAISE_CENTS) return null;
+  return typeof p.job_id === 'string' && JOB_ID_RE.test(p.job_id) ? p.job_id : null;
+}
+
 /** 依頼の寿命。作られてこれを超えた pending は expired */
 export const OPS_REQUEST_TTL_MS = 60 * 60_000;
 /** derive の note の字数の上限（route の POST /api/topics/:id/derive と同じ） */
@@ -193,7 +213,7 @@ async function finish(db: D1Database, id: string, status: 'done' | 'failed', res
  * cron から 1 回（お題の段の直前）。(1) 60 分を超えた pending を expired（CAS）(2) pending を古い順に 1 件だけ CAS で取り、
  * 形を確かめて queueTopicRun へ渡し、結果を書いて done / failed にする
  */
-export async function opsTick(env: Env, opts: { now?: Date } = {}): Promise<OpsTickResult> {
+export async function opsTick(env: Env, opts: { now?: Date; port?: FactoryPort } = {}): Promise<OpsTickResult> {
   const db = env.DB;
   const now = opts.now ?? new Date();
   const t = nowIso(now);
@@ -266,6 +286,29 @@ export async function opsTick(env: Env, opts: { now?: Date } = {}): Promise<OpsT
         } else {
           status = 'done';
           result = { tip_id: p.tipId, status: 'retired' };
+        }
+      }
+      await finish(db, row.id, status, result);
+      console.log(JSON.stringify({ at: 'ops_request', id: row.id, kind: row.kind, status }));
+      return { expired, request: { id: row.id, kind: row.kind, status } };
+    }
+    if (row.kind === 'job_raise_budget') {
+      const jobId = parseRaisePayload(row.payload_json);
+      if (!jobId) {
+        status = 'failed';
+        result = { error: 'bad_payload' };
+      } else if (!opts.port) {
+        status = 'failed';
+        result = { error: 'no_port' };
+      } else {
+        // 管理画面の「$5 増やして続ける」と同じ raiseBudget（予算で止まった job だけ・paused・1 job $50・同時実行数・日次上限を全部通す。§B-4-f）
+        const r = await raiseBudget(env, opts.port, jobId, { add_cents: OPS_RAISE_CENTS, note: null });
+        if (r.status === 200) {
+          status = 'done';
+          result = { job_id: jobId, budget_cents: r.body.budget_cents };
+        } else {
+          status = 'failed';
+          result = { refused: typeof r.body.error === 'string' ? r.body.error : 'refused' };
         }
       }
       await finish(db, row.id, status, result);
