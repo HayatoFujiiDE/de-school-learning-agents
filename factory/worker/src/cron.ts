@@ -1,5 +1,5 @@
 // 10 分ごとの照合・起動・検証（契約 §B-5）。scheduled handler は最長 15 分。
-// 順（契約 V-7 g）: 起動 → 取り込み → 自動回答（V-12） → 読み手係 → 検証 → 仕分け → 自動公開 → 画像 → 入口 → …
+// 順（契約 V-7 g）: 起動 → 取り込み → 自動回答（V-12） → 作り直しの再投入（V-13） → 読み手係 → 検証 → 仕分け → 自動公開 → 画像 → 入口 → …
 
 import { getFeedFetch, getGeminiPort, getOEmbedPort, getPort, getTopicFetch } from './anthropic';
 import { all, getSetting, isoPlus, nowIso, setSetting, stmt, tokyoDay } from './db';
@@ -12,6 +12,7 @@ import { getJob, markWebhookProcessed, reconcileJob, recoverCreating, startJob, 
 import { runVerificationStep } from './verify';
 import { autoPublishStep, triageStep } from './triage-step';
 import { autoAnswerStep } from './auto-answer';
+import { retryFailedReworkStep } from './retry-step';
 import { readerStep } from './reader';
 import { topicsTick } from './topics/tick';
 import { opsTick } from './ops';
@@ -77,6 +78,13 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
     out.auto_answer = await autoAnswerStep(env, port, { deadline: cronStart + CRON_LIMIT_MS - INTAKE_END_MARGIN_MS });
   } catch (e) {
     out.auto_answer_error = e instanceof Error ? e.name : 'error';
+  }
+
+  // 2-c. 作り直しの再投入（契約 V-13。基盤の都合で failed になった作り直しを 1 回だけ作り直す。queued は次の tick の起動段が拾う）
+  try {
+    out.auto_retry = await retryFailedReworkStep(env, { deadline: cronStart + CRON_LIMIT_MS - INTAKE_END_MARGIN_MS });
+  } catch (e) {
+    out.auto_retry_error = e instanceof Error ? e.name : 'error';
   }
 
   // 2-b. 読み手係（契約 V-4 a・V-7 g。取り込みの段の直後・検証の段の前。取る前の条件（一時停止・残り 270 秒）は readerStep が見る）

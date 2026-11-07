@@ -524,6 +524,14 @@ f. 操作のループ（ui-interaction-completeness）
 - d. 見える所: 管理画面の job ページの質問と回答（standards_log）に接頭辞つきで残る。cron のログ `{ at: 'auto_answer', job_id, result }`（本文は出さない）。
 - e. 守ること: 回答の中身は職人自身の `default` だけ（機械が文を作らない）。人の差し戻しの job には触らない。`answerJob` の述語（needs_answer・answer_state・answer_token）はそのまま使い、別の経路で状態を書かない。
 
+## V-13 作り直しが基盤の都合で failed になった時（2026-11-07 追加。司令塔の裁定）
+
+- 目的: session の stop reason `retries_exhausted`（基盤側の再試行切れ）で作り直しの job が failed になると、素材は idle・版は rejected のまま誰にも拾われない（V-7 の自動の直しが途中で消える）。
+- a. 再投入の段 `retryFailedReworkStep`（`src/retry-step.ts`。cron の自動回答の直後）: `paused` なら何もしない。候補は「failed・`error = 'retries_exhausted'`・rework で parent_version_id あり・24 時間以内・まだ再投入していない（`last_error` が `auto_retry:` で始まらない）・同じ素材に新しい job が無い・素材が idle」の job を古い順に 1 tick 1 件。failed の job の `brief_md` をそのまま使って `queueJobForMaterial` で rework を 1 つ queued にする（失敗した job は failed のまま。状態機械は変えない）。
+- b. 有限化: 同じ親の版から作った作り直しが 2 回 `retries_exhausted` になっていれば自動では作らない（親の版ごとに自動の再投入は 1 回。残りは人）。印 `last_error = 'auto_retry:<新しい job_id>'`（断られた時は `auto_retry:refused:<code>`）で二度拾わない。
+- c. 範囲外: `refusal`・`unknown_stop_reason`・`invalid_outputs`（§W-2 の取り込み直し）・`create_abandoned` は今までどおり（契約の穴として残す: create_abandoned も基盤の都合だが、起動の段に別の再試行があるため今回は含めない）。
+- d. 見える所: cron のログ `{ at: 'auto_retry', job_id, new_job_id | result }`。管理画面の失敗した job の last_error に `auto_retry:<job_id>`。
+
 ## V-11 受け入れ（vitest・smoke。fake で）
 
 - (u1) 抜粋: 同じ URL を 3 つの出典が別の引用で使う記録（30,000 字 × 13 出典ぶん）で、全出典が `excerpt` になり、各抜粋が自分の引用を含む / 引用が記録に無い出典は冒頭の印 / 61 件目は omitted / 60 出典・引用が各 1,000 字でも抜粋の本文の合計が 120,000 字以下 / `available` が小さい時は後ろから omitted、全部だめなら節なし / `C` の式の境界（n=1・n=60）/ YouTube の出典は今のまま / 写した取得記録（§S-8）でも抜粋になる / `usedIds` が動画の主張の確かめ（§Q-9.11）で今と同じ意味で使われる / meta に `evidence_v: 2`（同期・Batch の両方。古い plan の回収では付かない）/ system の差し替えた 3 行と最後の指示文（図 × 動画 × 動かせるもの の 8 通り）が文字列として一致し、ほかの行が変わっていない。
@@ -538,3 +546,4 @@ f. 操作のループ（ui-interaction-completeness）
 - (u9 追加) 読み手チェック待ちの版で「公開する」が押せて理由が「公開できます（読み手チェックはまだです）」/ 400 `channel_trust_required` で項目へ動く・`checks_pending` で読み直す / 検証 failed の帯の文。
 - (u10) 既存のテストは、意味が変わった所（§L-3 の自動 OK・画面の DOM・取得記録の入れ方）を新しい決まりに合わせて直し、それ以外は緑のまま。migration 0009 のテスト（既存の行・索引の定義）。tsc・vitest・smoke・check-no-fake の verdict を報告する。
 - (u11) 自動回答（V-12）: 自動の差し戻しの job が needs_answer で全質問に default あり → 1 tick で answerJob が呼ばれ running / making・standards_log に接頭辞つきの回答・`auto_answer.attempts` が 1・ログ / 人の差し戻しの job は触らない / default の無い質問が 1 つでもあれば no_default で触らない（attempts 不変）/ `paused` なら何もしない（attempts 不変）/ attempts 3 で cap / 送信の失敗で saved に戻り、次の tick で送り直し、3 回で止まる / 残り時間が 30 秒未満なら始めない / 1 tick 2 件 / 自動の差し戻しの brief に `## 追記` の `AUTO_RETURN_APPEND` が入り、人の差し戻しの brief は変わらない。
+- (u12) 再投入（V-13）: failed・retries_exhausted・rework・素材 idle・新しい job なし → 同じ親・同じ brief の rework が queued、素材が queued、failed の job の last_error が `auto_retry:<id>`、ログ / draft・refusal・新しい job あり・素材が idle でない・24 時間より前・印つき、はどれも 0 件 / 同じ親で 2 回目の retries_exhausted は作らない / `paused` なら何もしない / 1 tick 1 件 / queueJobForMaterial が 409 なら `auto_retry:refused:material_busy` で二度拾わない。
