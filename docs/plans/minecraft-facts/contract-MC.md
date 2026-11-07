@@ -22,7 +22,8 @@
    - その文字列が `/java/i` に合う → `{ edition: 'java', version }`。
    - `/bedrock|統合版|be\b/i` に合う → `{ edition: 'bedrock', version }`。
    - どちらでもない・版番号が無い・tools が無い → `null`。
-3. 定数: `VERSION_BOUND_VIDEO_MAX_AGE_DAYS = 1095`。`isVideoTooOld(published, now)`: `published` が `YYYY-MM-DD` で、now − published > 1095 日 → true。形が違えば false（「不明」は別に扱う）。
+3. **本文の版の 1 文（オーナー指示 2026-11-07「マイクラのコンテンツを作るときは必ずバージョンを記載」）**: 版が決まっている題材で `declaredEdition` が java の時、parts/ 配下の子ども向け本文（.md。短い・詳しい・小学生・中学生・game のすべて）の各ファイルに「Java 版」と宣言した版番号（例 `26.3`）の両方が書かれていること。取り込みの機械検査 `src/checks/childtext.ts` に kind `edition_text`（`{ path, kind: 'edition_text', sample: '' }`。無い本文ごとに 1 件。20 件の上限は既存のまま）を足し、`checks_json.child_text` に入れる。`declaredEdition` が null の版は本文を見ない（宣言の無さは MC-2 の `edition_missing` が拾う）。
+4. 定数: `VERSION_BOUND_VIDEO_MAX_AGE_DAYS = 1095`。`isVideoTooOld(published, now)`: `published` が `YYYY-MM-DD` で、now − published > 1095 日 → true。形が違えば false（「不明」は別に扱う）。
 
 ## MC-2 仕分け（`src/checks/triage.ts`）
 
@@ -34,9 +35,10 @@
 | `edition:not_java` | conditions_of_use | fix | `edition_not_java` | edition が bedrock |
 | `video:<id>:age` | terms_of_use | fix | `video_too_old` | meta.outcome が ok で `isVideoTooOld(meta.published)` |
 | `video:<id>:age` | terms_of_use | ask | `video_date_unknown` | meta.outcome が ok で published が無い |
+| `text:edition_text:<path>` | explanation_and_expression | fix | `edition_text_missing` | checks_json.child_text に kind `edition_text` がある（path ごとに 1 件。古い版で child_text が無ければ項目を作らない） |
 
-- `CAUSE_TEXT`: `edition_missing` 「使う条件に Minecraft の版（Java 版 ○○）が書かれていない」/ `edition_not_java` 「Java 版でない版（統合版）を宣言している」/ `video_too_old` 「動画の公開日が 3 年より前（古い情報）」/ `video_date_unknown` 「動画の公開日が取れていない」。
-- 差し戻し文（`buildReturnNote`）の該当行には、edition は「conditions.tools に『Minecraft Java 版 <版>』の形で書く（最新の正式版は version manifest の latest.release）」、動画は「公開日 <published> の動画。3 年以内の Java 版の動画に替えるか、動画なしにする」を detail に出す。
+- `CAUSE_TEXT`: `edition_missing` 「使う条件に Minecraft の版（Java 版 ○○）が書かれていない」/ `edition_not_java` 「Java 版でない版（統合版）を宣言している」/ `video_too_old` 「動画の公開日が 3 年より前（古い情報）」/ `video_date_unknown` 「動画の公開日が取れていない」/ `edition_text_missing` 「本文に版（Java 版 ○○）の 1 文が無い」。
+- 差し戻し文（`buildReturnNote`）の該当行には、`edition_text_missing` は「<path> に『この説明は Java 版 <版> のものです。』の 1 文を入れる」、edition は「conditions.tools に『Minecraft Java 版 <版>』の形で書く（最新の正式版は version manifest の latest.release）」、動画は「公開日 <published> の動画。3 年以内の Java 版の動画に替えるか、動画なしにする」を detail に出す。
 - 版が決まっていない題材には何も足さない（既存の版の仕分けは変わらない）。
 - `TriageVideoMeta` に `published: string | null` を足す。review API の `video_meta[]` にも `published` を足す。
 
@@ -75,7 +77,7 @@
 
 - `editorial-standards.md`: 「版が決まっている題材（Minecraft など）」の節（Java 版の最新・版の宣言・edition を分ける・古い情報を根拠にしない）。
 - `agents/material-maker.md`: 「# 版が決まっている題材（Minecraft など）」の節と、`youtube_info` の説明に `published` を足す。取得先に `minecraft.net`（公式の記事・パッチノート）と `piston-meta.mojang.com`（version manifest。`latest.release` を読む）。
-- `rubrics/common.md`: 16（版の宣言と本文の 1 文）・13 に公開日の条件。
+- `rubrics/common.md`: 16（版の宣言と、子ども向け本文のすべてのファイルにある版の 1 文）・13 に公開日の条件。
 - `allowlist.json`（domains・hosts）と `environments/cloud.yaml` を同じ commit で直す（`test/allowlist-env.test.ts`・`test/figure-claims-schema.test.ts`）。primary_hosts は変えない（minecraft.net は絵の主張の一次にしない）。
 - 反映は Worker の deploy → `ant apply`（agent と environment）→ 確認用の session 1 本（[[feedback-smoke-session-after-ant-apply]]）→ `material_redo` の依頼。逆の順だと、新しい job が古い定義で走る。
 
@@ -96,6 +98,7 @@
 ## MC-8 受け入れ（vitest。新しいテストは直す前のコードで落ちる）
 
 - `edition.ts`: mc- の catalog / 題名のマイクラ / tools の Minecraft で version-bound。`Minecraft Java 版 26.3`・`Minecraft Java Edition 1.21.4`・`Minecraft（Java 版）26.3` → java。`Minecraft 統合版 1.21` → bedrock。`Minecraft` だけ・版番号なし → null。`isVideoTooOld`: 1095 日ちょうどは false、1096 日は true、形が違えば false。
+- childtext: java 宣言ありで、4 つの変奏のうち 1 つに「Java 版」か版番号が無い → その path の `edition_text` 1 件。全部にある → 0 件。宣言なし・version-bound でない → 0 件（本文を見ない）。triage: `child_text` の `edition_text` → fix `edition_text_missing`（path つき）・差し戻し文に path と 1 文。
 - triage: version-bound で宣言なし → fix `edition_missing`・action auto_return・差し戻し文に『Minecraft Java 版』の文。bedrock → `edition_not_java`。宣言ありの動画で published が 4 年前 → fix `video_too_old`、published 無し → ask `video_date_unknown`、2 年前 → 項目なし。version-bound でない版では、同じ動画・同じ tools でも項目が出ない（反対側）。
 - oEmbed port: ok + watch ページに `itemprop="uploadDate" content="2019-05-21T03:03:18-07:00"` → published `2019-05-21`。watch が 403 / 時間切れ / 2 MiB 超えで一致なし / 一致なし → ok のまま published 空。oEmbed が 404 なら watch を呼ばない（fetch の回数で確かめる）。
 - 記録: published つきの ok の記録を書き、読み直すと published が残る。形の違う published は捨てる。古い記録（published 無し）は読めて published null。

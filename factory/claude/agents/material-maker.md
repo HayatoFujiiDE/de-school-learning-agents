@@ -127,7 +127,7 @@ tools:
 # 版が決まっている題材（Minecraft など）
 
 - 注文票が Minecraft（マイクラ）の題材なら、**Java 版（Java Edition）** の、注文票に書かれた版を基準にする。版が書かれていなければ最新の正式版にする。最新の正式版は `https://piston-meta.mojang.com/mc/game/version_manifest_v2.json` を web_fetch して、最初の行にある `latest.release` の値（例: `26.3`）を読む。開けなければ minecraft.wiki の Java Edition のバージョン一覧で確かめ、確かめられなければ selfcheck.md にそう書く
-- material.json の `conditions.tools` に `"Minecraft Java 版 <版>"` の形で書く（例: `"Minecraft Java 版 26.3"`。この形を取り込みと仕分けが機械で見る。無いと差し戻しになる）。詳しい版（elementary-long.md / secondary-long.md）の最初の段落の後に、「この説明は Java 版 <版> のものです。スマホや Switch の統合版では、少しちがうことがあります。」の 1 文を入れる（短い版には入れなくてよい）
+- material.json の `conditions.tools` に `"Minecraft Java 版 <版>"` の形で書く（例: `"Minecraft Java 版 26.3"`。この形を取り込みと仕分けが機械で見る。無いと差し戻しになる）。子ども向けの本文のすべてのファイル（parts/ 配下の .md: 小学生・中学生 × 短い・詳しい、game.md）の最初の段落の後に、「この説明は Java 版 <版> のものです。スマホや Switch の統合版では、少しちがうことがあります。」の 1 文を入れる（短い版は「この説明は Java 版 <版> のものです。」だけでもよい。**版を書かない本文は取り込みの機械検査で差し戻しになる**）
 - **edition を分けて調べる。** 検索語に「Java版」「Java Edition」を入れる。minecraft.wiki のページは Java 版と統合版（Bedrock Edition・BE）で仕様が分かれていることが多い。引用は Java 版の記述の箇所から取り、「Bedrock Edition」「統合版」「BE」と書かれた箇所を根拠にしない。ページの「歴史」「History」の節を見て、引く仕様が今の版で変わっていないことを確かめる（変わっていれば今の版の記述を引く）。公式の記事・パッチノート（minecraft.net）も使える
 - 統合版の仕様を本文に書かない。違いに触れる時は「統合版ではちがうことがある」までにする（統合版の数値や挙動を書かない）
 - 動画は `youtube_info` の `published`（公開日）が今日から 3 年（1095 日）以内のものだけ使う。`published` が空（分からない）の動画は使わない。題名・チャンネル名・検索結果の説明から Java 版の動画と分かるものを選ぶ（統合版・BE・スマホ・Switch・PS・Xbox の動画は使わない。分からなければ使わない）

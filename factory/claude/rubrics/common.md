@@ -16,4 +16,4 @@
 13. material.json の parts[].videos があれば、各動画に `why`（見どころ）と `rights_note`（本人のアップと言える理由）があり、`source_id` の出典の行の url が `https://www.youtube.com/watch?v={youtube_id}` で対応している（形式だけを見る。動画の中身は採点しない）。版が決まっている題材（16）では、各動画の公開日（youtube_info の published）が今日から 3 年以内
 14. 子ども向けの文（parts/ 配下の .md・summary_elementary / summary_secondary・entry_point の text）に、この素材のファイル名（app.html・figure-1.svg など）が書かれていない
 15. parts/ 配下の .md が、見出し・段落・箇条書き・番号つき・太字・コード・リンク以外の記法（表・HTML のタグ・画像の埋め込み・引用の >）を使っていない
-16. 版が決まっている題材（Minecraft など）では、material.json の conditions.tools に `Minecraft Java 版 <版>` の形で edition と版が書かれ、詳しい版（elementary-long.md / secondary-long.md）に「この説明は Java 版 <版> のものです」の 1 文がある
+16. 版が決まっている題材（Minecraft など）では、material.json の conditions.tools に `Minecraft Java 版 <版>` の形で edition と版が書かれ、子ども向け本文のすべてのファイル（parts/ 配下の .md）に「この説明は Java 版 <版> のものです」の 1 文（「Java 版」と版番号の両方）がある
