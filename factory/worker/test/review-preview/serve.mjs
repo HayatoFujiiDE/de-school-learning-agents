@@ -18,7 +18,7 @@ const VID = 'vfix-0001';
 const state = { auto_publish: false, channels: [{ channel_key: 'https://www.youtube.com/@fixture-science', channel_name: '作り物の科学チャンネル', channel_url: 'https://www.youtube.com/@fixture-science', first_version_id: 'vclean-0001', approved_by: 'owner@example.invalid', created_at: '2026-11-05T09:00:00.000Z' }] };
 const readBody = (req) => new Promise((resolve) => { let b = ''; req.on('data', (c) => { b += c; }); req.on('end', () => { try { resolve(b ? JSON.parse(b) : null); } catch { resolve(null); } }); });
 // Worker の /admin と同じ CSP（src/index.ts）
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self' https://www.youtube-nocookie.com; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self' https://www.youtube-nocookie.com https://sketchfab.com https://3d-api.si.edu; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.md': 'text/markdown; charset=utf-8', '.json': 'application/json' };
 
 /** base の下のファイルだけを返す（.. で外へ出ない） */

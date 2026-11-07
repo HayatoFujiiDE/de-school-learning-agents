@@ -12,6 +12,7 @@ import { AUTO_PUBLISH_EMAIL, computeTriage, latestVerificationOf } from '../tria
 import { generatedImagesOf } from './images';
 import { serveVersionFile } from './library';
 import { readVersionVideoNotes, readVideoMetaViews, versionVideosOf, versionVideosOfMaterial, type VideoMetaView, type VideoNotesFile } from '../videos';
+import { model3dEntryOf, versionModels3dOfMaterial } from '../models3d';
 
 // 観点の一覧は publish.ts に置く（振り返り係 §S が同じ一覧で差し戻しの観点を数える。route を import しない）
 export { CHECKLIST_KEYS };
@@ -252,7 +253,20 @@ export async function reviewDetail(c: RouteCtx, vid: string): Promise<Response> 
     figures_meta: figuresMetaOf(material),
     video_notes: videoNotes,
     video_meta: videoMeta,
+    // §AJ-4: 版の立体モデルの一覧の情報（material の models3d の id → 一覧の項目。一覧に無い id は入れない）。埋め込みの url は画面が表示の直前にもう一度形を確かめる
+    models3d_meta: models3dMetaOf(material),
   });
+}
+
+/** §AJ-4: models3d_meta（{ <models3d の id>: { catalog_id, title, org, kind, embed_url, page_url, license, attribution } }） */
+function models3dMetaOf(material: unknown): Record<string, { catalog_id: string; title: string; org: string; kind: string; embed_url: string | null; page_url: string; license: string; attribution: string }> {
+  const out: Record<string, { catalog_id: string; title: string; org: string; kind: string; embed_url: string | null; page_url: string; license: string; attribution: string }> = {};
+  for (const d of versionModels3dOfMaterial(material)) {
+    const e = model3dEntryOf(d.catalog_id);
+    if (!e) continue;
+    out[d.id] = { catalog_id: e.id, title: e.title_ja, org: e.org, kind: e.kind, embed_url: e.embed_url, page_url: e.page_url, license: e.license.label, attribution: e.attribution };
+  }
+  return out;
 }
 
 /** 版の動画の公式の情報（§Q-11 8）。記録の無い・読めない動画は outcome unknown */

@@ -7,6 +7,8 @@ import type { SessionCreateParams } from '@anthropic-ai/sdk/resources/beta/sessi
 import { PortError, type CallOpts, type FactoryPort, type FileMeta } from './anthropic';
 import { accumulateCitations, applyCarry, finishCitations, isCitationAcc, newCitationAcc, type CitationAcc } from './checks/citations';
 import { versionVideosOf } from './videos';
+import { models3dSectionLines } from './models3d';
+import type { Model3dEntry } from './generated/models3d-catalog';
 import { checkForbidden } from './checks/forbidden';
 import { checkChildText } from './checks/childtext';
 import { PRIMARY_HOSTS } from './checks/hosts';
@@ -250,7 +252,9 @@ export async function standardsLogLines(db: D1Database, materialId: string | nul
 
 /**
  * prev: §S-8-1 作り直しで前の版のファイルを付けた時だけ（付けたファイル名と開き直さなくてよい出典）。
- * 注文票の直後・編集基準の前に「前の版」の区画を入れる。無ければ従来の文と 1 文字も変わらない
+ * 注文票の直後・編集基準の前に「前の版」の区画を入れる。無ければ従来の文と 1 文字も変わらない。
+ * models3d: §AJ-2 a の一覧（既定は MODELS3D。テストで差し替える）。前の版の区画の後・編集基準の前に「使ってよい立体モデル（一覧）」の節を入れる。
+ * 埋め込めるもの（sketchfab / voyager）が無ければ節ごと出さず、従来の文と 1 文字も変わらない
  */
 export async function buildPhase1Message(
   db: D1Database,
@@ -258,6 +262,7 @@ export async function buildPhase1Message(
   kinds: number[],
   prev: { names: readonly string[]; reopenFree: readonly string[] } | null = null,
   materialId: string | null = null,
+  models3d?: readonly Model3dEntry[],
 ): Promise<string> {
   const lines = await standardsLogLines(db, materialId);
   const kindLines = kinds.map((k) => `- 型 ${k}（${KIND_LABEL[k] ?? '不明'}）`);
@@ -275,6 +280,7 @@ export async function buildPhase1Message(
     briefMd,
     '',
     ...(prev ? prevSectionLines(prev.names, prev.reopenFree) : []),
+    ...models3dSectionLines(models3d),
     '# 編集基準',
     EDITORIAL_STANDARDS.trim(),
     `## これまでの回答と差し戻し理由（この素材の分と全体の追記は全件・全文、ほかの素材は新しい順に ${PHASE1_LOG.otherCount} 件・1 件 ${PHASE1_LOG.otherChars} 字まで。合わせて最大 ${PHASE1_LOG.total} 件）`,

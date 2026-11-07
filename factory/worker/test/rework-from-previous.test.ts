@@ -12,6 +12,7 @@ import type { Env } from '../src/env';
 import { createFakePort } from '../src/fake/anthropic';
 import { grayPng } from '../src/fake/openai';
 import { buildPhase1Message, reconcileJob, startJob } from '../src/jobs';
+import { models3dSectionLines } from '../src/models3d';
 import { PREV_FILES_MAX, PREV_FILE_MAX_BYTES, PREV_MOUNT_DIR, carryRecordsOf, prevResources, prevSectionLines } from '../src/rework';
 import { SOURCE_CAPTURES_FILE, loadSourceCaptures, type SourceCapturesFile } from '../src/verify';
 import { d1, migratedDb, one, rows } from './d1-shim';
@@ -251,7 +252,8 @@ describe('§S-8-1 startJob: resources を付ける条件と最初の文の区画
     expect(text).toContain('\n- material.json\n');
     expect(text).toContain(`## 開き直さなくてよい出典\n`);
     expect(text).toContain(`\n- ${URL_A}\n`);
-    expect(text).toContain(section.join('\n') + '\n# 編集基準');
+    // §AJ-2 a: 前の版の区画の後・編集基準の前に「使ってよい立体モデル（一覧）」の節
+    expect(text).toContain(section.join('\n') + '\n' + models3dSectionLines().join('\n') + '\n# 編集基準');
     expect(text.replace(section.join('\n') + '\n', '')).toBe(await buildPhase1Message(env.DB, BRIEF, [3]));
   });
 

@@ -606,6 +606,12 @@ button.sc-cid { text-decoration: underline; text-underline-offset: 2px; }
 .mp-video { margin: 4px 0 16px; }
 .mp-video iframe { display: block; width: 100%; max-width: 640px; aspect-ratio: 16 / 9; height: auto; border: 0; border-radius: 12px; background: #000; }
 .mp-video-why { margin: 8px 0 0 !important; font-size: 0.93em; }
+/* §AJ-4: 立体モデル（公式の埋め込み。動画と同じ 16:9 で幅いっぱい） */
+.mp-model3d { margin: 4px 0 16px; }
+.mp-model3d iframe { display: block; width: 100%; max-width: 640px; aspect-ratio: 16 / 9; height: auto; border: 0; border-radius: 12px; background: #000; }
+.mp-model3d-cap { margin: 6px 0 0 !important; font-size: 0.85em; color: var(--mp-muted); }
+.mp-model3d-cap a { margin-left: 8px; }
+.mp-model3d-why { margin: 8px 0 0 !important; font-size: 0.93em; }
 .mp-k { display: inline-block; font-size: 12px; font-weight: 700; color: var(--mp-green); margin-right: 8px; }
 .mp-missing { color: var(--mp-muted); background: var(--mp-paper); border: 1px dashed #cfcabd; border-radius: 12px; padding: 10px 14px; }
 .mp-loading { color: var(--mp-muted); }
@@ -686,8 +692,8 @@ body.review-wide .rv-foot-row, body.review-wide .rv-reason { max-width: 1440px; 
 .mat-preview .has-pin { position: relative; }
 .mp-para.has-pin { background: var(--mp-orange-soft); border-radius: 6px; padding: 2px 8px; margin-left: -8px; margin-right: -8px; }
 .mp-para.has-pin.pin-ok { background: var(--mp-green-soft); }
-.mp-fig.has-pin, .mp-app.has-pin, .mp-video.has-pin { box-shadow: 0 0 0 3px var(--mp-orange-soft); border-radius: 12px; }
-.mp-fig.has-pin.pin-ok, .mp-app.has-pin.pin-ok, .mp-video.has-pin.pin-ok { box-shadow: 0 0 0 3px var(--mp-green-soft); }
+.mp-fig.has-pin, .mp-app.has-pin, .mp-video.has-pin, .mp-model3d.has-pin { box-shadow: 0 0 0 3px var(--mp-orange-soft); border-radius: 12px; }
+.mp-fig.has-pin.pin-ok, .mp-app.has-pin.pin-ok, .mp-video.has-pin.pin-ok, .mp-model3d.has-pin.pin-ok { box-shadow: 0 0 0 3px var(--mp-green-soft); }
 .mp-summary.has-pin, .mp-part-title.has-pin { background: var(--mp-orange-soft); border-radius: 6px; padding: 0 8px; }
 .mp-entry.has-pin { box-shadow: inset 0 0 0 2px var(--mp-orange); }
 .mp-pins { position: absolute; top: -10px; right: -11px; z-index: 2; display: inline-flex; gap: 3px; }

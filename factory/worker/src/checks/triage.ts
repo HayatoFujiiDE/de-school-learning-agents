@@ -6,11 +6,14 @@
 // キー照合は Map / Set で行い（継承プロパティを踏まない）、形が違う値は黙って飛ばす（例外を投げない）。detail などの文は長さを切る。
 // §Q-11 9: 動画の出典（版の動画の source_id が指す行で、url がその動画の watch URL と一致するもの）は、開けたか・引用の検査と、
 // 引用の不一致の割合の集計（分子・分母）から外す。
+// §AJ-3: 立体モデルの出典（版の立体モデルの source_id が指す行で、url が一覧の page_url と一致するもの）も同じく外す（職人はページを開けない）。
+// 立体モデルは v1 では機械が中身を見ないので、1 件ごとに「人が回して見る」の ask を出す（自動公開しない）。
 
-import { videoSourceIds } from './citations';
+import { model3dSourceIds, videoSourceIds } from './citations';
 import { PRIMARY_HOSTS } from './hosts';
 import { figureShowsMetaOf } from './schema';
 import { versionVideosOfMaterial } from '../videos';
+import { MODELS3D_BY_ID, versionModels3dOfMaterial } from '../models3d';
 
 export type Cause =
   | 'contradicted'
@@ -75,7 +78,7 @@ export const ITEM_DETAIL_MAX = 600;
 export const RETURN_NOTE_MAX = 4000;
 
 export type Severity = 'fix' | 'ask' | 'note';
-export type ItemKind = 'claim' | 'source' | 'figure' | 'app' | 'video' | 'text' | 'reader' | 'learning' | 'conditions' | 'check';
+export type ItemKind = 'claim' | 'source' | 'figure' | 'app' | 'video' | 'model3d' | 'text' | 'reader' | 'learning' | 'conditions' | 'check';
 export interface TriageItem {
   id: string;
   kind: ItemKind;
@@ -94,6 +97,9 @@ export interface TriageItem {
   video_id?: string;
   channel_key?: string;
   channel_name?: string;
+  /** §AJ-3: 立体モデルの項目（kind model3d）だけ */
+  model3d_id?: string;
+  catalog_id?: string;
 }
 
 /** 項目の title（契約 V-6 c の表。verbatim）。cause → title */
@@ -145,6 +151,9 @@ export const ITEM_TITLE: Record<string, string> = {
   video_meta_unknown: 'YouTube の公式の情報が取れていない',
   video_channel_mismatch: 'チャンネル名が公式の情報と違う',
   video_channel_new: '初めてのチャンネル（本人のアップかを見てください）',
+  // 立体モデル（§AJ-3。項目の title は一覧の題名にし、この文は detail に入れる）
+  model3d_human: '立体モデル（人が回して見てください）',
+  model3d_missing: '立体モデルが一覧に無い（一覧を直すか、素材を作り直す）',
   // 読み手係（finding の kind）
   word: '言葉がむずかしい',
   sentence: '文が分かりにくい',
@@ -471,6 +480,8 @@ function legacyGroups(input: TriageInput): { groups: TriageGroup[]; ok_counts: {
     [...sources.values()].map((s) => ({ id: s.source_id, url: s.url })),
     versionVideosOfMaterial(input.material),
   );
+  // §AJ-3: 開けたか・引用の検査から外す出典 = 動画の出典 + 立体モデルの出典
+  const unopenedIds = new Set([...videoIds, ...model3dSourceIds([...sources.values()].map((s) => ({ id: s.source_id, url: s.url })), versionModels3dOfMaterial(input.material), MODELS3D_BY_ID)]);
 
   const groups: TriageGroup[] = [];
   const byKey = new Map<string, TriageGroup>();
@@ -508,8 +519,8 @@ function legacyGroups(input: TriageInput): { groups: TriageGroup[]; ok_counts: {
         let cause: Cause;
         if (verdict === 'contradicted') cause = 'contradicted';
         else if (!s) cause = 'source_not_listed';
-        else if (s.url_was_fetched === 0 && !videoIds.has(sid)) cause = 'maker_url_not_fetched';
-        else if (s.quote_found === 0 && !videoIds.has(sid)) cause = 'quote_mismatch';
+        else if (s.url_was_fetched === 0 && !unopenedIds.has(sid)) cause = 'maker_url_not_fetched';
+        else if (s.quote_found === 0 && !unopenedIds.has(sid)) cause = 'quote_mismatch';
         else if (verifierLimit) cause = 'verifier_limit';
         else cause = 'not_confirmed';
         addClaim(groupFor(sid, cause), c.id);
@@ -518,7 +529,7 @@ function legacyGroups(input: TriageInput): { groups: TriageGroup[]; ok_counts: {
   }
   // 出典だけの問題（report の有無に関係なく出す）
   for (const [sid, s] of sources) {
-    if (s.quote_found === 0 && !videoIds.has(sid)) groupFor(sid, 'quote_mismatch');
+    if (s.quote_found === 0 && !unopenedIds.has(sid)) groupFor(sid, 'quote_mismatch');
     if (s.license === 'unknown') groupFor(sid, 'license_unknown');
   }
 
@@ -664,6 +675,9 @@ export function triageVersion(input: TriageInput): TriageOutput {
     [...sources.values()].map((s) => ({ id: s.source_id, url: s.url })),
     videos,
   );
+  // §AJ-3: 版の立体モデルと、その出典（開けたか・引用の検査から外すのは動画の出典 + 立体モデルの出典）
+  const models3d = versionModels3dOfMaterial(material);
+  const unopenedIds = new Set([...videoIds, ...model3dSourceIds([...sources.values()].map((s) => ({ id: s.source_id, url: s.url })), models3d, MODELS3D_BY_ID)]);
   const figurePaths = materialPaths(material, ['files'], ['.svg', '.png', '.webp']);
   const appPaths = materialPaths(material, ['variants', 'files'], ['.html']);
   const anyVideo = hasVideos(material);
@@ -712,7 +726,7 @@ export function triageVersion(input: TriageInput): TriageOutput {
         continue;
       }
       // unverified（または verdict が無い・値の外）
-      const nonVideo = own.filter((s) => !videoIds.has(s.source_id));
+      const nonVideo = own.filter((s) => !unopenedIds.has(s.source_id));
       if (nonVideo.length >= 1 && nonVideo.every((s) => Number(s.url_was_fetched) === 0)) push({ ...base, severity: 'fix', cause: 'maker_url_not_fetched' });
       else if (nonVideo.length >= 1 && nonVideo.every((s) => Number(s.quote_found) === 0)) push({ ...base, severity: 'fix', cause: 'quote_mismatch' });
       else if (verifierLimit) push({ ...base, severity: 'ask', cause: 'verifier_limit' });
@@ -862,6 +876,23 @@ export function triageVersion(input: TriageInput): TriageOutput {
     }
   }
 
+  // 立体モデル（§AJ-3。report の有無に関係なく、1 件ごとに人が確認画面で回して見る。v1 では自動公開しない）
+  for (const d of models3d) {
+    const entry = MODELS3D_BY_ID.get(d.catalog_id);
+    const cause = entry ? 'model3d_human' : 'model3d_missing';
+    push({
+      id: `model3d:${d.id}`,
+      kind: 'model3d',
+      key: 'explanation_and_expression',
+      severity: entry ? 'ask' : 'fix',
+      cause,
+      model3d_id: d.id,
+      catalog_id: d.catalog_id,
+      title: entry ? entry.title_ja : d.catalog_id,
+      detail: ITEM_TITLE[cause],
+    });
+  }
+
   // 読み手係
   const rStatus = String(input.reader?.status ?? 'pending');
   const rResult = rStatus === 'done' ? readReaderResult(input.reader?.result) : null;
@@ -907,7 +938,7 @@ export function triageVersion(input: TriageInput): TriageOutput {
 
   // 割合の項目（report があり主張が 5 件以上の時だけ）
   const n = claims.length;
-  const quoteSources = [...sources.values()].filter((s) => !videoIds.has(s.source_id));
+  const quoteSources = [...sources.values()].filter((s) => !unopenedIds.has(s.source_id));
   const quoteBad = quoteSources.filter((s) => Number(s.quote_found) === 0).length;
   if (hasReport && n >= MIN_CLAIMS_FOR_REASONS) {
     const ratio = { kind: 'check' as const, key: 'content_and_evidence' as const, severity: 'fix' as const };

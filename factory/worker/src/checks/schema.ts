@@ -1,7 +1,8 @@
 // 純関数: material.json / claims.json / sources.json の検証と公開 manifest の算出（契約 §E）。I/O を持たない。
-// ここで失敗したものだけが invalid_outputs（必須キー欠落・参照先不在・parts 外参照・JSON 不正・サイズ超過・画像の先頭バイト不一致 §M-2・動画の形 §Q-1・絵の主張の形 §O-13-2 1）。
+// ここで失敗したものだけが invalid_outputs（必須キー欠落・参照先不在・parts 外参照・JSON 不正・サイズ超過・画像の先頭バイト不一致 §M-2・動画の形 §Q-1・絵の主張の形 §O-13-2 1・立体モデルの形 §AJ-1）。
 
 import { urlHostMatches } from './hosts';
+import { MODELS3D, type Model3dEntry } from '../generated/models3d-catalog';
 
 export const REQUIRED_FILES = ['material.json', 'claims.json', 'sources.json', 'adapt-rules.md', 'selfcheck.md'] as const;
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -281,6 +282,19 @@ export const VIDEO_MAX_RANGE_SEC = 600;
 /** 出典の行の url はこの形と完全一致（クエリは v だけ） */
 export const youtubeWatchUrl = (youtubeId: string): string => `https://www.youtube.com/watch?v=${youtubeId}`;
 
+/** §AJ-1: parts[].models3d[] の 1 件（一覧 factory/models3d/catalog.json から選んだ立体モデル） */
+export interface Model3d {
+  id: string;
+  catalog_id: string;
+  why: string;
+  source_id: string;
+}
+
+/** §AJ-1 の形 */
+export const MODEL3D_ID_RE = /^d[0-9]{1,2}$/;
+/** 1 素材の立体モデルの上限（4 件以上は too_many） */
+export const MAX_MODELS3D = 3;
+
 export interface Part {
   id: string;
   kind: number;
@@ -290,6 +304,8 @@ export interface Part {
   files: PartFile[];
   /** §Q-1: 任意。material.json の part に videos がある時だけ付く（無い素材は従来どおり） */
   videos?: Video[];
+  /** §AJ-1: 任意。material.json の part に models3d がある時だけ付く（無い素材は従来どおり） */
+  models3d?: Model3d[];
   adjustable: string[];
   tech_dependencies: string[];
   runtime_check: unknown;
@@ -427,6 +443,49 @@ export function checkVideos(
   return { ok: true, byPart };
 }
 
+/**
+ * §AJ-1: parts[].models3d[] の検査（純関数。checkVideos と同じ形）。parts は part id と models3d の配列（無い part は null）を出現順に渡す。
+ * sourceUrlById は sources.json の id → url。catalog は一覧の id → 項目（呼び出し側が MODELS3D から作る。テストでは小さな一覧を渡せる）。
+ * 失敗は bad_model3d:{part_id}:{index}:{理由}（理由は id / catalog / text / source / dup / too_many）。素材全体で 4 件以上なら 4 件目で too_many
+ */
+export function checkModels3d(
+  parts: Array<{ id: string; models3d: unknown[] | null }>,
+  sourceUrlById: ReadonlyMap<string, string>,
+  catalog: ReadonlyMap<string, Model3dEntry>,
+): { ok: true; byPart: Map<string, Model3d[]> } | { ok: false; detail: string } {
+  const bad = (partId: string, index: number, reason: string) => ({ ok: false as const, detail: `bad_model3d:${partId}:${index}:${reason}` });
+  const byPart = new Map<string, Model3d[]>();
+  const seenIds = new Set<string>();
+  const seenCatalog = new Set<string>();
+  let total = 0;
+  for (const part of parts) {
+    if (part.models3d === null) continue;
+    const out: Model3d[] = [];
+    for (const [index, raw] of part.models3d.entries()) {
+      total++;
+      if (total > MAX_MODELS3D) return bad(part.id, index, 'too_many');
+      if (!isPlainObj(raw)) return bad(part.id, index, 'id');
+      const d = raw;
+      if (!isStr(d.id) || !MODEL3D_ID_RE.test(d.id)) return bad(part.id, index, 'id');
+      // 一覧に無い id・kind が download（埋め込めない）の id は catalog（継承プロパティを踏まないよう Map で引く）
+      const entry = isStr(d.catalog_id) ? catalog.get(d.catalog_id) : undefined;
+      if (!entry || (entry.kind !== 'sketchfab' && entry.kind !== 'voyager')) return bad(part.id, index, 'catalog');
+      if (!textLenOk(d.why, 300)) return bad(part.id, index, 'text');
+      if (seenIds.has(d.id) || seenCatalog.has(entry.id)) return bad(part.id, index, 'dup');
+      seenIds.add(d.id);
+      seenCatalog.add(entry.id);
+      if (!isStr(d.source_id) || sourceUrlById.get(d.source_id) !== entry.page_url) return bad(part.id, index, 'source');
+      out.push({ id: d.id, catalog_id: entry.id, why: d.why, source_id: d.source_id });
+    }
+    byPart.set(part.id, out);
+  }
+  return { ok: true, byPart };
+}
+
+/** §AJ-1: validateOutputs が使う一覧（MODELS3D から 1 回だけ作る） */
+let models3dCatalogMap: ReadonlyMap<string, Model3dEntry> | null = null;
+const models3dCatalog = (): ReadonlyMap<string, Model3dEntry> => (models3dCatalogMap ??= new Map(MODELS3D.map((e) => [e.id, e])));
+
 /** パーツ配下の参照パスか（parts/<part_id>/ 配下で .md/.svg/.html）。variants はこれだけ（§M-1） */
 export function isPartPath(p: string, partId: string): boolean {
   if (!isSafeRelativePath(p)) return false;
@@ -486,6 +545,8 @@ export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
   const techDeps = new Set<string>();
   /** §Q-1: videos は sources.json を読んだ後に検査する（出典の行との一致を見るため） */
   const rawVideos: Array<{ id: string; videos: unknown[] | null }> = [];
+  /** §AJ-1: models3d も sources.json を読んだ後に検査する（出典の行の url と一覧の page_url を照らすため） */
+  const rawModels3d: Array<{ id: string; models3d: unknown[] | null }> = [];
   /** §O-13-2 1: 素材全体の絵の主張の合計（同じ path は 1 回だけ数える） */
   let showsTotal = 0;
   /** §O-13-2 1: path → 1 行目の絵の主張・参照（JSON）。同じ path の 2 行目以降は 1 行目と同じでなければ弾く（後の行の主張が検査から漏れないように） */
@@ -560,6 +621,8 @@ export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
     }
     if (p.videos !== undefined && !Array.isArray(p.videos)) return fail(`bad_type:parts[${i}].videos`);
     rawVideos.push({ id: p.id, videos: Array.isArray(p.videos) ? (p.videos as unknown[]) : null });
+    if (p.models3d !== undefined && !Array.isArray(p.models3d)) return fail(`bad_type:parts[${i}].models3d`);
+    rawModels3d.push({ id: p.id, models3d: Array.isArray(p.models3d) ? (p.models3d as unknown[]) : null });
     const td = isStrArr(p.tech_dependencies) ? p.tech_dependencies : [];
     td.forEach((t) => techDeps.add(t));
     parts.push({
@@ -636,6 +699,13 @@ export function validateOutputs(files: Map<string, Uint8Array>): SchemaResult {
   for (const part of parts) {
     const vs = vc.byPart.get(part.id);
     if (vs) part.videos = vs;
+  }
+  // §AJ-1: parts[].models3d[]（一覧の id と、出典の行の url = 一覧の page_url）。models3d のある part にだけ付ける
+  const dc = checkModels3d(rawModels3d, new Map(sources.map((s) => [s.id, s.url])), models3dCatalog());
+  if (!dc.ok) return fail(dc.detail);
+  for (const part of parts) {
+    const ds = dc.byPart.get(part.id);
+    if (ds) part.models3d = ds;
   }
 
   const material: Material = {

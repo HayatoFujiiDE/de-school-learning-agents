@@ -295,8 +295,9 @@ describe('§Q-5 確認画面: 「説明と表現」の動画', () => {
 });
 
 describe('§Q-5・§Q-9.8 CSP: frame-src の youtube-nocookie は /admin だけ', () => {
+  // §AJ-4: 立体モデルの公式の埋め込みの 2 つのホストを frame-src に足した（それ以外は §Q-5 のまま）
   const ADMIN_CSP_EXPECTED =
-    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self' https://www.youtube-nocookie.com; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self' https://www.youtube-nocookie.com https://sketchfab.com https://3d-api.si.edu; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
   it('/admin の HTML の CSP は frame-src に https://www.youtube-nocookie.com を足しただけ', async () => {
     const env = {

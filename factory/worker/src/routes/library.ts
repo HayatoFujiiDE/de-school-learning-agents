@@ -5,6 +5,7 @@ import type { Env } from '../env';
 import { json, parseJsonField } from '../http';
 import { isRealDate } from '../topics/schema';
 import { isTopicKind, topicsSwitch } from '../topics/store';
+import { embeddableModels3d, model3dViewOf } from '../models3d';
 
 const HTML_CSP = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:";
 const SVG_CSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'";
@@ -163,4 +164,12 @@ export async function libraryTopicStock(env: Env, url: URL): Promise<Response> {
     kind,
     topics: rows.map((r) => ({ topic_id: r.topic_id, kind: r.kind, needs_supporter: r.sensitivity === 'heavy', lineage_id: r.lineage_id, body: parseJsonField(r.body_json, null) })),
   });
+}
+
+/**
+ * §AJ-5: GET /api/library/models3d（認証なし）。一覧のうち埋め込めるもの（kind が sketchfab / voyager）を一覧の順に。
+ * 子ども向けアプリは material.json の catalog_id をこれで引いて描く（埋め込みの url の形の再確認は §AJ-4 と同じ 2 つの正規表現）
+ */
+export function libraryModels3d(): Response {
+  return json(200, { models: embeddableModels3d().map(model3dViewOf) }, { 'cache-control': 'public, max-age=3600' });
 }

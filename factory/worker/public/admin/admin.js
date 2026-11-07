@@ -1916,7 +1916,7 @@
     ok: '公開できます',
     ok_reader: '公開できます（読み手チェックはまだです）'
   };
-  var MEDIA_LABEL = { figure: '図', app: '動かせるもの', video: '動画' };
+  var MEDIA_LABEL = { figure: '図', app: '動かせるもの', video: '動画', model3d: '立体モデル' };
   var WAIT_TEXT = { paused: '検証待ち（停止中）', daily_cap: '検証待ち（日次上限）', inflight: '検証待ち（順番）' };
   var IMAGE_RE = /\.(svg|png|webp)$/i;
   // 検証係の図ごとの判定（§O-12 d）: [文, pill の色]
@@ -2064,6 +2064,18 @@
     });
     return out;
   }
+  /** §AJ-4: material.parts[].models3d[] を出現順に（形の違う要素は飛ばさず残し、表示側で埋め込まない） */
+  function models3dOf(mat) {
+    var out = [];
+    ((mat && mat.parts) || []).forEach(function (p) {
+      if (p && Array.isArray(p.models3d)) p.models3d.forEach(function (x) { out.push(x && typeof x === 'object' ? x : {}); });
+    });
+    return out;
+  }
+  /** §AJ-4: models3d_meta（無い応答 = 古い Worker は null。何も出さない） */
+  function models3dMetaOf(d) { return d && isObj(d.models3d_meta) ? d.models3d_meta : null; }
+  /** §AJ-4: id の一覧の情報（無ければ null） */
+  function model3dMetaFor(meta, id) { return meta && typeof id === 'string' && vhas(meta, id) && isObj(meta[id]) ? meta[id] : null; }
   function isSec(n) { return typeof n === 'number' && isFinite(n) && n >= 0 && Math.floor(n) === n; }
   /** 秒 → 分:秒（例 80 → 1:20） */
   function fmtSec(n) { var s = n % 60; return Math.floor(n / 60) + ':' + (s < 10 ? '0' : '') + s; }
@@ -2331,6 +2343,10 @@
   function itemTarget(it, d) {
     var parts = partsOf(d), i, j;
     if (it.kind === 'claim' && typeof it.claim_id === 'string' && it.claim_id) return { t: 'claim', claim_id: it.claim_id };
+    if (it.kind === 'model3d' && typeof it.model3d_id === 'string' && it.model3d_id) {
+      for (i = 0; i < parts.length; i++) if ((Array.isArray(parts[i].models3d) ? parts[i].models3d : []).some(function (x) { return isObj(x) && x.id === it.model3d_id; })) return { t: 'media', media: 'model3d', key: it.model3d_id, pi: i };
+      return null;
+    }
     if (typeof it.video_id === 'string' && it.video_id) {
       for (i = 0; i < parts.length; i++) if ((Array.isArray(parts[i].videos) ? parts[i].videos : []).some(function (v) { return isObj(v) && v.id === it.video_id; })) return { t: 'media', media: 'video', key: it.video_id, pi: i };
       return null;
@@ -2441,7 +2457,7 @@
     var str = function (x) { return typeof x === 'string' ? x : ''; };
     return '<li class="rv-it sev-' + sev + ' is-' + state + (cur ? ' is-cur' : '') + '" id="rv-it-' + i + '" data-item-id="' + esc(it.id) + '" data-sev="' + sev + '" data-state="' + state + '" tabindex="-1">' +
       '<p class="rv-it-head"><span class="rv-it-num" aria-hidden="true">' + (state === 'ok' ? '✓' : state === 'redo' ? '直' : i + 1) + '</span>' +
-        '<span class="sr-only">見てほしい所 ' + (i + 1) + '（' + PIN_STATE_TEXT[state] + '）</span><b class="rv-it-title">' + esc(str(it.title)) + '</b></p>' +
+        '<span class="sr-only">見てほしい所 ' + (i + 1) + '（' + PIN_STATE_TEXT[state] + '）</span><b class="rv-it-title">' + esc(it.kind === 'model3d' ? '立体モデル ' + str(it.model3d_id) + ' ' + str(it.title) : str(it.title)) + '</b></p>' +
       (loc ? '<p class="rv-it-where">' + esc(loc.label) + '</p>' : '') +
       (str(it.channel_name) ? '<p class="rv-it-ch">チャンネル「' + esc(it.channel_name) + '」</p>' : '') +
       (str(it.quote) && it.kind !== 'claim' ? '<p class="rv-it-quote">「' + esc(it.quote) + '」</p>' : '') +
@@ -2514,9 +2530,9 @@
     (Array.isArray(d.generated_images) ? d.generated_images : []).forEach(function (g) { if (g && typeof g.path === 'string') gen[g.path] = g; });
     var figs = figuresOf(d), figBy = {};
     (figs || []).forEach(function (f) { if (f && typeof f.path === 'string') figBy[f.path] = f; });
-    var vids = videosOf(d.version.material);
+    var vids = videosOf(d.version.material), m3n = models3dOf(d.version.material).length;
     var metaBy = figuresMetaOf(d);
-    return '<div class="rv-figs"><span class="muted">図・画像 ' + imgs.length + ' 枚' + (vids.length ? '・動画 ' + vids.length + ' 本' : '') +
+    return '<div class="rv-figs"><span class="muted">図・画像 ' + imgs.length + ' 枚' + (vids.length ? '・動画 ' + vids.length + ' 本' : '') + (m3n ? '・立体モデル ' + m3n + ' 件' : '') +
       (figs ? '（検証係の判定はサムネイルの下）' : '（この版の検証係は図を見ていません）') + '</span>' +
       (imgs.length ? '<div class="thumbs">' + imgs.map(function (p) {
         var a = '<a href="' + esc(base + p) + '" target="_blank" rel="noopener noreferrer" title="' + esc(p) + '"><img class="thumb" alt="' + esc(p) + '" src="' + esc(base + p) + '"></a>';
@@ -2539,6 +2555,17 @@
       return '<div class="rv-term" data-video-term="' + esc(v.id) + '"><p><b>動画 ' + esc(v.id) + '</b> チャンネル ' + esc(v.channel) + mark + '</p>' +
         videoMetaHtml(v, vc) + '<p>本人のアップと言える理由: ' + esc(v.rights_note) + '</p></div>';
     }).join('') + '</div>';
+  }
+  /** §AJ-4: 「利用条件」の補足の立体モデル（一覧の題名・提供元・ライセンス・出典の書き方。一覧に無い id は出さない） */
+  function models3dTermsHtml(d) {
+    var meta = models3dMetaOf(d);
+    return models3dOf(d && d.version && d.version.material).map(function (x) {
+      var id = typeof x.id === 'string' ? x.id : '', m = model3dMetaFor(meta, id);
+      if (!m) return '';
+      var link = model3dPageLink(m);
+      return '<div class="rv-term" data-model3d-term="' + esc(id) + '"><p><b>立体モデル ' + esc(id) + '</b> ' + esc(m.title) + '（' + esc(m.org) + '）</p>' +
+        '<p>ライセンス: ' + esc(m.license) + '。出典の書き方: ' + esc(m.attribution) + '</p>' + (link ? '<p>' + link + '</p>' : '') + '</div>';
+    }).join('');
   }
   /** #rv-machine の中身（純関数） */
   function machineHtml(d) {
@@ -2578,7 +2605,7 @@
       return '<li data-app-verdict="' + esc(x && typeof x.verdict === 'string' ? x.verdict : 'none') + '"><b>' + esc(a.title || '動かせるもの') + '</b> ' + (x ? mkVerdictHtml(x) : '<span class="muted">判定がありません</span>') + '</li>';
     }).join('') + '</ul>' : '';
     sum.terms_of_use = ['出典 ' + srcs.length + ' 件' + (vids.length && tri.present && (anyNew || tri.trusted_keys.length) ? '・動画のチャンネル: ' + (anyNew ? '初めて' : '確認済み') : '')];
-    more.terms_of_use = (licUnknown ? '<p class="muted">利用条件が分からない出典があります（' + licUnknown + ' 件）</p>' : '') + videoTermsHtml(vids, d, tri);
+    more.terms_of_use = (licUnknown ? '<p class="muted">利用条件が分からない出典があります（' + licUnknown + ' 件）</p>' : '') + videoTermsHtml(vids, d, tri) + models3dTermsHtml(d);
     var reread = rd.status === 'failed' && d.version && d.version.status === 'review'
       ? '<p class="mk-reread"><button type="button" class="btn small" id="rv-reread">読み手チェックをやり直す</button></p>' : '';
     return '<h2 class="rv-rail-h">機械が確かめたこと</h2>' + reread + MK_KEYS.map(function (k) {
@@ -2662,6 +2689,33 @@
     return '<iframe src="' + esc('https://www.youtube-nocookie.com/embed/' + v.youtube_id + '?start=' + s + '&end=' + e + '&rel=0') + '" title="' + esc(v.title) +
       '" allow="encrypted-media; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin" loading="lazy"></iframe>';
   }
+  // §AJ-4: 立体モデルの公式の埋め込みの url の形（表示の直前にもう一度確かめる。material.json の値は src にしない）
+  var SKETCHFAB_EMBED_RE = /^https:\/\/sketchfab\.com\/models\/[0-9a-f]{32}\/embed$/;
+  var VOYAGER_EMBED_RE = /^https:\/\/3d-api\.si\.edu\/voyager\/3d_package:[0-9a-f-]{36}$/;
+  /** 立体モデルの埋め込み（m = models3d_meta の 1 件。embed_url の形が合わなければ空） */
+  function model3dEmbedHtml(m) {
+    var u = m && typeof m.embed_url === 'string' ? m.embed_url : '';
+    if (!(SKETCHFAB_EMBED_RE.test(u) || VOYAGER_EMBED_RE.test(u))) return '';
+    return '<iframe src="' + esc(u) + '" title="' + esc(m.title) + '" allow="fullscreen; xr-spatial-tracking" referrerpolicy="strict-origin-when-cross-origin" loading="lazy"></iframe>';
+  }
+  /** 立体モデルの「提供元で開く」（page_url が https:// で始まる時だけリンク） */
+  function model3dPageLink(m) {
+    var u = m && typeof m.page_url === 'string' ? m.page_url : '';
+    return /^https:\/\//.test(u) ? '<a href="' + esc(u) + '" target="_blank" rel="noopener noreferrer">提供元で開く</a>' : '';
+  }
+  /** §AJ-4: 子どもの画面の立体モデル 1 件（x = material の models3d の 1 件、meta = models3d_meta。値はすべてエスケープ） */
+  function model3dPreviewHtml(x, meta, pa) {
+    var id = typeof x.id === 'string' ? x.id : '';
+    var m = model3dMetaFor(meta, id);
+    var body;
+    if (!m) body = '<p class="mp-missing">立体モデル ' + esc(id) + ' は一覧に無いため、埋め込みません</p>';
+    else {
+      body = (model3dEmbedHtml(m) || '<p class="mp-missing">立体モデルの埋め込みの形が正しくないため、埋め込みません</p>') +
+        '<p class="mp-model3d-cap">' + esc(m.title) + '（' + esc(m.org) + '・' + esc(m.license) + '）' + model3dPageLink(m) + '</p>';
+    }
+    return '<div class="mp-model3d' + pa.cls + '" data-media="model3d" data-media-key="' + esc(id) + '"' + pa.attr + '>' + pa.btns + body +
+      (typeof x.why === 'string' && x.why ? '<p class="mp-model3d-why"><span class="mp-k">見方</span>' + esc(x.why) + '</p>' : '') + '</div>';
+  }
   /**
    * 本文の中に置く図・動かせるもの・動画（図と動画は先頭の段落の直後、型 4 の app は本文の上）。
    * 動かせるものの上に子どもに見える見出し「さわってみよう」（§V-9 b）。o.marks と o.pins があれば、見てほしい所の部品に番号の印
@@ -2708,8 +2762,13 @@
         (vt ? '<span class="mp-video-tools">' + vt + '</span>' : '') + pa.btns + (emb || '<p class="mp-missing">動画の id か区間の形が正しくないため、埋め込みません</p>') +
         (v.why ? '<p class="mp-video-why"><span class="mp-k">見どころ</span>' + esc(v.why) + '</p>' : '') + '</div>';
     });
+    // §AJ-4: 動画の直後に立体モデル（埋め込みの url は o.models3dMeta = review API の models3d_meta から。付箋は付けない = 段落の付箋で代用）
+    var m3s = (Array.isArray(part.models3d) ? part.models3d : []).map(function (x) {
+      x = x && typeof x === 'object' ? x : {};
+      return model3dPreviewHtml(x, o.models3dMeta || null, pinOf('model3d', x.id));
+    });
     var top = part.kind === 4 ? apps : [];
-    var after = figs.concat(part.kind === 4 ? [] : apps, vids);
+    var after = figs.concat(part.kind === 4 ? [] : apps, vids, m3s);
     return { top: top.join(''), after: after.join(''), end: others.join('') };
   }
   /**
@@ -3397,7 +3456,7 @@
     if (!c) return;
     var d = c.d, st = c.st, token = c.pvToken = (c.pvToken || 0) + 1;
     var parts = (d.version.material && Array.isArray(d.version.material.parts)) ? d.version.material.parts : [];
-    var base = { fileBase: '/api/review/' + encodeURIComponent(c.vid) + '/files/', marks: c.marks !== false, stick: true, pins: pinsOf(d, st), claimIdx: claimIndexOf(d) };
+    var base = { fileBase: '/api/review/' + encodeURIComponent(c.vid) + '/files/', marks: c.marks !== false, stick: true, pins: pinsOf(d, st), claimIdx: claimIndexOf(d), models3dMeta: models3dMetaOf(d) };
     previewFrames(st).forEach(function (sel, fi) {
       parts.forEach(function (p, pi) {
         var el = document.getElementById('mp-body-' + fi + '-' + pi);
@@ -3977,7 +4036,7 @@
     inlineMd: inlineMd, mdBlocks: mdBlocks, pickVariant: pickVariant, previewBodyHtml: previewBodyHtml, previewFrameHtml: previewFrameHtml, kindName: kindName,
     defaultPv: defaultPv,
     // 付箋
-    figClaimsHtml: figClaimsHtml, figsBlockHtml: figsBlockHtml,
+    figClaimsHtml: figClaimsHtml, figsBlockHtml: figsBlockHtml, models3dTermsHtml: models3dTermsHtml,
     stickyLine: stickyLine, stickyNoteText: stickyNoteText, stickyListHtml: stickyListHtml, STICK_KINDS: STICK_KINDS, appendLines: appendLines,
     STICK_FIG_KINDS: STICK_FIG_KINDS, STICK_APP_KINDS: STICK_APP_KINDS, STICK_VIDEO_KINDS: STICK_VIDEO_KINDS,
     noteWithoutStickyLines: noteWithoutStickyLines, decisionNote: decisionNote, inInputOf: inInputOf, claimParaSelectors: claimParaSelectors, stickyKeyAction: stickyKeyAction, stripCites: stripCites

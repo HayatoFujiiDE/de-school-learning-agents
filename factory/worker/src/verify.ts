@@ -12,6 +12,7 @@ import { ALLOWLIST } from './generated/claude-assets';
 import { GEMINI_TEXT_MAX_CHARS, GeminiError, capChars, type GeminiPort } from './gemini';
 import { todayCostCents } from './jobs';
 import { OEMBED_TIMEOUT_MS, type OEmbedPort, type OEmbedResult } from './youtube-oembed';
+import { versionModels3dOfMaterial } from './models3d';
 import {
   VIDEO_ENABLED_KEY,
   VIDEO_FALLBACK_ENABLED_KEY,
@@ -1579,7 +1580,8 @@ const materialParts = (material: unknown): Record<string, unknown>[] =>
   isRecord(material) && Array.isArray(material.parts) ? (material.parts as unknown[]).filter(isRecord) : [];
 
 /**
- * 契約 V-3 a: <child_texts> の節（子どもが読む文のうち parts の .md 以外: 要約・各部品の最初にやること・各動画の見どころ）。
+ * 契約 V-3 a: <child_texts> の節（子どもが読む文のうち parts の .md 以外: 要約・各部品の最初にやること・各動画の見どころ・
+ * §AJ-3 各立体モデルの見方（material から versionModels3dOfMaterial で読む））。
  * 値は 1 行にして各 500 字で切り、neutralizeInputText を通す（節の区切りを偽れない）。書く行が 1 つも無ければ []
  */
 export function childTextsBlocks(material: unknown, videos: VersionVideo[]): string[] {
@@ -1593,6 +1595,7 @@ export function childTextsBlocks(material: unknown, videos: VersionVideo[]): str
     lines.push(`部品 ${cutValue(p.id)}「${cutValue(p.title)}」 最初にやること: ${cutValue(ep.text)}`);
   }
   for (const v of videos) lines.push(`動画 ${cutValue(v.id)} 見どころ: ${cutValue(v.why)}`);
+  for (const d of versionModels3dOfMaterial(material)) lines.push(`立体モデル ${cutValue(d.id)} 見方: ${cutValue(d.why)}`);
   if (lines.length === 0) return [];
   return [CHILD_TEXTS_OPEN, neutralizeInputText(lines.join('\n')), CHILD_TEXTS_CLOSE];
 }

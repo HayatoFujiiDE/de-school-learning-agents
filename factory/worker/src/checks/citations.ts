@@ -33,6 +33,29 @@ export function videoSourceIds(sources: ReadonlyArray<{ id: string; url: string 
   return out;
 }
 
+/** §AJ-3: 版の立体モデルのうち、出典の判定に要る値（src/models3d.ts の VersionModel3d と同じ名前） */
+export interface CitationModel3d {
+  source_id: string;
+  catalog_id: string;
+}
+
+/**
+ * §AJ-3: 立体モデルの出典の id（版の立体モデルの source_id が指す行で、url が一覧のその項目の page_url と完全一致するもの）。
+ * videoSourceIds と同型。一覧に無い catalog_id は入れない。職人はページを開けないので、開けたか・引用の検査から外す
+ */
+export function model3dSourceIds(
+  sources: ReadonlyArray<{ id: string; url: string }>,
+  models3d: readonly CitationModel3d[],
+  catalog: ReadonlyMap<string, { page_url: string }>,
+): Set<string> {
+  const out = new Set<string>();
+  for (const d of models3d) {
+    const page = catalog.get(d.catalog_id)?.page_url;
+    if (page !== undefined && sources.some((s) => s.id === d.source_id && s.url === page)) out.add(d.source_id);
+  }
+  return out;
+}
+
 /** 動画の出典の check_detail（§Q-11 9: 既存の値で表す。引用は空にする行なので no_excerpt。url_was_fetched・quote_found は 0） */
 export const VIDEO_SOURCE_CHECK_DETAIL: CheckDetail = 'no_excerpt';
 
