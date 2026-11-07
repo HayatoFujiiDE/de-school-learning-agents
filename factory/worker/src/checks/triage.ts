@@ -162,6 +162,73 @@ export const ITEM_TITLE: Record<string, string> = {
   quote_mismatch_many: '引用が本文と一致しない出典が多い',
 };
 
+/** 項目の原因の一覧（ITEM_TITLE のキー。§S v2 B 7 の機械の差し戻しの checklist に書いてよい値） */
+export const ITEM_CAUSES: readonly string[] = Object.keys(ITEM_TITLE);
+/** 原因ごとの数の上限（書く時も読む時も切る） */
+export const AUTO_CAUSE_MAX = 999;
+
+/**
+ * 機械の差し戻しの checklist_json（§S v2 B 7）。自動の承認（AUTO_CHECKLIST_JSON）と同じ形で 6 項目を書き、
+ * 直す必要のある項目（severity = 'fix'）がある観点を ng、それ以外を ok にする。ng の観点には原因ごとの数（causes。ITEM_CAUSES の値と整数だけ）を添える。
+ * 職人の出力の文字列は入れない（改善係へ渡すのはこの列挙と数だけ。注入の経路を作らない）
+ */
+export function autoReturnChecklistJson(items: readonly TriageItem[]): string {
+  const per = new Map<CheckKey, Map<string, number>>();
+  for (const i of items) {
+    if (i.severity !== 'fix' || !CHECK_KEYS.includes(i.key)) continue;
+    const m = per.get(i.key) ?? new Map<string, number>();
+    per.set(i.key, m);
+    if (ITEM_CAUSES.includes(i.cause)) m.set(i.cause, Math.min(AUTO_CAUSE_MAX, (m.get(i.cause) ?? 0) + 1));
+  }
+  return JSON.stringify(
+    Object.fromEntries(
+      CHECK_KEYS.map((k) => {
+        const m = per.get(k);
+        if (!m) return [k, { result: 'ok', note: 'auto' }];
+        const causes = Object.fromEntries([...m.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)));
+        return [k, { result: 'ng', note: 'auto', causes }];
+      }),
+    ),
+  );
+}
+
+/**
+ * 機械の差し戻しの checklist_json から原因ごとの数を読む（観点をまたいで足す）。読む側でも一覧と照合し直す:
+ * 知らない観点・知らない原因・整数でない数は捨て、数は 1〜AUTO_CAUSE_MAX に切る。読めなければ空
+ */
+export function autoReturnCauses(checklistJson: string | null | undefined): Record<string, number> {
+  let o: unknown = null;
+  try {
+    o = checklistJson ? JSON.parse(checklistJson) : null;
+  } catch {
+    o = null;
+  }
+  const out: Record<string, number> = {};
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return out;
+  const rec = o as Record<string, unknown>;
+  for (const k of CHECK_KEYS) {
+    const item = Object.hasOwn(rec, k) ? rec[k] : undefined;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const it = item as Record<string, unknown>;
+    if (it.result !== 'ng') continue;
+    for (const [cause, n] of Object.entries(cleanCauses(it.causes))) out[cause] = Math.min(AUTO_CAUSE_MAX, (out[cause] ?? 0) + n);
+  }
+  return cleanCauses(out);
+}
+
+/** 原因ごとの数を一覧と照合し直す（知らない原因・整数でない数・1 未満を捨て、AUTO_CAUSE_MAX に切る。キーの順に並べる） */
+export function cleanCauses(v: unknown): Record<string, number> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+  const c = v as Record<string, unknown>;
+  const out: Record<string, number> = {};
+  for (const cause of [...ITEM_CAUSES].sort()) {
+    const n = Object.hasOwn(c, cause) ? c[cause] : undefined;
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1) continue;
+    out[cause] = Math.min(AUTO_CAUSE_MAX, n);
+  }
+  return out;
+}
+
 /** 読み手係ができなかった・全部を読めていない時の 3 項目の title（契約 V-6 c。verbatim） */
 export const READER_FALLBACK_TITLE: Record<'reader_failed' | 'reader_partial', Record<'explanation_and_expression' | 'relation_to_learning' | 'conditions_of_use', string>> = {
   reader_failed: {
