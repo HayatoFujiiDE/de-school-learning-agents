@@ -27,3 +27,11 @@
 ## 手元の道具
 
 `factory/worker/scripts/ops-request.sh topic <news|talk|philo|make> [--wait]`。kind を許可の一覧と照合してから 1 行 INSERT（id は uuid）。`--wait` は 30 秒ごとに依頼と run の status・error・made・cents だけを読み、run が閉じるか 20 分で止まる。wrangler の出力は一時ファイルへ落とす。
+
+## §W-2 取り込み直し（2026-11-07 追加）
+
+- kind `job_reingest`、payload `{ job_id }`（uuid の形だけ。余計な項目は bad_payload）。migration 0011 で CHECK を広げた（表を作り直して行を写す）。
+- opsTick は route の `POST /api/jobs/:id/reingest` と同じ `claimReingest` を呼ぶ（invalid_outputs の failed・素材が待機・同じ素材の最新の job、の述語も同じ）。failed → running に戻すだけで、取り込みは次の cron の reconcile が行う。session は作らず、費用は掛からない。
+- 断られた時は failed で、result に `{ refused: <コード> }`。
+- 道具: `scripts/ops-request.sh reingest <job_id>`。
+- 理由: §S-8 の取り込みの不具合で failed になった作り直し 2 件（出力は session に残っている）を、作り直しをやり直さずに取り戻すため。
