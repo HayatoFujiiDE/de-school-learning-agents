@@ -9,15 +9,15 @@
     "./claude/agents/material-maker.md": {
       "kind": "agent",
       "id": "agent_015ajCKLmg7Q8rAAksvBzJ1N",
-      "version": "13",
-      "hash": "a16862071bfac55c3e5f86ff4cd5686b",
-      "remote_hash": "bb1f5fa546ae2a8f7ee0226017e11ff6"
+      "version": "14",
+      "hash": "c8f39d565ba291fd12b4f3c28cc1aadc",
+      "remote_hash": "a2739ce6152414f58089092f8d2307f9"
     },
     "./claude/environments/cloud.yaml": {
       "kind": "environment",
       "id": "env_01Mrm4nNyypF4B2pjaxhdXSJ",
-      "hash": "b25ba6c4b01b7971e22b3f25dcb0a347",
-      "remote_hash": "dfd0e1f922cd5a478f49d738244d9cee"
+      "hash": "990479f8d194d86a40a4fe653e1f8592",
+      "remote_hash": "32b9c86dbde36baf2b33b01ae3cd3fa2"
     }
   }
 }
